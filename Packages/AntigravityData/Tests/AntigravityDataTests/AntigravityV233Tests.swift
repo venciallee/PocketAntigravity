@@ -65,7 +65,7 @@ final class AntigravityV233Tests: XCTestCase {
         )
         let items = try XCTUnwrap(sanitized["items"]?.arrayValue)
         XCTAssertEqual(items.count, 4, "Cloud Relay sanitizer must preserve text, file, media, and codeQuote items")
-        let plannerCfg = sanitized["cascadeConfig"]?["plannerConfig"]
+        let plannerCfg = sanitized["cascadeConfig"]?.objectValue?["plannerConfig"]?.objectValue
         XCTAssertEqual(plannerCfg?["thinkingEffort"]?.stringValue, "xhigh")
         XCTAssertEqual(plannerCfg?["agentPersona"]?.stringValue, "go-reviewer")
         XCTAssertEqual(plannerCfg?["permissionPreset"]?.stringValue, "PERMISSION_PRESET_DEFAULT")
@@ -111,7 +111,8 @@ final class AntigravityV233Tests: XCTestCase {
         XCTAssertEqual(orchestrator?.plannerModelName, "Gemini 4 Neon")
         XCTAssertEqual(orchestrator?.executorModelName, "Gemini 4 Argon")
 
-        XCTAssertEqual(ThinkingEffortLevel.extra.wireValue, "xhigh")
+        XCTAssertEqual(ThinkingEffortLevel.extra.cliValue, "xhigh")
+        XCTAssertEqual(ThinkingEffortLevel.extra.protoWireValue, "XHIGH")
         XCTAssertEqual(ThinkingEffortLevel.allCases.count, 4)
 
         // Preserve ESDD verification catalog unchanged
@@ -361,19 +362,14 @@ final class AntigravityV233Tests: XCTestCase {
         ```
         """
         let blocks = AntigravityMarkdownParser.parse(md)
-        if case .frontmatter(let entries) = blocks.first {
+        if case .frontmatter(_, let entries) = blocks.first {
             XCTAssertEqual(entries.first?.key, "title")
             XCTAssertEqual(entries.first?.value, "Settlement Architecture")
         } else {
             XCTFail("Expected leading YAML frontmatter block")
         }
 
-        let hasMermaid = blocks.contains { block in
-            if case .codeBlock(let lang, _) = block {
-                return AntigravityMarkdownParser.isMermaidDiagram(language: lang)
-            }
-            return false
-        }
+        let hasMermaid = blocks.contains(where: \.isMermaidDiagram)
         XCTAssertTrue(hasMermaid)
 
         let prs = AntigravityMarkdownParser.extractGitHubPRLinks(from: md)
@@ -450,8 +446,8 @@ final class AntigravityV233Tests: XCTestCase {
         XCTAssertEqual(loadedQuota?.geminiWeeklyPercent, 72)
         XCTAssertEqual(loadedQuota?.partnerWeeklyPercent, 55)
 
-        await projStore.saveCustomizationsCatalog(.defaultCatalog)
-        let loadedCatalog = await projStore.loadCustomizationsCatalog()
+        await projStore.saveCustomizations(.defaultCatalog)
+        let loadedCatalog = await projStore.loadCustomizations()
         XCTAssertEqual(loadedCatalog?.plugins.count, CustomizationsCatalog.defaultCatalog.plugins.count)
     }
 
