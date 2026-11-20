@@ -31,6 +31,7 @@ public struct AutomationsViewController: View {
     @State private var quickPromptText: String = ""
     @State private var isPausedResumed: Bool = false
     @State private var isShowingEditorSheet: Bool = false
+    @State private var isShowingGoogleSignIn: Bool = false
     @State private var editingAutomation: AutomationItem? = nil
     @State private var sectionFilter: AutomationSectionFilter = .all
     @State private var deletingAutomation: AutomationItem? = nil
@@ -70,6 +71,10 @@ public struct AutomationsViewController: View {
 
     private var isLiveMode: Bool {
         !store.isVerificationMode || store.isLiveBackendConnected
+    }
+
+    private var isAuthExpired: Bool {
+        store.isAutomationsAuthExpired || store.connectionStatusText == "Google Sign-In Expired"
     }
 
     public var body: some View {
@@ -140,13 +145,45 @@ public struct AutomationsViewController: View {
                 store: store,
                 editingItem: editingAutomation,
                 initialPromptSeed: editingAutomation == nil ? quickPromptText : "",
+                onRequestSignIn: {
+                    isShowingEditorSheet = false
+                    isShowingGoogleSignIn = true
+                },
                 onDismiss: {
                     isShowingEditorSheet = false
                     editingAutomation = nil
                 }
             )
-            .presentationDetents([.large])
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $isShowingGoogleSignIn) {
+            let targetURL = store.lastScannedRelayURL.isEmpty
+                ? store.activeHost.endpointURL.absoluteString
+                : store.lastScannedRelayURL
+            CloudRelaySignInSheet(
+                targetRelayURLString: targetURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : targetURL,
+                onAuthenticated: { cookieHeader, finalURL, detectedAuthUser in
+                    isShowingGoogleSignIn = false
+                    let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(
+                        scannedInput: targetURL,
+                        webViewFinalURL: finalURL
+                    )
+                    Task {
+                        let ok = await store.connectCloudRelay(
+                            relayURLString: effectiveURL,
+                            sessionCookie: cookieHeader,
+                            authUser: detectedAuthUser
+                        )
+                        if ok {
+                            await store.refreshAutomations()
+                        }
+                    }
+                },
+                onDismiss: {
+                    isShowingGoogleSignIn = false
+                }
+            )
         }
         .alert(
             "Delete Automation?",
@@ -784,26 +821,46 @@ public struct AutomationsViewController: View {
     }
 
     private func automationErrorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(AntigravityTheme.statusError)
+        let authExpired = isAuthExpired && store.activeHost.channel == .cloudRelay
+        let accentColor = authExpired ? AntigravityTheme.statusWaiting : AntigravityTheme.statusError
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: authExpired ? "person.crop.circle.badge.exclamationmark" : "exclamationmark.triangle.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(accentColor)
                 .padding(.top, 2)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(message)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13.5, weight: .medium))
                     .foregroundStyle(UEChromePalette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Button {
-                    Task { await store.refreshAutomations() }
-                } label: {
-                    Text("Retry")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                HStack(spacing: 10) {
+                    if authExpired {
+                        Button {
+                            isShowingGoogleSignIn = true
+                        } label: {
+                            Text("重新登录 Google")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 32)
+                                .background(
+                                    Capsule().fill(AntigravityTheme.statusWaiting)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button {
+                            Task { await store.refreshAutomations() }
+                        } label: {
+                            Text("Retry")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .buttonStyle(.plain)
             }
 
             Spacer(minLength: 4)
@@ -821,11 +878,11 @@ public struct AutomationsViewController: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(AntigravityTheme.statusError.opacity(0.12))
+                .fill(accentColor.opacity(0.12))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(AntigravityTheme.statusError.opacity(0.32), lineWidth: 1)
+                .strokeBorder(accentColor.opacity(0.32), lineWidth: 1)
         )
     }
 
@@ -1194,46 +1251,33 @@ public struct AutomationsViewController: View {
     }
 }
 
-// MARK: - Structured Create / Edit Automation Sheet
+// MARK: - PC-Style Minimal Create / Edit Automation Sheet
 
 private struct AutomationEditorSheetView: View {
     @Bindable var store: AntigravitySessionStore
     let editingItem: AutomationItem?
+    let onRequestSignIn: () -> Void
     let onDismiss: () -> Void
 
-    private enum SchedulePreset: String, CaseIterable, Identifiable {
-        case hourly = "Hourly"
-        case daily = "Daily"
+    private enum TriggerFrequency: String, CaseIterable, Identifiable {
+        case daily = "Every day"
         case weekdays = "Weekdays"
-        case weekly = "Weekly"
-        case custom = "Custom"
+        case weekly = "Every week"
+        case hourly = "Every hour"
 
         var id: String { rawValue }
     }
 
-    private enum ModelOption: String, CaseIterable, Identifiable {
-        case defaultModel = "Default"
-        case flash = "Flash"
-        case flashLite = "Flash Lite"
-        case pro = "Pro"
+    private struct TimeSlot: Hashable, Identifiable {
+        let hour: Int
+        let minute: Int
 
-        var id: String { rawValue }
+        var id: Int { hour * 60 + minute }
 
-        var modelArg: String? {
-            switch self {
-            case .defaultModel: return nil
-            case .flash: return "gemini-3-flash"
-            case .flashLite: return "gemini-3-flash-lite"
-            case .pro: return "gemini-3.1-pro"
-            }
-        }
-
-        static func fromBadge(_ badge: String?) -> ModelOption {
-            guard let b = badge?.lowercased() else { return .defaultModel }
-            if b.contains("lite") { return .flashLite }
-            if b.contains("pro") { return .pro }
-            if b.contains("flash") { return .flash }
-            return .defaultModel
+        var label: String {
+            let period = hour < 12 ? "AM" : "PM"
+            let displayHour = (hour % 12 == 0) ? 12 : (hour % 12)
+            return String(format: "%d:%02d %@", displayHour, minute, period)
         }
     }
 
@@ -1246,77 +1290,71 @@ private struct AutomationEditorSheetView: View {
 
     @State private var displayName: String
     @State private var promptText: String
-    @State private var preset: SchedulePreset
+    @State private var frequency: TriggerFrequency
     @State private var selectedHour: Int
     @State private var selectedMinute: Int
     @State private var selectedWeekday: Int
-    @State private var customCronText: String
     @State private var selectedProjectToken: String
-    @State private var selectedModel: ModelOption
-    @State private var enableImmediately: Bool
+    @State private var selectedModelArg: String?
+    @State private var selectedModelLabel: String
     @State private var isSubmitting: Bool = false
+    @State private var submitError: String? = nil
 
     init(
         store: AntigravitySessionStore,
         editingItem: AutomationItem?,
         initialPromptSeed: String = "",
+        onRequestSignIn: @escaping () -> Void = {},
         onDismiss: @escaping () -> Void
     ) {
         self.store = store
         self.editingItem = editingItem
+        self.onRequestSignIn = onRequestSignIn
         self.onDismiss = onDismiss
 
         var initName = ""
         var initPrompt = ""
-        var initPreset: SchedulePreset = .weekdays
+        var initFrequency: TriggerFrequency = .daily
         var initHour = 9
         var initMinute = 0
         var initWeekday = 1
-        var initCustomCron = "0 9 * * 1-5"
         var initProjectToken = Self.defaultProjectToken
-        var initModel: ModelOption = .defaultModel
-        var initEnable = true
+        var initModelArg: String? = nil
+        var initModelLabel = store.selectedModelConfig.displayName
 
         if let item = editingItem {
             initName = item.title
             initPrompt = item.prompt.isEmpty ? item.title : item.prompt
-            initModel = ModelOption.fromBadge(item.modelLabel)
-            initEnable = item.isEnabled
+            if let badge = item.modelLabel, !badge.isEmpty {
+                initModelLabel = badge
+            }
             if item.allProjects {
                 initProjectToken = Self.allProjectsToken
             } else if !item.projectSlug.isEmpty
                 && item.projectSlug != "This Computer"
+                && item.projectSlug != "This computer"
                 && item.projectSlug != "All projects" {
                 initProjectToken = item.projectSlug
             }
 
             let (_, expr) = AutomationScheduleCodec.splitCronAndTimeZone(item.cronExpression)
-            if !expr.isEmpty {
-                initCustomCron = expr
-                let parts = expr.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-                if parts.count == 5 {
-                    let minF = parts[0], hourF = parts[1], domF = parts[2], monF = parts[3], dowF = parts[4]
-                    if hourF == "*", domF == "*", monF == "*", dowF == "*", let m = Int(minF) {
-                        initPreset = .hourly
-                        initMinute = m
-                    } else if let m = Int(minF), let h = Int(hourF), domF == "*", monF == "*" {
-                        initMinute = m
-                        initHour = h
-                        if dowF == "*" {
-                            initPreset = .daily
-                        } else if dowF == "1-5" {
-                            initPreset = .weekdays
-                        } else if let wd = Int(dowF), (0...7).contains(wd) {
-                            initPreset = .weekly
-                            initWeekday = wd == 7 ? 0 : wd
-                        } else {
-                            initPreset = .custom
-                        }
+            let parts = expr.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            if parts.count == 5 {
+                let minF = parts[0], hourF = parts[1], dowF = parts[4]
+                if hourF == "*", let m = Int(minF) {
+                    initFrequency = .hourly
+                    initMinute = m
+                } else if let m = Int(minF), let h = Int(hourF) {
+                    initMinute = m
+                    initHour = h
+                    if dowF == "1-5" {
+                        initFrequency = .weekdays
+                    } else if let wd = Int(dowF), (0...7).contains(wd) {
+                        initFrequency = .weekly
+                        initWeekday = wd == 7 ? 0 : wd
                     } else {
-                        initPreset = .custom
+                        initFrequency = .daily
                     }
-                } else {
-                    initPreset = .custom
                 }
             }
         } else {
@@ -1326,52 +1364,82 @@ private struct AutomationEditorSheetView: View {
                 initName = parsed.displayName
                 initPrompt = parsed.prompt
                 let (_, expr) = AutomationScheduleCodec.splitCronAndTimeZone(parsed.cronExpression)
-                initCustomCron = expr
                 let parts = expr.split(whereSeparator: { $0.isWhitespace }).map(String.init)
                 if parts.count == 5 {
                     if parts[1] == "*", let m = Int(parts[0]) {
-                        initPreset = .hourly
+                        initFrequency = .hourly
                         initMinute = m
                     } else if let m = Int(parts[0]), let h = Int(parts[1]) {
                         initMinute = m
                         initHour = h
-                        if parts[4] == "*" {
-                            initPreset = .daily
-                        } else if parts[4] == "1-5" {
-                            initPreset = .weekdays
+                        if parts[4] == "1-5" {
+                            initFrequency = .weekdays
                         } else if let wd = Int(parts[4]), (0...7).contains(wd) {
-                            initPreset = .weekly
+                            initFrequency = .weekly
                             initWeekday = wd == 7 ? 0 : wd
                         } else {
-                            initPreset = .custom
+                            initFrequency = .daily
                         }
                     }
                 }
-            }
-            if let selected = store.selectedProject, selected.runtime != .cloud, !selected.isNoProject {
-                initProjectToken = selected.name
             }
         }
 
         _displayName = State(initialValue: initName)
         _promptText = State(initialValue: initPrompt)
-        _preset = State(initialValue: initPreset)
+        _frequency = State(initialValue: initFrequency)
         _selectedHour = State(initialValue: initHour)
         _selectedMinute = State(initialValue: initMinute)
         _selectedWeekday = State(initialValue: initWeekday)
-        _customCronText = State(initialValue: initCustomCron)
         _selectedProjectToken = State(initialValue: initProjectToken)
-        _selectedModel = State(initialValue: initModel)
-        _enableImmediately = State(initialValue: initEnable)
+        _selectedModelArg = State(initialValue: initModelArg)
+        _selectedModelLabel = State(initialValue: initModelLabel)
     }
 
     private var localProjects: [ProjectWorkspace] {
         store.projects.filter { $0.runtime != .cloud && !$0.isNoProject }
     }
 
+    private var targetDisplayLabel: String {
+        if selectedProjectToken == Self.defaultProjectToken {
+            return "This computer"
+        }
+        if selectedProjectToken == Self.allProjectsToken {
+            return "All projects"
+        }
+        return selectedProjectToken
+    }
+
+    private var timeZoneShortLabel: String {
+        let offsetSec = TimeZone.current.secondsFromGMT()
+        let hours = offsetSec / 3600
+        let mins = abs(offsetSec % 3600) / 60
+        if mins == 0 {
+            return hours >= 0 ? "GMT+\(hours)" : "GMT\(hours)"
+        }
+        return String(format: "GMT%+d:%02d", hours, mins)
+    }
+
+    private var timeSlots: [TimeSlot] {
+        var set = Set<TimeSlot>()
+        for h in 0..<24 {
+            set.insert(TimeSlot(hour: h, minute: 0))
+            set.insert(TimeSlot(hour: h, minute: 30))
+        }
+        set.insert(TimeSlot(hour: selectedHour, minute: selectedMinute))
+        return set.sorted { $0.id < $1.id }
+    }
+
+    private var currentTimeLabel: String {
+        if frequency == .hourly {
+            return String(format: ":%02d", selectedMinute)
+        }
+        return TimeSlot(hour: selectedHour, minute: selectedMinute).label
+    }
+
     private var computedCronExpression: String {
         let tzId = TimeZone.current.identifier
-        switch preset {
+        switch frequency {
         case .hourly:
             return "CRON_TZ=\(tzId) \(selectedMinute) * * * *"
         case .daily:
@@ -1380,12 +1448,6 @@ private struct AutomationEditorSheetView: View {
             return "CRON_TZ=\(tzId) \(selectedMinute) \(selectedHour) * * 1-5"
         case .weekly:
             return "CRON_TZ=\(tzId) \(selectedMinute) \(selectedHour) * * \(selectedWeekday)"
-        case .custom:
-            let trimmed = customCronText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.hasPrefix("CRON_TZ=") || trimmed.hasPrefix("TZ=") || trimmed.isEmpty {
-                return trimmed
-            }
-            return "CRON_TZ=\(tzId) \(trimmed)"
         }
     }
 
@@ -1401,93 +1463,350 @@ private struct AutomationEditorSheetView: View {
     }
 
     private var canSubmit: Bool {
-        !isSubmitting
-            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !computedCronExpression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isSubmitting && !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    errorSection
-                    nameSection
-                    promptSection
-                    scheduleSection
-                    projectScopeSection
-                    modelSection
-                    enableToggleSection
-                    submitSection
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 28)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                headerBar
+                contextBar
+                submitErrorBanner
+                triggerSection
+                instructionsSection
             }
-            .background(UEChromePalette.surfaceSheet.ignoresSafeArea())
-            .navigationTitle(editingItem == nil ? "New Automation" : "Edit Automation")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        onDismiss()
-                    }
-                    .foregroundStyle(UEChromePalette.textSecondary)
-                }
-            }
+            .padding(.horizontal, 18)
+            .padding(.top, 20)
+            .padding(.bottom, 28)
         }
+        .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
         .preferredColorScheme(.dark)
     }
 
+    private var headerBar: some View {
+        HStack(alignment: .center, spacing: 10) {
+            TextField("Untitled", text: $displayName)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .tint(AntigravityTheme.accentPeriwinkle)
+                .lineLimit(1)
+
+            Button {
+                onDismiss()
+            } label: {
+                Text("Cancel")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(UEChromePalette.textBody)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 36)
+                    .background(
+                        Capsule()
+                            .fill(Color(red: 0x24 / 255.0, green: 0x26 / 255.0, blue: 0x2E / 255.0))
+                    )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                Task { await submit() }
+            } label: {
+                Group {
+                    if isSubmitting {
+                        ProgressView()
+                            .tint(AntigravityTheme.inkOnPrimaryCTA)
+                            .scaleEffect(0.8)
+                    } else {
+                        Text(editingItem == nil ? "Create" : "Save")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(canSubmit ? AntigravityTheme.inkOnPrimaryCTA : UEChromePalette.textMuted)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .frame(minWidth: 74, minHeight: 36)
+                .background(
+                    Capsule()
+                        .fill(canSubmit ? AntigravityTheme.accentPeriwinkle : Color(red: 0x1D / 255.0, green: 0x2C / 255.0, blue: 0x45 / 255.0))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSubmit)
+        }
+    }
+
+    private var contextBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Menu {
+                    Button("This computer") {
+                        selectedProjectToken = Self.defaultProjectToken
+                    }
+                    Button("All projects") {
+                        selectedProjectToken = Self.allProjectsToken
+                    }
+                    if !localProjects.isEmpty {
+                        Divider()
+                        ForEach(localProjects) { proj in
+                            Button(proj.name) {
+                                selectedProjectToken = proj.name
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(targetDisplayLabel)
+                            .font(.system(size: 14.5, weight: .medium))
+                            .foregroundStyle(UEChromePalette.textBody)
+                            .lineLimit(1)
+                        if !localProjects.isEmpty {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(UEChromePalette.textMuted)
+                        }
+                    }
+                }
+
+                Menu {
+                    Button {
+                        selectedModelArg = nil
+                        selectedModelLabel = store.selectedModelConfig.displayName
+                    } label: {
+                        Text("\(store.selectedModelConfig.displayName) (Default)")
+                    }
+                    Divider()
+                    if !store.availableModels.isEmpty {
+                        ForEach(store.availableModels) { model in
+                            Button {
+                                selectedModelArg = model.modelId
+                                selectedModelLabel = model.displayName
+                            } label: {
+                                Text(model.displayName)
+                            }
+                        }
+                    } else {
+                        Button("Gemini 3 Flash") {
+                            selectedModelArg = "gemini-3-flash"
+                            selectedModelLabel = "Gemini 3 Flash"
+                        }
+                        Button("Gemini 3 Flash Lite") {
+                            selectedModelArg = "gemini-3-flash-lite"
+                            selectedModelLabel = "Gemini 3 Flash Lite"
+                        }
+                        Button("Gemini 3.1 Pro") {
+                            selectedModelArg = "gemini-3.1-pro"
+                            selectedModelLabel = "Gemini 3.1 Pro"
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(selectedModelLabel)
+                            .font(.system(size: 13.5, weight: .medium))
+                            .foregroundStyle(UEChromePalette.textPrimary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(UEChromePalette.textMuted)
+                    }
+                    .padding(.horizontal, 11)
+                    .frame(minHeight: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(AntigravityTheme.surfaceCard)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    )
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Text("Uses your local files and tools. Schedules only.")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(UEChromePalette.textMuted)
+        }
+    }
+
     @ViewBuilder
-    private var errorSection: some View {
-        if let err = store.automationsErrorText, !err.isEmpty {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(AntigravityTheme.statusError)
+    private var submitErrorBanner: some View {
+        if let err = submitError, !err.isEmpty {
+            let authExpired = store.isAutomationsAuthExpired && store.activeHost.channel == .cloudRelay
+            let color = authExpired ? AntigravityTheme.statusWaiting : AntigravityTheme.statusError
+            HStack(spacing: 10) {
+                Image(systemName: authExpired ? "person.crop.circle.badge.exclamationmark" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(color)
                 Text(err)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(UEChromePalette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                if authExpired {
+                    Button("重新登录") {
+                        onRequestSignIn()
+                    }
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 28)
+                    .background(Capsule().fill(AntigravityTheme.statusWaiting))
+                    .buttonStyle(.plain)
+                }
             }
             .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(AntigravityTheme.statusError.opacity(0.14))
+                    .fill(color.opacity(0.14))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(color.opacity(0.32), lineWidth: 1)
             )
         }
     }
 
-    private var nameSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("NAME")
-            TextField("e.g. Nightly dependency audit", text: $displayName)
-                .font(.system(size: 15.5, weight: .regular))
-                .foregroundStyle(UEChromePalette.textPrimary)
-                .tint(AntigravityTheme.accentPeriwinkle)
-                .padding(.horizontal, 14)
-                .frame(minHeight: 46)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(UEChromePalette.surfaceSheetGroup)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
-                )
+    private var triggerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Trigger")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(UEChromePalette.textSecondary)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 7) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(UEChromePalette.textSecondary)
+                    Text("Scheduled")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(UEChromePalette.textPrimary)
+                }
+
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(TriggerFrequency.allCases) { option in
+                            Button {
+                                frequency = option
+                            } label: {
+                                if frequency == option {
+                                    Label(option.rawValue, systemImage: "checkmark")
+                                } else {
+                                    Text(option.rawValue)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(frequency.rawValue)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(UEChromePalette.textPrimary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(UEChromePalette.textMuted)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 36)
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(UEChromePalette.surfaceSubtleBox)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        )
+                    }
+
+                    Text("at")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(UEChromePalette.textSecondary)
+
+                    Menu {
+                        if frequency == .hourly {
+                            ForEach(Array(Set([0, 15, 30, 45, selectedMinute])).sorted(), id: \.self) { m in
+                                Button(String(format: ":%02d", m)) {
+                                    selectedMinute = m
+                                }
+                            }
+                        } else {
+                            ForEach(timeSlots) { slot in
+                                Button(slot.label) {
+                                    selectedHour = slot.hour
+                                    selectedMinute = slot.minute
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(currentTimeLabel)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(UEChromePalette.textPrimary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(UEChromePalette.textMuted)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 36)
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(UEChromePalette.surfaceSubtleBox)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        )
+                    }
+
+                    Text(timeZoneShortLabel)
+                        .font(.system(size: 13.5, weight: .regular))
+                        .foregroundStyle(UEChromePalette.textMuted)
+
+                    Spacer(minLength: 0)
+                }
+
+                if frequency == .weekly {
+                    HStack(spacing: 6) {
+                        ForEach(Self.weekdayItems, id: \.0) { dayNum, label in
+                            let active = (selectedWeekday == dayNum)
+                            Button {
+                                selectedWeekday = dayNum
+                            } label: {
+                                Text(label)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(active ? AntigravityTheme.inkOnPrimaryCTA : UEChromePalette.textSecondary)
+                                    .frame(maxWidth: .infinity, minHeight: 30)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(active ? AntigravityTheme.accentPeriwinkle : UEChromePalette.surfaceSubtleBox)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AntigravityTheme.surfaceCard)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+            )
         }
     }
 
-    private var promptSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("AGENT PROMPT")
+    private var instructionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Instructions")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(UEChromePalette.textSecondary)
+
             ZStack(alignment: .topLeading) {
                 if promptText.isEmpty {
-                    Text("Describe what the agent should inspect, run, or report each time this automation fires...")
-                        .font(.system(size: 15, weight: .regular))
+                    Text("What should the agent do on each run? For example: summarize new bugs assigned to me and anything that changed overnight.")
+                        .font(.system(size: 14.5, weight: .regular))
                         .foregroundStyle(UEChromePalette.textMuted)
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
+                        .padding(.vertical, 13)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $promptText)
@@ -1495,350 +1814,71 @@ private struct AutomationEditorSheetView: View {
                     .foregroundStyle(UEChromePalette.textPrimary)
                     .tint(AntigravityTheme.accentPeriwinkle)
                     .scrollContentBackground(.hidden)
-                    .frame(minHeight: 96, maxHeight: 150)
+                    .frame(minHeight: 136, maxHeight: 220)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 7)
             }
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(UEChromePalette.surfaceSheetGroup)
+                    .fill(AntigravityTheme.surfaceCard)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
             )
         }
-    }
-
-    private var scheduleSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("SCHEDULE")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(SchedulePreset.allCases) { option in
-                        let isSelected = (preset == option)
-                        Button {
-                            preset = option
-                        } label: {
-                            Text(option.rawValue)
-                                .font(.system(size: 13.5, weight: .semibold))
-                                .foregroundStyle(isSelected ? AntigravityTheme.inkOnPrimaryCTA : UEChromePalette.textBody)
-                                .padding(.horizontal, 14)
-                                .frame(minHeight: 36)
-                                .background(
-                                    Capsule()
-                                        .fill(isSelected ? AntigravityTheme.accentPeriwinkle : UEChromePalette.surfaceSheetGroup)
-                                )
-                                .overlay(
-                                    Capsule()
-                                        .strokeBorder(isSelected ? Color.clear : UEChromePalette.cardBorder, lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                scheduleControls
-                Divider().overlay(UEChromePalette.subtleDivider)
-                schedulePreviewRow
-            }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(UEChromePalette.surfaceSheetGroup)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var scheduleControls: some View {
-        if preset == .weekly {
-            HStack(spacing: 6) {
-                ForEach(Self.weekdayItems, id: \.0) { dayNum, label in
-                    let active = (selectedWeekday == dayNum)
-                    Button {
-                        selectedWeekday = dayNum
-                    } label: {
-                        Text(label)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(active ? AntigravityTheme.inkOnPrimaryCTA : UEChromePalette.textSecondary)
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(active ? AntigravityTheme.accentPeriwinkle : UEChromePalette.surfaceSubtleBox)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-
-        if preset == .custom {
-            TextField("0 9 * * 1-5", text: $customCronText)
-                .font(.system(size: 14.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(UEChromePalette.textPrimary)
-                .tint(AntigravityTheme.accentPeriwinkle)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .padding(.horizontal, 12)
-                .frame(minHeight: 42)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(UEChromePalette.surfaceSubtleBox)
-                )
-        } else {
-            HStack(spacing: 12) {
-                if preset != .hourly {
-                    HStack(spacing: 6) {
-                        Text("Hour")
-                            .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textSecondary)
-                        Picker("Hour", selection: $selectedHour) {
-                            ForEach(0..<24, id: \.self) { h in
-                                Text(String(format: "%02d", h)).tag(h)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .tint(AntigravityTheme.accentPeriwinkle)
-                    }
-                }
-
-                HStack(spacing: 6) {
-                    Text("Minute")
-                        .font(.system(size: 13.5, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textSecondary)
-                    Picker("Minute", selection: $selectedMinute) {
-                        ForEach(Array(Set([0, 5, 10, 15, 20, 30, 45, selectedMinute])).sorted(), id: \.self) { m in
-                            Text(String(format: ":%02d", m)).tag(m)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .tint(AntigravityTheme.accentPeriwinkle)
-                }
-
-                Spacer()
-            }
-        }
-    }
-
-    private var schedulePreviewRow: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(AutomationScheduleCodec.humanReadableSchedule(from: computedCronExpression))
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textPrimary)
-                Text(computedCronExpression)
-                    .font(.system(size: 11.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(UEChromePalette.textMuted)
-                    .lineLimit(1)
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("NEXT RUN")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textMuted)
-                Text(AutomationScheduleCodec.nextFireDescription(from: computedCronExpression))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-            }
-        }
-    }
-
-    private var projectScopeSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("PROJECT SCOPE")
-            HStack {
-                Text("Target")
-                    .font(.system(size: 14.5, weight: .medium))
-                    .foregroundStyle(UEChromePalette.textPrimary)
-                Spacer()
-                Picker("Target Project", selection: $selectedProjectToken) {
-                    Text("This Computer (Default)").tag(Self.defaultProjectToken)
-                    Text("All projects").tag(Self.allProjectsToken)
-                    ForEach(localProjects) { proj in
-                        Text(proj.name).tag(proj.name)
-                    }
-                    if selectedProjectToken != Self.defaultProjectToken
-                        && selectedProjectToken != Self.allProjectsToken
-                        && !localProjects.contains(where: { $0.name == selectedProjectToken }) {
-                        Text(selectedProjectToken).tag(selectedProjectToken)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(AntigravityTheme.accentPeriwinkle)
-            }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 46)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(UEChromePalette.surfaceSheetGroup)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
-            )
-
-            Text("Scheduled Automations run locally on \(store.activeHost.hostname).")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(UEChromePalette.textMuted)
-                .padding(.leading, 4)
-        }
-    }
-
-    private var modelSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("MODEL")
-            HStack(spacing: 8) {
-                ForEach(ModelOption.allCases) { option in
-                    let active = (selectedModel == option)
-                    Button {
-                        selectedModel = option
-                    } label: {
-                        Text(option.rawValue)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(active ? AntigravityTheme.inkOnPrimaryCTA : UEChromePalette.textBody)
-                            .frame(maxWidth: .infinity, minHeight: 38)
-                            .background(
-                                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .fill(active ? AntigravityTheme.accentPeriwinkle : UEChromePalette.surfaceSheetGroup)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .strokeBorder(active ? Color.clear : UEChromePalette.cardBorder, lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var enableToggleSection: some View {
-        if editingItem == nil {
-            Toggle(isOn: $enableImmediately) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Enable immediately")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textPrimary)
-                    Text("Start scheduling on \(store.activeHost.hostname) as soon as created")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textMuted)
-                }
-            }
-            .tint(AntigravityTheme.accentPeriwinkle)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(UEChromePalette.surfaceSheetGroup)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var submitSection: some View {
-        Button {
-            Task { await submit() }
-        } label: {
-            HStack(spacing: 8) {
-                if isSubmitting {
-                    ProgressView()
-                        .tint(AntigravityTheme.inkOnPrimaryCTA)
-                }
-                Text(editingItem == nil ? "Create Automation" : "Save Changes")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
-            }
-            .frame(maxWidth: .infinity, minHeight: 50)
-            .background(
-                Capsule()
-                    .fill(canSubmit ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.accentPeriwinkle.opacity(0.35))
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(!canSubmit)
-        .padding(.top, 4)
-
-        if editingItem == nil {
-            Button {
-                let targetSlug = (selectedProjectToken == Self.defaultProjectToken || selectedProjectToken == Self.allProjectsToken)
-                    ? nil
-                    : selectedProjectToken
-                let seed = promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    : promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-                onDismiss()
-                store.createAutomationWithAgent(prompt: seed, projectSlug: targetSlug)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 13.5, weight: .semibold))
-                    Text("Or build interactively with /automation")
-                        .font(.system(size: 14, weight: .medium))
-                }
-                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                .frame(maxWidth: .infinity, minHeight: 40)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11.5, weight: .semibold))
-            .tracking(0.8)
-            .foregroundStyle(UEChromePalette.textMuted)
-            .padding(.leading, 4)
     }
 
     private func submit() async {
         guard canSubmit else { return }
         isSubmitting = true
+        submitError = nil
         defer { isSubmitting = false }
+
+        let trimmedPrompt = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawTitle = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveTitle: String = {
+            if !rawTitle.isEmpty && rawTitle.caseInsensitiveCompare("Untitled") != .orderedSame {
+                return rawTitle
+            }
+            let firstLine = trimmedPrompt.split(separator: "\n").first.map(String.init) ?? trimmedPrompt
+            return String(firstLine.prefix(48))
+        }()
 
         let target = resolvedProjectParams
         let humanSched = AutomationScheduleCodec.humanReadableSchedule(from: computedCronExpression)
-        let desc = "\(humanSched): \(promptText.trimmingCharacters(in: .whitespacesAndNewlines))"
+        let desc = "\(humanSched): \(trimmedPrompt)"
 
         let success: Bool
         if let existing = editingItem {
             success = await store.updateAutomation(
                 automationId: existing.id,
-                displayName: displayName,
-                prompt: promptText,
+                displayName: effectiveTitle,
+                prompt: trimmedPrompt,
                 cronExpression: computedCronExpression,
                 projectSlug: target.slug,
                 projectId: target.projectId,
                 allProjects: target.allProjects,
-                modelArg: selectedModel.modelArg,
+                modelArg: selectedModelArg,
                 description: desc
             )
         } else {
             success = await store.createAutomation(
-                displayName: displayName,
-                prompt: promptText,
+                displayName: effectiveTitle,
+                prompt: trimmedPrompt,
                 cronExpression: computedCronExpression,
                 projectSlug: target.slug,
                 projectId: target.projectId,
                 allProjects: target.allProjects,
-                modelArg: selectedModel.modelArg,
+                modelArg: selectedModelArg,
                 description: desc,
-                enableImmediately: enableImmediately
+                enableImmediately: true
             )
         }
         if success {
             onDismiss()
+        } else {
+            submitError = store.automationsErrorText ?? "Failed to save automation."
         }
     }
 }

@@ -101,6 +101,7 @@ public final class AntigravitySessionStore {
     public var isLoadingAutomations: Bool = false
     public var isMutatingAutomation: Bool = false
     public var automationsErrorText: String? = nil
+    public var isAutomationsAuthExpired: Bool = false
     public var contextCandidates: [ContextCandidateItem]
     public var contextSearchQuery: String = ""
     public var selectedContextCategoryFilter: ContextCategory? = nil
@@ -954,6 +955,7 @@ public final class AntigravitySessionStore {
         isLoadingAutomations = false
         isMutatingAutomation = false
         automationsErrorText = nil
+        isAutomationsAuthExpired = false
         optimisticActiveUntilByCascadeId.removeAll()
         syncedConfigCascadeIds.removeAll()
         locallyCreatedEmptyCascadeIds.removeAll()
@@ -1735,6 +1737,7 @@ public final class AntigravitySessionStore {
         composerAttachments = []
         stepLoadErrorText = nil
         automationsErrorText = nil
+        isAutomationsAuthExpired = false
         lastAutomationsSyncAt = nil
         automations = []
 
@@ -3056,11 +3059,14 @@ public final class AntigravitySessionStore {
 
     // MARK: - Automations Actions (`UE06` — Native Antigravity 2.0 Sidecars)
 
-    private static func formatAutomationError(_ error: Error) -> String {
+    private static func formatAutomationError(_ error: Error, isCloudRelay: Bool = true) -> String {
         if let rpcErr = error as? AntigravityRPCError {
             switch rpcErr {
-            case .unauthorized(let msg):
-                return "Auth error: \(msg)"
+            case .unauthorized:
+                if isCloudRelay {
+                    return "Google 登录会话已过期，请点击下方重新登录。"
+                }
+                return "宿主机鉴权失败，请检查配对 Token 或重新配对。"
             case .httpError(let code, let body):
                 let cleaned = body.trimmingCharacters(in: .whitespacesAndNewlines)
                 if cleaned.isEmpty {
@@ -3076,6 +3082,19 @@ public final class AntigravitySessionStore {
             }
         }
         return error.localizedDescription
+    }
+
+    private func recordAutomationError(_ error: Error, silent: Bool = false) {
+        let isRelay = (activeHost.channel == .cloudRelay)
+        if case AntigravityRPCError.unauthorized = error {
+            isAutomationsAuthExpired = true
+            connectionStatusText = isRelay ? "Google Sign-In Expired" : "Offline · \(activeHost.hostname) (Auth Expired)"
+            automationsErrorText = Self.formatAutomationError(error, isCloudRelay: isRelay)
+            return
+        }
+        if !silent || automations.isEmpty {
+            automationsErrorText = Self.formatAutomationError(error, isCloudRelay: isRelay)
+        }
     }
 
     /// Reconciles live Cascade summary state (`running`, `waiting`, `error`, `done`) onto Automations
@@ -3159,12 +3178,11 @@ public final class AntigravitySessionStore {
             let reconciled = Self.reconcileAutomations(remote, with: summaries)
             automations = reconciled
             automationsErrorText = nil
+            isAutomationsAuthExpired = false
             lastAutomationsSyncAt = Date()
             await projectionStore.saveAutomations(reconciled)
         } catch {
-            if !silent || automations.isEmpty {
-                automationsErrorText = Self.formatAutomationError(error)
-            }
+            recordAutomationError(error, silent: silent)
         }
     }
 
@@ -3242,7 +3260,7 @@ public final class AntigravitySessionStore {
             } catch {
                 guard let self else { return }
                 self.automations.removeAll { $0.id == optimisticId }
-                self.automationsErrorText = Self.formatAutomationError(error)
+                self.recordAutomationError(error)
                 await storeRef.saveAutomations(self.automations)
             }
         }
@@ -3321,7 +3339,7 @@ public final class AntigravitySessionStore {
             await refreshAutomations(silent: true)
             return true
         } catch {
-            automationsErrorText = Self.formatAutomationError(error)
+            recordAutomationError(error)
             return false
         }
     }
@@ -3369,7 +3387,7 @@ public final class AntigravitySessionStore {
                     instanceUuidOverride: originUuid
                 )
             } catch {
-                automationsErrorText = Self.formatAutomationError(error)
+                recordAutomationError(error)
                 return false
             }
         }
@@ -3435,7 +3453,7 @@ public final class AntigravitySessionStore {
                 if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
                     self.automations[currentIdx] = previous
                 }
-                self.automationsErrorText = Self.formatAutomationError(error)
+                self.recordAutomationError(error)
                 await storeRef.saveAutomations(self.automations)
             }
         }
@@ -3472,7 +3490,7 @@ public final class AntigravitySessionStore {
                 if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
                     self.automations[currentIdx] = previous
                 }
-                self.automationsErrorText = Self.formatAutomationError(error)
+                self.recordAutomationError(error)
                 await storeRef.saveAutomations(self.automations)
             }
         }
@@ -3515,7 +3533,7 @@ public final class AntigravitySessionStore {
                 if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
                     self.automations[currentIdx] = previous
                 }
-                self.automationsErrorText = Self.formatAutomationError(error)
+                self.recordAutomationError(error)
                 await storeRef.saveAutomations(self.automations)
             }
         }
@@ -3545,7 +3563,7 @@ public final class AntigravitySessionStore {
                 guard let self else { return }
                 let insertIdx = min(idx, self.automations.count)
                 self.automations.insert(removed, at: insertIdx)
-                self.automationsErrorText = Self.formatAutomationError(error)
+                self.recordAutomationError(error)
                 await storeRef.saveAutomations(self.automations)
             }
         }
@@ -3568,7 +3586,7 @@ public final class AntigravitySessionStore {
                 )
                 await self?.refreshAutomations(silent: true)
             } catch {
-                self?.automationsErrorText = Self.formatAutomationError(error)
+                self?.recordAutomationError(error)
             }
         }
     }

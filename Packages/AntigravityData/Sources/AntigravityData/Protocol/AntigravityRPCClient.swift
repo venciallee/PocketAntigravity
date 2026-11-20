@@ -977,7 +977,7 @@ public actor AntigravityRPCClient {
         let currentAuthUser = authUser
         let session = urlSession
 
-        func sendOnce(to targetUuid: String) async throws -> (payload: Data, headers: [String: String]) {
+        func sendOnce(to targetUuid: String, authUserOverride: String? = nil) async throws -> (payload: Data, headers: [String: String]) {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             if let timeoutInterval {
@@ -987,7 +987,7 @@ public actor AntigravityRPCClient {
                 to: &request,
                 cookieHeader: currentCookie,
                 origin: originStr,
-                authUser: currentAuthUser,
+                authUser: authUserOverride ?? currentAuthUser,
                 isStreaming: false
             )
             request.httpBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
@@ -1019,6 +1019,12 @@ public actor AntigravityRPCClient {
         do {
             return try await sendOnce(to: initialTargetUuid)
         } catch let AntigravityRPCError.unauthorized(msg) {
+            if let resolved = try? await resolveCloudRelayInstance(
+                preferredIdentifier: targetInstanceIdentifier,
+                timeoutInterval: 6.0
+            ), (resolved.matchedAuthUser != currentAuthUser || resolved.selected.uuid != initialTargetUuid) {
+                return try await sendOnce(to: resolved.selected.uuid, authUserOverride: resolved.matchedAuthUser)
+            }
             throw AntigravityRPCError.unauthorized(msg)
         } catch {
             let shouldFailover: Bool = {
