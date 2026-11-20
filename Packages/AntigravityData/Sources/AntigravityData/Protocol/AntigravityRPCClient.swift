@@ -2170,7 +2170,7 @@ public actor AntigravityRPCClient {
                     ])
                 )
             }
-            for link in draft.googleDriveLinks where !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            for link in draft.driveResourceLinks where !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 resourceEntries.append(
                     .object([
                         "remoteResource": .object([
@@ -2220,8 +2220,8 @@ public actor AntigravityRPCClient {
             "repository": .string(repoName),
             "branchWorktree": .string(draft.branchWorktree)
         ]
-        if !draft.googleDriveLinks.isEmpty {
-            body["googleDriveLinks"] = .array(draft.googleDriveLinks.map(JSONValue.string))
+        if !draft.driveResourceLinks.isEmpty {
+            body["googleDriveLinks"] = .array(draft.driveResourceLinks.map(JSONValue.string))
         }
         if !draft.uploadedFilePaths.isEmpty {
             body["uploadedFilePaths"] = .array(draft.uploadedFilePaths.map(JSONValue.string))

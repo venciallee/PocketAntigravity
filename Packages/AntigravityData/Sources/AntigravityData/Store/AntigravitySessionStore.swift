@@ -4591,7 +4591,7 @@ public final class AntigravitySessionStore {
             if summary.title.lowercased().contains(q)
                 || summary.projectSlug.lowercased().contains(q)
                 || summary.statusSubtitle.lowercased().contains(q)
-                || summary.lastMessagePreview.lowercased().contains(q) {
+                || (summary.lastMessagePreview?.lowercased().contains(q) ?? false) {
                 return true
             }
             if let steps = stepsByCascadeId[summary.cascadeId] {

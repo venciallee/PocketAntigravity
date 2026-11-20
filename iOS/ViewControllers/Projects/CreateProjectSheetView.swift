@@ -470,10 +470,10 @@ public struct CreateProjectSheetView: View {
                         .foregroundStyle(Color.white)
                     Spacer()
                     TextField("Optional Google Drive folder link", text: Binding(
-                        get: { store.newProjectDraft.googleDriveLinks.first ?? "" },
+                        get: { store.newProjectDraft.driveResourceLinks.first ?? "" },
                         set: { val in
                             let clean = val.trimmingCharacters(in: .whitespacesAndNewlines)
-                            store.newProjectDraft.googleDriveLinks = clean.isEmpty ? [] : [clean]
+                            store.newProjectDraft.driveResourceLinks = clean.isEmpty ? [] : [clean]
                         }
                     ))
                     .font(.system(size: 13.5))
