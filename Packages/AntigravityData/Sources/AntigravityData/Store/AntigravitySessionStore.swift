@@ -98,6 +98,9 @@ public final class AntigravitySessionStore {
     public var summaries: [CascadeSummary]
     public var automations: [AutomationItem]
     public var automationPromptDraft: String = ""
+    public var isLoadingAutomations: Bool = false
+    public var isMutatingAutomation: Bool = false
+    public var automationsErrorText: String? = nil
     public var contextCandidates: [ContextCandidateItem]
     public var contextSearchQuery: String = ""
     public var selectedContextCategoryFilter: ContextCategory? = nil
@@ -175,6 +178,7 @@ public final class AntigravitySessionStore {
     private var optimisticActiveUntilByCascadeId: [String: Date] = [:]
     private var consecutiveSyncFailures: Int = 0
     private var backgroundPollCounter: Int = 0
+    private var lastAutomationsSyncAt: Date? = nil
     private var syncedConfigCascadeIds: Set<String> = []
     internal var locallyCreatedEmptyCascadeIds: Set<String> = []
     private var stepSyncGeneration: UInt64 = 0
@@ -946,6 +950,10 @@ public final class AntigravitySessionStore {
         lastStreamReopenAttemptAt = .distantPast
         pendingOutboxCount = 0
         connectionLifecyclePhase = .disconnected
+        lastAutomationsSyncAt = nil
+        isLoadingAutomations = false
+        isMutatingAutomation = false
+        automationsErrorText = nil
         optimisticActiveUntilByCascadeId.removeAll()
         syncedConfigCascadeIds.removeAll()
         locallyCreatedEmptyCascadeIds.removeAll()
@@ -1726,6 +1734,8 @@ public final class AntigravitySessionStore {
         composerDraftText = ""
         composerAttachments = []
         stepLoadErrorText = nil
+        automationsErrorText = nil
+        lastAutomationsSyncAt = nil
         automations = []
 
         let projectsSnapshot = projects
@@ -2047,17 +2057,6 @@ public final class AntigravitySessionStore {
                 }
             }
             return false
-        }
-    }
-
-    /// Refreshes automations on demand (initial handshake, Automations tab entry, or manual pull-to-refresh)
-    /// instead of on every periodic summary tick.
-    public func refreshAutomations() async {
-        guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
-        guard isLiveBackendConnected, let client = rpcClient else { return }
-        if let remoteAutos = try? await client.listAutomations() {
-            automations = remoteAutos
-            await projectionStore.saveAutomations(remoteAutos)
         }
     }
 
@@ -3046,13 +3045,128 @@ public final class AntigravitySessionStore {
             return
         }
 
-        if includeAutomations && isLiveBackendConnected, let remoteAutos = try? await client.listAutomations() {
-            automations = remoteAutos
-            await projectionStore.saveAutomations(remoteAutos)
+        if isLiveBackendConnected {
+            if includeAutomations {
+                await refreshAutomations(silent: true)
+            } else if !automations.isEmpty {
+                automations = Self.reconcileAutomations(automations, with: summaries)
+            }
         }
     }
 
-    // MARK: - Automations Actions (`UE06`)
+    // MARK: - Automations Actions (`UE06` — Native Antigravity 2.0 Sidecars)
+
+    private static func formatAutomationError(_ error: Error) -> String {
+        if let rpcErr = error as? AntigravityRPCError {
+            switch rpcErr {
+            case .unauthorized(let msg):
+                return "Auth error: \(msg)"
+            case .httpError(let code, let body):
+                let cleaned = body.trimmingCharacters(in: .whitespacesAndNewlines)
+                if cleaned.isEmpty {
+                    return "Host rejected request (HTTP \(code))."
+                }
+                return "Host error (\(code)): \(String(cleaned.prefix(160)))"
+            case .invalidEndpoint:
+                return "Host endpoint is unavailable."
+            case .decodingError(let msg):
+                return "Invalid response from host: \(msg)"
+            case .interactionRejected:
+                return "Automation action was rejected by host."
+            }
+        }
+        return error.localizedDescription
+    }
+
+    /// Reconciles live Cascade summary state (`running`, `waiting`, `error`, `done`) onto Automations
+    /// whose latest `GetSidecarEvents` payload references a `lastRunCascadeId`.
+    public static func reconcileAutomations(
+        _ items: [AutomationItem],
+        with summaries: [CascadeSummary]
+    ) -> [AutomationItem] {
+        guard !items.isEmpty, !summaries.isEmpty else { return items }
+        var byCascadeId: [String: CascadeSummary] = [:]
+        for summary in summaries {
+            byCascadeId[summary.cascadeId] = summary
+        }
+        return items.map { raw in
+            var copy = raw
+            guard let cid = copy.lastRunCascadeId, let summary = byCascadeId[cid] else {
+                return copy
+            }
+            switch summary.status {
+            case .inProgress, .pending:
+                copy.isRunningNow = true
+                copy.needsReview = false
+                copy.lastRunText = "Running · \(summary.relativeTimeLabel)"
+            case .waiting, .blocked:
+                copy.isRunningNow = false
+                copy.needsReview = true
+                copy.lastRunText = "Needs review · \(summary.relativeTimeLabel)"
+            case .error:
+                copy.isRunningNow = false
+                copy.needsReview = true
+                let lower = copy.lastRunText.lowercased()
+                if !lower.hasPrefix("failed") && !lower.hasPrefix("error") {
+                    copy.lastRunText = "Failed · \(summary.relativeTimeLabel)"
+                }
+            case .done:
+                copy.isRunningNow = false
+                if copy.lastRunText.lowercased().hasPrefix("running") {
+                    copy.lastRunText = "Succeeded · \(summary.relativeTimeLabel)"
+                }
+            case .unspecified, .cancelled:
+                copy.isRunningNow = false
+            }
+            return copy
+        }
+    }
+
+    private func preferredLocalAutomationProjectSlug() -> String {
+        if let selected = selectedProject, selected.runtime != .cloud, !selected.isNoProject {
+            return selected.name
+        }
+        if let firstLocal = projects.first(where: { $0.runtime != .cloud && !$0.isNoProject }) {
+            return firstLocal.name
+        }
+        if hasPairedBackend || isLiveBackendConnected {
+            return "This Computer"
+        }
+        return selectedProject?.id ?? "ledger-svc"
+    }
+
+    /// Refreshes native Antigravity 2.0 Automations via `GetSidecars` + `GetSidecarEvents`.
+    public func refreshAutomations(silent: Bool = false) async {
+        if isVerificationMode && !isLiveBackendConnected {
+            return
+        }
+        guard !isNetworkingSuspended, isDeviceNetworkReachable else {
+            return
+        }
+        guard let client = rpcClient, (hasPairedBackend || isLiveBackendConnected) else {
+            return
+        }
+        if !silent {
+            isLoadingAutomations = true
+        }
+        defer {
+            if !silent {
+                isLoadingAutomations = false
+            }
+        }
+        do {
+            let remote = try await client.listAutomations()
+            let reconciled = Self.reconcileAutomations(remote, with: summaries)
+            automations = reconciled
+            automationsErrorText = nil
+            lastAutomationsSyncAt = Date()
+            await projectionStore.saveAutomations(reconciled)
+        } catch {
+            if !silent || automations.isEmpty {
+                automationsErrorText = Self.formatAutomationError(error)
+            }
+        }
+    }
 
     @discardableResult
     public func createAutomationFromPrompt(_ prompt: String = "") -> AutomationItem? {
@@ -3061,62 +3175,428 @@ public final class AntigravitySessionStore {
             : prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
 
-        let slug = selectedProject?.id ?? "ledger-svc"
+        let parsed = AutomationScheduleCodec.parseNaturalLanguagePrompt(raw)
+        let slug = preferredLocalAutomationProjectSlug()
+        let optimisticId = parsed.sidecarId
         let item = AutomationItem(
-            id: "auto-\(UUID().uuidString.prefix(8).lowercased())",
-            title: raw,
+            id: optimisticId,
+            title: parsed.displayName,
             projectSlug: slug,
-            scheduleSummary: "\(slug) · Weekdays at 09:00 · Flash",
+            scheduleSummary: "\(slug) · \(parsed.humanScheduleLabel) · Flash",
             section: .scheduled,
-            nextRunText: "Tomorrow, 09:00",
-            lastRunText: "Created just now",
+            nextRunText: AutomationScheduleCodec.nextFireDescription(from: parsed.cronExpression),
+            lastRunText: (hasPairedBackend || isLiveBackendConnected) ? "Creating..." : "Created just now",
             needsReview: false,
-            isRunningNow: false
+            isRunningNow: false,
+            descriptionText: "\(parsed.humanScheduleLabel): \(parsed.prompt)",
+            prompt: parsed.prompt,
+            cronExpression: parsed.cronExpression,
+            projectId: nil,
+            allProjects: slug == "All projects",
+            modelLabel: "Flash",
+            isEnabled: true,
+            isScheduleBuiltin: true
         )
         automations.insert(item, at: 0)
         automationPromptDraft = ""
+        automationsErrorText = nil
 
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
         let snapshot = automations
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
-            await storeRef.saveAutomations(snapshot)
-            _ = try? await clientRef?.createAutomation(prompt: raw, projectSlug: slug)
+        if isLive {
+            isMutatingAutomation = true
+        }
+
+        Task { [weak self] in
+            if !isLive {
+                await storeRef.saveAutomations(snapshot)
+                return
+            }
+            defer {
+                self?.isMutatingAutomation = false
+            }
+            guard let clientRef else { return }
+            do {
+                let created = try await clientRef.createAutomation(
+                    displayName: parsed.displayName,
+                    prompt: parsed.prompt,
+                    cronExpression: parsed.cronExpression,
+                    projectSlug: slug,
+                    projectId: nil,
+                    allProjects: slug == "All projects",
+                    modelArg: nil,
+                    description: "\(parsed.humanScheduleLabel): \(parsed.prompt)",
+                    enableImmediately: true
+                )
+                guard let self else { return }
+                if let idx = self.automations.firstIndex(where: { $0.id == optimisticId }) {
+                    self.automations[idx] = created
+                } else {
+                    self.automations.insert(created, at: 0)
+                }
+                self.automationsErrorText = nil
+                await storeRef.saveAutomations(self.automations)
+                await self.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                self.automations.removeAll { $0.id == optimisticId }
+                self.automationsErrorText = Self.formatAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
         }
         return item
     }
 
+    /// Creates a structured scheduled Automation via native `ManageSidecar(SIDECAR_ACTION_CREATE)`.
+    @discardableResult
+    public func createAutomation(
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        projectSlug: String,
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil,
+        description: String = "",
+        enableImmediately: Bool = true
+    ) async -> Bool {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCron = cronExpression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty, !trimmedCron.isEmpty else {
+            automationsErrorText = "Please enter a name, schedule, and prompt."
+            return false
+        }
+
+        automationsErrorText = nil
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+        if !isLive {
+            let humanSched = AutomationScheduleCodec.humanReadableSchedule(from: trimmedCron)
+            let modelBadge = AutomationScheduleCodec.formatModelBadge(modelArg ?? "Flash")
+            let slugLabel = projectSlug.isEmpty ? (allProjects ? "All projects" : "This Computer") : projectSlug
+            let localItem = AutomationItem(
+                id: AutomationScheduleCodec.makeSidecarId(from: trimmedName),
+                title: trimmedName,
+                projectSlug: slugLabel,
+                scheduleSummary: "\(slugLabel) · \(humanSched) · \(modelBadge)",
+                section: enableImmediately ? .scheduled : .paused,
+                nextRunText: enableImmediately ? AutomationScheduleCodec.nextFireDescription(from: trimmedCron) : "Paused",
+                lastRunText: enableImmediately ? "Created just now" : "Paused · New",
+                descriptionText: description,
+                prompt: trimmedPrompt,
+                cronExpression: trimmedCron,
+                projectId: projectId,
+                allProjects: allProjects,
+                modelLabel: modelBadge,
+                isEnabled: enableImmediately,
+                isScheduleBuiltin: true
+            )
+            automations.insert(localItem, at: 0)
+            await projectionStore.saveAutomations(automations)
+            return true
+        }
+
+        guard let client = rpcClient else { return false }
+        isMutatingAutomation = true
+        defer { isMutatingAutomation = false }
+
+        do {
+            let created = try await client.createAutomation(
+                displayName: trimmedName,
+                prompt: trimmedPrompt,
+                cronExpression: trimmedCron,
+                projectSlug: projectSlug,
+                projectId: projectId,
+                allProjects: allProjects,
+                modelArg: modelArg,
+                description: description,
+                enableImmediately: enableImmediately
+            )
+            automations.removeAll { $0.id == created.id }
+            automations.insert(created, at: 0)
+            automationsErrorText = nil
+            await projectionStore.saveAutomations(automations)
+            await refreshAutomations(silent: true)
+            return true
+        } catch {
+            automationsErrorText = Self.formatAutomationError(error)
+            return false
+        }
+    }
+
+    /// Updates an existing scheduled Automation via `ManageSidecar(SIDECAR_ACTION_UPDATE)`.
+    @discardableResult
+    public func updateAutomation(
+        automationId: String,
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        projectSlug: String,
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil,
+        description: String = ""
+    ) async -> Bool {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCron = cronExpression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty, !trimmedCron.isEmpty else {
+            automationsErrorText = "Please enter a name, schedule, and prompt."
+            return false
+        }
+
+        automationsErrorText = nil
+        let existing = automations.first(where: { $0.id == automationId })
+        let originUuid = existing?.originInstanceUuid
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+
+        if isLive, let client = rpcClient {
+            isMutatingAutomation = true
+            defer { isMutatingAutomation = false }
+            do {
+                try await client.updateAutomation(
+                    automationId: automationId,
+                    displayName: trimmedName,
+                    prompt: trimmedPrompt,
+                    cronExpression: trimmedCron,
+                    projectSlug: projectSlug,
+                    projectId: projectId,
+                    allProjects: allProjects,
+                    modelArg: modelArg,
+                    description: description,
+                    instanceUuidOverride: originUuid
+                )
+            } catch {
+                automationsErrorText = Self.formatAutomationError(error)
+                return false
+            }
+        }
+
+        if let idx = automations.firstIndex(where: { $0.id == automationId }) {
+            let humanSched = AutomationScheduleCodec.humanReadableSchedule(from: trimmedCron)
+            let modelBadge = AutomationScheduleCodec.formatModelBadge(modelArg ?? automations[idx].modelLabel ?? "Flash")
+            let slugLabel = projectSlug.isEmpty ? (allProjects ? "All projects" : "This Computer") : projectSlug
+            automations[idx].title = trimmedName
+            automations[idx].prompt = trimmedPrompt
+            automations[idx].cronExpression = trimmedCron
+            automations[idx].descriptionText = description
+            automations[idx].projectSlug = slugLabel
+            automations[idx].projectId = projectId
+            automations[idx].allProjects = allProjects
+            automations[idx].modelLabel = modelBadge
+            automations[idx].scheduleSummary = "\(slugLabel) · \(humanSched) · \(modelBadge)"
+            if automations[idx].section == .scheduled {
+                automations[idx].nextRunText = AutomationScheduleCodec.nextFireDescription(from: trimmedCron)
+            }
+        }
+        await projectionStore.saveAutomations(automations)
+        if isLive {
+            await refreshAutomations(silent: true)
+        }
+        return true
+    }
+
     public func triggerAutomationNow(_ automationId: String) {
         guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        let previous = automations[idx]
         automations[idx].isRunningNow = true
         automations[idx].needsReview = false
         automations[idx].lastRunText = "Running now..."
+        automationsErrorText = nil
 
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
         let snapshot = automations
         let storeRef = projectionStore
         let clientRef = rpcClient
-        let entry = OutboxEntry(cascadeId: automationId, kind: .automationTrigger, messageText: "TriggerAutomationNow")
-        Task {
+        let originUuid = previous.originInstanceUuid
+        let entry = OutboxEntry(cascadeId: automationId, kind: .automationTrigger, messageText: "ManageSidecar:RUN_NOW")
+
+        Task { [weak self] in
             await storeRef.enqueueOutbox(entry)
             await storeRef.saveAutomations(snapshot)
-            try? await clientRef?.triggerAutomationNow(automationId: automationId)
-            await storeRef.removeOutboxEntry(id: entry.id)
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.triggerAutomationNow(
+                    automationId: automationId,
+                    instanceUuidOverride: originUuid
+                )
+                await storeRef.removeOutboxEntry(id: entry.id)
+                // Follow up briefly so newly spawned conversation links to `lastRunCascadeId`.
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                await self?.refreshAutomations(silent: true)
+                await self?.refreshWorkspacesAndSummaries()
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                await storeRef.removeOutboxEntry(id: entry.id)
+                if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
+                    self.automations[currentIdx] = previous
+                }
+                self.automationsErrorText = Self.formatAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
+        }
+    }
+
+    public func pauseAutomation(_ automationId: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        let previous = automations[idx]
+        automations[idx].section = .paused
+        automations[idx].isEnabled = false
+        automations[idx].isRunningNow = false
+        automations[idx].nextRunText = "Paused"
+        automations[idx].lastRunText = "Paused · just now"
+        automationsErrorText = nil
+
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+        let snapshot = automations
+        let storeRef = projectionStore
+        let clientRef = rpcClient
+        let originUuid = previous.originInstanceUuid
+
+        Task { [weak self] in
+            await storeRef.saveAutomations(snapshot)
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.setAutomationPaused(
+                    automationId: automationId,
+                    isPaused: true,
+                    instanceUuidOverride: originUuid
+                )
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
+                    self.automations[currentIdx] = previous
+                }
+                self.automationsErrorText = Self.formatAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
         }
     }
 
     public func resumeAutomation(_ automationId: String) {
         guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
-        automations[idx].section = .scheduled
-        automations[idx].nextRunText = "Tomorrow, 08:00"
+        let previous = automations[idx]
+        let targetSection: AutomationSectionKind = previous.isScheduleBuiltin ? .scheduled : .alwaysOn
+        automations[idx].section = targetSection
+        automations[idx].isEnabled = true
+        if targetSection == .scheduled {
+            automations[idx].nextRunText = previous.cronExpression.isEmpty
+                ? "Tomorrow, 08:00"
+                : AutomationScheduleCodec.nextFireDescription(from: previous.cronExpression)
+        } else {
+            automations[idx].nextRunText = "Listening"
+        }
         automations[idx].lastRunText = "Resumed · just now"
+        automationsErrorText = nil
 
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
         let snapshot = automations
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
+        let originUuid = previous.originInstanceUuid
+
+        Task { [weak self] in
             await storeRef.saveAutomations(snapshot)
-            try? await clientRef?.setAutomationPaused(automationId: automationId, isPaused: false)
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.setAutomationPaused(
+                    automationId: automationId,
+                    isPaused: false,
+                    instanceUuidOverride: originUuid
+                )
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
+                    self.automations[currentIdx] = previous
+                }
+                self.automationsErrorText = Self.formatAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
         }
+    }
+
+    public func deleteAutomation(_ automationId: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        let removed = automations.remove(at: idx)
+        automationsErrorText = nil
+
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+        let snapshot = automations
+        let storeRef = projectionStore
+        let clientRef = rpcClient
+        let originUuid = removed.originInstanceUuid
+
+        Task { [weak self] in
+            await storeRef.saveAutomations(snapshot)
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.deleteAutomation(
+                    automationId: automationId,
+                    instanceUuidOverride: originUuid
+                )
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                let insertIdx = min(idx, self.automations.count)
+                self.automations.insert(removed, at: insertIdx)
+                self.automationsErrorText = Self.formatAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
+        }
+    }
+
+    public func restartAutomation(_ automationId: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        let originUuid = automations[idx].originInstanceUuid
+        automations[idx].lastRunText = "Restarting..."
+        automationsErrorText = nil
+
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+        let clientRef = rpcClient
+        Task { [weak self] in
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.restartAutomation(
+                    automationId: automationId,
+                    instanceUuidOverride: originUuid
+                )
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                self?.automationsErrorText = Self.formatAutomationError(error)
+            }
+        }
+    }
+
+    /// Launches Antigravity Desktop's official interactive `/automation` builder in a local host conversation.
+    /// The host agent clarifies schedule/permissions (via `UE10` Structured Question) and writes the sidecar.
+    public func createAutomationWithAgent(prompt: String = "", projectSlug: String? = nil) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let slashPrompt = trimmed.isEmpty ? "/automation" : "/automation \(trimmed)"
+        let targetSlug: String = {
+            if let explicit = projectSlug,
+               let match = projects.first(where: { ($0.id == explicit || $0.name == explicit) && $0.runtime != .cloud }) {
+                return match.id
+            }
+            if let selected = selectedProject, selected.runtime != .cloud, !selected.isNoProject {
+                return selected.id
+            }
+            if let firstLocal = projects.first(where: { $0.runtime != .cloud && !$0.isNoProject }) {
+                return firstLocal.id
+            }
+            return AntigravityCloudDetector.noProjectDisplayName
+        }()
+        let convTitle = trimmed.isEmpty ? "New Automation" : String(trimmed.prefix(48))
+        _ = createConversationInProject(
+            targetSlug,
+            title: convTitle,
+            initialPrompt: slashPrompt
+        )
     }
 
     // MARK: - Add Context & Composer Actions (`UE07`, `UE08`, `UE09`)

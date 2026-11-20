@@ -307,7 +307,15 @@ public struct ProjectDetailViewController: View {
     }
 
     private var effectiveProjectAutomations: [AutomationItem] {
-        store.automations.filter { $0.projectSlug == projectSlug || $0.projectSlug == liveProject?.name }
+        let targetSlugLower = projectSlug.lowercased()
+        let targetNameLower = liveProject?.name.lowercased()
+        return store.automations.filter { item in
+            if item.projectSlug.lowercased() == targetSlugLower { return true }
+            if let targetNameLower, item.projectSlug.lowercased() == targetNameLower { return true }
+            if let pid = item.projectId, pid == projectSlug || pid == liveProject?.id { return true }
+            if item.allProjects && liveProject?.runtime != .cloud { return true }
+            return false
+        }
     }
 
     // MARK: - 2. Hero Header ([Folder] ledger-svc + ~/code/ledger-svc)
@@ -520,17 +528,54 @@ public struct ProjectDetailViewController: View {
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    ForEach(effectiveProjectAutomations) { auto in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(auto.title)
-                                .font(.system(size: 15.5, weight: .semibold))
-                                .foregroundStyle(Color.white)
-                            Text("\(auto.scheduleSummary) · \(auto.lastRunText)")
-                                .font(.system(size: 13, weight: .regular))
-                                .foregroundStyle(UEChromePalette.textSecondary)
+                    ForEach(Array(effectiveProjectAutomations.enumerated()), id: \.element.id) { idx, auto in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(auto.title)
+                                    .font(.system(size: 15.5, weight: .semibold))
+                                    .foregroundStyle(Color.white)
+                                Text("\(auto.scheduleSummary) · \(auto.lastRunText)")
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(auto.needsReview ? AntigravityTheme.statusWaiting : UEChromePalette.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if let cid = auto.lastRunCascadeId, !cid.isEmpty {
+                                    store.selectCascade(cid)
+                                }
+                            }
+
+                            if auto.section == .scheduled {
+                                Button {
+                                    store.triggerAutomationNow(auto.id)
+                                } label: {
+                                    Image(systemName: "play.fill")
+                                        .font(.system(size: 11.5, weight: .bold))
+                                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                        .frame(width: 36, height: 36)
+                                        .background(
+                                            Circle()
+                                                .fill(Color(red: 0x1E / 255.0, green: 0x24 / 255.0, blue: 0x33 / 255.0))
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            } else if auto.section == .paused {
+                                Button("Resume") {
+                                    store.resumeAutomation(auto.id)
+                                }
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                .buttonStyle(.plain)
+                            }
                         }
                         .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if idx < effectiveProjectAutomations.count - 1 {
+                            Divider()
+                                .overlay(UEChromePalette.subtleDivider)
+                                .padding(.leading, 14)
+                        }
                     }
                 }
             }

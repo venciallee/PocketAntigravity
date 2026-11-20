@@ -405,6 +405,13 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
             responseDict = ["steps": slice]
         } else if path.hasSuffix("/ListAutomations") {
             responseDict = ["automations": []]
+        } else if path.hasSuffix("/GetSidecars") {
+            responseDict = ["sidecars": []]
+        } else if path.hasSuffix("/GetSidecarEvents") {
+            responseDict = ["events": []]
+        } else if path.hasSuffix("/ManageSidecar") {
+            let sid = (jsonBody["sidecarId"] as? String) ?? "auto-mock"
+            responseDict = ["sidecarId": sid, "ok": true]
         } else if path.hasSuffix("/StartCascade") {
             createdCounter += 1
             let newId = "cid-live-created-\(createdCounter)"
