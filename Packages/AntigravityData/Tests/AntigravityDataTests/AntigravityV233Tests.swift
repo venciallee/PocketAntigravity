@@ -109,7 +109,7 @@ final class AntigravityV233Tests: XCTestCase {
         let orchestrator = liveModels.first(where: { $0.isOrchestrator })
         XCTAssertNotNil(orchestrator)
         XCTAssertEqual(orchestrator?.plannerModelName, "Gemini 4 Neon")
-        XCTAssertEqual(orchestrator?.executorModelName, "Gemini 4 Argon")
+        XCTAssertEqual(orchestrator?.executorModelName, "Gemini 4 Hydrogen")
 
         XCTAssertEqual(ThinkingEffortLevel.extra.cliValue, "xhigh")
         XCTAssertEqual(ThinkingEffortLevel.extra.protoWireValue, "XHIGH")

@@ -1077,9 +1077,10 @@ public actor AntigravityRPCClient {
                     guard let obj = entry.objectValue else { continue }
                     if let text = obj["text"]?.stringValue {
                         cleanItems.append(.object(["text": .string(text)]))
-                    } else if let itemObj = obj["item"]?.objectValue {
+                    } else {
+                        let itemObj = obj["item"]?.objectValue ?? obj
                         if let fileObj = itemObj["file"]?.objectValue,
-                           let absUri = fileObj["absoluteUri"]?.stringValue,
+                           let absUri = fileObj["absoluteUri"]?.stringValue ?? fileObj["absolutePathUri"]?.stringValue,
                            !absUri.isEmpty {
                             var cleanFile: [String: JSONValue] = ["absoluteUri": .string(absUri)]
                             if let label = fileObj["label"]?.stringValue, !label.isEmpty {

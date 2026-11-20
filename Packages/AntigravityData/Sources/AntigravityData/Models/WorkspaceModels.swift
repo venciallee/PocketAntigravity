@@ -1362,6 +1362,15 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
             effort: .high,
             supportedEfforts: [.low, .medium, .high],
             isNewBadge: true
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_PLACEHOLDER_M18",
+            displayName: "Gemini 3 Flash",
+            subtitle: "Legacy Gemini 3 fast execution model",
+            hasThinkingBadge: false,
+            mode: .fast,
+            effort: .medium,
+            supportedEfforts: [.low, .medium, .high]
         )
     ]
 
@@ -1564,6 +1573,14 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             summary: "Render rich interactive HTML charts, diagrams, and control widgets inline",
             iconName: "wand.and.stars",
             category: .appOnly
+        ),
+        SlashCommandItem(
+            command: "/voice",
+            title: "Voice Mode",
+            summary: "Start Gemini Live interactive voice session with your agent",
+            iconName: "waveform.circle",
+            category: .appOnly,
+            availableInRemoteAgent: true
         )
     ]
 
