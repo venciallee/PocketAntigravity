@@ -1568,6 +1568,53 @@ final class AntigravityProtocolTests: XCTestCase {
         let remaining = await LocalProjectionStore(storageDirectory: tempDir).loadPendingOutbox()
         XCTAssertEqual(remaining.map(\.id), [entry2.id])
     }
+
+    func testModelConfigBadgeTitleAndDescriptiveSubtitles() throws {
+        XCTAssertTrue(CascadeModelConfig.isGenericBadgeLabel("New"))
+        XCTAssertTrue(CascadeModelConfig.isGenericBadgeLabel("  beta "))
+        XCTAssertFalse(CascadeModelConfig.isGenericBadgeLabel("Deep reasoning for long, multi-step tasks"))
+
+        XCTAssertEqual(
+            CascadeModelConfig.descriptiveSubtitle(forModelLabel: "Gemini 4 Neon (XHigh)"),
+            "Maximum reasoning depth for the hardest tasks"
+        )
+        XCTAssertEqual(
+            CascadeModelConfig.descriptiveSubtitle(forModelLabel: "Gemini 4 Neon (High)"),
+            "Deep reasoning for complex, multi-step tasks"
+        )
+        XCTAssertEqual(
+            CascadeModelConfig.descriptiveSubtitle(forModelLabel: "Gemini 4 Neon (Medium)"),
+            "Balanced speed and reasoning for daily work"
+        )
+        XCTAssertEqual(
+            CascadeModelConfig.descriptiveSubtitle(forModelLabel: "Gemini 4 Neon (Low)"),
+            "Faster responses for quick, everyday edits"
+        )
+
+        // Round-trip encoding/decoding with explicit badgeTitle
+        let neon = CascadeModelConfig(
+            modelId: "MODEL_NEON_HIGH",
+            displayName: "Gemini 4 Neon (High)",
+            subtitle: "Deep reasoning for complex, multi-step tasks",
+            badgeTitle: "New"
+        )
+        let encoded = try JSONEncoder().encode(neon)
+        let decoded = try JSONDecoder().decode(CascadeModelConfig.self, from: encoded)
+        XCTAssertEqual(decoded.badgeTitle, "New")
+        XCTAssertEqual(decoded, neon)
+
+        // Backward-compatible decoding when legacy payload omits badgeTitle
+        let legacyJSON = Data("""
+        {
+          "modelId": "MODEL_NEON_LOW",
+          "displayName": "Gemini 4 Neon (Low)",
+          "subtitle": "Faster responses for quick, everyday edits"
+        }
+        """.utf8)
+        let legacyDecoded = try JSONDecoder().decode(CascadeModelConfig.self, from: legacyJSON)
+        XCTAssertNil(legacyDecoded.badgeTitle)
+        XCTAssertEqual(legacyDecoded.displayName, "Gemini 4 Neon (Low)")
+    }
 }
 
 private extension AntigravitySessionStore {

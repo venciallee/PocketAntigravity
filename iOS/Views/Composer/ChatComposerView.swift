@@ -85,17 +85,23 @@ public struct ChatComposerView: View {
             .accessibilityIdentifier("composer-text-input")
 
             // Bottom Toolbar: `+`, `Planning ⌄`, `<Active Model> ⌄`, `mic`, `↑` Send
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 // 1. Circular `+` Add Context Button
                 Button {
                     isShowingAddContextSheet = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkReading)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .frame(width: 36, height: 36)
                         .background(Self.controlPillBg)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                        )
                         .clipShape(Circle())
+                        .frame(minWidth: 38, minHeight: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer-btn-add-context")
@@ -113,12 +119,19 @@ public struct ChatComposerView: View {
                             .font(.system(size: 9.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                     }
-                    .padding(.horizontal, 10)
-                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
+                    .padding(.horizontal, 11)
+                    .frame(height: 34)
                     .background(Self.controlPillBg)
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                    )
                     .clipShape(Capsule())
+                    .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .fixedSize(horizontal: true, vertical: false)
                 .accessibilityIdentifier("composer-pill-mode")
 
                 // 3. `[<Active Model> ⌄]` Model Pill (bound directly to `store.selectedModelConfig.displayName`)
@@ -130,15 +143,22 @@ public struct ChatComposerView: View {
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.inkLabel)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.88)
+                            .truncationMode(.tail)
+                            .minimumScaleFactor(0.84)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                     }
-                    .padding(.horizontal, 9)
-                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
+                    .padding(.horizontal, 10)
+                    .frame(height: 34)
                     .background(Self.controlPillBg)
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                    )
                     .clipShape(Capsule())
+                    .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer-pill-model")
@@ -150,9 +170,10 @@ public struct ChatComposerView: View {
                     isInputFocused = true
                 } label: {
                     Image(systemName: "mic")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 15.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .frame(width: 34, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer-btn-mic")
@@ -162,11 +183,13 @@ public struct ChatComposerView: View {
                     submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 15.5, weight: .bold))
                         .foregroundStyle(Self.inkOnCTA)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .frame(width: 36, height: 36)
                         .background(Self.periwinkle)
                         .clipShape(Circle())
+                        .frame(minWidth: 38, minHeight: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer-btn-send")
@@ -200,10 +223,15 @@ public struct ChatComposerView: View {
         .sheet(isPresented: $isShowingModelAndModeSheet) {
             ModelAndModeSheetView(
                 store: store,
+                isPresentedAsNativeSheet: true,
                 onDismiss: {
                     isShowingModelAndModeSheet = false
                 }
             )
+            .presentationDetents([.fraction(0.76), .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
+            .presentationBackground(ModelAndModeSheetView.sheetSurfaceColor)
         }
     }
 

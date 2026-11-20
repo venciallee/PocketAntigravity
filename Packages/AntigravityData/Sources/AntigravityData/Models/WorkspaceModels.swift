@@ -1130,6 +1130,7 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
     public var agentPersona: String
     public var effort: ThinkingEffortLevel
     public var isModelAlias: Bool
+    public var badgeTitle: String?
 
     public init(
         modelId: String,
@@ -1140,7 +1141,8 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         mode: CascadeExecutionMode = .planning,
         agentPersona: String = "Default",
         effort: ThinkingEffortLevel = .high,
-        isModelAlias: Bool = false
+        isModelAlias: Bool = false,
+        badgeTitle: String? = nil
     ) {
         self.modelId = modelId
         self.displayName = displayName
@@ -1151,6 +1153,7 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         self.agentPersona = agentPersona
         self.effort = effort
         self.isModelAlias = isModelAlias
+        self.badgeTitle = badgeTitle
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1163,6 +1166,7 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         case agentPersona
         case effort
         case isModelAlias
+        case badgeTitle
     }
 
     public init(from decoder: Decoder) throws {
@@ -1176,10 +1180,52 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         self.agentPersona = try container.decodeIfPresent(String.self, forKey: .agentPersona) ?? "Default"
         self.effort = try container.decodeIfPresent(ThinkingEffortLevel.self, forKey: .effort) ?? .high
         self.isModelAlias = try container.decodeIfPresent(Bool.self, forKey: .isModelAlias) ?? false
+        self.badgeTitle = try container.decodeIfPresent(String.self, forKey: .badgeTitle)
     }
 
     public var supportsThinkingBadge: Bool { hasThinkingBadge }
     public var requiresProBadge: Bool { requiresUpgradeNote != nil }
+
+    /// Returns `true` when a short label (e.g. `"New"`, `"Beta"`, `"Preview"`) is a pill tag rather than a description.
+    public static func isGenericBadgeLabel(_ text: String) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "new", "beta", "preview", "alpha", "experimental", "recommended", "legacy":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Generates a concise, tier-aware subtitle when the backend omits a human description.
+    public static func descriptiveSubtitle(forModelLabel label: String) -> String {
+        let lower = label.lowercased()
+        if lower.contains("flash") {
+            return "Fastest responses and lightweight edits"
+        }
+        if lower.contains("opus") {
+            return "Frontier Anthropic reasoning for complex architecture"
+        }
+        if lower.contains("sonnet") {
+            return "Balanced Anthropic coding & reasoning"
+        }
+        if lower.contains("(xhigh)") || lower.contains("(x-high)") || lower.contains("(extra high)") || lower.contains("(max)") {
+            return "Maximum reasoning depth for the hardest tasks"
+        }
+        if lower.contains("(high)") {
+            return "Deep reasoning for complex, multi-step tasks"
+        }
+        if lower.contains("(medium)") || lower.contains("(med)") {
+            return "Balanced speed and reasoning for daily work"
+        }
+        if lower.contains("(low)") || lower.contains("(minimal)") {
+            return "Faster responses for quick, everyday edits"
+        }
+        if lower.contains("gpt") || lower.contains("o3") || lower.contains("o4") {
+            return "OpenAI coding & reasoning model"
+        }
+        return "Deep reasoning for long, multi-step tasks"
+    }
 
     public static let availableAgents: [String] = [
         "Default",

@@ -1632,7 +1632,8 @@ public final class AntigravitySessionStore {
                 mode: currentMode,
                 agentPersona: currentPersona,
                 effort: matchedModel.effort,
-                isModelAlias: matchedModel.isModelAlias
+                isModelAlias: matchedModel.isModelAlias,
+                badgeTitle: matchedModel.badgeTitle
             )
         }
 
@@ -1662,7 +1663,8 @@ public final class AntigravitySessionStore {
                 mode: nextMode,
                 agentPersona: selectedModelConfig.agentPersona,
                 effort: m.effort,
-                isModelAlias: m.isModelAlias
+                isModelAlias: m.isModelAlias,
+                badgeTitle: m.badgeTitle
             )
         } else {
             selectedModelConfig.mode = nextMode

@@ -1211,17 +1211,31 @@ public actor AntigravityRPCClient {
                         || lowerLabel.contains("thinking")
                         || lowerLabel.contains("pro")
                         || lowerLabel.contains("opus")
-                    let effort: ThinkingEffortLevel = lowerLabel.contains("(low)") ? .low : (lowerLabel.contains("flash") ? .medium : .high)
-                    let quotaPart: String? = {
-                        if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue {
-                            return "\(Int((rem * 100.0).rounded()))% quota left"
+                    let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                            return .low
+                        }
+                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                            return .medium
+                        }
+                        return .high
+                    }()
+                    let rawTag = Self.nonEmptyString(cfg["tagTitle"]?.stringValue)
+                    let rawDesc = Self.nonEmptyString(cfg["description"]?.stringValue)
+                    let cleanDesc: String? = {
+                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                        return rawDesc
+                    }()
+                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+                    let baseSubtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
+                    let quotaSuffix: String? = {
+                        if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue, rem < 0.99 {
+                            let pct = max(0, min(100, Int((rem * 100.0).rounded())))
+                            return pct == 0 ? "Quota exhausted" : "\(pct)% quota left"
                         }
                         return nil
                     }()
-                    let desc = Self.nonEmptyString(cfg["description"]?.stringValue)
-                        ?? Self.nonEmptyString(cfg["tagTitle"]?.stringValue)
-                        ?? quotaPart
-                        ?? Self.defaultSubtitle(forModelLabel: label)
+                    let desc = quotaSuffix.map { "\(baseSubtitle) · \($0)" } ?? baseSubtitle
 
                     parsedModels.append(
                         CascadeModelConfig(
@@ -1233,7 +1247,8 @@ public actor AntigravityRPCClient {
                             mode: .planning,
                             agentPersona: "Default",
                             effort: effort,
-                            isModelAlias: isAlias
+                            isModelAlias: isAlias,
+                            badgeTitle: badgeTitle
                         )
                     )
                     if cfg["isRecommended"]?.boolValue == true && defaultModelId == nil {
@@ -1288,9 +1303,24 @@ public actor AntigravityRPCClient {
                     let lowerLabel = displayName.lowercased()
                     let supportsThinking = (details["supportsThinking"]?.boolValue ?? false)
                         || lowerLabel.contains("thinking")
-                    let effort: ThinkingEffortLevel = lowerLabel.contains("(low)") ? .low : (lowerLabel.contains("flash") ? .medium : .high)
-                    let subtitle = Self.nonEmptyString(details["description"]?.stringValue)
-                        ?? Self.defaultSubtitle(forModelLabel: displayName)
+                    let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                            return .low
+                        }
+                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                            return .medium
+                        }
+                        return .high
+                    }()
+                    let rawTag = Self.nonEmptyString(details["tagTitle"]?.stringValue)
+                        ?? Self.nonEmptyString(details["badge"]?.stringValue)
+                    let rawDesc = Self.nonEmptyString(details["description"]?.stringValue)
+                    let cleanDesc: String? = {
+                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                        return rawDesc
+                    }()
+                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+                    let subtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: displayName)
 
                     parsedModels.append(
                         CascadeModelConfig(
@@ -1302,7 +1332,8 @@ public actor AntigravityRPCClient {
                             mode: .planning,
                             agentPersona: "Default",
                             effort: effort,
-                            isModelAlias: !modelId.hasPrefix("MODEL_")
+                            isModelAlias: !modelId.hasPrefix("MODEL_"),
+                            badgeTitle: badgeTitle
                         )
                     )
                 }
@@ -1342,20 +1373,7 @@ public actor AntigravityRPCClient {
     }
 
     private static func defaultSubtitle(forModelLabel label: String) -> String {
-        let lower = label.lowercased()
-        if lower.contains("flash") {
-            return "Fastest responses and lightweight edits"
-        }
-        if lower.contains("opus") {
-            return "Frontier Anthropic reasoning for complex architecture"
-        }
-        if lower.contains("sonnet") {
-            return "Balanced Anthropic coding & reasoning"
-        }
-        if lower.contains("(low)") {
-            return "Faster Pro reasoning for everyday coding"
-        }
-        return "Deep reasoning for long, multi-step tasks"
+        CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
     }
 
     // MARK: - Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) Projects & Summaries
