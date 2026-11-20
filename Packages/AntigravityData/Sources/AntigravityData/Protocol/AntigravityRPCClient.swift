@@ -1261,17 +1261,34 @@ public actor AntigravityRPCClient {
                         }
                         return [.low, .medium, .high]
                     }()
-                    let effort: ThinkingEffortLevel = lowerLabel.contains("(low)") ? .low : (lowerLabel.contains("flash") ? .medium : .high)
-                    let quotaPart: String? = {
-                        if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue {
-                            return "\(Int((rem * 100.0).rounded()))% quota left"
+                    let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
+                            return .extra
+                        }
+                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                            return .low
+                        }
+                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                            return .medium
+                        }
+                        return .high
+                    }()
+                    let rawTag = Self.nonEmptyString(cfg["tagTitle"]?.stringValue)
+                    let rawDesc = Self.nonEmptyString(cfg["description"]?.stringValue)
+                    let cleanDesc: String? = {
+                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                        return rawDesc
+                    }()
+                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+                    let baseSubtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
+                    let quotaSuffix: String? = {
+                        if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue, rem < 0.99 {
+                            let pct = max(0, min(100, Int((rem * 100.0).rounded())))
+                            return pct == 0 ? "Quota exhausted" : "\(pct)% quota left"
                         }
                         return nil
                     }()
-                    let desc = Self.nonEmptyString(cfg["description"]?.stringValue)
-                        ?? Self.nonEmptyString(cfg["tagTitle"]?.stringValue)
-                        ?? quotaPart
-                        ?? Self.defaultSubtitle(forModelLabel: label)
+                    let desc = quotaSuffix.map { "\(baseSubtitle) · \($0)" } ?? baseSubtitle
 
                     parsedModels.append(
                         CascadeModelConfig(
@@ -1284,6 +1301,7 @@ public actor AntigravityRPCClient {
                             agentPersona: "Default",
                             effort: effort,
                             isModelAlias: isAlias,
+                            badgeTitle: badgeTitle,
                             isOrchestrator: isOrchestrator,
                             plannerModelName: Self.nonEmptyString(cfg["plannerModelName"]?.stringValue),
                             executorModelName: Self.nonEmptyString(cfg["executorModelName"]?.stringValue),
@@ -1348,9 +1366,27 @@ public actor AntigravityRPCClient {
                     let supportsThinking = (details["supportsThinking"]?.boolValue ?? false)
                         || lowerLabel.contains("thinking")
                         || lowerLabel.contains("neon")
-                    let effort: ThinkingEffortLevel = lowerLabel.contains("(low)") ? .low : (lowerLabel.contains("flash") ? .medium : .high)
-                    let subtitle = Self.nonEmptyString(details["description"]?.stringValue)
-                        ?? Self.defaultSubtitle(forModelLabel: displayName)
+                    let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
+                            return .extra
+                        }
+                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                            return .low
+                        }
+                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                            return .medium
+                        }
+                        return .high
+                    }()
+                    let rawTag = Self.nonEmptyString(details["tagTitle"]?.stringValue)
+                        ?? Self.nonEmptyString(details["badge"]?.stringValue)
+                    let rawDesc = Self.nonEmptyString(details["description"]?.stringValue)
+                    let cleanDesc: String? = {
+                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                        return rawDesc
+                    }()
+                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+                    let subtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: displayName)
 
                     parsedModels.append(
                         CascadeModelConfig(
@@ -1363,6 +1399,7 @@ public actor AntigravityRPCClient {
                             agentPersona: "Default",
                             effort: effort,
                             isModelAlias: !modelId.hasPrefix("MODEL_"),
+                            badgeTitle: badgeTitle,
                             isOrchestrator: isOrchestrator,
                             supportedEfforts: (lowerLabel.contains("neon") || lowerLabel.contains("hydrogen"))
                                 ? [.low, .medium, .high, .extra] : [.low, .medium, .high],
@@ -1418,35 +1455,7 @@ public actor AntigravityRPCClient {
     }
 
     private static func defaultSubtitle(forModelLabel label: String) -> String {
-        let lower = label.lowercased()
-        if lower.contains("orchestrator") {
-            return "Dual-model planner & fast executor (fixed config)"
-        }
-        if lower.contains("neon") {
-            return "Frontier Gemini 4 intelligence with Extra thinking"
-        }
-        if lower.contains("carbon") {
-            return "High-efficiency Gemini 4 balanced coding & reasoning"
-        }
-        if lower.contains("argon") {
-            return "Ultra-fast Gemini 4 edits & rapid iterations"
-        }
-        if lower.contains("hydrogen") {
-            return "Deep scientific & systems reasoning with Extra thinking"
-        }
-        if lower.contains("flash") {
-            return "Fastest responses and lightweight edits"
-        }
-        if lower.contains("opus") {
-            return "Frontier Anthropic reasoning for complex architecture"
-        }
-        if lower.contains("sonnet") {
-            return "Balanced Anthropic coding & reasoning"
-        }
-        if lower.contains("(low)") {
-            return "Faster Pro reasoning for everyday coding"
-        }
-        return "Deep reasoning for long, multi-step tasks"
+        CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
     }
 
     // MARK: - Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) Projects & Summaries
@@ -2430,7 +2439,8 @@ public actor AntigravityRPCClient {
     }
 
     /// Sends a user prompt + rich multimodal/context items + model/mode/effort/permission config (`SendUserCascadeMessage`).
-    /// Encodes `Planning` vs `Fast` via `conversational.agenticMode` (`CONVERSATIONAL_PLANNER_MODE_DEFAULT`)
+    /// Encodes `Planning` vs `Fast` via `conversational.agenticMode` (`CONVERSATIONAL_PLANNER_MODE_DEFAULT`),
+    /// applies the selected `AgentPermissionPreset` via `plannerConfig.toolConfig`,
     /// and sets `planModel` alongside `requestedModel` for Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) sessions.
     public func sendUserCascadeMessage(
         cascadeId: String,
@@ -2517,33 +2527,66 @@ public actor AntigravityRPCClient {
             ? .object(["alias": .string(modelId)])
             : .object(["model": .string(protoModel)])
 
+        let effectivePermission: AgentPermissionPreset = {
+            if let preset = permissionPreset, preset != .inheritGlobal {
+                return preset
+            }
+            return AgentPermissionPreset.defaultPreset(isRemote: isCloud || cascadeId.hasPrefix("v1/"))
+        }()
+        var toolConfig: [String: JSONValue] = [
+            "code": .object(["allowEditGitignore": .bool(true)]),
+            "viewFile": .object(["allowViewGitignore": .bool(true)]),
+            "grep": .object(["allowAccessGitignore": .bool(true)])
+        ]
+        switch effectivePermission {
+        case .requestReview:
+            toolConfig["runCommand"] = .object([
+                "autoCommandConfig": .object([
+                    "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_OFF")
+                ])
+            ])
+            toolConfig["notifyUser"] = .object([
+                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_ALWAYS")
+            ])
+        case .defaultPolicy, .auto, .inheritGlobal:
+            toolConfig["notifyUser"] = .object([
+                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_AUTO")
+            ])
+        case .turbo:
+            toolConfig["runCommand"] = .object([
+                "autoCommandConfig": .object([
+                    "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_EAGER")
+                ])
+            ])
+            toolConfig["notifyUser"] = .object([
+                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_TURBO")
+            ])
+        }
+
         var plannerConfig: [String: JSONValue] = [
             "conversational": .object([
                 "plannerMode": .string("CONVERSATIONAL_PLANNER_MODE_DEFAULT"),
                 "agenticMode": .bool(mode == .planning)
             ]),
+            "toolConfig": .object(toolConfig),
             "requestedModel": requestedModelPayload,
             "thinkingEffort": .string(effort.protoWireValue)
         ]
         if agentPersona != "Default" && !agentPersona.isEmpty {
             plannerConfig["agentPersona"] = .string(agentPersona)
         }
-        if let permissionPreset {
-            plannerConfig["permissionPreset"] = .string(permissionPreset.rawValue)
-        }
+        plannerConfig["permissionPreset"] = .string(effectivePermission.rawValue)
         if (isCloud || cascadeId.hasPrefix("v1/")) && !isModelAlias && protoModel.hasPrefix("MODEL_") {
             plannerConfig["planModel"] = .string(protoModel)
         }
 
-        var modelCfgObj: [String: JSONValue] = [
+        let modelCfgObj: [String: JSONValue] = [
             "modelId": .string(modelId),
             "thinkingEffort": .string(effort.protoWireValue),
             "mode": .string(mode.rawValue.uppercased()),
-            "agentPersona": .string(agentPersona)
+            "agentPersona": .string(agentPersona),
+            "permissionPreset": .string(effectivePermission.rawValue)
         ]
-        if let permissionPreset {
-            modelCfgObj["permissionPreset"] = .string(permissionPreset.rawValue)
-        }
 
         _ = try await callUnaryJSON(
             method: "SendUserCascadeMessage",

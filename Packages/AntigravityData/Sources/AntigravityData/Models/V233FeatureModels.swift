@@ -36,51 +36,8 @@ public struct ModelUsageQuota: Codable, Sendable, Equatable {
     public var partnerFiveHourPercent: Int { Int((partnerFiveHourRemaining * 100.0).rounded()) }
 }
 
-// MARK: - Fine-Grained Permission Presets & Rules (v2.23 - v2.33)
-
-/// Official Antigravity 2.0 Permission Presets (global, per-project, or per-conversation in v2.30+).
-public enum AgentPermissionPreset: String, Codable, CaseIterable, Sendable, Identifiable {
-    case requestReview = "Request Review"
-    case defaultSandbox = "Default"
-    case auto = "Auto"
-    case turbo = "Turbo"
-    case inheritGlobal = "Use Global Settings"
-
-    public var id: String { rawValue }
-
-    public var wireValue: String {
-        switch self {
-        case .requestReview: return "PERMISSION_PRESET_REQUEST_REVIEW"
-        case .defaultSandbox: return "PERMISSION_PRESET_DEFAULT"
-        case .auto: return "PERMISSION_PRESET_AUTO"
-        case .turbo: return "PERMISSION_PRESET_TURBO"
-        case .inheritGlobal: return "PERMISSION_PRESET_INHERIT_GLOBAL"
-        }
-    }
-
-    public var usesTerminalSandbox: Bool {
-        self == .defaultSandbox || self == .auto
-    }
-
-    public var shortDescription: String {
-        switch self {
-        case .requestReview:
-            return "Always ask before terminal commands; workspace file access only."
-        case .defaultSandbox:
-            return "Commands run in isolated Terminal sandbox; ask before leaving sandbox."
-        case .auto:
-            return "Sandboxed by default; safe outside-sandbox commands auto-evaluated."
-        case .turbo:
-            return "Unrestricted local commands and file access (sensitive browser gates remain)."
-        case .inheritGlobal:
-            return "Follow your global workstation or remote agent preset."
-        }
-    }
-
-    public static var concretePresets: [AgentPermissionPreset] {
-        [.requestReview, .defaultSandbox, .auto, .turbo]
-    }
-}
+// MARK: - Fine-Grained Permission Rules (v2.23 - v2.33)
+// Note: `AgentPermissionPreset` is unified in `WorkspaceModels.swift`.
 
 public enum PermissionRuleListKind: String, Codable, CaseIterable, Sendable {
     case deny = "Deny"

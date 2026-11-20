@@ -72,7 +72,7 @@ public struct CustomizationsSettingsView: View {
                             .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkMuted)
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
-                                Text(preset.rawValue)
+                                Text(preset.displayTitle)
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundStyle(AntigravityTheme.inkReading)
                                 if preset.usesTerminalSandbox {

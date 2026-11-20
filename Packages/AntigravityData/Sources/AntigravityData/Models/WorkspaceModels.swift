@@ -1147,6 +1147,111 @@ public enum CascadeExecutionMode: String, Codable, Sendable, CaseIterable, Ident
     }
 }
 
+/// Permission preset controlling terminal command execution and tool approvals
+/// (`Request Review`, `Default`, `Auto`, `Turbo`) in Antigravity 2.x Local & Remote sessions.
+public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIterable, Identifiable {
+    case requestReview = "request_review"
+    case defaultPolicy = "default"
+    case auto = "auto"
+    case turbo = "turbo"
+    case inheritGlobal = "inherit_global"
+
+    /// Source-compatibility alias for `.defaultPolicy` (sandboxed Default preset).
+    public static var defaultSandbox: AgentPermissionPreset { .defaultPolicy }
+
+    public var id: String { rawValue }
+
+    public var displayTitle: String {
+        switch self {
+        case .requestReview:
+            return "Request Review"
+        case .defaultPolicy:
+            return "Default"
+        case .auto:
+            return "Auto"
+        case .turbo:
+            return "Turbo"
+        case .inheritGlobal:
+            return "Use Global Settings"
+        }
+    }
+
+    public var summaryDescription: String {
+        switch self {
+        case .requestReview:
+            return "Every command requires approval."
+        case .defaultPolicy:
+            return "Ask before sensitive operations."
+        case .auto:
+            return "Automatically decide if commands run."
+        case .turbo:
+            return "Run all commands without restrictions."
+        case .inheritGlobal:
+            return "Follow your global workstation or remote agent preset."
+        }
+    }
+
+    public var shortDescription: String {
+        switch self {
+        case .requestReview:
+            return "Always ask before terminal commands; workspace file access only."
+        case .defaultPolicy:
+            return "Commands run in isolated Terminal sandbox; ask before leaving sandbox."
+        case .auto:
+            return "Sandboxed by default; safe outside-sandbox commands auto-evaluated."
+        case .turbo:
+            return "Unrestricted local commands and file access (sensitive browser gates remain)."
+        case .inheritGlobal:
+            return "Follow your global workstation or remote agent preset."
+        }
+    }
+
+    public var symbolName: String {
+        switch self {
+        case .requestReview:
+            return "eye"
+        case .defaultPolicy:
+            return "lock"
+        case .auto:
+            return "checkmark.shield"
+        case .turbo:
+            return "exclamationmark.shield"
+        case .inheritGlobal:
+            return "slider.horizontal.3"
+        }
+    }
+
+    public var wireValue: String {
+        switch self {
+        case .requestReview: return "PERMISSION_PRESET_REQUEST_REVIEW"
+        case .defaultPolicy: return "PERMISSION_PRESET_DEFAULT"
+        case .auto: return "PERMISSION_PRESET_AUTO"
+        case .turbo: return "PERMISSION_PRESET_TURBO"
+        case .inheritGlobal: return "PERMISSION_PRESET_INHERIT_GLOBAL"
+        }
+    }
+
+    public var usesTerminalSandbox: Bool {
+        self == .defaultPolicy || self == .auto
+    }
+
+    public static var concretePresets: [AgentPermissionPreset] {
+        [.requestReview, .defaultPolicy, .auto, .turbo]
+    }
+
+    /// Presets offered in Remote/Cloud (`Remote Permissions`) vs Local Desktop (`Permissions`).
+    public static func availablePresets(isRemote: Bool) -> [AgentPermissionPreset] {
+        isRemote
+            ? [.requestReview, .defaultPolicy, .turbo]
+            : [.requestReview, .defaultPolicy, .auto, .turbo]
+    }
+
+    /// Official Antigravity default preset per runtime (`Turbo` in isolated Cloud VMs, `Default` locally).
+    public static func defaultPreset(isRemote: Bool) -> AgentPermissionPreset {
+        isRemote ? .turbo : .defaultPolicy
+    }
+}
+
 /// Model, execution mode, and custom agent persona configuration (`UE07`, `UE09`, v2.33 Gemini 4 & Orchestrator).
 public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
     public var id: String { modelId }
@@ -1159,6 +1264,7 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
     public var agentPersona: String
     public var effort: ThinkingEffortLevel
     public var isModelAlias: Bool
+    public var badgeTitle: String?
     public var isOrchestrator: Bool
     public var plannerModelName: String?
     public var executorModelName: String?
@@ -1175,6 +1281,7 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         agentPersona: String = "Default",
         effort: ThinkingEffortLevel = .high,
         isModelAlias: Bool = false,
+        badgeTitle: String? = nil,
         isOrchestrator: Bool = false,
         plannerModelName: String? = nil,
         executorModelName: String? = nil,
@@ -1190,11 +1297,12 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         self.agentPersona = agentPersona
         self.effort = effort
         self.isModelAlias = isModelAlias
+        self.badgeTitle = badgeTitle ?? (isNewBadge ? "New" : nil)
         self.isOrchestrator = isOrchestrator
         self.plannerModelName = plannerModelName
         self.executorModelName = executorModelName
         self.supportedEfforts = isOrchestrator ? [] : supportedEfforts
-        self.isNewBadge = isNewBadge
+        self.isNewBadge = isNewBadge || (badgeTitle?.caseInsensitiveCompare("New") == .orderedSame)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1207,6 +1315,7 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         case agentPersona
         case effort
         case isModelAlias
+        case badgeTitle
         case isOrchestrator
         case plannerModelName
         case executorModelName
@@ -1225,6 +1334,7 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         self.agentPersona = try container.decodeIfPresent(String.self, forKey: .agentPersona) ?? "Default"
         self.effort = try container.decodeIfPresent(ThinkingEffortLevel.self, forKey: .effort) ?? .high
         self.isModelAlias = try container.decodeIfPresent(Bool.self, forKey: .isModelAlias) ?? false
+        self.badgeTitle = try container.decodeIfPresent(String.self, forKey: .badgeTitle)
         let orchestrator = try container.decodeIfPresent(Bool.self, forKey: .isOrchestrator)
             ?? self.displayName.lowercased().contains("orchestrator")
         self.isOrchestrator = orchestrator
@@ -1238,6 +1348,47 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
     public var supportsThinkingBadge: Bool { hasThinkingBadge }
     public var requiresProBadge: Bool { requiresUpgradeNote != nil }
     public var supportsEffortAdjustment: Bool { !isOrchestrator && !supportedEfforts.isEmpty }
+
+    /// Returns `true` when a short label (e.g. `"New"`, `"Beta"`, `"Preview"`) is a pill tag rather than a description.
+    public static func isGenericBadgeLabel(_ text: String) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "new", "beta", "preview", "alpha", "experimental", "recommended", "legacy":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Generates a concise, tier-aware subtitle when the backend omits a human description.
+    public static func descriptiveSubtitle(forModelLabel label: String) -> String {
+        let lower = label.lowercased()
+        if lower.contains("flash") {
+            return "Fastest responses and lightweight edits"
+        }
+        if lower.contains("opus") {
+            return "Frontier Anthropic reasoning for complex architecture"
+        }
+        if lower.contains("sonnet") {
+            return "Balanced Anthropic coding & reasoning"
+        }
+        if lower.contains("(xhigh)") || lower.contains("(x-high)") || lower.contains("(extra high)") || lower.contains("(max)") {
+            return "Maximum reasoning depth for the hardest tasks"
+        }
+        if lower.contains("(high)") {
+            return "Deep reasoning for complex, multi-step tasks"
+        }
+        if lower.contains("(medium)") || lower.contains("(med)") {
+            return "Balanced speed and reasoning for daily work"
+        }
+        if lower.contains("(low)") || lower.contains("(minimal)") {
+            return "Faster responses for quick, everyday edits"
+        }
+        if lower.contains("gpt") || lower.contains("o3") || lower.contains("o4") {
+            return "OpenAI coding & reasoning model"
+        }
+        return "Deep reasoning for long, multi-step tasks"
+    }
 
     public static let availableAgents: [String] = [
         "Default",

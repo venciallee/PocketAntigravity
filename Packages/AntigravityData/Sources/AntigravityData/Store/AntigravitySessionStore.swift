@@ -123,13 +123,53 @@ public final class AntigravitySessionStore {
     public var isAutoScrollPinnedToBottom: Bool = true
     public var unreadStreamingStepCount: Int = 0
 
-    // MARK: - Composer & Model Config State (`UE07`, `UE08`, `UE09`)
+    // MARK: - Composer, Model & Permission State (`UE07`, `UE08`, `UE09`)
     public var composerDraftText: String = ""
     public var composerAttachments: [ComposerAttachmentChip] = []
     public var selectedModelConfig: CascadeModelConfig
     public var availableModels: [CascadeModelConfig]
     public var availableAgents: [String]
+    public var localPermissionPreset: AgentPermissionPreset = .defaultPolicy
+    public var remotePermissionPreset: AgentPermissionPreset = .turbo
     public var isSlashPopupDismissedManually: Bool = false
+
+    private static let localPermissionDefaultsKey = "antigravity.ios.permissionPreset.local"
+    private static let remotePermissionDefaultsKey = "antigravity.ios.permissionPreset.remote"
+
+    /// `true` when the active conversation or selected project targets Antigravity Cloud / Remote Agents.
+    public var isActiveSessionCloud: Bool {
+        if activeSummary?.isCloud == true { return true }
+        if activeCascadeId.hasPrefix("v1/") { return true }
+        if let slug = activeSummary?.projectSlug,
+           let proj = projects.first(where: { $0.id == slug || $0.name == slug }),
+           proj.runtime == .cloud {
+            return true
+        }
+        if selectedProject?.runtime == .cloud { return true }
+        if selectedWorkspaceUri.hasPrefix("cloud://") { return true }
+        return false
+    }
+
+    /// Active permission preset for the current session runtime (`Remote Permissions` vs local `Permissions`).
+    public var activePermissionPreset: AgentPermissionPreset {
+        get { isActiveSessionCloud ? remotePermissionPreset : localPermissionPreset }
+        set { setActivePermissionPreset(newValue) }
+    }
+
+    public func setActivePermissionPreset(_ preset: AgentPermissionPreset, isRemoteOverride: Bool? = nil) {
+        let isRemote = isRemoteOverride ?? isActiveSessionCloud
+        if isRemote {
+            remotePermissionPreset = preset
+            if !isVerificationMode {
+                UserDefaults.standard.set(preset.rawValue, forKey: Self.remotePermissionDefaultsKey)
+            }
+        } else {
+            localPermissionPreset = preset
+            if !isVerificationMode {
+                UserDefaults.standard.set(preset.rawValue, forKey: Self.localPermissionDefaultsKey)
+            }
+        }
+    }
 
     // MARK: - Structured Multi-Step Question State (`UE10`)
     public var questionSteps: [StructuredQuestionStepItem]
@@ -1684,6 +1724,7 @@ public final class AntigravitySessionStore {
                 agentPersona: currentPersona,
                 effort: matchedModel.isOrchestrator ? .high : preservedEffort,
                 isModelAlias: matchedModel.isModelAlias,
+                badgeTitle: matchedModel.badgeTitle,
                 isOrchestrator: matchedModel.isOrchestrator,
                 plannerModelName: matchedModel.plannerModelName,
                 executorModelName: matchedModel.executorModelName,
@@ -1719,6 +1760,7 @@ public final class AntigravitySessionStore {
                 agentPersona: selectedModelConfig.agentPersona,
                 effort: m.effort,
                 isModelAlias: m.isModelAlias,
+                badgeTitle: m.badgeTitle,
                 isOrchestrator: m.isOrchestrator,
                 plannerModelName: m.plannerModelName,
                 executorModelName: m.executorModelName,
@@ -3353,7 +3395,13 @@ public final class AntigravitySessionStore {
 
         let cid = activeCascadeId
         let cfg = selectedModelConfig
-        let effectivePreset = effectivePermissionPreset(for: cid)
+        let runtimeDefaultPreset = summaryIsCloud ? remotePermissionPreset : localPermissionPreset
+        let effectivePreset: AgentPermissionPreset = {
+            if let overridePreset = conversationPermissionPresets[cid], overridePreset != .inheritGlobal {
+                return overridePreset
+            }
+            return runtimeDefaultPreset
+        }()
         let storeRef = projectionStore
         let clientRef = rpcClient
         let shouldSendLive = (hasPairedBackend || isLiveBackendConnected)
@@ -3600,6 +3648,7 @@ public final class AntigravitySessionStore {
                     agentPersona: cfg.agentPersona,
                     isModelAlias: cfg.isModelAlias,
                     isCloud: summaryIsCloud,
+                    permissionPreset: summaryIsCloud ? remotePermissionPreset : localPermissionPreset,
                     instanceUuidOverride: summaryOriginUuid
                 )
 
@@ -4024,7 +4073,7 @@ public final class AntigravitySessionStore {
         if let explicit = conversationPermissionPresets[cid], explicit != .inheritGlobal {
             return explicit
         }
-        return appearancePreferences.globalPermissionPreset
+        return activePermissionPreset
     }
 
     public func setConversationPermissionPreset(_ preset: AgentPermissionPreset, for cascadeId: String? = nil) {
@@ -5630,6 +5679,14 @@ public final class AntigravitySessionStore {
         store.composerAttachments = []
         store.composerDraftText = ""
         store.connectionStatusText = "Not Connected"
+        if let rawLocal = UserDefaults.standard.string(forKey: Self.localPermissionDefaultsKey),
+           let savedLocal = AgentPermissionPreset(rawValue: rawLocal) {
+            store.localPermissionPreset = savedLocal
+        }
+        if let rawRemote = UserDefaults.standard.string(forKey: Self.remotePermissionDefaultsKey),
+           let savedRemote = AgentPermissionPreset(rawValue: rawRemote) {
+            store.remotePermissionPreset = savedRemote
+        }
         return store
     }
 }
