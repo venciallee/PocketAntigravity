@@ -36,7 +36,6 @@ public struct AntigravityApp: App {
                         store.isInitialSessionCheckComplete = true
                     }
                     await store.loadPersistedV233Preferences()
-                    NotificationCoordinator.shared.requestAuthorizationIfNeeded(preferences: store.appearancePreferences)
                     await store.consumePendingLiveActivityActions()
                     let env = ProcessInfo.processInfo.environment
                     if let relayURL = env["ANTIGRAVITY_RELAY_URL"], !relayURL.isEmpty {
