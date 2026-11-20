@@ -51,13 +51,25 @@ public struct ModelAndModeSheetView: View {
                 }
                 .padding(.top, 10)
 
-                // Title & Done Header
+                // Title, Refresh & Done Header
                 ZStack {
                     Text("Model & Mode")
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(AntigravityTheme.inkReading)
 
                     HStack {
+                        if !store.isVerificationMode {
+                            Button {
+                                Task { await store.refreshModelCatalog(forceRefresh: true) }
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                                    .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("btn-refresh-models")
+                        }
                         Spacer()
                         Button {
                             applyAndDismiss()
@@ -89,6 +101,46 @@ public struct ModelAndModeSheetView: View {
                         testId: "mode-card-fast"
                     )
                 }
+                .opacity(store.selectedModelConfig.isOrchestrator ? 0.65 : 1.0)
+                .disabled(store.selectedModelConfig.isOrchestrator)
+
+                if !store.isVerificationMode && store.selectedModelConfig.isOrchestrator {
+                    HStack(spacing: 8) {
+                        Image(systemName: "cpu.fill")
+                            .foregroundStyle(Self.periwinkle)
+                        Text("Orchestrator uses fixed Planner (\(store.selectedModelConfig.plannerModelName ?? "Pro")) + Executor (\(store.selectedModelConfig.executorModelName ?? "Flash")) settings.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                    }
+                    .padding(10)
+                    .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 12))
+                }
+
+                // Live-Mode Thinking Effort Level Picker (`Low` / `Medium` / `High` / `Extra`)
+                if !store.isVerificationMode && !store.selectedModelConfig.isOrchestrator {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("THINKING LEVEL")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .tracking(0.6)
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        HStack(spacing: 8) {
+                            ForEach(store.selectedModelConfig.supportedEfforts) { level in
+                                let isChosen = store.selectedModelConfig.effort == level
+                                Button {
+                                    store.selectedModelConfig.effort = level
+                                } label: {
+                                    Text(level.rawValue)
+                                        .font(.system(size: 12.5, weight: isChosen ? .bold : .medium))
+                                        .foregroundStyle(isChosen ? Color(red: 0.04, green: 0.04, blue: 0.05) : AntigravityTheme.inkReading)
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .background(isChosen ? Self.periwinkle : Self.cardSurface, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("effort-pill-\(level.cliValue)")
+                            }
+                        }
+                    }
+                }
 
                 // MODEL Picker Section
                 VStack(alignment: .leading, spacing: 8) {
@@ -101,7 +153,7 @@ public struct ModelAndModeSheetView: View {
                         ScrollView(.vertical, showsIndicators: true) {
                             modelRowsList
                         }
-                        .frame(maxHeight: 280)
+                        .frame(maxHeight: 240)
                         .background(Self.cardSurface)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     } else {
@@ -114,6 +166,31 @@ public struct ModelAndModeSheetView: View {
                         .font(.system(size: 12.5))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                         .padding(.top, 2)
+                }
+
+                // Live-Mode Dual-Pool Usage Quota Telemetry (`Gemini` vs `Partner` Weekly + 5h)
+                if !store.isVerificationMode {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("QUOTA · \(store.usageQuota.planDisplayName.uppercased())")
+                                .font(.system(size: 11, weight: .semibold))
+                                .tracking(0.5)
+                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                            Spacer()
+                            Text("5h & Weekly Pools")
+                                .font(.system(size: 11))
+                                .foregroundStyle(AntigravityTheme.inkMuted)
+                        }
+                        HStack(spacing: 12) {
+                            quotaMiniBar(label: "Gemini 5h", pct: store.usageQuota.geminiFiveHourPercent)
+                            quotaMiniBar(label: "Gemini Wk", pct: store.usageQuota.geminiWeeklyPercent)
+                            quotaMiniBar(label: "Partner 5h", pct: store.usageQuota.partnerFiveHourPercent)
+                            quotaMiniBar(label: "Partner Wk", pct: store.usageQuota.partnerWeeklyPercent)
+                        }
+                    }
+                    .padding(10)
+                    .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+                    .accessibilityIdentifier("model-usage-quota-card")
                 }
 
                 // AGENT Persona Section
@@ -158,6 +235,18 @@ public struct ModelAndModeSheetView: View {
                 await store.refreshModelCatalog()
             }
         }
+    }
+
+    private func quotaMiniBar(label: String, pct: Int) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AntigravityTheme.inkSecondary)
+            Text("\(pct)%")
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(pct > 25 ? Self.periwinkle : AntigravityTheme.statusWaiting)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modelRowsList: some View {
@@ -250,10 +339,15 @@ public struct ModelAndModeSheetView: View {
                 subtitle: option.subtitle,
                 hasThinkingBadge: option.hasThinkingBadge,
                 requiresUpgradeNote: option.requiresUpgradeNote,
-                mode: store.selectedModelConfig.mode,
+                mode: option.isOrchestrator ? .planning : store.selectedModelConfig.mode,
                 agentPersona: store.selectedModelConfig.agentPersona,
-                effort: option.effort,
-                isModelAlias: option.isModelAlias
+                effort: option.isOrchestrator ? .high : option.effort,
+                isModelAlias: option.isModelAlias,
+                isOrchestrator: option.isOrchestrator,
+                plannerModelName: option.plannerModelName,
+                executorModelName: option.executorModelName,
+                supportedEfforts: option.supportedEfforts,
+                isNewBadge: option.isNewBadge
             )
             onSelectConfiguration?(
                 store.selectedModelConfig.mode.rawValue,
@@ -267,6 +361,15 @@ public struct ModelAndModeSheetView: View {
                         Text(option.displayName)
                             .font(.system(size: 16, weight: isSelected ? .semibold : .medium))
                             .foregroundStyle(AntigravityTheme.inkReading)
+
+                        if option.isNewBadge && !store.isVerificationMode {
+                            Text("NEW")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(Self.periwinkle)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Self.periwinkle.opacity(0.16), in: RoundedRectangle(cornerRadius: 5))
+                        }
 
                         if option.hasThinkingBadge {
                             Text("Thinking")

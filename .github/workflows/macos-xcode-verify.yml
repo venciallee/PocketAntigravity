@@ -33,6 +33,12 @@ jobs:
           fi
           python3 -m pip install --break-system-packages --quiet pillow || pip3 install --quiet pillow
 
+      - name: "[Gate 0] Pure-Cloud Doc-Sync Watcher Self-Test & Script Syntax Check"
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/sync-antigravity-docs.py scripts/run-doc-sync-agent.py scripts/mac-companion-bridge.py verification/mock_language_server.py verification/verify-v233-capabilities.py
+          python3 scripts/sync-antigravity-docs.py --self-test
+
       - name: "[Gate 1] Swift 6 Package Compilation & XCTest Suite (AntigravityData)"
         run: |
           set -euo pipefail
@@ -43,6 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 verification/verify-live-rpc-flow.py 2>&1 | tee verification/output/real-simulator/live-rpc-flow.log
+          python3 verification/verify-v233-capabilities.py 2>&1 | tee verification/output/real-simulator/v233-capabilities.log
 
       - name: "[Gate 3-5] Real Simulator XCUITest UI Taps (AntigravityUITests) + Live App RPC + 13 Native Screenshots"
         run: |

@@ -162,30 +162,25 @@ public actor AntigravityRPCClient {
         public let models: [CascadeModelConfig]
         public let defaultModelId: String?
         public let agents: [String]
+        public let usageQuota: ModelUsageQuota?
 
         public init(
             models: [CascadeModelConfig],
             defaultModelId: String? = nil,
-            agents: [String] = ["Default"]
+            agents: [String] = ["Default"],
+            usageQuota: ModelUsageQuota? = nil
         ) {
             self.models = models
             self.defaultModelId = defaultModelId
             self.agents = agents
+            self.usageQuota = usageQuota
         }
     }
 
-    private static let companionOnlyMethods: Set<String> = [
-        "ListAutomations",
-        "CreateAutomation",
-        "TriggerAutomationNow",
-        "SetAutomationPaused",
-        "OpenWorkspaceInFinder",
-        "CreateProjectWorkspace",
-        "GetTurnDiff",
-        "GetArtifactSnapshots",
-        "SendPlanReviewComments",
-        "RevertDiffHunk",
-        "SendDiffReviewComments"
+    /// Only true local-OS-only desktop commands (like revealing a local folder in macOS Finder)
+    /// are unsupported over Antigravity Cloud Relay; all data & review RPCs forward to upstream.
+    private static let localDesktopOnlyMethods: Set<String> = [
+        "OpenWorkspaceInFinder"
     ]
 
     public init(
@@ -843,21 +838,15 @@ public actor AntigravityRPCClient {
         instanceUuidOverride: String? = nil,
         timeoutInterval: TimeInterval? = nil
     ) async throws -> [String: JSONValue] {
-        if Self.companionOnlyMethods.contains(method) {
-            if method == "ListAutomations" {
-                return ["automations": .array([])]
-            }
-            if method == "GetArtifactSnapshots" {
-                return ["artifacts": .array([])]
-            }
-            if method == "GetTurnDiff" {
-                return ["files": .array([])]
-            }
-            return ["ok": .bool(true)]
+        if Self.localDesktopOnlyMethods.contains(method) {
+            throw AntigravityRPCError.httpError(
+                statusCode: 501,
+                body: "\(method) is only available when connected directly to a local desktop workspace."
+            )
         }
 
         var workingBody = try await sanitizeCloudRelayPayload(method: method, body: body)
-        for attempt in 1...3 {
+        for attempt in 1...4 {
             let encodedPayload = workingBody.isEmpty ? Data("{}".utf8) : try JSONEncoder().encode(workingBody)
             let (rawRespData, _) = try await callCloudRelayProxyCommand(
                 method: method,
@@ -874,17 +863,26 @@ public actor AntigravityRPCClient {
                 if let code = decoded["code"]?.stringValue,
                    let message = decoded["message"]?.stringValue,
                    decoded.count <= 3 {
-                    if attempt < 3, let unknownField = Self.extractUnknownProtoFieldName(from: message),
-                       workingBody[unknownField] != nil {
-                        workingBody.removeValue(forKey: unknownField)
-                        continue
+                    if attempt < 4, let unknownField = Self.extractUnknownProtoFieldName(from: message) {
+                        if workingBody[unknownField] != nil {
+                            workingBody.removeValue(forKey: unknownField)
+                            continue
+                        }
+                        if var cascadeCfg = workingBody["cascadeConfig"]?.objectValue,
+                           var plannerCfg = cascadeCfg["plannerConfig"]?.objectValue,
+                           plannerCfg[unknownField] != nil {
+                            plannerCfg.removeValue(forKey: unknownField)
+                            cascadeCfg["plannerConfig"] = .object(plannerCfg)
+                            workingBody["cascadeConfig"] = .object(cascadeCfg)
+                            continue
+                        }
                     }
                     throw AntigravityRPCError.httpError(statusCode: 400, body: "\(code): \(message)")
                 }
                 return decoded
             }
             let rawText = String(data: respData, encoding: .utf8) ?? ""
-            if attempt < 3, let unknownField = Self.extractUnknownProtoFieldName(from: rawText),
+            if attempt < 4, let unknownField = Self.extractUnknownProtoFieldName(from: rawText),
                workingBody[unknownField] != nil {
                 workingBody.removeValue(forKey: unknownField)
                 continue
@@ -1043,7 +1041,7 @@ public actor AntigravityRPCClient {
         }
     }
 
-    private func sanitizeCloudRelayPayload(
+    internal func sanitizeCloudRelayPayload(
         method: String,
         body: [String: JSONValue]
     ) async throws -> [String: JSONValue] {
@@ -1079,15 +1077,22 @@ public actor AntigravityRPCClient {
                     guard let obj = entry.objectValue else { continue }
                     if let text = obj["text"]?.stringValue {
                         cleanItems.append(.object(["text": .string(text)]))
-                    } else if let absUri = obj["item"]?.objectValue?["file"]?.objectValue?["absoluteUri"]?.stringValue,
-                              absUri.hasPrefix("file://") {
-                        cleanItems.append(
-                            .object([
-                                "item": .object([
-                                    "file": .object(["absoluteUri": .string(absUri)])
-                                ])
-                            ])
-                        )
+                    } else if let itemObj = obj["item"]?.objectValue {
+                        if let fileObj = itemObj["file"]?.objectValue,
+                           let absUri = fileObj["absoluteUri"]?.stringValue,
+                           !absUri.isEmpty {
+                            var cleanFile: [String: JSONValue] = ["absoluteUri": .string(absUri)]
+                            if let label = fileObj["label"]?.stringValue, !label.isEmpty {
+                                cleanFile["label"] = .string(label)
+                            }
+                            cleanItems.append(.object(["item": .object(["file": .object(cleanFile)])]))
+                        } else if let mediaObj = itemObj["media"]?.objectValue {
+                            cleanItems.append(.object(["item": .object(["media": .object(mediaObj)])]))
+                        } else if let quoteObj = itemObj["codeQuote"]?.objectValue {
+                            cleanItems.append(.object(["item": .object(["codeQuote": .object(quoteObj)])]))
+                        } else if let mentionObj = itemObj["mention"]?.objectValue {
+                            cleanItems.append(.object(["item": .object(["mention": .object(mentionObj)])]))
+                        }
                     }
                 }
             }
@@ -1110,6 +1115,20 @@ public actor AntigravityRPCClient {
                         convObj["plannerMode"] = .string("CONVERSATIONAL_PLANNER_MODE_DEFAULT")
                     }
                     plannerCfg["conversational"] = .object(convObj)
+                }
+
+                // Preserve thinkingEffort, agentPersona, and permissionPreset on Cloud Relay
+                if let modelCfgObj = body["modelConfig"]?.objectValue {
+                    if let effort = modelCfgObj["thinkingEffort"]?.stringValue, !effort.isEmpty {
+                        plannerCfg["thinkingEffort"] = .string(effort)
+                    }
+                    if let persona = modelCfgObj["agentPersona"]?.stringValue,
+                       !persona.isEmpty, persona != "Default" {
+                        plannerCfg["agentPersona"] = .string(persona)
+                    }
+                    if let permPreset = modelCfgObj["permissionPreset"]?.stringValue, !permPreset.isEmpty {
+                        plannerCfg["permissionPreset"] = .string(permPreset)
+                    }
                 }
 
                 let reqModelObj = plannerCfg["requestedModel"]?.objectValue
@@ -1170,14 +1189,21 @@ public actor AntigravityRPCClient {
         return (result.defaultModelId, ids)
     }
 
-    /// Queries the connected `language_server` / `agy` daemon for its live model & custom agent catalog
-    /// via `GetCascadeModelConfigs`, `GetCascadeModelConfigData`, `GetAvailableModels`, and `GetAllCustomAgentConfigs`.
-    public func fetchModelCatalog() async -> LiveModelCatalogResult {
+    /// Queries the connected `language_server` / `agy` daemon for its live model, custom agent catalog,
+    /// and dual-pool usage quota via `GetCascadeModelConfigs`, `GetCascadeModelConfigData`, `GetAvailableModels`,
+    /// and `GetAllCustomAgentConfigs`.
+    public func fetchModelCatalog(forceRefresh: Bool = false) async -> LiveModelCatalogResult {
+        if forceRefresh {
+            self.cachedValidUpstreamModels = nil
+            self.cachedDefaultUpstreamModel = nil
+        }
         var parsedModels: [CascadeModelConfig] = []
         var validIds = Set<String>()
         var defaultModelId: String? = nil
+        var parsedQuota: ModelUsageQuota? = nil
 
         let metaReq: [String: JSONValue] = [
+            "forceRefresh": .bool(forceRefresh),
             "metadata": .object([
                 "ideName": .string("antigravity"),
                 "extensionName": .string("antigravity"),
@@ -1188,6 +1214,9 @@ public actor AntigravityRPCClient {
             if let obj = try? await callUnaryJSON(method: method, body: metaReq, timeoutInterval: 8.0),
                let configs = obj["clientModelConfigs"]?.arrayValue,
                !configs.isEmpty {
+                if let quotaObj = obj["usageQuota"]?.objectValue ?? obj["quotaSummary"]?.objectValue {
+                    parsedQuota = Self.parseUsageQuota(quotaObj)
+                }
                 for entry in configs {
                     guard let cfg = entry.objectValue else { continue }
                     if cfg["disabled"]?.boolValue == true { continue }
@@ -1206,11 +1235,31 @@ public actor AntigravityRPCClient {
                     validIds.insert(modelId)
 
                     let lowerLabel = label.lowercased()
+                    let isOrchestrator = (cfg["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
                     let supportsThinking = (cfg["supportsThoughtCirculation"]?.boolValue ?? false)
                         || (cfg["supportsThinking"]?.boolValue ?? false)
                         || lowerLabel.contains("thinking")
+                        || lowerLabel.contains("neon")
+                        || lowerLabel.contains("carbon")
+                        || lowerLabel.contains("argon")
+                        || lowerLabel.contains("hydrogen")
                         || lowerLabel.contains("pro")
                         || lowerLabel.contains("opus")
+                    let supportedEfforts: [ThinkingEffortLevel] = {
+                        if let rawEfforts = cfg["supportedEfforts"]?.arrayValue {
+                            let mapped = rawEfforts.compactMap { val -> ThinkingEffortLevel? in
+                                guard let s = val.stringValue?.lowercased() else { return nil }
+                                if s == "xhigh" || s == "extra" { return .extra }
+                                return ThinkingEffortLevel.allCases.first { $0.rawValue.lowercased() == s }
+                            }
+                            if !mapped.isEmpty { return mapped }
+                        }
+                        if isOrchestrator { return [.high] }
+                        if lowerLabel.contains("neon") || lowerLabel.contains("hydrogen") {
+                            return [.low, .medium, .high, .extra]
+                        }
+                        return [.low, .medium, .high]
+                    }()
                     let effort: ThinkingEffortLevel = lowerLabel.contains("(low)") ? .low : (lowerLabel.contains("flash") ? .medium : .high)
                     let quotaPart: String? = {
                         if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue {
@@ -1229,11 +1278,16 @@ public actor AntigravityRPCClient {
                             displayName: label,
                             subtitle: desc,
                             hasThinkingBadge: supportsThinking,
-                            requiresUpgradeNote: nil,
+                            requiresUpgradeNote: Self.nonEmptyString(cfg["upgradeNote"]?.stringValue),
                             mode: .planning,
                             agentPersona: "Default",
                             effort: effort,
-                            isModelAlias: isAlias
+                            isModelAlias: isAlias,
+                            isOrchestrator: isOrchestrator,
+                            plannerModelName: Self.nonEmptyString(cfg["plannerModelName"]?.stringValue),
+                            executorModelName: Self.nonEmptyString(cfg["executorModelName"]?.stringValue),
+                            supportedEfforts: supportedEfforts,
+                            isNewBadge: (cfg["isNew"]?.boolValue ?? false) || lowerLabel.contains("gemini 4") || isOrchestrator
                         )
                     )
                     if cfg["isRecommended"]?.boolValue == true && defaultModelId == nil {
@@ -1255,10 +1309,13 @@ public actor AntigravityRPCClient {
         if parsedModels.isEmpty,
            let availWrapper = try? await callUnaryJSON(
                method: "GetAvailableModels",
-               body: ["forceRefresh": .bool(false)],
+               body: ["forceRefresh": .bool(forceRefresh)],
                timeoutInterval: 8.0
            ) {
             let resp = availWrapper["response"]?.objectValue ?? availWrapper
+            if parsedQuota == nil, let quotaObj = resp["usageQuota"]?.objectValue {
+                parsedQuota = Self.parseUsageQuota(quotaObj)
+            }
             if let modelsMap = resp["models"]?.objectValue, !modelsMap.isEmpty {
                 var orderedKeys: [String] = []
                 let sorts = resp["agentModelSorts"]?.arrayValue ?? resp["battleModeModelSorts"]?.arrayValue ?? []
@@ -1286,8 +1343,10 @@ public actor AntigravityRPCClient {
                     validIds.insert(modelId)
 
                     let lowerLabel = displayName.lowercased()
+                    let isOrchestrator = (details["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
                     let supportsThinking = (details["supportsThinking"]?.boolValue ?? false)
                         || lowerLabel.contains("thinking")
+                        || lowerLabel.contains("neon")
                     let effort: ThinkingEffortLevel = lowerLabel.contains("(low)") ? .low : (lowerLabel.contains("flash") ? .medium : .high)
                     let subtitle = Self.nonEmptyString(details["description"]?.stringValue)
                         ?? Self.defaultSubtitle(forModelLabel: displayName)
@@ -1302,7 +1361,11 @@ public actor AntigravityRPCClient {
                             mode: .planning,
                             agentPersona: "Default",
                             effort: effort,
-                            isModelAlias: !modelId.hasPrefix("MODEL_")
+                            isModelAlias: !modelId.hasPrefix("MODEL_"),
+                            isOrchestrator: isOrchestrator,
+                            supportedEfforts: (lowerLabel.contains("neon") || lowerLabel.contains("hydrogen"))
+                                ? [.low, .medium, .high, .extra] : [.low, .medium, .high],
+                            isNewBadge: lowerLabel.contains("gemini 4") || isOrchestrator
                         )
                     )
                 }
@@ -1337,12 +1400,39 @@ public actor AntigravityRPCClient {
         return LiveModelCatalogResult(
             models: finalModels,
             defaultModelId: defaultModelId ?? finalModels.first?.modelId,
-            agents: agents
+            agents: agents,
+            usageQuota: parsedQuota
+        )
+    }
+
+    private static func parseUsageQuota(_ obj: [String: JSONValue]) -> ModelUsageQuota {
+        ModelUsageQuota(
+            geminiWeeklyRemaining: obj["geminiWeeklyRemaining"]?.doubleValue ?? 0.85,
+            geminiFiveHourRemaining: obj["geminiFiveHourRemaining"]?.doubleValue ?? 0.92,
+            partnerWeeklyRemaining: obj["partnerWeeklyRemaining"]?.doubleValue ?? 0.70,
+            partnerFiveHourRemaining: obj["partnerFiveHourRemaining"]?.doubleValue ?? 0.80,
+            aiCreditOveragesEnabled: obj["aiCreditOveragesEnabled"]?.boolValue ?? obj["hasExtraCredits"]?.boolValue ?? false,
+            planDisplayName: obj["planDisplayName"]?.stringValue ?? obj["planTier"]?.stringValue ?? "Google AI Ultra"
         )
     }
 
     private static func defaultSubtitle(forModelLabel label: String) -> String {
         let lower = label.lowercased()
+        if lower.contains("orchestrator") {
+            return "Dual-model planner & fast executor (fixed config)"
+        }
+        if lower.contains("neon") {
+            return "Frontier Gemini 4 intelligence with Extra thinking"
+        }
+        if lower.contains("carbon") {
+            return "High-efficiency Gemini 4 balanced coding & reasoning"
+        }
+        if lower.contains("argon") {
+            return "Ultra-fast Gemini 4 edits & rapid iterations"
+        }
+        if lower.contains("hydrogen") {
+            return "Deep scientific & systems reasoning with Extra thinking"
+        }
         if lower.contains("flash") {
             return "Fastest responses and lightweight edits"
         }
@@ -2068,18 +2158,34 @@ public actor AntigravityRPCClient {
                 "name": .string(draft.projectName),
                 "backendType": .string("BACKEND_TYPE_REMOTE_AICODE")
             ]
+            var resourceEntries: [JSONValue] = []
             if let repo = draft.selectedRepo {
-                projectObj["projectResources"] = .object([
-                    "resources": .array([
-                        .object([
-                            "remoteResource": .object([
-                                "type": .string("github"),
-                                "name": .string(repo.fullName),
-                                "displayName": .string(repo.fullName)
-                            ])
+                resourceEntries.append(
+                    .object([
+                        "remoteResource": .object([
+                            "type": .string("github"),
+                            "name": .string(repo.fullName),
+                            "displayName": .string(repo.fullName)
                         ])
                     ])
-                ])
+                )
+            }
+            for link in draft.googleDriveLinks where !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                resourceEntries.append(
+                    .object([
+                        "remoteResource": .object([
+                            "type": .string("google_drive"),
+                            "name": .string(link),
+                            "displayName": .string(link)
+                        ])
+                    ])
+                )
+            }
+            if !resourceEntries.isEmpty {
+                projectObj["projectResources"] = .object(["resources": .array(resourceEntries)])
+            }
+            if !draft.envSetupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                projectObj["envSetupScript"] = .string(draft.envSetupScript)
             }
             let res = try await callUnaryJSON(
                 method: "CreateProject",
@@ -2107,15 +2213,25 @@ public actor AntigravityRPCClient {
             return created
         }
 
+        var body: [String: JSONValue] = [
+            "name": .string(draft.projectName),
+            "runtime": .string(draft.runsOn.rawValue),
+            "source": .string(draft.source.rawValue),
+            "repository": .string(repoName),
+            "branchWorktree": .string(draft.branchWorktree)
+        ]
+        if !draft.googleDriveLinks.isEmpty {
+            body["googleDriveLinks"] = .array(draft.googleDriveLinks.map(JSONValue.string))
+        }
+        if !draft.uploadedFilePaths.isEmpty {
+            body["uploadedFilePaths"] = .array(draft.uploadedFilePaths.map(JSONValue.string))
+        }
+        if !draft.envSetupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["envSetupScript"] = .string(draft.envSetupScript)
+        }
         let res = try await callUnaryJSON(
             method: "CreateProjectWorkspace",
-            body: [
-                "name": .string(draft.projectName),
-                "runtime": .string(draft.runsOn.rawValue),
-                "source": .string(draft.source.rawValue),
-                "repository": .string(repoName),
-                "branchWorktree": .string(draft.branchWorktree)
-            ]
+            body: body
         )
         let workspaceUri = res["workspaceUri"]?.stringValue
             ?? (draft.runsOn == .cloud ? "cloud://\(repoName)" : "file:///Users/wl/code/\(draft.projectName)")
@@ -2240,6 +2356,15 @@ public actor AntigravityRPCClient {
             return trimmed
         }
         let lower = trimmed.lowercased()
+        if lower.contains("orchestrator") {
+            if lower.contains("carbon") { return "MODEL_ORCHESTRATOR_CARBON" }
+            if lower.contains("argon") { return "MODEL_ORCHESTRATOR_ARGON" }
+            return "MODEL_ORCHESTRATOR_NEON"
+        }
+        if lower.contains("neon") { return "MODEL_GOOGLE_GEMINI_4_NEON" }
+        if lower.contains("carbon") { return "MODEL_GOOGLE_GEMINI_4_CARBON" }
+        if lower.contains("argon") { return "MODEL_GOOGLE_GEMINI_4_ARGON" }
+        if lower.contains("hydrogen") { return "MODEL_GOOGLE_GEMINI_4_HYDROGEN" }
         if lower.contains("flash") {
             return "MODEL_PLACEHOLDER_M18"
         }
@@ -2303,7 +2428,7 @@ public actor AntigravityRPCClient {
         return clientCid
     }
 
-    /// Sends a user prompt + `@file` context items + model/mode config (`SendUserCascadeMessage`).
+    /// Sends a user prompt + rich multimodal/context items + model/mode/effort/permission config (`SendUserCascadeMessage`).
     /// Encodes `Planning` vs `Fast` via `conversational.agenticMode` (`CONVERSATIONAL_PLANNER_MODE_DEFAULT`)
     /// and sets `planModel` alongside `requestedModel` for Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) sessions.
     public func sendUserCascadeMessage(
@@ -2316,20 +2441,74 @@ public actor AntigravityRPCClient {
         agentPersona: String = "Default",
         isModelAlias: Bool = false,
         isCloud: Bool = false,
+        permissionPreset: AgentPermissionPreset? = nil,
         instanceUuidOverride: String? = nil
     ) async throws {
         var items: [JSONValue] = [.object(["text": .string(message)])]
         for chip in attachments {
-            items.append(
-                .object([
-                    "item": .object([
-                        "file": .object([
-                            "absoluteUri": .string(chip.targetUri),
-                            "label": .string(chip.label)
+            switch chip.kind {
+            case .imageScreenshot, .audioRecording, .videoClip, .pdfDocument, .archiveZip, .genericFile:
+                if let b64 = chip.inlineBase64Data, !b64.isEmpty {
+                    items.append(
+                        .object([
+                            "item": .object([
+                                "media": .object([
+                                    "uri": .string(chip.targetUri),
+                                    "label": .string(chip.label),
+                                    "mimeType": .string(chip.mimeType ?? "application/octet-stream"),
+                                    "inlineBase64Data": .string(b64),
+                                    "kind": .string(chip.kind.rawValue)
+                                ])
+                            ])
+                        ])
+                    )
+                } else {
+                    items.append(
+                        .object([
+                            "item": .object([
+                                "file": .object([
+                                    "absoluteUri": .string(chip.targetUri),
+                                    "label": .string(chip.label)
+                                ])
+                            ])
+                        ])
+                    )
+                }
+            case .codeQuote:
+                items.append(
+                    .object([
+                        "item": .object([
+                            "codeQuote": .object([
+                                "uri": .string(chip.targetUri),
+                                "label": .string(chip.label)
+                            ])
                         ])
                     ])
-                ])
-            )
+                )
+            case .pluginMention, .skill, .conversationMention, .action:
+                items.append(
+                    .object([
+                        "item": .object([
+                            "mention": .object([
+                                "kind": .string(chip.kind.rawValue),
+                                "targetUri": .string(chip.targetUri),
+                                "label": .string(chip.label)
+                            ])
+                        ])
+                    ])
+                )
+            case .fileMention, .folder, .terminalLog:
+                items.append(
+                    .object([
+                        "item": .object([
+                            "file": .object([
+                                "absoluteUri": .string(chip.targetUri),
+                                "label": .string(chip.label)
+                            ])
+                        ])
+                    ])
+                )
+            }
         }
 
         let protoModel = Self.normalizeProtoModelEnum(modelId)
@@ -2342,10 +2521,27 @@ public actor AntigravityRPCClient {
                 "plannerMode": .string("CONVERSATIONAL_PLANNER_MODE_DEFAULT"),
                 "agenticMode": .bool(mode == .planning)
             ]),
-            "requestedModel": requestedModelPayload
+            "requestedModel": requestedModelPayload,
+            "thinkingEffort": .string(effort.protoWireValue)
         ]
+        if agentPersona != "Default" && !agentPersona.isEmpty {
+            plannerConfig["agentPersona"] = .string(agentPersona)
+        }
+        if let permissionPreset {
+            plannerConfig["permissionPreset"] = .string(permissionPreset.rawValue)
+        }
         if (isCloud || cascadeId.hasPrefix("v1/")) && !isModelAlias && protoModel.hasPrefix("MODEL_") {
             plannerConfig["planModel"] = .string(protoModel)
+        }
+
+        var modelCfgObj: [String: JSONValue] = [
+            "modelId": .string(modelId),
+            "thinkingEffort": .string(effort.protoWireValue),
+            "mode": .string(mode.rawValue.uppercased()),
+            "agentPersona": .string(agentPersona)
+        ]
+        if let permissionPreset {
+            modelCfgObj["permissionPreset"] = .string(permissionPreset.rawValue)
         }
 
         _ = try await callUnaryJSON(
@@ -2356,17 +2552,12 @@ public actor AntigravityRPCClient {
                 "userResponse": .string(message),
                 "metadata": .object([
                     "ideName": .string("antigravity-ios"),
-                    "ideVersion": .string("2.0.0")
+                    "ideVersion": .string("2.33.0")
                 ]),
                 "cascadeConfig": .object([
                     "plannerConfig": .object(plannerConfig)
                 ]),
-                "modelConfig": .object([
-                    "modelId": .string(modelId),
-                    "thinkingEffort": .string(effort.rawValue.uppercased()),
-                    "mode": .string(mode.rawValue.uppercased()),
-                    "agentPersona": .string(agentPersona)
-                ])
+                "modelConfig": .object(modelCfgObj)
             ],
             instanceUuidOverride: instanceUuidOverride,
             timeoutInterval: 300.0
@@ -2392,6 +2583,7 @@ public actor AntigravityRPCClient {
         } else if let perm = payload.permission {
             interactionObj["permission"] = .object([
                 "allow": .bool(perm.allow),
+                "scope": .string(perm.scope),
                 "turnGrants": .object([
                     "allow": .array(perm.grantPatterns.map(JSONValue.string)),
                     "deny": .array([])
@@ -2415,7 +2607,11 @@ public actor AntigravityRPCClient {
             }
             interactionObj["askQuestion"] = .object(qaObj)
         } else if let confirm = payload.genericConfirm {
-            interactionObj[payload.kind.rawValue] = .object(["confirm": .bool(confirm)])
+            var genericObj: [String: JSONValue] = ["confirm": .bool(confirm)]
+            if let scope = payload.approvalScope {
+                genericObj["scope"] = .string(scope)
+            }
+            interactionObj[payload.kind.rawValue] = .object(genericObj)
         }
 
         _ = try await callUnaryJSON(
@@ -2626,7 +2822,7 @@ public actor AntigravityRPCClient {
         )
     }
 
-    // MARK: - Artifacts & Turn Diff RPC (`UE11`, `UE12`)
+    // MARK: - Artifacts & Turn Diff RPC (`UE11`, `UE12` + Git VCS)
 
     public func getArtifactSnapshots(cascadeId: String) async throws -> [ArtifactSnapshot] {
         let res = try await callUnaryJSON(
@@ -2637,13 +2833,35 @@ public actor AntigravityRPCClient {
         return arr.compactMap { item -> ArtifactSnapshot? in
             guard let obj = item.objectValue,
                   let path = obj["artifactPath"]?.stringValue else { return nil }
+            let kind: ArtifactKind = {
+                if let rawKind = obj["kind"]?.stringValue,
+                   let parsed = ArtifactKind(rawValue: rawKind) {
+                    return parsed
+                }
+                let lower = path.lowercased()
+                if lower.hasSuffix(".pdf") { return .pdfDocument }
+                if lower.hasSuffix(".ipynb") { return .jupyterNotebook }
+                if lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".webp") {
+                    return .imageAsset
+                }
+                if lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") || lower.hasSuffix(".webm") {
+                    return .videoAsset
+                }
+                if lower.hasSuffix(".html") { return .generativeUIHTML }
+                if lower.hasSuffix(".url.json") { return .urlBookmark }
+                if lower.contains("walkthrough") { return .walkthrough }
+                if lower.contains("task") { return .taskList }
+                return .implementationPlan
+            }()
             return ArtifactSnapshot(
                 artifactPath: path,
-                title: obj["title"]?.stringValue ?? "Artifact",
+                title: obj["title"]?.stringValue ?? (path as NSString).lastPathComponent,
                 summary: obj["summary"]?.stringValue ?? "",
-                kind: .implementationPlan,
+                kind: kind,
                 content: obj["content"]?.stringValue ?? "",
-                requestFeedback: obj["requestFeedback"]?.boolValue ?? false
+                requestFeedback: obj["requestFeedback"]?.boolValue ?? false,
+                userFacing: obj["userFacing"]?.boolValue ?? true,
+                version: obj["version"]?.intValue ?? 1
             )
         }
     }
@@ -2666,13 +2884,136 @@ public actor AntigravityRPCClient {
         )
     }
 
-    public func getTurnDiff(cascadeId: String, turnNumber: Int?) async throws -> [FilePatchDiff] {
-        var body: [String: JSONValue] = ["cascadeId": .string(cascadeId)]
+    public func getTurnDiff(
+        cascadeId: String,
+        turnNumber: Int?,
+        compareMode: DiffCompareMode = .turn
+    ) async throws -> [FilePatchDiff] {
+        var body: [String: JSONValue] = [
+            "cascadeId": .string(cascadeId),
+            "compareMode": .string(compareMode.rawValue)
+        ]
         if let turnNumber {
             body["turnNumber"] = .int(turnNumber)
         }
-        _ = try await callUnaryJSON(method: "GetTurnDiff", body: body)
-        return []
+        let res = try await callUnaryJSON(method: "GetTurnDiff", body: body)
+        return Self.parseFilePatchDiffs(from: res, defaultTurn: turnNumber ?? 1, defaultScope: compareMode)
+    }
+
+    internal static func parseFilePatchDiffs(
+        from response: [String: JSONValue],
+        defaultTurn: Int = 1,
+        defaultScope: DiffCompareMode = .turn
+    ) -> [FilePatchDiff] {
+        guard let rawFiles = response["files"]?.arrayValue ?? response["diffs"]?.arrayValue else {
+            return []
+        }
+        return rawFiles.compactMap { entry -> FilePatchDiff? in
+            guard let obj = entry.objectValue,
+                  let path = nonEmptyString(obj["filePath"]?.stringValue ?? obj["path"]?.stringValue) else {
+                return nil
+            }
+            let turn = obj["turnNumber"]?.intValue ?? defaultTurn
+            let statusLetter = GitFileStatusLetter(
+                rawValue: (obj["statusLetter"]?.stringValue ?? obj["status"]?.stringValue ?? "M").uppercased()
+            ) ?? .modified
+            let isStaged = obj["isStaged"]?.boolValue ?? false
+            let isReviewed = obj["isReviewed"]?.boolValue ?? false
+            let scope = DiffCompareMode(rawValue: obj["compareScope"]?.stringValue ?? "") ?? defaultScope
+            let hunkHeader = obj["hunkHeader"]?.stringValue ?? "@@ -1,1 +1,1 @@"
+
+            var parsedLines: [DiffLine] = []
+            if let rawLines = obj["lines"]?.arrayValue {
+                for (idx, lineVal) in rawLines.enumerated() {
+                    guard let lObj = lineVal.objectValue else { continue }
+                    let kindStr = (lObj["kind"]?.stringValue ?? "context").lowercased()
+                    let lineKind: DiffLine.Kind
+                    switch kindStr {
+                    case "addition", "add", "+": lineKind = .addition
+                    case "deletion", "del", "-": lineKind = .deletion
+                    case "hunkheader", "hunk": lineKind = .hunkHeader
+                    default: lineKind = .context
+                    }
+                    parsedLines.append(
+                        DiffLine(
+                            id: lObj["id"]?.intValue ?? idx,
+                            kind: lineKind,
+                            oldLineNumber: lObj["oldLineNumber"]?.intValue,
+                            newLineNumber: lObj["newLineNumber"]?.intValue,
+                            text: lObj["text"]?.stringValue ?? "",
+                            wordHighlightRange: lObj["wordHighlightRange"]?.stringValue
+                        )
+                    )
+                }
+            } else if let rawHunks = obj["hunks"]?.arrayValue {
+                var runningId = 0
+                for hVal in rawHunks {
+                    guard let hObj = hVal.objectValue else { continue }
+                    if let hdr = nonEmptyString(hObj["header"]?.stringValue) {
+                        parsedLines.append(DiffLine(id: runningId, kind: .hunkHeader, text: hdr))
+                        runningId += 1
+                    }
+                    for lineVal in hObj["lines"]?.arrayValue ?? [] {
+                        guard let lObj = lineVal.objectValue else { continue }
+                        let kindStr = (lObj["kind"]?.stringValue ?? "context").lowercased()
+                        let lineKind: DiffLine.Kind = (kindStr == "addition" || kindStr == "+")
+                            ? .addition
+                            : ((kindStr == "deletion" || kindStr == "-") ? .deletion : .context)
+                        parsedLines.append(
+                            DiffLine(
+                                id: runningId,
+                                kind: lineKind,
+                                oldLineNumber: lObj["oldLineNumber"]?.intValue,
+                                newLineNumber: lObj["newLineNumber"]?.intValue,
+                                text: lObj["text"]?.stringValue ?? ""
+                            )
+                        )
+                        runningId += 1
+                    }
+                }
+            } else if let rawPatch = obj["patch"]?.stringValue ?? obj["unifiedDiff"]?.stringValue {
+                parsedLines = parseUnifiedDiffText(rawPatch)
+            }
+
+            let additions = obj["additions"]?.intValue ?? parsedLines.filter { $0.kind == .addition }.count
+            let deletions = obj["deletions"]?.intValue ?? parsedLines.filter { $0.kind == .deletion }.count
+
+            return FilePatchDiff(
+                turnNumber: turn,
+                filePath: path,
+                additions: additions,
+                deletions: deletions,
+                hunkHeader: hunkHeader,
+                isReviewed: isReviewed,
+                statusLetter: statusLetter,
+                isStaged: isStaged,
+                compareScope: scope,
+                lines: parsedLines
+            )
+        }
+    }
+
+    internal static func parseUnifiedDiffText(_ unifiedDiff: String) -> [DiffLine] {
+        var result: [DiffLine] = []
+        var oldNum = 1
+        var newNum = 1
+        for (idx, rawLine) in unifiedDiff.components(separatedBy: "\n").enumerated() {
+            if rawLine.hasPrefix("@@") {
+                result.append(DiffLine(id: idx, kind: .hunkHeader, text: rawLine))
+            } else if rawLine.hasPrefix("+") && !rawLine.hasPrefix("+++") {
+                result.append(DiffLine(id: idx, kind: .addition, oldLineNumber: nil, newLineNumber: newNum, text: String(rawLine.dropFirst())))
+                newNum += 1
+            } else if rawLine.hasPrefix("-") && !rawLine.hasPrefix("---") {
+                result.append(DiffLine(id: idx, kind: .deletion, oldLineNumber: oldNum, newLineNumber: nil, text: String(rawLine.dropFirst())))
+                oldNum += 1
+            } else if !rawLine.hasPrefix("---") && !rawLine.hasPrefix("+++") {
+                let content = rawLine.hasPrefix(" ") ? String(rawLine.dropFirst()) : rawLine
+                result.append(DiffLine(id: idx, kind: .context, oldLineNumber: oldNum, newLineNumber: newNum, text: content))
+                oldNum += 1
+                newNum += 1
+            }
+        }
+        return result
     }
 
     public func revertDiffHunk(cascadeId: String, filePath: String, hunkHeader: String? = nil) async throws {
@@ -2702,6 +3043,303 @@ public actor AntigravityRPCClient {
                 "comments": .array(encoded)
             ]
         )
+    }
+
+    // MARK: - Antigravity 2.0 (v2.33) Git VCS, Overview, Side Question, Permissions & Customizations RPCs
+
+    public func gitStageFile(cascadeId: String, filePath: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "GitStageFile",
+            body: ["cascadeId": .string(cascadeId), "filePath": .string(filePath)]
+        )
+    }
+
+    public func gitUnstageFile(cascadeId: String, filePath: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "GitUnstageFile",
+            body: ["cascadeId": .string(cascadeId), "filePath": .string(filePath)]
+        )
+    }
+
+    public func gitDiscardFile(cascadeId: String, filePath: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "GitDiscardFile",
+            body: ["cascadeId": .string(cascadeId), "filePath": .string(filePath)]
+        )
+    }
+
+    public func gitCommitChanges(cascadeId: String, draft: GitCommitDraft) async throws -> GitCommitResult {
+        let res = try await callUnaryJSON(
+            method: "GitCommit",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "message": .string(draft.message),
+                "includeUnstaged": .bool(draft.includeUnstaged),
+                "amend": .bool(draft.amend)
+            ]
+        )
+        return GitCommitResult(
+            commitSha: res["commitSha"]?.stringValue ?? String(UUID().uuidString.prefix(7)).lowercased(),
+            commitMessage: res["commitMessage"]?.stringValue ?? draft.message,
+            branchName: res["branchName"]?.stringValue ?? "main",
+            pushed: res["pushed"]?.boolValue ?? false
+        )
+    }
+
+    public func gitPushBranch(cascadeId: String, branchName: String) async throws -> Bool {
+        let res = try await callUnaryJSON(
+            method: "GitPush",
+            body: ["cascadeId": .string(cascadeId), "branchName": .string(branchName)]
+        )
+        return res["pushed"]?.boolValue ?? res["ok"]?.boolValue ?? true
+    }
+
+    public func fetchConversationOverview(cascadeId: String) async throws -> ConversationOverviewSnapshot {
+        let res = try await callUnaryJSON(
+            method: "GetConversationOverview",
+            body: ["cascadeId": .string(cascadeId)]
+        )
+        let subagents: [SubagentPayload] = (res["subagents"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue else { return nil }
+            return SubagentPayload(
+                subagentId: obj["subagentId"]?.stringValue ?? obj["id"]?.stringValue ?? UUID().uuidString,
+                role: obj["role"]?.stringValue ?? "Subagent",
+                typeName: obj["typeName"]?.stringValue ?? "self",
+                modelLabel: obj["modelLabel"]?.stringValue ?? "Gemini 4 Hydrogen",
+                status: CortexStepStatus.from(jsonName: obj["status"]?.stringValue ?? "IN_PROGRESS"),
+                summary: obj["summary"]?.stringValue ?? "",
+                waitingApprovalTitle: obj["waitingApprovalTitle"]?.stringValue
+            )
+        }
+        let bgTasks: [BackgroundTaskItem] = (res["backgroundTasks"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue else { return nil }
+            return BackgroundTaskItem(
+                id: obj["id"]?.stringValue ?? UUID().uuidString,
+                title: obj["title"]?.stringValue ?? "Background Task",
+                commandSummary: obj["commandSummary"]?.stringValue ?? "",
+                status: CortexStepStatus.from(jsonName: obj["status"]?.stringValue ?? "IN_PROGRESS"),
+                elapsedLabel: obj["elapsedLabel"]?.stringValue ?? "running",
+                canCancel: obj["canCancel"]?.boolValue ?? true
+            )
+        }
+        let goals: [ConversationGoalItem] = (res["goals"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue else { return nil }
+            return ConversationGoalItem(
+                id: obj["id"]?.stringValue ?? UUID().uuidString,
+                title: obj["title"]?.stringValue ?? "Goal",
+                status: CortexStepStatus.from(jsonName: obj["status"]?.stringValue ?? "IN_PROGRESS"),
+                progressText: obj["progressText"]?.stringValue ?? "Active"
+            )
+        }
+        let prs: [GitHubPullRequestInfo] = (res["pullRequests"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue,
+                  let repo = obj["ownerRepo"]?.stringValue,
+                  let num = obj["number"]?.intValue else { return nil }
+            return GitHubPullRequestInfo(
+                ownerRepo: repo,
+                number: num,
+                title: obj["title"]?.stringValue ?? "PR #\(num)",
+                state: GitHubPullRequestInfo.PRState(rawValue: (obj["state"]?.stringValue ?? "open").lowercased()) ?? .open,
+                checksSummary: obj["checksSummary"]?.stringValue ?? "Checks passing",
+                url: obj["url"]?.stringValue ?? "https://github.com/\(repo)/pull/\(num)",
+                additions: obj["additions"]?.intValue ?? 0,
+                deletions: obj["deletions"]?.intValue ?? 0
+            )
+        }
+        let modifiedFiles = (res["modifiedFiles"]?.arrayValue ?? []).compactMap(\.stringValue)
+        let docLinks = (res["documentLinks"]?.arrayValue ?? []).compactMap(\.stringValue)
+
+        return ConversationOverviewSnapshot(
+            reviewAdditions: res["reviewAdditions"]?.intValue ?? 0,
+            reviewDeletions: res["reviewDeletions"]?.intValue ?? 0,
+            modifiedFiles: modifiedFiles,
+            subagents: subagents,
+            backgroundTasks: bgTasks,
+            goals: goals,
+            artifacts: [],
+            documentLinks: docLinks,
+            pullRequests: prs
+        )
+    }
+
+    public func cancelBackgroundTask(cascadeId: String, taskId: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "CancelBackgroundTask",
+            body: ["cascadeId": .string(cascadeId), "taskId": .string(taskId)]
+        )
+    }
+
+    public func stopSubagent(cascadeId: String, subagentId: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "StopSubagent",
+            body: ["cascadeId": .string(cascadeId), "subagentId": .string(subagentId)]
+        )
+    }
+
+    public func sendSideQuestion(
+        cascadeId: String,
+        question: String,
+        threadId: String
+    ) async throws -> SideQuestionMessage {
+        let res = try await callUnaryJSON(
+            method: "SendSideQuestion",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "threadId": .string(threadId),
+                "question": .string(question)
+            ]
+        )
+        let answer = Self.nonEmptyString(res["answer"]?.stringValue)
+            ?? Self.nonEmptyString(res["response"]?.stringValue)
+            ?? "Read-only side answer for: \(question)"
+        return SideQuestionMessage(isUser: false, text: answer)
+    }
+
+    public func revertConversationToStep(cascadeId: String, stepIndex: Int) async throws {
+        _ = try await callUnaryJSON(
+            method: "RevertConversationToStep",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "stepIndex": .int(stepIndex)
+            ]
+        )
+    }
+
+    public func setConversationPermissionPreset(cascadeId: String, preset: AgentPermissionPreset) async throws {
+        _ = try await callUnaryJSON(
+            method: "SetPermissionPreset",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "preset": .string(preset.wireValue),
+                "label": .string(preset.rawValue)
+            ]
+        )
+    }
+
+    public func fetchCustomizationsCatalog() async throws -> CustomizationsCatalog {
+        let res = try await callUnaryJSON(method: "GetCustomizationsCatalog", body: [:])
+        let skills: [SkillSummary] = (res["skills"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue, let name = obj["name"]?.stringValue else { return nil }
+            return SkillSummary(
+                name: name,
+                description: obj["description"]?.stringValue ?? "",
+                scope: obj["scope"]?.stringValue ?? "Workspace",
+                isEnabled: obj["isEnabled"]?.boolValue ?? true
+            )
+        }
+        let rules: [RuleSummary] = (res["rules"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue, let name = obj["name"]?.stringValue else { return nil }
+            return RuleSummary(
+                name: name,
+                scope: obj["scope"]?.stringValue ?? "Workspace",
+                preview: obj["preview"]?.stringValue ?? "",
+                isActive: obj["isActive"]?.boolValue ?? true
+            )
+        }
+        let agents = (res["customAgents"]?.arrayValue ?? []).compactMap(\.stringValue)
+        let servers: [McpServerStatusItem] = (res["mcpServers"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue, let name = obj["name"]?.stringValue else { return nil }
+            let state = McpServerStatusItem.ConnectionState(rawValue: (obj["state"]?.stringValue ?? "connected").lowercased()) ?? .connected
+            return McpServerStatusItem(
+                name: name,
+                transport: obj["transport"]?.stringValue ?? "stdio",
+                state: state,
+                toolCount: obj["toolCount"]?.intValue ?? 0,
+                errorMessage: obj["errorMessage"]?.stringValue,
+                missingCommandHint: obj["missingCommandHint"]?.stringValue,
+                oauthConnected: obj["oauthConnected"]?.boolValue ?? true
+            )
+        }
+        let plugins: [PluginCatalogItem] = (res["plugins"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue,
+                  let id = obj["id"]?.stringValue,
+                  let name = obj["name"]?.stringValue else { return nil }
+            return PluginCatalogItem(
+                id: id,
+                name: name,
+                provider: obj["provider"]?.stringValue ?? name,
+                description: obj["description"]?.stringValue ?? "",
+                isInstalled: obj["isInstalled"]?.boolValue ?? false,
+                isEnabled: obj["isEnabled"]?.boolValue ?? true,
+                isFeaturedPartner: obj["isFeaturedPartner"]?.boolValue ?? false,
+                accountSignedIn: obj["accountSignedIn"]?.boolValue ?? false,
+                mcpStartupError: obj["mcpStartupError"]?.stringValue,
+                suggestedPrompts: (obj["suggestedPrompts"]?.arrayValue ?? []).compactMap(\.stringValue)
+            )
+        }
+        let hooks: [LifecycleHookItem] = (res["hooks"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue,
+                  let eventName = obj["eventName"]?.stringValue,
+                  let cmd = obj["command"]?.stringValue else { return nil }
+            return LifecycleHookItem(
+                id: obj["id"]?.stringValue ?? UUID().uuidString,
+                eventName: eventName,
+                matcher: obj["matcher"]?.stringValue ?? "*",
+                command: cmd,
+                timeoutSeconds: obj["timeoutSeconds"]?.intValue ?? 60,
+                isValid: obj["isValid"]?.boolValue ?? true
+            )
+        }
+        if skills.isEmpty && rules.isEmpty && servers.isEmpty && plugins.isEmpty {
+            return CustomizationsCatalog.defaultCatalog
+        }
+        return CustomizationsCatalog(
+            skills: skills,
+            rules: rules,
+            customAgents: agents.isEmpty ? ["Default"] : agents,
+            mcpServers: servers,
+            plugins: plugins,
+            hooks: hooks
+        )
+    }
+
+    public func restartMcpServer(serverName: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "RestartMcpServer",
+            body: ["serverName": .string(serverName)]
+        )
+    }
+
+    public func togglePlugin(pluginId: String, isEnabled: Bool) async throws {
+        _ = try await callUnaryJSON(
+            method: "TogglePlugin",
+            body: ["pluginId": .string(pluginId), "isEnabled": .bool(isEnabled)]
+        )
+    }
+
+    public func installMarketplacePlugin(pluginId: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "InstallPlugin",
+            body: ["pluginId": .string(pluginId)]
+        )
+    }
+
+    public func searchAllConversations(query: String) async throws -> [CascadeSummary] {
+        let res = try await callUnaryJSON(
+            method: "SearchAllConversations",
+            body: ["query": .string(query)]
+        )
+        guard let list = res["trajectories"]?.arrayValue ?? res["results"]?.arrayValue else {
+            return []
+        }
+        let now = Date()
+        return list.compactMap { item -> CascadeSummary? in
+            guard let obj = item.objectValue,
+                  let id = obj["cascadeId"]?.stringValue,
+                  let title = obj["title"]?.stringValue else { return nil }
+            return CascadeSummary(
+                cascadeId: id,
+                title: title,
+                projectSlug: obj["projectSlug"]?.stringValue ?? "workspace",
+                workspaceUri: obj["workspaceUri"]?.stringValue ?? "",
+                branchName: obj["branchName"]?.stringValue ?? "main",
+                status: CortexStepStatus.from(jsonName: obj["status"]?.stringValue ?? "DONE"),
+                stepCount: obj["stepCount"]?.intValue ?? 0,
+                updatedAt: now,
+                relativeTimeLabel: obj["relativeTimeLabel"]?.stringValue ?? "now",
+                statusSubtitle: obj["snippet"]?.stringValue ?? obj["statusSubtitle"]?.stringValue ?? ""
+            )
+        }
     }
 
     // MARK: - Server-Streaming Envelope Subscription

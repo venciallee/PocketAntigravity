@@ -37,10 +37,83 @@ public struct ApproveWaitingStepIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult {
-        _ = await LiveActivityBiometricGate.evaluate(
+        let outcome = await LiveActivityBiometricGate.evaluate(
             reason: "Approve terminal command execution on paired host"
         )
+        guard outcome == .verified || outcome == .unavailable else {
+            return .result()
+        }
+        await LiveActivityIntentDispatcher.dispatchApproval(
+            cascadeId: cascadeId,
+            stepIndex: stepIndex,
+            approved: true,
+            faceIdVerified: outcome == .verified
+        )
         return .result()
+    }
+}
+
+private enum LiveActivityIntentDispatcher {
+    static func makeRPCClient() async -> AntigravityRPCClient? {
+        guard let creds = await KeychainStore.shared.loadCredentials(),
+              let url = URL(string: creds.endpointURLString) else {
+            return nil
+        }
+        let host = RemoteHostInstance(
+            instanceId: creds.resolvedInstanceUuid ?? "live-activity",
+            hostname: creds.hostname,
+            channel: creds.channel,
+            endpointURL: url,
+            isOnline: true
+        )
+        return AntigravityRPCClient(
+            host: host,
+            csrfToken: creds.csrfToken,
+            sessionCookie: creds.sessionCookie,
+            authUser: creds.authUser,
+            resolvedInstanceUuid: creds.resolvedInstanceUuid,
+            pinnedFingerprintSHA256: creds.certFingerprintSHA256
+        )
+    }
+
+    static func dispatchApproval(
+        cascadeId: String,
+        stepIndex: Int,
+        approved: Bool,
+        faceIdVerified: Bool
+    ) async {
+        await SharedAppGroupBridge.shared.enqueueLiveActivityAction(
+            PendingLiveActivityAction(
+                cascadeId: cascadeId,
+                stepIndex: stepIndex,
+                kind: approved ? .approveWithFaceID : .deny
+            )
+        )
+        guard let client = await makeRPCClient() else { return }
+        let payload = CascadeUserInteractionPayload(
+            cascadeId: cascadeId,
+            stepIndex: stepIndex,
+            kind: .runCommand,
+            runCommand: .init(
+                confirm: approved,
+                proposedCommandLine: "",
+                submittedCommandLine: "",
+                faceIdVerified: faceIdVerified
+            )
+        )
+        try? await client.handleCascadeUserInteraction(payload)
+    }
+
+    static func dispatchStop(cascadeId: String) async {
+        await SharedAppGroupBridge.shared.enqueueLiveActivityAction(
+            PendingLiveActivityAction(
+                cascadeId: cascadeId,
+                stepIndex: 0,
+                kind: .stopTurn
+            )
+        )
+        guard let client = await makeRPCClient() else { return }
+        try? await client.cancelCascadeInvocation(cascadeId: cascadeId)
     }
 }
 
@@ -94,6 +167,12 @@ public struct DenyWaitingStepIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult {
+        await LiveActivityIntentDispatcher.dispatchApproval(
+            cascadeId: cascadeId,
+            stepIndex: stepIndex,
+            approved: false,
+            faceIdVerified: false
+        )
         return .result()
     }
 }
@@ -114,6 +193,7 @@ public struct StopCascadeTurnIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult {
+        await LiveActivityIntentDispatcher.dispatchStop(cascadeId: cascadeId)
         return .result()
     }
 }

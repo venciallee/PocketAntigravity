@@ -85,6 +85,21 @@ public struct CascadeChatViewController: View {
                                 switch item {
                                 case .single(let step):
                                     CascadeStepCellView(store: store, step: step)
+                                        .id("step-\(step.stepIndex)")
+                                        .contextMenu {
+                                            if let text = step.plannerResponse?.response ?? step.userInput, !text.isEmpty {
+                                                Button {
+                                                    store.composerDraftText += (store.composerDraftText.isEmpty ? "" : "\n") + "> \(String(text.prefix(240)))\n"
+                                                } label: {
+                                                    Label("Quote in Reply", systemImage: "text.quote")
+                                                }
+                                            }
+                                            Button(role: .destructive) {
+                                                store.revertConversationToStep(step.stepIndex)
+                                            } label: {
+                                                Label("Revert to This Step", systemImage: "arrow.uturn.backward")
+                                            }
+                                        }
                                 case .evidenceGroup(let groupId, let groupedSteps):
                                     CascadeEvidenceGroupCardView(
                                         store: store,
@@ -92,6 +107,36 @@ public struct CascadeChatViewController: View {
                                         steps: groupedSteps
                                     )
                                 }
+                            }
+
+                            if !store.isVerificationMode,
+                               let waiting = store.pendingWaitingStep,
+                               waiting.requestedInteraction?.kind == .askQuestion {
+                                Button {
+                                    store.syncActiveLiveQuestionFromSteps()
+                                    store.presentedSheet = .askQuestion(stepIndex: waiting.stepIndex)
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "list.bullet.rectangle.portrait.fill")
+                                            .foregroundStyle(Self.warmAmber)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Structured Question Pending")
+                                                .font(.system(size: 13.5, weight: .bold))
+                                                .foregroundStyle(AntigravityTheme.inkReading)
+                                            Text(waiting.requestedInteraction?.askQuestion?.question ?? "Tap to answer agent question")
+                                                .font(.system(size: 12.5))
+                                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                                                .lineLimit(2)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .foregroundStyle(Self.warmAmber)
+                                    }
+                                    .padding(12)
+                                    .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
+                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Self.warmAmber.opacity(0.45), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
                             }
 
                             if store.isCascadeStreaming || store.activeSummary?.status == .inProgress || store.activeSummary?.status == .pending {
@@ -126,6 +171,11 @@ public struct CascadeChatViewController: View {
                     guard !isStaticESDDFixtureView, store.isAutoScrollPinnedToBottom else { return }
                     withAnimation(.easeOut(duration: 0.2)) {
                         scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                    }
+                }
+                .onChange(of: store.isCascadeStreaming) { wasStreaming, nowStreaming in
+                    if wasStreaming && !nowStreaming {
+                        store.flushNextQueuedMessageIfIdle()
                     }
                 }
             }
@@ -178,6 +228,7 @@ public struct CascadeChatViewController: View {
             isTurnStopped = false
             if (store.hasPairedBackend || store.isLiveBackendConnected) && !store.activeCascadeId.isEmpty {
                 store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                await store.loadLiveArtifactsAndDiffs(for: store.activeCascadeId)
             }
         }
     }
@@ -407,11 +458,32 @@ public struct CascadeChatViewController: View {
 
             // `•••` Overflow Menu
             Menu {
+                Button {
+                    store.presentedSheet = .conversationOverview
+                } label: {
+                    Label("Conversation Overview", systemImage: "sidebar.right")
+                }
+                Button {
+                    store.openSideQuestion()
+                } label: {
+                    Label("/btw Side Question", systemImage: "questionmark.bubble")
+                }
+                Button {
+                    store.startVoiceMode()
+                } label: {
+                    Label("Start Voice Mode", systemImage: "waveform")
+                }
+                Divider()
                 Button("Open Implementation Plan") {
                     store.currentRoute = .planReview
                 }
                 Button("Review Turn Changes") {
                     store.currentRoute = .turnDiffReview
+                }
+                Button {
+                    store.presentedSheet = .customizationsSettings
+                } label: {
+                    Label("Permissions & Customizations", systemImage: "shield.lefthalf.filled")
                 }
                 Button("Refresh Trajectory Steps") {
                     store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)

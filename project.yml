@@ -53,6 +53,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         NSCameraUsageDescription: "Scan the Remote Control QR code from your paired desktop host."
         NSMicrophoneUsageDescription: "Dictate prompts in AG Orbit using real-time voice transcription."
+        NSSpeechRecognitionUsageDescription: "Transcribe spoken voice prompts and live dictation directly into AG Orbit."
         NSFaceIDUsageDescription: "Authorize agent terminal commands and external permissions with Face ID."
         NSLocalNetworkUsageDescription: "Connect directly to your paired desktop host or Companion Bridge over LAN and Tailscale."
         NSSupportsLiveActivities: true
@@ -125,6 +126,8 @@ targets:
             NSExtensionActivationRule:
               NSExtensionActivationSupportsText: true
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsFileWithMaxCount: 5
+              NSExtensionActivationSupportsImageWithMaxCount: 5
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).app.Share

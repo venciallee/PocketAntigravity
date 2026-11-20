@@ -30,6 +30,12 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
     case modelConfigPicker
     case fileMentionPicker
     case newCascadeSheet
+    case conversationOverview
+    case sideQuestion
+    case swarmBoard(stepIndex: Int)
+    case voiceMode
+    case richArtifactViewer(artifactPath: String)
+    case customizationsSettings
 
     public var id: String {
         switch self {
@@ -43,6 +49,12 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
         case .modelConfigPicker: return "model-picker"
         case .fileMentionPicker: return "file-picker"
         case .newCascadeSheet: return "new-cascade"
+        case .conversationOverview: return "conversation-overview"
+        case .sideQuestion: return "side-question"
+        case .swarmBoard(let idx): return "swarm-board-\(idx)"
+        case .voiceMode: return "voice-mode"
+        case .richArtifactViewer(let path): return "rich-artifact-\(path)"
+        case .customizationsSettings: return "customizations-settings"
         }
     }
 }
@@ -140,6 +152,37 @@ public final class AntigravitySessionStore {
     public var activeLineCommentDraft: String
     public var diffComments: [DiffLineComment] = []
     public var lastDispatchedInteraction: CascadeUserInteractionPayload? = nil
+
+    // MARK: - Antigravity 2.0 (v2.33) State: Quota, Permissions, Overview, /btw, Voice, Git VCS, Customizations & Appearance
+    public var usageQuota: ModelUsageQuota = ModelUsageQuota(
+        geminiWeeklyRemaining: 0.86,
+        geminiFiveHourRemaining: 0.94,
+        partnerWeeklyRemaining: 0.72,
+        partnerFiveHourRemaining: 0.81,
+        aiCreditOveragesEnabled: false,
+        planDisplayName: "Google AI Ultra"
+    )
+    public var conversationPermissionPresets: [String: AgentPermissionPreset] = [:]
+    public var permissionRules: [PermissionRuleEntry] = [
+        PermissionRuleEntry(list: .allow, action: .readFile, target: "workspace/**"),
+        PermissionRuleEntry(list: .ask, action: .command, target: "git push*"),
+        PermissionRuleEntry(list: .deny, action: .readFile, target: "~/.ssh/**")
+    ]
+    public var conversationOverview: ConversationOverviewSnapshot = ConversationOverviewSnapshot()
+    public var sideQuestionThread: SideQuestionThread = SideQuestionThread()
+    public var queuedMessages: [QueuedMessageItem] = []
+    public var voiceModeState: VoiceModeState = VoiceModeState()
+    public var customizations: CustomizationsCatalog = CustomizationsCatalog.defaultCatalog
+    public var appearancePreferences: AppAppearancePreferences = AppAppearancePreferences()
+    public var diffCompareMode: DiffCompareMode = .turn
+    public var gitCommitDraft: GitCommitDraft = GitCommitDraft()
+    public var lastCommitResult: GitCommitResult? = nil
+    public var imageRegionComments: [ImageRegionComment] = []
+    public var isScheduledFilterActive: Bool = false
+    public var remoteSearchResults: [CascadeSummary] = []
+    public var isSearchingAllConversations: Bool = false
+    public var manuallyCancelledCascadeIds: Set<String> = []
+    public var lastNotificationEvent: (id: String, title: String, body: String, cascadeId: String)? = nil
 
     // MARK: - Live Backend Connectivity & Auth State
     public var isVerificationMode: Bool = false
@@ -1599,10 +1642,14 @@ public final class AntigravitySessionStore {
         return namedProjects + unassignedProjects
     }
 
-    /// Queries the connected `language_server` / `agy` daemon for live models, custom agents, and Cloud GitHub repos.
-    public func refreshModelCatalog() async {
+    /// Queries the connected `language_server` / `agy` daemon for live models, dual-pool usage quota, custom agents, and Cloud GitHub repos.
+    public func refreshModelCatalog(forceRefresh: Bool = false) async {
         guard let client = rpcClient else { return }
-        let result = await client.fetchModelCatalog()
+        let result = await client.fetchModelCatalog(forceRefresh: forceRefresh)
+        if let quota = result.usageQuota {
+            usageQuota = quota
+            await projectionStore.saveUsageQuota(quota)
+        }
         if !result.models.isEmpty {
             availableModels = result.models
             availableAgents = result.agents.isEmpty ? ["Default"] : result.agents
@@ -1623,16 +1670,25 @@ public final class AntigravitySessionStore {
                 return result.models[0]
             }()
 
+            let preservedEffort = matchedModel.supportedEfforts.contains(selectedModelConfig.effort)
+                ? selectedModelConfig.effort
+                : matchedModel.effort
+
             selectedModelConfig = CascadeModelConfig(
                 modelId: matchedModel.modelId,
                 displayName: matchedModel.displayName,
                 subtitle: matchedModel.subtitle,
                 hasThinkingBadge: matchedModel.hasThinkingBadge,
                 requiresUpgradeNote: matchedModel.requiresUpgradeNote,
-                mode: currentMode,
+                mode: matchedModel.isOrchestrator ? .planning : currentMode,
                 agentPersona: currentPersona,
-                effort: matchedModel.effort,
-                isModelAlias: matchedModel.isModelAlias
+                effort: matchedModel.isOrchestrator ? .high : preservedEffort,
+                isModelAlias: matchedModel.isModelAlias,
+                isOrchestrator: matchedModel.isOrchestrator,
+                plannerModelName: matchedModel.plannerModelName,
+                executorModelName: matchedModel.executorModelName,
+                supportedEfforts: matchedModel.supportedEfforts,
+                isNewBadge: matchedModel.isNewBadge
             )
         }
 
@@ -1659,10 +1715,15 @@ public final class AntigravitySessionStore {
                 subtitle: m.subtitle,
                 hasThinkingBadge: m.hasThinkingBadge,
                 requiresUpgradeNote: m.requiresUpgradeNote,
-                mode: nextMode,
+                mode: m.isOrchestrator ? .planning : nextMode,
                 agentPersona: selectedModelConfig.agentPersona,
                 effort: m.effort,
-                isModelAlias: m.isModelAlias
+                isModelAlias: m.isModelAlias,
+                isOrchestrator: m.isOrchestrator,
+                plannerModelName: m.plannerModelName,
+                executorModelName: m.executorModelName,
+                supportedEfforts: m.supportedEfforts,
+                isNewBadge: m.isNewBadge
             )
         } else {
             selectedModelConfig.mode = nextMode
@@ -3180,6 +3241,44 @@ public final class AntigravitySessionStore {
         let trimmed = composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !composerAttachments.isEmpty else { return }
 
+        let lowerTrim = trimmed.lowercased()
+        if lowerTrim == "/btw" || lowerTrim.hasPrefix("/btw ") {
+            let sidePrompt = trimmed.count > 4 ? String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            composerDraftText = ""
+            openSideQuestion(initialPrompt: sidePrompt.isEmpty ? nil : sidePrompt)
+            return
+        }
+        if lowerTrim == "/model" {
+            composerDraftText = ""
+            presentedSheet = .modelAndMode
+            return
+        }
+        if lowerTrim == "/mode" {
+            composerDraftText = ""
+            if !selectedModelConfig.isOrchestrator {
+                selectedModelConfig.mode = (selectedModelConfig.mode == .planning) ? .fast : .planning
+            }
+            return
+        }
+        if lowerTrim == "/voice" {
+            composerDraftText = ""
+            startVoiceMode()
+            return
+        }
+        if lowerTrim == "/clear" {
+            composerDraftText = ""
+            let targetProj = selectedProjectId.isEmpty ? (projects.first?.id ?? AntigravityCloudDetector.noProjectDisplayName) : selectedProjectId
+            _ = createConversationInProject(targetProj)
+            return
+        }
+
+        if isCascadeStreaming && (hasPairedBackend || isLiveBackendConnected) && !isVerificationMode {
+            enqueueFollowUpMessage(trimmed, attachments: composerAttachments)
+            composerDraftText = ""
+            composerAttachments.removeAll()
+            return
+        }
+
         let messageBody = trimmed.isEmpty
             ? "Inspect attached context: \(composerAttachments.map(\.label).joined(separator: ", "))"
             : trimmed
@@ -3254,6 +3353,7 @@ public final class AntigravitySessionStore {
 
         let cid = activeCascadeId
         let cfg = selectedModelConfig
+        let effectivePreset = effectivePermissionPreset(for: cid)
         let storeRef = projectionStore
         let clientRef = rpcClient
         let shouldSendLive = (hasPairedBackend || isLiveBackendConnected)
@@ -3358,6 +3458,7 @@ public final class AntigravitySessionStore {
                     agentPersona: cfg.agentPersona,
                     isModelAlias: cfg.isModelAlias,
                     isCloud: summaryIsCloud,
+                    permissionPreset: effectivePreset,
                     instanceUuidOverride: summaryOriginUuid
                 )
                 await storeRef.removeOutboxEntry(id: outboxEntry.id)
@@ -3535,6 +3636,7 @@ public final class AntigravitySessionStore {
 
     public func stopActiveCascadeStreaming() {
         optimisticActiveUntilByCascadeId.removeValue(forKey: activeCascadeId)
+        manuallyCancelledCascadeIds.insert(activeCascadeId)
         guard var currentSteps = stepsByCascadeId[activeCascadeId] else { return }
         for i in currentSteps.indices where currentSteps[i].status == .inProgress || currentSteps[i].status == .pending || currentSteps[i].status == .waiting {
             currentSteps[i].status = .cancelled
@@ -3614,10 +3716,14 @@ public final class AntigravitySessionStore {
                 summaries[sumIdx].statusSubtitle = "Denied · Awaiting instructions"
                 summaries[sumIdx].pendingInteractionTitle = nil
             }
-        case .allowOnce, .allowWithFaceID, .alwaysAllowInTurn, .allowWithModifiedCommand, .answerQuestion:
-            if case .alwaysAllowInTurn = decision,
+        case .allowOnce, .allowWithFaceID, .alwaysAllowInTurn, .allowInConversation, .alwaysAllow, .allowWithModifiedCommand, .answerQuestion:
+            if (decision == .alwaysAllowInTurn || decision == .allowInConversation || decision == .alwaysAllow),
                let pattern = targetStep.requestedInteraction?.permission?.suggestedPersistPattern {
                 activeTurnGrants.insert(pattern)
+                if decision == .alwaysAllow, let spec = targetStep.requestedInteraction?.permission {
+                    let ruleAction = PermissionRuleAction(rawValue: spec.action.lowercased()) ?? .command
+                    addPermissionRule(PermissionRuleEntry(list: .allow, action: ruleAction, target: pattern))
+                }
             }
             steps[idx].status = .done
 
@@ -3908,6 +4014,702 @@ public final class AntigravitySessionStore {
         activeTurnDiffs.removeAll()
         selectedDiffFileIndex = 0
         activeRoute = .cascadeChat(activeCascadeId)
+    }
+
+    // MARK: - Antigravity 2.0 (v2.33) Capabilities (P0 - P2)
+
+    /// Returns the effective permission preset for a conversation (falls back to global preset).
+    public func effectivePermissionPreset(for cascadeId: String? = nil) -> AgentPermissionPreset {
+        let cid = cascadeId ?? activeCascadeId
+        if let explicit = conversationPermissionPresets[cid], explicit != .inheritGlobal {
+            return explicit
+        }
+        return appearancePreferences.globalPermissionPreset
+    }
+
+    public func setConversationPermissionPreset(_ preset: AgentPermissionPreset, for cascadeId: String? = nil) {
+        let cid = cascadeId ?? activeCascadeId
+        if preset == .inheritGlobal {
+            conversationPermissionPresets.removeValue(forKey: cid)
+        } else {
+            conversationPermissionPresets[cid] = preset
+        }
+        let clientRef = rpcClient
+        if !cid.isEmpty {
+            Task {
+                try? await clientRef?.setConversationPermissionPreset(cascadeId: cid, preset: preset)
+            }
+        }
+    }
+
+    public func addPermissionRule(_ rule: PermissionRuleEntry) {
+        if !permissionRules.contains(where: { $0.formattedRule == rule.formattedRule && $0.list == rule.list }) {
+            permissionRules.append(rule)
+        }
+    }
+
+    public func removePermissionRule(id: String) {
+        permissionRules.removeAll { $0.id == id }
+    }
+
+    // MARK: - Persistent Sidebar Collapse & Appearance Preferences
+
+    public func isProjectCollapsed(_ projectId: String) -> Bool {
+        appearancePreferences.collapsedProjectIds.contains(projectId)
+    }
+
+    public func toggleProjectCollapsedPersisted(_ projectId: String) {
+        if appearancePreferences.collapsedProjectIds.contains(projectId) {
+            appearancePreferences.collapsedProjectIds.remove(projectId)
+        } else {
+            appearancePreferences.collapsedProjectIds.insert(projectId)
+        }
+        if let idx = projects.firstIndex(where: { $0.id == projectId }) {
+            projects[idx].isExpandedInHome = !appearancePreferences.collapsedProjectIds.contains(projectId)
+        }
+        saveAppearancePreferences()
+    }
+
+    public func saveAppearancePreferences() {
+        let snapshot = appearancePreferences
+        let storeRef = projectionStore
+        Task {
+            await storeRef.saveAppearancePreferences(snapshot)
+        }
+    }
+
+    public func loadPersistedV233Preferences() async {
+        if let prefs = await projectionStore.loadAppearancePreferences() {
+            appearancePreferences = prefs
+            for idx in projects.indices {
+                projects[idx].isExpandedInHome = !prefs.collapsedProjectIds.contains(projects[idx].id)
+            }
+        }
+        if let quota = await projectionStore.loadUsageQuota() {
+            usageQuota = quota
+        }
+        if let custom = await projectionStore.loadCustomizations() {
+            customizations = custom
+        }
+    }
+
+    // MARK: - Conversation Overview, Subagents & Background Tasks
+
+    public func refreshConversationOverview() async {
+        let cid = activeCascadeId
+        let steps = activeSteps
+
+        // Extract local fallback overview from live steps & diffs so Overview always works offline or live
+        var extractedSubagents: [SubagentPayload] = []
+        var extractedPRs: [GitHubPullRequestInfo] = []
+        var extractedDocs: [String] = []
+        var seenPrIds: Set<String> = []
+        for step in steps {
+            if let sub = step.subagent {
+                extractedSubagents.append(sub)
+            }
+            if let resp = step.plannerResponse?.response {
+                for pr in AntigravityMarkdownParser.extractGitHubPRLinks(from: resp) where seenPrIds.insert(pr.id).inserted {
+                    extractedPRs.append(pr)
+                }
+            }
+            for ref in step.plannerResponse?.referencedFiles ?? [] {
+                if !extractedDocs.contains(ref) { extractedDocs.append(ref) }
+            }
+        }
+
+        if let client = rpcClient, !cid.isEmpty, (hasPairedBackend || isLiveBackendConnected) {
+            if let remote = try? await client.fetchConversationOverview(cascadeId: cid) {
+                var merged = remote
+                merged.artifacts = activeArtifacts
+                if merged.subagents.isEmpty { merged.subagents = extractedSubagents }
+                if merged.pullRequests.isEmpty { merged.pullRequests = extractedPRs }
+                if merged.modifiedFiles.isEmpty { merged.modifiedFiles = activeTurnDiffs.map(\.filePath) }
+                if merged.reviewAdditions == 0 { merged.reviewAdditions = activeTurnDiffs.reduce(0) { $0 + $1.additions } }
+                if merged.reviewDeletions == 0 { merged.reviewDeletions = activeTurnDiffs.reduce(0) { $0 + $1.deletions } }
+                conversationOverview = merged
+                return
+            }
+        }
+
+        conversationOverview = ConversationOverviewSnapshot(
+            reviewAdditions: activeTurnDiffs.reduce(0) { $0 + $1.additions },
+            reviewDeletions: activeTurnDiffs.reduce(0) { $0 + $1.deletions },
+            modifiedFiles: activeTurnDiffs.map(\.filePath),
+            subagents: extractedSubagents,
+            backgroundTasks: conversationOverview.backgroundTasks,
+            goals: conversationOverview.goals,
+            artifacts: activeArtifacts,
+            documentLinks: extractedDocs,
+            pullRequests: extractedPRs
+        )
+    }
+
+    public func cancelBackgroundTask(_ taskId: String) {
+        if let idx = conversationOverview.backgroundTasks.firstIndex(where: { $0.id == taskId }) {
+            conversationOverview.backgroundTasks[idx].status = .cancelled
+            conversationOverview.backgroundTasks[idx].canCancel = false
+        }
+        let cid = activeCascadeId
+        let clientRef = rpcClient
+        Task {
+            try? await clientRef?.cancelBackgroundTask(cascadeId: cid, taskId: taskId)
+        }
+    }
+
+    public func stopSubagent(_ subagentId: String) {
+        if let idx = conversationOverview.subagents.firstIndex(where: { $0.subagentId == subagentId }) {
+            conversationOverview.subagents[idx].status = .cancelled
+        }
+        let cid = activeCascadeId
+        let clientRef = rpcClient
+        Task {
+            try? await clientRef?.stopSubagent(cascadeId: cid, subagentId: subagentId)
+        }
+    }
+
+    // MARK: - Multi-Turn /btw Side Questions
+
+    public func openSideQuestion(initialPrompt: String? = nil) {
+        if sideQuestionThread.parentCascadeId != activeCascadeId {
+            sideQuestionThread = SideQuestionThread(parentCascadeId: activeCascadeId)
+        }
+        presentedSheet = .sideQuestion
+        if let initialPrompt, !initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sendSideQuestion(initialPrompt)
+        }
+    }
+
+    public func sendSideQuestion(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if sideQuestionThread.parentCascadeId != activeCascadeId {
+            sideQuestionThread = SideQuestionThread(parentCascadeId: activeCascadeId)
+        }
+        sideQuestionThread.messages.append(SideQuestionMessage(isUser: true, text: trimmed))
+        sideQuestionThread.isStreaming = true
+
+        let cid = activeCascadeId
+        let threadId = sideQuestionThread.threadId
+        let clientRef = rpcClient
+        let isLive = (hasPairedBackend || isLiveBackendConnected)
+
+        Task { [weak self] in
+            let reply: SideQuestionMessage
+            if isLive, let clientRef, !cid.isEmpty,
+               let remoteReply = try? await clientRef.sendSideQuestion(cascadeId: cid, question: trimmed, threadId: threadId) {
+                reply = remoteReply
+            } else {
+                reply = SideQuestionMessage(
+                    isUser: false,
+                    text: "Read-only side analysis (does not mutate main context): `\(trimmed)` — checked current branch `\(self?.activeSummary?.branchName ?? "main")` and \(self?.activeSteps.count ?? 0) conversation steps."
+                )
+            }
+            self?.sideQuestionThread.messages.append(reply)
+            self?.sideQuestionThread.isStreaming = false
+        }
+    }
+
+    public func insertSideQuestionAnswerIntoMain() {
+        guard let answer = sideQuestionThread.latestAssistantAnswer, !answer.isEmpty else { return }
+        let prefix = composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "\n\n"
+        composerDraftText += "\(prefix)From /btw side note:\n> \(answer)"
+        presentedSheet = nil
+    }
+
+    public func resetSideQuestionThread() {
+        sideQuestionThread = SideQuestionThread(parentCascadeId: activeCascadeId)
+    }
+
+    // MARK: - Message Queueing, Conversation Navigator & Revert to Step
+
+    public func enqueueFollowUpMessage(_ text: String, attachments: [ComposerAttachmentChip] = []) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        queuedMessages.append(
+            QueuedMessageItem(cascadeId: activeCascadeId, text: trimmed, attachments: attachments)
+        )
+    }
+
+    public func updateQueuedMessage(id: String, newText: String) {
+        if let idx = queuedMessages.firstIndex(where: { $0.id == id }) {
+            queuedMessages[idx].text = newText
+        }
+    }
+
+    public func removeQueuedMessage(id: String) {
+        queuedMessages.removeAll { $0.id == id }
+    }
+
+    public func flushNextQueuedMessageIfIdle() {
+        guard !isCascadeStreaming,
+              let idx = queuedMessages.firstIndex(where: { $0.cascadeId == activeCascadeId }) else {
+            return
+        }
+        let next = queuedMessages.remove(at: idx)
+        composerDraftText = next.text
+        composerAttachments = next.attachments
+        sendCurrentDraft()
+    }
+
+    public var conversationTurns: [ConversationTurnSummary] {
+        var turnNumber = 0
+        return activeSteps.compactMap { step in
+            guard step.type == .userInput, let text = step.userInput, !text.isEmpty else { return nil }
+            turnNumber += 1
+            return ConversationTurnSummary(
+                turnNumber: turnNumber,
+                stepIndex: step.stepIndex,
+                promptPreview: String(text.prefix(72)),
+                timestamp: step.createdAt
+            )
+        }
+    }
+
+    public func revertConversationToStep(_ stepIndex: Int) {
+        guard var steps = stepsByCascadeId[activeCascadeId] else { return }
+        steps.removeAll { $0.stepIndex > stepIndex }
+        stepsByCascadeId[activeCascadeId] = steps
+        let cid = activeCascadeId
+        let clientRef = rpcClient
+        let storeRef = projectionStore
+        Task {
+            await storeRef.saveProjectedSteps(steps, for: cid)
+            try? await clientRef?.revertConversationToStep(cascadeId: cid, stepIndex: stepIndex)
+        }
+    }
+
+    // MARK: - Live Artifacts, Diff Hydration & Git VCS (Stage / Unstage / Discard / Commit / Push / Quote)
+
+    public func loadLiveArtifactsAndDiffs(for cascadeId: String? = nil) async {
+        guard !isVerificationMode, let client = rpcClient else { return }
+        let cid = cascadeId ?? activeCascadeId
+        guard !cid.isEmpty else { return }
+
+        if let snapshots = try? await client.getArtifactSnapshots(cascadeId: cid), !snapshots.isEmpty {
+            activeArtifacts = snapshots
+            if !snapshots.contains(where: { $0.artifactPath == selectedArtifactPath }) {
+                selectedArtifactPath = snapshots[0].artifactPath
+            }
+        }
+        if let diffs = try? await client.getTurnDiff(
+            cascadeId: cid,
+            turnNumber: diffCompareMode == .turn ? selectedDiffTurn : nil,
+            compareMode: diffCompareMode
+        ) {
+            if !diffs.isEmpty || (hasPairedBackend || isLiveBackendConnected) {
+                activeTurnDiffs = diffs
+                selectedDiffFileIndex = min(selectedDiffFileIndex, max(0, diffs.count - 1))
+            }
+        }
+    }
+
+    public func setDiffCompareMode(_ mode: DiffCompareMode) {
+        diffCompareMode = mode
+        if !isVerificationMode && (hasPairedBackend || isLiveBackendConnected) {
+            Task { [weak self] in
+                await self?.loadLiveArtifactsAndDiffs()
+            }
+        }
+    }
+
+    public func toggleStageDiffFile(at index: Int? = nil) {
+        let idx = index ?? selectedDiffFileIndex
+        guard activeTurnDiffs.indices.contains(idx) else { return }
+        activeTurnDiffs[idx].isStaged.toggle()
+        let filePath = activeTurnDiffs[idx].filePath
+        let nowStaged = activeTurnDiffs[idx].isStaged
+        let cid = activeCascadeId
+        let clientRef = rpcClient
+        Task {
+            if nowStaged {
+                try? await clientRef?.gitStageFile(cascadeId: cid, filePath: filePath)
+            } else {
+                try? await clientRef?.gitUnstageFile(cascadeId: cid, filePath: filePath)
+            }
+        }
+    }
+
+    public func discardDiffFile(at index: Int? = nil) {
+        let idx = index ?? selectedDiffFileIndex
+        guard activeTurnDiffs.indices.contains(idx) else { return }
+        let removed = activeTurnDiffs.remove(at: idx)
+        selectedDiffFileIndex = min(selectedDiffFileIndex, max(0, activeTurnDiffs.count - 1))
+        let cid = activeCascadeId
+        let clientRef = rpcClient
+        Task {
+            try? await clientRef?.gitDiscardFile(cascadeId: cid, filePath: removed.filePath)
+        }
+    }
+
+    public func commitDiffChanges() async -> GitCommitResult? {
+        let message = gitCommitDraft.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return nil }
+        let draft = gitCommitDraft
+        let cid = activeCascadeId
+        let branch = activeSummary?.branchName ?? "main"
+        let result: GitCommitResult
+        if let client = rpcClient, (hasPairedBackend || isLiveBackendConnected),
+           let remoteResult = try? await client.gitCommitChanges(cascadeId: cid, draft: draft) {
+            result = remoteResult
+        } else {
+            result = GitCommitResult(
+                commitSha: String(UUID().uuidString.prefix(7)).lowercased(),
+                commitMessage: message,
+                branchName: branch,
+                pushed: false
+            )
+        }
+        lastCommitResult = result
+        gitCommitDraft.message = ""
+        if draft.includeUnstaged {
+            activeTurnDiffs.removeAll()
+        } else {
+            activeTurnDiffs.removeAll(where: \.isStaged)
+        }
+        selectedDiffFileIndex = 0
+        return result
+    }
+
+    public func pushCurrentDiffBranch() async -> Bool {
+        let cid = activeCascadeId
+        let branch = activeSummary?.branchName ?? "main"
+        let pushed: Bool
+        if let client = rpcClient, (hasPairedBackend || isLiveBackendConnected) {
+            pushed = (try? await client.gitPushBranch(cascadeId: cid, branchName: branch)) ?? false
+        } else {
+            pushed = true
+        }
+        if pushed, var last = lastCommitResult {
+            last.pushed = true
+            lastCommitResult = last
+        }
+        return pushed
+    }
+
+    public func quoteDiffLinesToComposer(filePath: String, startLine: Int, endLine: Int, snippet: String) {
+        let fileName = (filePath as NSString).lastPathComponent
+        let rangeLabel = startLine == endLine ? "L\(startLine)" : "L\(startLine)-L\(endLine)"
+        let chip = ComposerAttachmentChip(
+            kind: .codeQuote,
+            label: "\(fileName):\(rangeLabel)",
+            targetUri: "\(filePath)#\(rangeLabel)"
+        )
+        if !composerAttachments.contains(where: { $0.targetUri == chip.targetUri }) {
+            composerAttachments.append(chip)
+        }
+        let cleanSnippet = snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanSnippet.isEmpty {
+            let prefix = composerDraftText.isEmpty ? "" : "\n"
+            composerDraftText += "\(prefix)Regarding `\(fileName):\(rangeLabel)`:\n```\n\(cleanSnippet)\n```\n"
+        }
+        activeRoute = .cascadeChat(activeCascadeId)
+    }
+
+    public func addImageRegionComment(_ comment: ImageRegionComment) {
+        imageRegionComments.append(comment)
+    }
+
+    // MARK: - Live Structured Question Hydration (`UE10`)
+
+    public func syncActiveLiveQuestionFromSteps() {
+        guard !isVerificationMode else { return }
+        guard let waiting = pendingWaitingStep,
+              let ask = waiting.requestedInteraction?.askQuestion else {
+            return
+        }
+        let stepId = "live-q-\(waiting.stepIndex)"
+        if questionSteps.first?.id != stepId {
+            questionSteps = [
+                StructuredQuestionStepItem(
+                    id: stepId,
+                    stepNumber: 1,
+                    shortTabTitle: "Question",
+                    questionTitle: ask.question,
+                    options: ask.options,
+                    selectedOptions: [],
+                    customWriteIn: "",
+                    isCompleted: false,
+                    isMultiSelect: ask.isMultiSelect
+                )
+            ]
+            activeQuestionStepIndex = 0
+        }
+    }
+
+    // MARK: - Customizations Hub (Skills, Rules, MCP Servers, Plugins Marketplace, Hooks)
+
+    public func refreshCustomizations() async {
+        guard let client = rpcClient, (hasPairedBackend || isLiveBackendConnected) else { return }
+        if let fetched = try? await client.fetchCustomizationsCatalog() {
+            customizations = fetched
+            await projectionStore.saveCustomizations(fetched)
+        }
+    }
+
+    public func restartMcpServer(_ serverName: String) {
+        if let idx = customizations.mcpServers.firstIndex(where: { $0.name == serverName }) {
+            customizations.mcpServers[idx].state = .connected
+            customizations.mcpServers[idx].errorMessage = nil
+        }
+        let clientRef = rpcClient
+        Task {
+            try? await clientRef?.restartMcpServer(serverName: serverName)
+        }
+    }
+
+    public func togglePlugin(_ pluginId: String, isEnabled: Bool) {
+        if let idx = customizations.plugins.firstIndex(where: { $0.id == pluginId }) {
+            customizations.plugins[idx].isEnabled = isEnabled
+        }
+        let snapshot = customizations
+        let storeRef = projectionStore
+        let clientRef = rpcClient
+        Task {
+            await storeRef.saveCustomizations(snapshot)
+            try? await clientRef?.togglePlugin(pluginId: pluginId, isEnabled: isEnabled)
+        }
+    }
+
+    public func installPlugin(_ pluginId: String) {
+        if let idx = customizations.plugins.firstIndex(where: { $0.id == pluginId }) {
+            customizations.plugins[idx].isInstalled = true
+            customizations.plugins[idx].isEnabled = true
+        }
+        let snapshot = customizations
+        let storeRef = projectionStore
+        let clientRef = rpcClient
+        Task {
+            await storeRef.saveCustomizations(snapshot)
+            try? await clientRef?.installMarketplacePlugin(pluginId: pluginId)
+        }
+    }
+
+    // MARK: - Gemini Live Voice Mode
+
+    public func startVoiceMode() {
+        voiceModeState.isActive = true
+        voiceModeState.isMuted = false
+        voiceModeState.startedAt = Date()
+        if voiceModeState.activeTurns.isEmpty {
+            voiceModeState.activeTurns.append(
+                VoiceTranscriptTurn(
+                    isUser: false,
+                    transcript: "Connected to Gemini Live Voice Mode (\(voiceModeState.selectedVoiceId.capitalized)). How can I help with \(activeSummary?.projectSlug ?? "this workspace")?"
+                )
+            )
+        }
+        presentedSheet = .voiceMode
+    }
+
+    public func toggleVoiceMute() {
+        voiceModeState.isMuted.toggle()
+    }
+
+    public func interruptVoiceAgent() {
+        voiceModeState.isAgentSpeaking = false
+    }
+
+    public func selectVoiceOption(_ voiceId: String) {
+        voiceModeState.selectedVoiceId = voiceId
+    }
+
+    public func setVoicePlaybackSpeed(_ speed: Double) {
+        voiceModeState.playbackSpeed = min(2.0, max(0.75, speed))
+    }
+
+    public func appendVoiceTranscriptTurn(isUser: Bool, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        voiceModeState.activeTurns.append(VoiceTranscriptTurn(isUser: isUser, transcript: trimmed))
+        if isUser {
+            voiceModeState.isAgentSpeaking = true
+            let ack = "Got it — queued voice instruction: \"\(trimmed)\" on \(activeSummary?.title ?? "active conversation")."
+            voiceModeState.activeTurns.append(VoiceTranscriptTurn(isUser: false, transcript: ack))
+            voiceModeState.isAgentSpeaking = false
+        }
+    }
+
+    public func endVoiceMode() {
+        guard voiceModeState.isActive else {
+            presentedSheet = nil
+            return
+        }
+        let duration = max(1, Int(Date().timeIntervalSince(voiceModeState.startedAt ?? Date())))
+        let turns = voiceModeState.activeTurns
+        let userTurnCount = turns.filter(\.isUser).count
+        let summary = VoiceCallTranscriptSummary(
+            cascadeId: activeCascadeId,
+            durationSeconds: duration,
+            summaryText: "Voice Mode session (\(duration)s · \(userTurnCount) spoken prompts · \(voiceModeState.selectedVoiceId.capitalized))",
+            turns: turns
+        )
+        voiceModeState.lastCallSummary = summary
+        voiceModeState.isActive = false
+        voiceModeState.isAgentSpeaking = false
+        voiceModeState.activeTurns = []
+
+        if !activeCascadeId.isEmpty {
+            var currentSteps = stepsByCascadeId[activeCascadeId] ?? []
+            let nextIdx = (currentSteps.map(\.stepIndex).max() ?? 0) + 1
+            let callStep = CascadeStep(
+                cascadeId: activeCascadeId,
+                stepIndex: nextIdx,
+                type: .plannerResponse,
+                status: .done,
+                plannerResponse: PlannerResponsePayload(response: summary.summaryText),
+                voiceSummary: summary
+            )
+            currentSteps.append(callStep)
+            stepsByCascadeId[activeCascadeId] = currentSteps
+        }
+        presentedSheet = nil
+    }
+
+    // MARK: - Full-Text Search, Slash Commands & Typo-Tolerant @Mentions
+
+    public func runFullTextConversationSearch(_ query: String) async {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            remoteSearchResults = []
+            isSearchingAllConversations = false
+            return
+        }
+        isSearchingAllConversations = true
+        defer { isSearchingAllConversations = false }
+
+        if let client = rpcClient, (hasPairedBackend || isLiveBackendConnected),
+           let remote = try? await client.searchAllConversations(query: trimmed),
+           !remote.isEmpty {
+            remoteSearchResults = remote
+            return
+        }
+
+        // Offline/local full-text fallback across titles, previews, and loaded step contents
+        let q = trimmed.lowercased()
+        remoteSearchResults = summaries.filter { summary in
+            if summary.title.lowercased().contains(q)
+                || summary.projectSlug.lowercased().contains(q)
+                || summary.statusSubtitle.lowercased().contains(q)
+                || summary.lastMessagePreview.lowercased().contains(q) {
+                return true
+            }
+            if let steps = stepsByCascadeId[summary.cascadeId] {
+                return steps.contains { step in
+                    (step.userInput?.lowercased().contains(q) ?? false)
+                        || (step.plannerResponse?.response.lowercased().contains(q) ?? false)
+                }
+            }
+            return false
+        }
+    }
+
+    public func filteredSlashCommands(for draft: String) -> [SlashCommandItem] {
+        let trimmed = draft.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("/") else { return [] }
+        let query = String(trimmed.dropFirst()).lowercased()
+        let isRemote = activeSummary?.isCloud ?? false
+        let all = SlashCommandItem.commands(isRemoteAgent: isRemote, customSkills: customizations.skills)
+        guard !query.isEmpty else { return all }
+        return all.filter { item in
+            item.command.lowercased().contains(query)
+                || item.title.lowercased().contains(query)
+                || item.summary.lowercased().contains(query)
+        }
+    }
+
+    public func filteredMentionCandidates(for query: String) -> [ContextCandidateItem] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return contextCandidates }
+        return contextCandidates.filter { candidate in
+            let hay = "\(candidate.title) \(candidate.subtitle)".lowercased()
+            if hay.contains(q) { return true }
+            // Typo-tolerant subsequence match for @ mentions (v2.32.0+)
+            var qIdx = q.startIndex
+            for ch in hay {
+                if qIdx < q.endIndex && ch == q[qIdx] {
+                    qIdx = q.index(after: qIdx)
+                }
+            }
+            return qIdx == q.endIndex
+        }
+    }
+
+    // MARK: - Live Activity & Share Extension Shared Bridge Reconciliation
+
+    public func consumePendingLiveActivityActions() async {
+        let actions = await SharedAppGroupBridge.shared.drainLiveActivityActions()
+        guard !actions.isEmpty else { return }
+        for action in actions {
+            if !action.cascadeId.isEmpty {
+                activeCascadeId = action.cascadeId
+            }
+            switch action.kind {
+            case .approveWithFaceID:
+                approveWaitingCommandWithFaceID(stepIndex: action.stepIndex > 0 ? action.stepIndex : nil)
+            case .deny:
+                denyWaitingCommand(stepIndex: action.stepIndex > 0 ? action.stepIndex : nil)
+            case .stopTurn:
+                stopActiveCascadeStreaming()
+            }
+        }
+    }
+
+    public func consumePendingSharePayload(id: String? = nil) async -> Bool {
+        guard let payload = await SharedAppGroupBridge.shared.consumeSharePayload(id: id) else {
+            return false
+        }
+        var parts: [String] = []
+        if !payload.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(payload.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        if let urlStr = payload.urlString, !urlStr.isEmpty {
+            parts.append(urlStr)
+            composerAttachments.append(
+                ComposerAttachmentChip(kind: .genericFile, label: urlStr, targetUri: urlStr)
+            )
+        }
+        if let fname = payload.fileName, !fname.isEmpty {
+            composerAttachments.append(
+                ComposerAttachmentChip(kind: .genericFile, label: fname, targetUri: "share://\(fname)")
+            )
+        }
+        let joined = parts.joined(separator: "\n")
+        if !joined.isEmpty {
+            composerDraftText = composerDraftText.isEmpty ? joined : "\(composerDraftText)\n\(joined)"
+        }
+        if activeCascadeId.isEmpty, let first = summaries.first {
+            activeCascadeId = first.cascadeId
+        }
+        if !activeCascadeId.isEmpty {
+            activeRoute = .cascadeChat(activeCascadeId)
+        }
+        return true
+    }
+
+    /// Evaluates NotificationPolicy on a status transition and emits a local notification payload when eligible.
+    public func evaluateNotificationTransition(
+        cascadeId: String,
+        title: String,
+        previousStatus: CortexStepStatus,
+        newStatus: CortexStepStatus
+    ) {
+        let wasManualStop = manuallyCancelledCascadeIds.contains(cascadeId)
+        if NotificationPolicy.shouldNotify(
+            previousStatus: previousStatus,
+            newStatus: newStatus,
+            wasManuallyCancelled: wasManualStop,
+            preferences: appearancePreferences
+        ) {
+            let body: String
+            switch newStatus {
+            case .waiting: body = "Approval or input required in \(title)"
+            case .done: body = "Agent finished working on \(title)"
+            case .error: body = "Run encountered an error in \(title)"
+            default: body = "Status updated in \(title)"
+            }
+            lastNotificationEvent = (id: UUID().uuidString, title: title, body: body, cascadeId: cascadeId)
+        }
     }
 
     // MARK: - Deterministic Scene Routing Helper (`UE01` .. `UE13`)
