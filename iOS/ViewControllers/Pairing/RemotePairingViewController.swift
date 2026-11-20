@@ -27,8 +27,9 @@ public struct RemotePairingViewController: View {
     }
 
     public var body: some View {
-        let isOnlineConnected = store.isLiveBackendConnected && store.activeHost.isOnline
-        let isOfflinePaired = store.hasPairedBackend && (!store.isLiveBackendConnected || !store.activeHost.isOnline)
+        let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
+        let isOnlineConnected = store.isDeviceNetworkReachable && store.isLiveBackendConnected && store.activeHost.isOnline
+        let isOfflinePaired = store.hasPairedBackend && !isOnlineConnected
 
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
@@ -88,7 +89,9 @@ public struct RemotePairingViewController: View {
                                 Text(
                                     isOnlineConnected
                                         ? "Connected: \(store.activeHost.hostname)"
-                                        : (isOfflinePaired ? "Host Offline: \(store.activeHost.hostname)" : "Tap to Scan Remote Control QR")
+                                        : (isNoInternet
+                                            ? "No Internet Connection"
+                                            : (isOfflinePaired ? "Host Offline: \(store.activeHost.hostname)" : "Tap to Scan Remote Control QR"))
                                 )
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(Color.white)
@@ -97,9 +100,11 @@ public struct RemotePairingViewController: View {
                                 Text(
                                     isOnlineConnected
                                         ? "\(store.activeHost.channel.displayName) · \(store.lastPingLatencyMs ?? store.activeHost.latencyMs)ms · \(store.summaries.count) sessions"
-                                        : (isOfflinePaired
-                                            ? "Auto-reconnecting · Tap below to retry or scan a new QR"
-                                            : "Open Antigravity on Mac/PC → Remote Control")
+                                        : (isNoInternet
+                                            ? "Paused while iPhone is offline · Auto-resumes when network returns"
+                                            : (isOfflinePaired
+                                                ? "Power-saving backoff reconnect · Tap below to retry or scan QR"
+                                                : "Open Antigravity on Mac/PC → Remote Control"))
                                 )
                                 .font(.system(size: 13, weight: .regular))
                                 .foregroundStyle(UEChromePalette.textSecondary)
@@ -110,7 +115,7 @@ public struct RemotePairingViewController: View {
                                     HStack(spacing: 10) {
                                         Button {
                                             Task {
-                                                await store.refreshWorkspacesAndSummaries()
+                                                await store.reconnectNow(userInitiated: true)
                                             }
                                         } label: {
                                             HStack(spacing: 6) {

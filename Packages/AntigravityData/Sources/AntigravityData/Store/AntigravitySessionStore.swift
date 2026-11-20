@@ -156,9 +156,16 @@ public final class AntigravitySessionStore {
     public var isLoadingSteps: Bool = false
     public var stepLoadErrorText: String? = nil
     public var cloudAgentWarmingUp: Bool = false
+    public var connectionLifecyclePhase: ConnectionLifecyclePhase = .disconnected
+    public var isDeviceNetworkReachable: Bool = true
+    public var isNetworkingSuspended: Bool = false
+    public var reconnectAttemptCount: Int = 0
+    public var nextReconnectAt: Date? = nil
+    public var pendingOutboxCount: Int = 0
 
     // MARK: - Dependencies
     private let projectionStore: LocalProjectionStore
+    private let networkPathObserver = NetworkPathObserver()
     private var rpcClient: AntigravityRPCClient?
     private var summaryStreamTask: Task<Void, Never>? = nil
     private var cloudSummaryStreamTask: Task<Void, Never>? = nil
@@ -171,6 +178,24 @@ public final class AntigravitySessionStore {
     private var syncedConfigCascadeIds: Set<String> = []
     internal var locallyCreatedEmptyCascadeIds: Set<String> = []
     private var stepSyncGeneration: UInt64 = 0
+    private var lastNetworkStatus: NetworkReachabilityStatus? = nil
+    private var isNetworkExpensiveOrConstrained: Bool = false
+    private var lastBackendActivityAt: Date = .distantPast
+    private var lastFullSyncAt: Date = .distantPast
+    private var lastStreamReopenAttemptAt: Date = .distantPast
+    private var isReplayingOutbox: Bool = false
+    internal var lowPowerModeOverrideForTesting: Bool? = nil
+
+    public var isLowPowerModeEnabled: Bool {
+        if let override = lowPowerModeOverrideForTesting {
+            return override
+        }
+        #if os(iOS) || os(macOS)
+        return ProcessInfo.processInfo.isLowPowerModeEnabled
+        #else
+        return false
+        #endif
+    }
 
     public init(
         hosts: [RemoteHostInstance] = [],
@@ -901,14 +926,26 @@ public final class AntigravitySessionStore {
 
     public func disconnectBackendAndClearKeychain() async {
         summaryStreamTask?.cancel()
+        summaryStreamTask = nil
         cloudSummaryStreamTask?.cancel()
+        cloudSummaryStreamTask = nil
         summaryPollingTask?.cancel()
+        summaryPollingTask = nil
         stepPollingTask?.cancel()
+        stepPollingTask = nil
+        networkPathObserver.stop()
         hasPairedBackend = false
         isLiveBackendConnected = false
         cloudAgentWarmingUp = false
         consecutiveSyncFailures = 0
+        reconnectAttemptCount = 0
+        nextReconnectAt = nil
         backgroundPollCounter = 0
+        lastBackendActivityAt = .distantPast
+        lastFullSyncAt = .distantPast
+        lastStreamReopenAttemptAt = .distantPast
+        pendingOutboxCount = 0
+        connectionLifecyclePhase = .disconnected
         optimisticActiveUntilByCascadeId.removeAll()
         syncedConfigCascadeIds.removeAll()
         locallyCreatedEmptyCascadeIds.removeAll()
@@ -934,7 +971,165 @@ public final class AntigravitySessionStore {
             activeCascadeId = ""
             activeRoute = .tabRoot
         }
+        _ = await projectionStore.drainOutbox()
         await KeychainStore.shared.clearCredentials()
+    }
+
+    // MARK: - Foreground / Screen-Off Lifecycle & Network Path Control
+
+    /// Immediately suspends all streams, heartbeats, backoff timers, step polling, and `NWPathMonitor`
+    /// when the device locks, sleeps, or enters the background so battery & radio overhead is zero.
+    public func suspendNetworkingForBackground() {
+        guard !isVerificationMode else { return }
+        guard !isNetworkingSuspended else { return }
+        isNetworkingSuspended = true
+        summaryStreamTask?.cancel()
+        summaryStreamTask = nil
+        cloudSummaryStreamTask?.cancel()
+        cloudSummaryStreamTask = nil
+        summaryPollingTask?.cancel()
+        summaryPollingTask = nil
+        stepPollingTask?.cancel()
+        stepPollingTask = nil
+        networkPathObserver.stop()
+        if hasPairedBackend || isLiveBackendConnected {
+            connectionLifecyclePhase = .suspended
+        }
+    }
+
+    /// Resumes connectivity cleanly when the screen unlocks or the app returns to `.active`:
+    /// performs a single fresh reconciliation pass and restarts push streams + low-power scheduler.
+    public func resumeNetworkingFromForeground() async {
+        guard !isVerificationMode else { return }
+        let wasSuspended = isNetworkingSuspended
+        isNetworkingSuspended = false
+        startNetworkPathMonitoringIfNeeded()
+
+        guard hasPairedBackend else { return }
+
+        if rpcClient == nil {
+            _ = await restoreSavedBackendSession()
+            return
+        }
+
+        guard isDeviceNetworkReachable else {
+            connectionLifecyclePhase = .noNetwork
+            connectionStatusText = "No Internet Connection"
+            return
+        }
+
+        reconnectAttemptCount = 0
+        nextReconnectAt = nil
+        if wasSuspended {
+            connectionLifecyclePhase = .connecting
+        }
+
+        await refreshWorkspacesAndSummaries(
+            forceFullSync: true,
+            includeAutomations: selectedTab == .automations
+        )
+        startSummarySubscriptionStream()
+
+        if case .cascadeChat(let cid) = activeRoute, !cid.isEmpty {
+            syncStepsForCascade(cid, pollUntilIdle: true)
+        }
+    }
+
+    /// Immediately resets exponential backoff and attempts a fresh connection + sync.
+    /// Used by `Reconnect Now`, pull-to-refresh, `NWPathMonitor` recovery, and chat retry buttons.
+    public func reconnectNow(userInitiated: Bool = true, includeAutomations: Bool = false) async {
+        guard !isVerificationMode else { return }
+        if isNetworkingSuspended {
+            isNetworkingSuspended = false
+            startNetworkPathMonitoringIfNeeded()
+        }
+        guard hasPairedBackend else { return }
+
+        if !userInitiated && !isDeviceNetworkReachable {
+            connectionLifecyclePhase = .noNetwork
+            connectionStatusText = "No Internet Connection"
+            return
+        }
+
+        reconnectAttemptCount = 0
+        consecutiveSyncFailures = 0
+        nextReconnectAt = nil
+        lastStreamReopenAttemptAt = .distantPast
+        summaryPollingTask?.cancel()
+        summaryPollingTask = nil
+        connectionLifecyclePhase = .connecting
+
+        if rpcClient == nil {
+            _ = await restoreSavedBackendSession()
+            return
+        }
+
+        await refreshWorkspacesAndSummaries(
+            forceFullSync: true,
+            includeAutomations: includeAutomations || selectedTab == .automations
+        )
+        startSummarySubscriptionStream()
+
+        if case .cascadeChat(let cid) = activeRoute, !cid.isEmpty {
+            syncStepsForCascade(cid, pollUntilIdle: true)
+        }
+    }
+
+    private func startNetworkPathMonitoringIfNeeded() {
+        guard !isVerificationMode, !isNetworkingSuspended else { return }
+        networkPathObserver.start { [weak self] status in
+            Task { @MainActor [weak self] in
+                self?.handleNetworkPathChange(status)
+            }
+        }
+    }
+
+    internal func handleNetworkPathChange(_ status: NetworkReachabilityStatus) {
+        let previous = lastNetworkStatus
+        lastNetworkStatus = status
+        isDeviceNetworkReachable = status.isSatisfied
+        isNetworkExpensiveOrConstrained = status.isExpensiveOrConstrained
+
+        guard !isVerificationMode, !isNetworkingSuspended, hasPairedBackend else { return }
+
+        if !status.isSatisfied {
+            // Device lost IP connectivity (e.g. elevator / Airplane Mode): stop all timers & streams (0 packets)
+            summaryStreamTask?.cancel()
+            summaryStreamTask = nil
+            cloudSummaryStreamTask?.cancel()
+            cloudSummaryStreamTask = nil
+            summaryPollingTask?.cancel()
+            summaryPollingTask = nil
+            stepPollingTask?.cancel()
+            stepPollingTask = nil
+            isLiveBackendConnected = false
+            lastPingLatencyMs = nil
+            nextReconnectAt = nil
+            connectionLifecyclePhase = .noNetwork
+            connectionStatusText = "No Internet Connection"
+            connectionErrorText = "iPhone is offline. Waiting for Wi-Fi or cellular network..."
+            return
+        }
+
+        // Network transitioned from unsatisfied -> satisfied, OR switched interfaces (Wi-Fi <-> 5G)
+        let recoveredFromNoNetwork = (previous == .unsatisfied)
+        let interfaceSwitched: Bool = {
+            guard let prevFp = previous?.interfaceFingerprint,
+                  let nextFp = status.interfaceFingerprint else {
+                return false
+            }
+            return prevFp != nextFp
+        }()
+
+        if recoveredFromNoNetwork || interfaceSwitched {
+            summaryStreamTask?.cancel()
+            summaryStreamTask = nil
+            cloudSummaryStreamTask?.cancel()
+            cloudSummaryStreamTask = nil
+            Task { [weak self] in
+                await self?.reconnectNow(userInitiated: false)
+            }
+        }
     }
 
     private func applyOfflinePairedSession(
@@ -957,8 +1152,22 @@ public final class AntigravitySessionStore {
         isLiveBackendConnected = false
         lastPingLatencyMs = nil
         rpcClient = client
+        reconnectAttemptCount = 0
         connectionErrorText = errorText
         connectionStatusText = statusText
+        pendingOutboxCount = await projectionStore.loadPendingOutbox().count
+
+        if isNetworkingSuspended {
+            connectionLifecyclePhase = .suspended
+        } else if !isDeviceNetworkReachable {
+            connectionLifecyclePhase = .noNetwork
+        } else {
+            let nextDelay = ConnectionPowerPolicy.offlineBackoffBaseDelay(
+                attempt: 0,
+                isLowPowerMode: isLowPowerModeEnabled
+            )
+            connectionLifecyclePhase = .offlineBackoff(attempt: 0, nextRetrySeconds: nextDelay)
+        }
 
         if wasInESDDDemoState {
             let cachedProjects = (await projectionStore.loadProjects()).filter {
@@ -1035,11 +1244,27 @@ public final class AntigravitySessionStore {
 
         connectionErrorText = error.localizedDescription
         connectionStatusText = "Offline · \(updatedHost.hostname)"
+
+        if isNetworkingSuspended {
+            connectionLifecyclePhase = .suspended
+        } else if !isDeviceNetworkReachable {
+            connectionLifecyclePhase = .noNetwork
+        } else {
+            let nextDelay = ConnectionPowerPolicy.offlineBackoffBaseDelay(
+                attempt: reconnectAttemptCount,
+                isLowPowerMode: isLowPowerModeEnabled
+            )
+            connectionLifecyclePhase = .offlineBackoff(attempt: reconnectAttemptCount, nextRetrySeconds: nextDelay)
+        }
     }
 
     private func markBackendReconnected() {
         let wasOffline = !isLiveBackendConnected || !activeHost.isOnline
         consecutiveSyncFailures = 0
+        reconnectAttemptCount = 0
+        nextReconnectAt = nil
+        lastBackendActivityAt = Date()
+        isDeviceNetworkReachable = true
         hasPairedBackend = true
         isLiveBackendConnected = true
         connectionErrorText = nil
@@ -1051,9 +1276,17 @@ public final class AntigravitySessionStore {
             hosts[idx] = updatedHost
         }
         connectionStatusText = "Connected · \(updatedHost.hostname)"
+        connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
 
-        if wasOffline {
+        if wasOffline && !isNetworkingSuspended {
+            lastStreamReopenAttemptAt = .distantPast
             ensureSummaryEnvelopeStreamRunning()
+            if case .cascadeChat(let cid) = activeRoute, !cid.isEmpty, stepPollingTask == nil {
+                syncStepsForCascade(cid, pollUntilIdle: true)
+            }
+            Task { [weak self] in
+                await self?.replayPendingOutbox()
+            }
         }
     }
 
@@ -1452,11 +1685,18 @@ public final class AntigravitySessionStore {
         }
         rpcClient = client
         consecutiveSyncFailures = 0
+        reconnectAttemptCount = 0
+        nextReconnectAt = nil
+        lastBackendActivityAt = Date()
+        lastFullSyncAt = Date()
+        lastStreamReopenAttemptAt = .distantPast
+        isDeviceNetworkReachable = true
         hasPairedBackend = true
         isLiveBackendConnected = true
         lastPingLatencyMs = handshake.latencyMs
         connectionErrorText = nil
         connectionStatusText = "Connected · \(updatedHost.hostname) · \(handshake.latencyMs)ms"
+        connectionLifecyclePhase = .onlineIdle
 
         workspaces = handshake.workspaces
         var sortedSummaries = handshake.summaries.sorted { lhs, rhs in
@@ -1495,11 +1735,8 @@ public final class AntigravitySessionStore {
             await storeRef.saveProjects(projectsSnapshot)
             await storeRef.saveProjectedSummaries(summariesSnapshot)
             await self?.refreshModelCatalog()
-            await self?.refreshWorkspacesAndSummaries()
-            if let liveAutos = try? await client.listAutomations() {
-                self?.automations = liveAutos
-                await storeRef.saveAutomations(liveAutos)
-            }
+            await self?.refreshAutomations()
+            await self?.replayPendingOutbox()
         }
 
         startSummarySubscriptionStream()
@@ -1509,7 +1746,15 @@ public final class AntigravitySessionStore {
     }
 
     private func ensureSummaryEnvelopeStreamRunning() {
+        guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
         guard let client = rpcClient else { return }
+
+        if summaryStreamTask == nil && cloudSummaryStreamTask == nil {
+            let sinceLastOpen = Date().timeIntervalSince(lastStreamReopenAttemptAt)
+            guard sinceLastOpen >= ConnectionPowerPolicy.minStreamReopenSpacingSeconds else { return }
+            lastStreamReopenAttemptAt = Date()
+        }
+
         if summaryStreamTask == nil {
             summaryStreamTask = Task { [weak self] in
                 defer {
@@ -1521,10 +1766,18 @@ public final class AntigravitySessionStore {
                 do {
                     for try await event in stream {
                         guard let self, !Task.isCancelled else { break }
+                        self.lastBackendActivityAt = Date()
                         self.applyJetboxSummaryEvent(event, forceCloud: false)
                     }
                 } catch {
-                    // Stream ended or closed; concurrent polling task keeps state synchronized and reconnects.
+                    // Stream closed with error while foregrounded -> run a single lightweight passive probe immediately
+                    if let self,
+                       !Task.isCancelled,
+                       !self.isNetworkingSuspended,
+                       self.isDeviceNetworkReachable,
+                       self.isLiveBackendConnected {
+                        await self.performLightweightHeartbeatTick(allowFullReconciliation: false)
+                    }
                 }
             }
         }
@@ -1543,6 +1796,7 @@ public final class AntigravitySessionStore {
                 do {
                     for try await event in stream {
                         guard let self, !Task.isCancelled else { break }
+                        self.lastBackendActivityAt = Date()
                         self.applyJetboxSummaryEvent(event, forceCloud: true)
                     }
                 } catch {
@@ -1552,34 +1806,258 @@ public final class AntigravitySessionStore {
         }
     }
 
-    /// Subscribes to Connect-RPC 5-byte framed `JetboxSubscribeToSummaries` stream (both Local and Antigravity Cloud)
-    /// AND runs a concurrent live sync / health-check loop so Desktop & Cloud sidebar changes AND offline/online
-    /// host transitions reflect automatically on iOS in real time.
+    /// Subscribes to Connect-RPC 5-byte framed `JetboxSubscribeToSummaries` stream (Local & Cloud)
+    /// AND runs a power-aware foreground scheduler:
+    /// - Screen off / background (`isNetworkingSuspended`): zero streams, zero timers, zero radio wakeups.
+    /// - iPhone no network (`!isDeviceNetworkReachable`): zero requests until `NWPathMonitor` reports recovery.
+    /// - Online idle: relies on push stream + lightweight single-RPC heartbeat (`30s–60s` Relay / `15s–30s` LAN).
+    /// - Host offline: exponential backoff with jitter (`3s → 6s → 12s → 24s → 45s → 60s`, ×2 in Low Power Mode).
     public func startSummarySubscriptionStream() {
         summaryStreamTask?.cancel()
         summaryStreamTask = nil
         cloudSummaryStreamTask?.cancel()
         cloudSummaryStreamTask = nil
         summaryPollingTask?.cancel()
+        summaryPollingTask = nil
+
+        guard !isVerificationMode, !isNetworkingSuspended else { return }
         guard rpcClient != nil else { return }
 
-        if isLiveBackendConnected {
+        startNetworkPathMonitoringIfNeeded()
+        guard isDeviceNetworkReachable else {
+            connectionLifecyclePhase = .noNetwork
+            connectionStatusText = "No Internet Connection"
+            return
+        }
+
+        if isLiveBackendConnected && activeHost.isOnline {
+            lastStreamReopenAttemptAt = .distantPast
             ensureSummaryEnvelopeStreamRunning()
+            connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
         }
 
         summaryPollingTask = Task { [weak self] in
             while !Task.isCancelled {
-                let isRelay = (self?.activeHost.channel == .cloudRelay)
-                let intervalNs: UInt64 = {
-                    if isRelay {
-                        return (self?.isLiveBackendConnected == true) ? 7_000_000_000 : 3_000_000_000
+                let sleepSeconds: TimeInterval? = {
+                    guard let self,
+                          !self.isNetworkingSuspended,
+                          self.isDeviceNetworkReachable,
+                          (self.hasPairedBackend || self.isLiveBackendConnected) else {
+                        return nil
                     }
-                    return (self?.isLiveBackendConnected == true) ? 1_500_000_000 : 2_000_000_000
+                    let isLowPower = self.isLowPowerModeEnabled
+                    if self.isLiveBackendConnected && self.activeHost.isOnline {
+                        let heartbeatInterval = ConnectionPowerPolicy.onlineHeartbeatInterval(
+                            channel: self.activeHost.channel,
+                            isLowPowerMode: isLowPower,
+                            isExpensiveNetwork: self.isNetworkExpensiveOrConstrained,
+                            isStreamHealthy: self.summaryStreamTask != nil
+                        )
+                        let elapsedSinceActivity = Date().timeIntervalSince(self.lastBackendActivityAt)
+                        return max(2.0, heartbeatInterval - elapsedSinceActivity)
+                    } else {
+                        let attempt = self.reconnectAttemptCount
+                        let delaySeconds = ConnectionPowerPolicy.offlineBackoffDelay(
+                            attempt: attempt,
+                            isLowPowerMode: isLowPower,
+                            applyJitter: true
+                        )
+                        self.nextReconnectAt = Date().addingTimeInterval(delaySeconds)
+                        self.connectionLifecyclePhase = .offlineBackoff(
+                            attempt: attempt,
+                            nextRetrySeconds: delaySeconds
+                        )
+                        return delaySeconds
+                    }
                 }()
-                try? await Task.sleep(nanoseconds: intervalNs)
-                guard let self, !Task.isCancelled, (self.hasPairedBackend || self.isLiveBackendConnected) else { break }
-                await self.refreshWorkspacesAndSummaries()
+                guard let sleepSeconds else { break }
+
+                try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+                guard let self,
+                      !Task.isCancelled,
+                      !self.isNetworkingSuspended,
+                      self.isDeviceNetworkReachable,
+                      (self.hasPairedBackend || self.isLiveBackendConnected) else {
+                    break
+                }
+
+                if self.isLiveBackendConnected && self.activeHost.isOnline {
+                    let heartbeatInterval = ConnectionPowerPolicy.onlineHeartbeatInterval(
+                        channel: self.activeHost.channel,
+                        isLowPowerMode: self.isLowPowerModeEnabled,
+                        isExpensiveNetwork: self.isNetworkExpensiveOrConstrained,
+                        isStreamHealthy: self.summaryStreamTask != nil
+                    )
+                    let fullSyncInterval = ConnectionPowerPolicy.onlineFullSyncInterval(
+                        channel: self.activeHost.channel,
+                        isLowPowerMode: self.isLowPowerModeEnabled
+                    )
+                    let needsFullSync = Date().timeIntervalSince(self.lastFullSyncAt) >= fullSyncInterval
+                        || self.summaryStreamTask == nil
+                    let refreshedElapsed = Date().timeIntervalSince(self.lastBackendActivityAt)
+
+                    // Skip redundant heartbeat if push events or user RPCs already proved liveness recently
+                    if refreshedElapsed < heartbeatInterval * 0.8 && !needsFullSync {
+                        continue
+                    }
+
+                    await self.performLightweightHeartbeatTick(allowFullReconciliation: needsFullSync)
+                } else {
+                    let recovered = await self.performOfflineRecoveryProbe()
+                    if !recovered {
+                        self.reconnectAttemptCount = min(
+                            self.reconnectAttemptCount + 1,
+                            ConnectionPowerPolicy.offlineBackoffScheduleSeconds.count
+                        )
+                    }
+                }
             }
+        }
+    }
+
+    private func applyRelayProbeMetadata(_ probe: HostReachabilityProbeResult) {
+        lastPingLatencyMs = probe.latencyMs
+        if !probe.availableRelayInstances.isEmpty {
+            availableRelayInstances = probe.availableRelayInstances
+            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
+            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
+            for inst in probe.availableRelayInstances {
+                let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
+                let peerHost = RemoteHostInstance(
+                    instanceId: inst.uuid,
+                    hostname: inst.name,
+                    version: inst.version,
+                    channel: .cloudRelay,
+                    endpointURL: instURL,
+                    isOnline: inst.status.isReachable,
+                    latencyMs: probe.latencyMs
+                )
+                if let idx = hosts.firstIndex(where: { $0.instanceId == peerHost.instanceId }) {
+                    hosts[idx] = peerHost
+                } else {
+                    hosts.append(peerHost)
+                }
+            }
+        }
+
+        if let activeInst = probe.activeRelayInstance {
+            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
+            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
+            let nextURL = URL(string: "\(originPrefix)/r/\(activeInst.uuid)") ?? activeHost.endpointURL
+            let refreshedHost = RemoteHostInstance(
+                instanceId: activeInst.uuid,
+                hostname: activeInst.name,
+                version: activeInst.version,
+                channel: .cloudRelay,
+                endpointURL: nextURL,
+                isOnline: true,
+                latencyMs: probe.latencyMs
+            )
+            activeHost = refreshedHost
+            if let idx = hosts.firstIndex(where: { $0.instanceId == refreshedHost.instanceId }) {
+                hosts[idx] = refreshedHost
+            } else {
+                hosts.insert(refreshedHost, at: 0)
+            }
+            connectionStatusText = "Connected · \(refreshedHost.hostname) · \(probe.latencyMs)ms"
+        } else {
+            var updatedHost = activeHost
+            updatedHost.latencyMs = probe.latencyMs
+            updatedHost.isOnline = true
+            activeHost = updatedHost
+            if let idx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
+                hosts[idx] = updatedHost
+            }
+            connectionStatusText = "Connected · \(updatedHost.hostname) · \(probe.latencyMs)ms"
+        }
+    }
+
+    private func performLightweightHeartbeatTick(allowFullReconciliation: Bool) async {
+        guard !isNetworkingSuspended, isDeviceNetworkReachable, let client = rpcClient else { return }
+        let isRelay = (activeHost.channel == .cloudRelay)
+        let probeTimeout: TimeInterval = isRelay ? 8.0 : 3.0
+
+        do {
+            let probe = try await client.probeHostReachability(timeoutInterval: probeTimeout)
+            consecutiveSyncFailures = 0
+            reconnectAttemptCount = 0
+            nextReconnectAt = nil
+            lastBackendActivityAt = Date()
+            applyRelayProbeMetadata(probe)
+
+            if !isLiveBackendConnected || !activeHost.isOnline {
+                markBackendReconnected()
+            } else {
+                connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
+            }
+
+            if probe.relayTopologyChanged {
+                summaryStreamTask?.cancel()
+                summaryStreamTask = nil
+                cloudSummaryStreamTask?.cancel()
+                cloudSummaryStreamTask = nil
+                lastStreamReopenAttemptAt = .distantPast
+                ensureSummaryEnvelopeStreamRunning()
+                await refreshWorkspacesAndSummaries(forceFullSync: true, includeAutomations: false)
+            } else {
+                if summaryStreamTask == nil {
+                    ensureSummaryEnvelopeStreamRunning()
+                }
+                if allowFullReconciliation {
+                    await refreshWorkspacesAndSummaries(forceFullSync: false, includeAutomations: false)
+                }
+            }
+        } catch {
+            if Self.isBackendOfflineError(error) {
+                consecutiveSyncFailures += 1
+                let threshold = ConnectionPowerPolicy.offlineFailureThreshold(
+                    channel: activeHost.channel,
+                    error: error
+                )
+                if consecutiveSyncFailures >= threshold {
+                    markBackendOffline(error: error)
+                }
+            }
+        }
+    }
+
+    private func performOfflineRecoveryProbe() async -> Bool {
+        guard !isNetworkingSuspended, isDeviceNetworkReachable, let client = rpcClient else { return false }
+        let isRelay = (activeHost.channel == .cloudRelay)
+        let probeTimeout: TimeInterval = isRelay ? 8.0 : 3.0
+
+        do {
+            let probe = try await client.probeHostReachability(timeoutInterval: probeTimeout)
+            applyRelayProbeMetadata(probe)
+            markBackendReconnected()
+            await refreshWorkspacesAndSummaries(
+                forceFullSync: true,
+                includeAutomations: selectedTab == .automations
+            )
+            return true
+        } catch {
+            if Self.isBackendOfflineError(error) {
+                connectionErrorText = error.localizedDescription
+                if case AntigravityRPCError.unauthorized = error {
+                    // Auth expired requires user re-sign-in; immediately cap backoff to avoid noisy 401 retries
+                    reconnectAttemptCount = ConnectionPowerPolicy.offlineBackoffScheduleSeconds.count
+                    connectionStatusText = isRelay ? "Google Sign-In Expired" : "Offline · \(activeHost.hostname) (Auth Expired)"
+                } else {
+                    connectionStatusText = "Offline · \(activeHost.hostname)"
+                }
+            }
+            return false
+        }
+    }
+
+    /// Refreshes automations on demand (initial handshake, Automations tab entry, or manual pull-to-refresh)
+    /// instead of on every periodic summary tick.
+    public func refreshAutomations() async {
+        guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
+        guard isLiveBackendConnected, let client = rpcClient else { return }
+        if let remoteAutos = try? await client.listAutomations() {
+            automations = remoteAutos
+            await projectionStore.saveAutomations(remoteAutos)
         }
     }
 
@@ -1738,13 +2216,15 @@ public final class AntigravitySessionStore {
     }
 
     /// Synchronizes `GetCascadeTrajectorySteps` (`stepOffset` JSON `<600`, Binary Protobuf `>=600`) for `cascadeId`.
-    /// Polls every 350ms while the agent turn is actively streaming (`inProgress` or `pending`), and every 1.0s
-    /// while the user is viewing the conversation (`activeRoute == .cascadeChat(cascadeId)`) so PC/Cloud-originated
-    /// messages appear on iOS immediately.
+    /// Polls adaptively ONLY while an agent turn is actively streaming (`500ms` LAN / `1.0s` Relay; slowed in Low Power Mode).
+    /// When the conversation is idle and the push stream is healthy, stops polling completely (0 idle RPCs) and relies
+    /// on `JetboxSubscribeToSummaries` to wake step sync on demand.
     public func syncStepsForCascade(_ cascadeId: String, pollUntilIdle: Bool = true) {
         stepPollingTask?.cancel()
+        stepPollingTask = nil
         stepSyncGeneration &+= 1
         let generation = stepSyncGeneration
+        guard !isNetworkingSuspended else { return }
         guard (hasPairedBackend || isLiveBackendConnected), let client = rpcClient, !cascadeId.isEmpty else { return }
 
         stepLoadErrorText = nil
@@ -1753,6 +2233,20 @@ public final class AntigravitySessionStore {
         // Never show a stuck "Loading conversation history..." spinner or `not_found` error on them.
         if cascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(cascadeId) {
             isLoadingSteps = false
+            return
+        }
+
+        if !isDeviceNetworkReachable {
+            isLoadingSteps = false
+            let storeRef = projectionStore
+            if (stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                Task { [weak self] in
+                    let cached = await storeRef.loadProjectedSteps(cascadeId: cascadeId)
+                    if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                        self.stepsByCascadeId[cascadeId] = cached
+                    }
+                }
+            }
             return
         }
 
@@ -1779,9 +2273,11 @@ public final class AntigravitySessionStore {
         stepPollingTask = Task { [weak self] in
             defer {
                 if let self,
-                   self.stepSyncGeneration == generation,
-                   self.activeCascadeId == cascadeId {
-                    self.isLoadingSteps = false
+                   self.stepSyncGeneration == generation {
+                    if self.activeCascadeId == cascadeId {
+                        self.isLoadingSteps = false
+                    }
+                    self.stepPollingTask = nil
                 }
             }
             if (self?.stepsByCascadeId[cascadeId] ?? []).isEmpty {
@@ -1797,13 +2293,14 @@ public final class AntigravitySessionStore {
             var attempts = 0
             let maxAttempts = pollUntilIdle ? 10_000 : 1
             while !Task.isCancelled && attempts < maxAttempts {
+                guard let self, !self.isNetworkingSuspended, self.isDeviceNetworkReachable else { break }
                 attempts += 1
-                let summaryMeta = self?.summaries.first(where: { $0.cascadeId == cascadeId })
+                let summaryMeta = self.summaries.first(where: { $0.cascadeId == cascadeId })
                 let knownCount = summaryMeta?.stepCount ?? 0
                 let summaryIsCloud = summaryMeta?.isCloud ?? false
                 let originUuid = summaryMeta?.originInstanceUuid
-                let isEmptyNewSessionNow = (self?.locallyCreatedEmptyCascadeIds.contains(cascadeId) == true)
-                    && !(self?.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
+                let isEmptyNewSessionNow = self.locallyCreatedEmptyCascadeIds.contains(cascadeId)
+                    && !(self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
                 var stillActive = false
                 do {
                     let remoteSteps = try await client.fetchAllTrajectorySteps(
@@ -1812,10 +2309,12 @@ public final class AntigravitySessionStore {
                         isCloud: summaryIsCloud,
                         instanceUuidOverride: originUuid
                     )
-                    let liveRelayInst: RelayInstanceInfo? = (self?.activeHost.channel == .cloudRelay)
+                    let liveRelayInst: RelayInstanceInfo? = (self.activeHost.channel == .cloudRelay)
                         ? await client.currentActiveRelayInstance()
                         : nil
-                    guard let self, !Task.isCancelled else { return }
+                    guard !Task.isCancelled, !self.isNetworkingSuspended else { return }
+
+                    self.lastBackendActivityAt = Date()
 
                     if let liveRelayInst {
                         if self.activeHost.instanceId != liveRelayInst.uuid
@@ -1901,8 +2400,9 @@ public final class AntigravitySessionStore {
                             || summaryMeta?.status == .inProgress
                             || summaryMeta?.status == .pending
                     }
+                    self.connectionLifecyclePhase = stillActive ? .onlineStreaming : .onlineIdle
                 } catch {
-                    if let self, !Task.isCancelled {
+                    if !Task.isCancelled {
                         if Self.isBackendOfflineError(error) && self.activeHost.channel != .cloudRelay {
                             self.markBackendOffline(error: error)
                         }
@@ -1916,17 +2416,35 @@ public final class AntigravitySessionStore {
                     if !pollUntilIdle { break }
                 }
 
-                guard let self, !Task.isCancelled else { break }
+                guard !Task.isCancelled, !self.isNetworkingSuspended, self.isDeviceNetworkReachable else { break }
                 if !pollUntilIdle {
                     break
                 }
                 let isViewingThisChat = (self.activeRoute == .cascadeChat(cascadeId) && self.activeCascadeId == cascadeId)
-                if !stillActive && !isViewingThisChat {
+                let isHostOffline = !self.isLiveBackendConnected || !self.activeHost.isOnline
+
+                if isHostOffline {
+                    // Central exponential-backoff reconnect scheduler owns host recovery; do not spin here
                     break
                 }
-                let isHostOffline = !self.isLiveBackendConnected || !self.activeHost.isOnline
-                let sleepNs: UInt64 = stillActive ? 350_000_000 : (isHostOffline ? 2_500_000_000 : 1_000_000_000)
-                try? await Task.sleep(nanoseconds: sleepNs)
+
+                if stillActive {
+                    let interval = ConnectionPowerPolicy.activeStreamingStepPollInterval(
+                        channel: self.activeHost.channel,
+                        isLowPowerMode: self.isLowPowerModeEnabled
+                    )
+                    try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                } else {
+                    guard isViewingThisChat,
+                          let fallbackInterval = ConnectionPowerPolicy.idleChatFallbackStepPollInterval(
+                              isStreamHealthy: self.summaryStreamTask != nil,
+                              isLowPowerMode: self.isLowPowerModeEnabled
+                          ) else {
+                        // Idle chat with healthy push stream -> stop polling completely (0 idle RPCs)
+                        break
+                    }
+                    try? await Task.sleep(nanoseconds: UInt64(fallbackInterval * 1_000_000_000))
+                }
             }
         }
     }
@@ -2354,7 +2872,11 @@ public final class AntigravitySessionStore {
         }
     }
 
-    public func refreshWorkspacesAndSummaries() async {
+    public func refreshWorkspacesAndSummaries(
+        forceFullSync: Bool = false,
+        includeAutomations: Bool = false
+    ) async {
+        guard !isNetworkingSuspended else { return }
         isRefreshingSummaries = true
         defer { isRefreshingSummaries = false }
         guard let client = rpcClient else { return }
@@ -2362,13 +2884,15 @@ public final class AntigravitySessionStore {
         backgroundPollCounter += 1
         let isRelay = (activeHost.channel == .cloudRelay)
         let syncTimeout: TimeInterval = isRelay ? 14.0 : 3.5
-        let useLightweight = isRelay && (backgroundPollCounter % 4 != 1) && summaryStreamTask != nil
+        let useLightweight = !forceFullSync && isRelay && (backgroundPollCounter % 4 != 1) && summaryStreamTask != nil
         do {
             let federated = try await client.fetchFederatedWorkspacesAndSummaries(
                 timeoutInterval: syncTimeout,
                 lightweightPoll: useLightweight
             )
             consecutiveSyncFailures = 0
+            lastBackendActivityAt = Date()
+            lastFullSyncAt = Date()
             cloudAgentWarmingUp = federated.cloudWarmingUp
 
             let remoteSummaries = federated.summaries
@@ -2378,6 +2902,8 @@ public final class AntigravitySessionStore {
 
             if hasPairedBackend && (!isLiveBackendConnected || !activeHost.isOnline) {
                 markBackendReconnected()
+            } else if isLiveBackendConnected && activeHost.isOnline {
+                connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
             }
 
             let existingById = Dictionary(uniqueKeysWithValues: summaries.map { ($0.cascadeId, $0) })
@@ -2509,7 +3035,10 @@ public final class AntigravitySessionStore {
         } catch {
             if Self.isBackendOfflineError(error) {
                 consecutiveSyncFailures += 1
-                let failureThreshold = isRelay ? 3 : 1
+                let failureThreshold = ConnectionPowerPolicy.offlineFailureThreshold(
+                    channel: activeHost.channel,
+                    error: error
+                )
                 if consecutiveSyncFailures >= failureThreshold {
                     markBackendOffline(error: error)
                 }
@@ -2517,7 +3046,7 @@ public final class AntigravitySessionStore {
             return
         }
 
-        if isLiveBackendConnected, let remoteAutos = try? await client.listAutomations() {
+        if includeAutomations && isLiveBackendConnected, let remoteAutos = try? await client.listAutomations() {
             automations = remoteAutos
             await projectionStore.saveAutomations(remoteAutos)
         }
@@ -2566,12 +3095,12 @@ public final class AntigravitySessionStore {
         let snapshot = automations
         let storeRef = projectionStore
         let clientRef = rpcClient
+        let entry = OutboxEntry(cascadeId: automationId, kind: .automationTrigger, messageText: "TriggerAutomationNow")
         Task {
-            await storeRef.enqueueOutbox(
-                OutboxEntry(cascadeId: automationId, kind: .automationTrigger, messageText: "TriggerAutomationNow")
-            )
+            await storeRef.enqueueOutbox(entry)
             await storeRef.saveAutomations(snapshot)
             try? await clientRef?.triggerAutomationNow(automationId: automationId)
+            await storeRef.removeOutboxEntry(id: entry.id)
         }
     }
 
@@ -2751,14 +3280,27 @@ public final class AntigravitySessionStore {
             return isVerificationMode ? "file:///Users/wl/code/ledger-svc" : ""
         }()
 
+        let outboxEntry = OutboxEntry(cascadeId: cid, kind: .userMessage, messageText: messageBody)
+
         Task { [weak self] in
-            await storeRef.enqueueOutbox(
-                OutboxEntry(cascadeId: cid, kind: .userMessage, messageText: messageBody)
-            )
+            await storeRef.enqueueOutbox(outboxEntry)
             await storeRef.saveProjectedSteps(currentSteps, for: cid)
 
             guard shouldSendLive, let clientRef else {
-                _ = await storeRef.drainOutbox()
+                await storeRef.removeOutboxEntry(id: outboxEntry.id)
+                return
+            }
+
+            if let self, !self.isDeviceNetworkReachable {
+                self.markStepQueuedInOutbox(cascadeId: cid, stepIndex: nextIndex)
+                self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
+                if let updated = self.stepsByCascadeId[cid] {
+                    await storeRef.saveProjectedSteps(updated, for: cid)
+                }
+                if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == cid }) {
+                    self.summaries[sumIdx].status = .pending
+                    self.summaries[sumIdx].statusSubtitle = "Queued · Waiting for network"
+                }
                 return
             }
 
@@ -2818,9 +3360,11 @@ public final class AntigravitySessionStore {
                     isCloud: summaryIsCloud,
                     instanceUuidOverride: summaryOriginUuid
                 )
-                _ = await storeRef.drainOutbox()
+                await storeRef.removeOutboxEntry(id: outboxEntry.id)
 
                 if let self {
+                    self.lastBackendActivityAt = Date()
+                    self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
                     if self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
                         self.markBackendReconnected()
                     }
@@ -2832,9 +3376,28 @@ public final class AntigravitySessionStore {
                 if let self {
                     let stepsAdvanced = (self.stepsByCascadeId[targetCascadeId]?.count ?? 0) > currentSteps.count
                     if stepsAdvanced && !targetCascadeId.isEmpty {
+                        await storeRef.removeOutboxEntry(id: outboxEntry.id)
+                        self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
                         // Turn already started streaming on backend despite unary HTTP timeout; keep polling steps
                         self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                    } else if Self.isBackendOfflineError(error) {
+                        // Keep entry persisted in Durable Outbox so it automatically replays once host reconnects
+                        self.optimisticActiveUntilByCascadeId.removeValue(forKey: targetCascadeId)
+                        self.markStepQueuedInOutbox(cascadeId: targetCascadeId, stepIndex: nextIndex)
+                        if let updated = self.stepsByCascadeId[targetCascadeId] {
+                            await storeRef.saveProjectedSteps(updated, for: targetCascadeId)
+                        }
+                        self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
+                        if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
+                            self.summaries[sumIdx].status = .pending
+                            self.summaries[sumIdx].statusSubtitle = "Queued · Will send when back online"
+                        }
+                        if self.activeHost.channel != .cloudRelay {
+                            self.markBackendOffline(error: error)
+                        }
                     } else {
+                        await storeRef.removeOutboxEntry(id: outboxEntry.id)
+                        self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
                         self.optimisticActiveUntilByCascadeId.removeValue(forKey: targetCascadeId)
                         self.stepLoadErrorText = "Failed to send message: \(error.localizedDescription)"
                         if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
@@ -2845,6 +3408,129 @@ public final class AntigravitySessionStore {
                 }
             }
         }
+    }
+
+    private func markStepQueuedInOutbox(cascadeId: String, stepIndex: Int) {
+        guard var steps = stepsByCascadeId[cascadeId],
+              let idx = steps.lastIndex(where: { $0.stepIndex == stepIndex && $0.type == .userInput }) else {
+            return
+        }
+        steps[idx].isQueuedInOutbox = true
+        stepsByCascadeId[cascadeId] = steps
+    }
+
+    /// Replays persisted offline Durable Outbox user messages in FIFO order once the paired host reconnects.
+    public func replayPendingOutbox() async {
+        guard !isReplayingOutbox,
+              !isVerificationMode,
+              !isNetworkingSuspended,
+              isDeviceNetworkReachable,
+              isLiveBackendConnected,
+              activeHost.isOnline,
+              let clientRef = rpcClient else {
+            return
+        }
+
+        isReplayingOutbox = true
+        defer { isReplayingOutbox = false }
+
+        let pending = await projectionStore.loadPendingOutbox()
+        pendingOutboxCount = pending.count
+        guard !pending.isEmpty else { return }
+
+        let cfg = selectedModelConfig
+        for entry in pending {
+            guard !isNetworkingSuspended, isDeviceNetworkReachable, isLiveBackendConnected else { break }
+            guard entry.kind == .userMessage,
+                  let messageBody = entry.messageText?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !messageBody.isEmpty else {
+                await projectionStore.removeOutboxEntry(id: entry.id)
+                continue
+            }
+
+            var targetCascadeId = entry.cascadeId
+            let currentSummary = summaries.first(where: { $0.cascadeId == targetCascadeId })
+            let currentProj = projects.first(where: { $0.id == (currentSummary?.projectSlug ?? selectedProjectId) })
+            let summaryIsCloud = currentSummary?.isCloud ?? (currentProj?.runtime == .cloud)
+            let summaryCloudProjId = currentSummary?.cloudProjectId ?? currentProj?.cloudProjectId
+            let summaryOriginUuid = currentSummary?.originInstanceUuid ?? currentProj?.originInstanceUuid
+            let workspaceUri = currentSummary?.workspaceUri ?? currentProj?.workspaceUri ?? selectedWorkspaceUri
+
+            do {
+                if targetCascadeId.isEmpty || targetCascadeId.hasPrefix("cas-") {
+                    let createdId = try await clientRef.startCascade(
+                        workspaceUri: workspaceUri,
+                        initialPrompt: "",
+                        modelId: cfg.modelId,
+                        cloudProjectId: summaryCloudProjId,
+                        isCloud: summaryIsCloud,
+                        instanceUuidOverride: summaryOriginUuid
+                    )
+                    if !createdId.isEmpty {
+                        locallyCreatedEmptyCascadeIds.remove(targetCascadeId)
+                        locallyCreatedEmptyCascadeIds.remove(createdId)
+                        if let existing = stepsByCascadeId.removeValue(forKey: targetCascadeId) {
+                            stepsByCascadeId[createdId] = existing.map { step in
+                                var copy = step
+                                copy.cascadeId = createdId
+                                return copy
+                            }
+                        }
+                        if let idx = summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
+                            summaries[idx].cascadeId = createdId
+                        }
+                        if activeCascadeId == targetCascadeId || activeCascadeId.isEmpty {
+                            activeCascadeId = createdId
+                            if case .cascadeChat = activeRoute {
+                                activeRoute = .cascadeChat(createdId)
+                            }
+                        }
+                        targetCascadeId = createdId
+                    }
+                }
+
+                try await clientRef.sendUserCascadeMessage(
+                    cascadeId: targetCascadeId,
+                    message: messageBody,
+                    attachments: [],
+                    modelId: cfg.modelId,
+                    effort: cfg.effort,
+                    mode: cfg.mode,
+                    agentPersona: cfg.agentPersona,
+                    isModelAlias: cfg.isModelAlias,
+                    isCloud: summaryIsCloud,
+                    instanceUuidOverride: summaryOriginUuid
+                )
+
+                await projectionStore.removeOutboxEntry(id: entry.id)
+                lastBackendActivityAt = Date()
+
+                if var steps = stepsByCascadeId[targetCascadeId] {
+                    for i in steps.indices where steps[i].isQueuedInOutbox && steps[i].userInput == messageBody {
+                        steps[i].isQueuedInOutbox = false
+                    }
+                    stepsByCascadeId[targetCascadeId] = steps
+                    await projectionStore.saveProjectedSteps(steps, for: targetCascadeId)
+                }
+                if let sumIdx = summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
+                    summaries[sumIdx].status = .inProgress
+                    summaries[sumIdx].statusSubtitle = "Running"
+                }
+                if !targetCascadeId.isEmpty {
+                    optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
+                    syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                }
+            } catch {
+                if Self.isBackendOfflineError(error) {
+                    // Host dropped again mid-replay: keep remaining entries persisted for next reconnect
+                    break
+                } else {
+                    await projectionStore.removeOutboxEntry(id: entry.id)
+                }
+            }
+        }
+
+        pendingOutboxCount = await projectionStore.loadPendingOutbox().count
     }
 
     public func stopActiveCascadeStreaming() {
@@ -2986,12 +3672,11 @@ public final class AntigravitySessionStore {
             let cid = activeCascadeId
             let originUuid = summaries.first(where: { $0.cascadeId == cid })?.originInstanceUuid
             let shouldSyncLive = (hasPairedBackend || isLiveBackendConnected)
+            let entry = OutboxEntry(cascadeId: cid, kind: .interactionApproval, messageText: "\(payload.stepIndex)")
             Task { [weak self] in
-                await storeRef.enqueueOutbox(
-                    OutboxEntry(cascadeId: cid, kind: .interactionApproval, messageText: "\(payload.stepIndex)")
-                )
+                await storeRef.enqueueOutbox(entry)
                 try? await clientRef.handleCascadeUserInteraction(payload, instanceUuidOverride: originUuid)
-                _ = await storeRef.drainOutbox()
+                await storeRef.removeOutboxEntry(id: entry.id)
                 if shouldSyncLive && !cid.isEmpty {
                     self?.syncStepsForCascade(cid, pollUntilIdle: true)
                 }
@@ -3093,16 +3778,15 @@ public final class AntigravitySessionStore {
 
         let storeRef = projectionStore
         let clientRef = rpcClient
+        let entry = OutboxEntry(
+            cascadeId: cid,
+            kind: .planComments,
+            messageText: "Sent \(commentsSnapshot.count) plan review comments"
+        )
         Task {
-            await storeRef.enqueueOutbox(
-                OutboxEntry(
-                    cascadeId: cid,
-                    kind: .planComments,
-                    messageText: "Sent \(commentsSnapshot.count) plan review comments"
-                )
-            )
+            await storeRef.enqueueOutbox(entry)
             try? await clientRef?.sendPlanReviewComments(cascadeId: cid, comments: commentsSnapshot)
-            _ = await storeRef.drainOutbox()
+            await storeRef.removeOutboxEntry(id: entry.id)
         }
     }
 
@@ -3155,12 +3839,11 @@ public final class AntigravitySessionStore {
             let cid = activeCascadeId
             let clientRef = rpcClient
             let storeRef = projectionStore
+            let entry = OutboxEntry(cascadeId: cid, kind: .diffComments, messageText: comment.body)
             Task {
-                await storeRef.enqueueOutbox(
-                    OutboxEntry(cascadeId: cid, kind: .diffComments, messageText: comment.body)
-                )
+                await storeRef.enqueueOutbox(entry)
                 try? await clientRef?.sendDiffReviewComments(cascadeId: cid, comments: [comment])
-                _ = await storeRef.drainOutbox()
+                await storeRef.removeOutboxEntry(id: entry.id)
             }
         }
     }

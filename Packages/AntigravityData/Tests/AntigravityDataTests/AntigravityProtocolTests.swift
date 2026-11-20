@@ -1406,6 +1406,168 @@ final class AntigravityProtocolTests: XCTestCase {
         )
         store.disconnectStepSyncForTestingIfNeeded()
     }
+
+    @MainActor
+    func testLowPowerConnectionLifecycleBackoffAndPersistentOutbox() async throws {
+        // 1. Heartbeat stays above cellular RRC tail-time (~12s) and doubles in Low Power Mode
+        XCTAssertEqual(
+            ConnectionPowerPolicy.onlineHeartbeatInterval(
+                channel: .cloudRelay,
+                isLowPowerMode: false,
+                isExpensiveNetwork: false,
+                isStreamHealthy: true
+            ),
+            30.0
+        )
+        XCTAssertEqual(
+            ConnectionPowerPolicy.onlineHeartbeatInterval(
+                channel: .cloudRelay,
+                isLowPowerMode: false,
+                isExpensiveNetwork: true,
+                isStreamHealthy: true
+            ),
+            45.0
+        )
+        XCTAssertEqual(
+            ConnectionPowerPolicy.onlineHeartbeatInterval(
+                channel: .cloudRelay,
+                isLowPowerMode: true,
+                isExpensiveNetwork: true,
+                isStreamHealthy: true
+            ),
+            90.0
+        )
+        XCTAssertEqual(
+            ConnectionPowerPolicy.onlineHeartbeatInterval(
+                channel: .directHost,
+                isLowPowerMode: false,
+                isExpensiveNetwork: false,
+                isStreamHealthy: true
+            ),
+            15.0
+        )
+
+        // 2. Idle chat stops step polling completely when push stream is healthy
+        XCTAssertNil(
+            ConnectionPowerPolicy.idleChatFallbackStepPollInterval(
+                isStreamHealthy: true,
+                isLowPowerMode: false
+            )
+        )
+        XCTAssertEqual(
+            ConnectionPowerPolicy.idleChatFallbackStepPollInterval(
+                isStreamHealthy: false,
+                isLowPowerMode: false
+            ),
+            15.0
+        )
+        XCTAssertEqual(
+            ConnectionPowerPolicy.activeStreamingStepPollInterval(
+                channel: .directHost,
+                isLowPowerMode: false
+            ),
+            0.5
+        )
+        XCTAssertEqual(
+            ConnectionPowerPolicy.activeStreamingStepPollInterval(
+                channel: .cloudRelay,
+                isLowPowerMode: false
+            ),
+            1.0
+        )
+
+        // 3. Offline exponential backoff sequence (3s -> 6s -> 12s -> 24s -> 45s -> 60s cap; x2 in Low Power Mode)
+        let normalSchedule = (0...7).map {
+            ConnectionPowerPolicy.offlineBackoffBaseDelay(attempt: $0, isLowPowerMode: false)
+        }
+        XCTAssertEqual(normalSchedule, [3.0, 6.0, 12.0, 24.0, 45.0, 60.0, 60.0, 60.0])
+
+        let lowPowerSchedule = (0...6).map {
+            ConnectionPowerPolicy.offlineBackoffBaseDelay(attempt: $0, isLowPowerMode: true)
+        }
+        XCTAssertEqual(lowPowerSchedule, [6.0, 12.0, 24.0, 48.0, 90.0, 120.0, 120.0])
+
+        let jittered = ConnectionPowerPolicy.offlineBackoffDelay(
+            attempt: 2,
+            isLowPowerMode: false,
+            applyJitter: true,
+            jitterFactor: 1.15
+        )
+        XCTAssertEqual(jittered, 13.8, accuracy: 0.001)
+
+        // 4. Failure debounce thresholds
+        XCTAssertEqual(
+            ConnectionPowerPolicy.offlineFailureThreshold(
+                channel: .cloudRelay,
+                error: AntigravityRPCError.httpError(statusCode: 503, body: "No reachable Antigravity Desktop instances online")
+            ),
+            1
+        )
+        XCTAssertEqual(
+            ConnectionPowerPolicy.offlineFailureThreshold(
+                channel: .cloudRelay,
+                error: URLError(.timedOut)
+            ),
+            2
+        )
+        XCTAssertEqual(
+            ConnectionPowerPolicy.offlineFailureThreshold(
+                channel: .directHost,
+                error: URLError(.cannotConnectToHost)
+            ),
+            1
+        )
+
+        // 5. Screen-off / background suspension stops networking cleanly WITHOUT flashing red Offline status
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.activeHost = RemoteHostInstance(
+            instanceId: "relay-mac-mini",
+            hostname: "Mac Mini",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/relay-mac-mini")!,
+            isOnline: true
+        )
+        store.connectionLifecyclePhase = .onlineIdle
+
+        store.suspendNetworkingForBackground()
+        XCTAssertTrue(store.isNetworkingSuspended)
+        XCTAssertEqual(store.connectionLifecyclePhase, .suspended)
+        XCTAssertTrue(store.activeHost.isOnline, "Suspending for screen-off must not falsely mark host offline")
+        XCTAssertTrue(store.isLiveBackendConnected)
+
+        // While suspended, syncStepsForCascade must remain completely inert
+        store.syncStepsForCascade("cid-should-not-poll", pollUntilIdle: true)
+        XCTAssertFalse(store.isLoadingSteps)
+
+        // 6. NWPathMonitor unsatisfied pauses probes with distinct No Internet status
+        store.isNetworkingSuspended = false
+        store.handleNetworkPathChange(.unsatisfied)
+        XCTAssertFalse(store.isDeviceNetworkReachable)
+        XCTAssertEqual(store.connectionLifecyclePhase, .noNetwork)
+        XCTAssertEqual(store.connectionStatusText, "No Internet Connection")
+
+        // 7. Persistent Durable Outbox disk round-trip & selective entry removal
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AntigravityOutboxTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let writerStore = LocalProjectionStore(storageDirectory: tempDir)
+        let entry1 = OutboxEntry(cascadeId: "cid-1", kind: .userMessage, messageText: "Queued prompt 1")
+        let entry2 = OutboxEntry(cascadeId: "cid-1", kind: .userMessage, messageText: "Queued prompt 2")
+        await writerStore.enqueueOutbox(entry1)
+        await writerStore.enqueueOutbox(entry2)
+
+        // Fresh actor instance reads persisted outbox_queue.json from disk
+        let readerStore = LocalProjectionStore(storageDirectory: tempDir)
+        let loaded = await readerStore.loadPendingOutbox()
+        XCTAssertEqual(loaded.map(\.id), [entry1.id, entry2.id])
+
+        await readerStore.removeOutboxEntry(id: entry1.id)
+        let remaining = await LocalProjectionStore(storageDirectory: tempDir).loadPendingOutbox()
+        XCTAssertEqual(remaining.map(\.id), [entry2.id])
+    }
 }
 
 private extension AntigravitySessionStore {

@@ -43,6 +43,7 @@ public actor LocalProjectionStore {
     private var cachedAutomations: [AutomationItem] = []
     private var cachedDisplayOptions: AgentDisplayOptions?
     private var outboxQueue: [OutboxEntry] = []
+    private var hasLoadedOutboxFromDisk: Bool = false
 
     public init(storageDirectory: URL? = nil) {
         let base = storageDirectory
@@ -155,13 +156,53 @@ public actor LocalProjectionStore {
         }
     }
 
+    private func ensureOutboxLoaded() {
+        guard !hasLoadedOutboxFromDisk else { return }
+        hasLoadedOutboxFromDisk = true
+        let file = storageDirectory.appendingPathComponent("outbox_queue.json")
+        guard let data = try? Data(contentsOf: file),
+              let decoded = try? JSONDecoder().decode([OutboxEntry].self, from: data) else {
+            return
+        }
+        outboxQueue = decoded
+    }
+
+    private func persistOutbox() {
+        let file = storageDirectory.appendingPathComponent("outbox_queue.json")
+        if outboxQueue.isEmpty {
+            try? FileManager.default.removeItem(at: file)
+        } else if let data = try? JSONEncoder().encode(outboxQueue) {
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
+    public func loadPendingOutbox() -> [OutboxEntry] {
+        ensureOutboxLoaded()
+        return outboxQueue
+    }
+
     public func enqueueOutbox(_ entry: OutboxEntry) {
-        outboxQueue.append(entry)
+        ensureOutboxLoaded()
+        if !outboxQueue.contains(where: { $0.id == entry.id }) {
+            outboxQueue.append(entry)
+            persistOutbox()
+        }
+    }
+
+    public func removeOutboxEntry(id: UUID) {
+        ensureOutboxLoaded()
+        let before = outboxQueue.count
+        outboxQueue.removeAll { $0.id == id }
+        if outboxQueue.count != before {
+            persistOutbox()
+        }
     }
 
     public func drainOutbox() -> [OutboxEntry] {
+        ensureOutboxLoaded()
         let items = outboxQueue
         outboxQueue.removeAll()
+        persistOutbox()
         return items
     }
 }

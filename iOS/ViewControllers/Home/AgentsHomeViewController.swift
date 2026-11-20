@@ -235,7 +235,7 @@ public struct AgentsHomeViewController: View {
                 .padding(.bottom, 96)
             }
             .refreshable {
-                await store.refreshWorkspacesAndSummaries()
+                await store.reconnectNow(userInitiated: true)
             }
 
             // Subtle bottom obsidian gradient behind floating liquid glass chrome
@@ -279,7 +279,7 @@ public struct AgentsHomeViewController: View {
     // MARK: - 1. Top Bar (Host Switcher + Display Options + New Project)
 
     private var isPairedHostOnline: Bool {
-        store.isLiveBackendConnected && store.activeHost.isOnline
+        store.isDeviceNetworkReachable && store.isLiveBackendConnected && store.activeHost.isOnline
     }
 
     private var pairedLocalHosts: [RemoteHostInstance] {
@@ -299,7 +299,7 @@ public struct AgentsHomeViewController: View {
     private var hostSwitcherDotColor: Color {
         switch selectedHost {
         case .antigravityCloud:
-            return AntigravityTheme.accentPeriwinkle
+            return store.isDeviceNetworkReachable ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.statusError
         case .localHost:
             if store.hasPairedBackend {
                 return isPairedHostOnline ? AntigravityTheme.statusDone : AntigravityTheme.statusError
@@ -314,6 +314,9 @@ public struct AgentsHomeViewController: View {
     }
 
     private var hostSwitcherLabelText: String {
+        if store.hasPairedBackend && !store.isDeviceNetworkReachable {
+            return "No Network"
+        }
         switch selectedHost {
         case .antigravityCloud:
             return "Antigravity"
@@ -338,7 +341,7 @@ public struct AgentsHomeViewController: View {
                 if store.hasPairedBackend {
                     Button {
                         Task {
-                            await store.refreshWorkspacesAndSummaries()
+                            await store.reconnectNow(userInitiated: true)
                         }
                     } label: {
                         Label(

@@ -80,7 +80,7 @@ public struct AutomationsViewController: View {
                 .padding(.bottom, 96)
             }
             .refreshable {
-                await store.refreshWorkspacesAndSummaries()
+                await store.reconnectNow(userInitiated: true, includeAutomations: true)
             }
 
             LinearGradient(
@@ -108,6 +108,11 @@ public struct AutomationsViewController: View {
             )
         }
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
+        .task {
+            if !store.isVerificationMode && store.hasPairedBackend {
+                await store.refreshAutomations()
+            }
+        }
     }
 
     // MARK: - 1. Top Filter Button

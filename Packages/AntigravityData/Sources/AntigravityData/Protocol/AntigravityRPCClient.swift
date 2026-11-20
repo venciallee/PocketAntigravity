@@ -49,6 +49,26 @@ public struct BackendHandshakeResult: Sendable, Equatable {
     }
 }
 
+/// Lightweight heartbeat / reachability result returned by `AntigravityRPCClient.probeHostReachability()`.
+public struct HostReachabilityProbeResult: Sendable, Equatable {
+    public let latencyMs: Int
+    public let availableRelayInstances: [RelayInstanceInfo]
+    public let activeRelayInstance: RelayInstanceInfo?
+    public let relayTopologyChanged: Bool
+
+    public init(
+        latencyMs: Int,
+        availableRelayInstances: [RelayInstanceInfo] = [],
+        activeRelayInstance: RelayInstanceInfo? = nil,
+        relayTopologyChanged: Bool = false
+    ) {
+        self.latencyMs = latencyMs
+        self.availableRelayInstances = availableRelayInstances
+        self.activeRelayInstance = activeRelayInstance
+        self.relayTopologyChanged = relayTopologyChanged
+    }
+}
+
 /// URLSession TLS delegate supporting SHA-256 certificate pinning and local LAN / Tailscale TOFU
 /// for Antigravity Desktop's dynamically generated self-signed `language_server` HTTPS certificate.
 public final class PinnedTLSURLSessionDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
@@ -468,6 +488,81 @@ public actor AntigravityRPCClient {
             resolvedAuthUser: channel == .cloudRelay ? authUser : nil,
             availableRelayInstances: allRelayInstances
         )
+    }
+
+    /// Single-request lightweight reachability probe used by foreground idle heartbeats
+    /// and exponential-backoff offline recovery so mobile radios avoid multi-RPC fan-out.
+    /// - Cloud Relay: sends only `ApiService/ListInstances` (a few hundred bytes, zero `ProxyCommand` fan-out).
+    /// - Direct LAN: sends a single short-timeout `GetWorkspaceInfos` probe (HTTP 404 still proves server + auth liveness).
+    public func probeHostReachability(timeoutInterval: TimeInterval? = nil) async throws -> HostReachabilityProbeResult {
+        let start = Date()
+        if channel == .cloudRelay {
+            let effectiveTimeout = timeoutInterval ?? 8.0
+            let prevReachableIds = Set(cachedRelayInstances.filter(\.status.isReachable).map(\.uuid))
+            let prevActiveUuid = resolvedInstanceUuid
+
+            let instances = try await listRelayInstances(timeoutInterval: effectiveTimeout)
+            if !instances.isEmpty {
+                self.cachedRelayInstances = instances
+            }
+
+            let reachable = instances.filter(\.status.isReachable)
+            if reachable.isEmpty {
+                if instances.isEmpty, let directUuid = resolvedInstanceUuid, !directUuid.isEmpty {
+                    do {
+                        _ = try await getWorkspaceInfos(
+                            instanceUuidOverride: directUuid,
+                            timeoutInterval: effectiveTimeout
+                        )
+                    } catch let AntigravityRPCError.httpError(statusCode, _) where statusCode == 404 {
+                        // HTTP 404 on optional endpoint still proves the remote language_server is alive.
+                    }
+                    let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+                    return HostReachabilityProbeResult(
+                        latencyMs: elapsedMs,
+                        availableRelayInstances: cachedRelayInstances,
+                        activeRelayInstance: currentActiveRelayInstance(),
+                        relayTopologyChanged: false
+                    )
+                }
+                throw AntigravityRPCError.httpError(
+                    statusCode: 503,
+                    body: "No reachable Antigravity Desktop instances online"
+                )
+            }
+
+            let chosen: RelayInstanceInfo = {
+                if let prevActiveUuid,
+                   let stillOnline = reachable.first(where: { $0.uuid == prevActiveUuid }) {
+                    return stillOnline
+                }
+                if !targetInstanceIdentifier.isEmpty {
+                    if let exact = reachable.first(where: { $0.matches(identifier: targetInstanceIdentifier) }) {
+                        return exact
+                    }
+                    if let sameFamily = reachable.first(where: { $0.sameHostFamily(as: targetInstanceIdentifier) }) {
+                        return sameFamily
+                    }
+                }
+                return reachable[0]
+            }()
+
+            self.resolvedInstanceUuid = chosen.uuid
+            let newReachableIds = Set(reachable.map(\.uuid))
+            let topologyChanged = (newReachableIds != prevReachableIds) || (chosen.uuid != prevActiveUuid)
+            let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+            return HostReachabilityProbeResult(
+                latencyMs: elapsedMs,
+                availableRelayInstances: instances,
+                activeRelayInstance: chosen,
+                relayTopologyChanged: topologyChanged
+            )
+        }
+
+        let effectiveTimeout = timeoutInterval ?? 3.0
+        _ = try await getWorkspaceInfosOptional(timeoutInterval: effectiveTimeout)
+        let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+        return HostReachabilityProbeResult(latencyMs: elapsedMs)
     }
 
     /// Refreshes `ListInstances` (when on `.cloudRelay`), federates local workspaces & summaries across all

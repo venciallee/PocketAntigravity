@@ -257,7 +257,13 @@ public struct CascadeChatViewController: View {
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                 Button {
-                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                    if !store.isDeviceNetworkReachable || !store.isLiveBackendConnected || !store.activeHost.isOnline {
+                        Task {
+                            await store.reconnectNow(userInitiated: true)
+                        }
+                    } else {
+                        store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                    }
                 } label: {
                     Text("Retry")
                         .font(.system(size: 13.5, weight: .semibold))
@@ -279,15 +285,22 @@ public struct CascadeChatViewController: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .padding(.top, 12)
         } else {
+            let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
             let isOfflinePaired = !isActiveSessionCloud && store.hasPairedBackend && (!store.isLiveBackendConnected || !store.activeHost.isOnline)
             let rawSlug = activeProjectWorkspace?.name ?? store.activeSummary?.projectSlug ?? AntigravityCloudDetector.noProjectDisplayName
             let isNoProjSession = (activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(rawSlug)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Circle()
-                        .fill(isOfflinePaired ? Self.coralError : (store.isLiveBackendConnected ? Self.emeraldDone : Self.periwinkle))
+                        .fill((isNoInternet || isOfflinePaired) ? Self.coralError : (store.isLiveBackendConnected ? Self.emeraldDone : Self.periwinkle))
                         .frame(width: 8, height: 8)
-                    Text(isOfflinePaired ? "Host Offline · Queued Outbox Ready" : (store.isLiveBackendConnected ? "Ready for Prompt" : "New Session Ready"))
+                    Text(
+                        isNoInternet
+                            ? "No Internet · Queued Outbox Ready"
+                            : (isOfflinePaired
+                                ? (store.pendingOutboxCount > 0 ? "Host Offline · \(store.pendingOutboxCount) Queued" : "Host Offline · Queued Outbox Ready")
+                                : (store.isLiveBackendConnected ? "Ready for Prompt" : "New Session Ready"))
+                    )
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                 }

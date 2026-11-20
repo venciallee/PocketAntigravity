@@ -1,5 +1,8 @@
 import SwiftUI
 import AntigravityData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @main
 public struct AntigravityApp: App {
@@ -56,11 +59,27 @@ public struct AntigravityApp: App {
                     }
                 }
                 .onChange(of: scenePhase) { _, newPhase in
-                    guard newPhase == .active, activeVerifyCase == nil, store.hasPairedBackend else { return }
-                    Task {
-                        await store.refreshWorkspacesAndSummaries()
+                    guard activeVerifyCase == nil else { return }
+                    switch newPhase {
+                    case .background:
+                        store.suspendNetworkingForBackground()
+                    case .active:
+                        guard store.isInitialSessionCheckComplete || store.isNetworkingSuspended else { return }
+                        Task {
+                            await store.resumeNetworkingFromForeground()
+                        }
+                    case .inactive:
+                        break
+                    @unknown default:
+                        break
                     }
                 }
+                #if canImport(UIKit)
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+                    guard activeVerifyCase == nil else { return }
+                    store.suspendNetworkingForBackground()
+                }
+                #endif
                 .onOpenURL { url in
                     if let sceneCase = DebugSceneFactory.resolveDeepLink(url) {
                         if !store.isVerificationMode {

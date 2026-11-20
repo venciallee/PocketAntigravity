@@ -221,6 +221,13 @@ public struct AntigravityRootContainerView: View {
                 selectedTab = .settings
             }
         }
+        .onChange(of: selectedTab) { _, newTab in
+            switch newTab {
+            case .agents:      store.selectedTab = .agents
+            case .automations: store.selectedTab = .automations
+            case .settings:    store.selectedTab = .settings
+            }
+        }
     }
 
     // MARK: - Interactive Navigation Shell
