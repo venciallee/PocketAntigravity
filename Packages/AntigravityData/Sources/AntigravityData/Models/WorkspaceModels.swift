@@ -1118,6 +1118,68 @@ public enum CascadeExecutionMode: String, Codable, Sendable, CaseIterable, Ident
     }
 }
 
+/// Permission preset controlling terminal command execution and tool approvals
+/// (`Request Review`, `Default`, `Auto`, `Turbo`) in Antigravity 2.x Local & Remote sessions.
+public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIterable, Identifiable {
+    case requestReview = "request_review"
+    case defaultPolicy = "default"
+    case auto = "auto"
+    case turbo = "turbo"
+
+    public var id: String { rawValue }
+
+    public var displayTitle: String {
+        switch self {
+        case .requestReview:
+            return "Request Review"
+        case .defaultPolicy:
+            return "Default"
+        case .auto:
+            return "Auto"
+        case .turbo:
+            return "Turbo"
+        }
+    }
+
+    public var summaryDescription: String {
+        switch self {
+        case .requestReview:
+            return "Every command requires approval."
+        case .defaultPolicy:
+            return "Ask before sensitive operations."
+        case .auto:
+            return "Automatically decide if commands run."
+        case .turbo:
+            return "Run all commands without restrictions."
+        }
+    }
+
+    public var symbolName: String {
+        switch self {
+        case .requestReview:
+            return "eye"
+        case .defaultPolicy:
+            return "lock"
+        case .auto:
+            return "checkmark.shield"
+        case .turbo:
+            return "exclamationmark.shield"
+        }
+    }
+
+    /// Presets offered in Remote/Cloud (`Remote Permissions`) vs Local Desktop (`Permissions`).
+    public static func availablePresets(isRemote: Bool) -> [AgentPermissionPreset] {
+        isRemote
+            ? [.requestReview, .defaultPolicy, .turbo]
+            : [.requestReview, .defaultPolicy, .auto, .turbo]
+    }
+
+    /// Official Antigravity default preset per runtime (`Turbo` in isolated Cloud VMs, `Default` locally).
+    public static func defaultPreset(isRemote: Bool) -> AgentPermissionPreset {
+        isRemote ? .turbo : .defaultPolicy
+    }
+}
+
 /// Model, execution mode, and custom agent persona configuration (`UE07`, `UE09`).
 public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
     public var id: String { modelId }

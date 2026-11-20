@@ -1,46 +1,58 @@
 import SwiftUI
 import AntigravityData
 
-/// State `UE09_MODEL_AND_MODE`: Official Model, Mode & Custom Agent Picker sheet (`iOS · 模型 / Agent 模式选择`).
-/// Features:
-/// - `Model & Mode` header + Periwinkle `Done` button (`btn-model-done`)
-/// - Compact equal-height side-by-side `Planning` (`mode-card-planning` with `#8EB4FF` border) and `Fast` (`mode-card-fast`) mode cards
-/// - `MODEL` grouped card with clean badge pills (`New`, `Thinking`), descriptive subtitles, and inline effort tier controls (`Low` / `Medium` / `High` / `XHigh`) for multi-tier model families
-/// - Note: `A new model takes effect on the next turn.`
-/// - `AGENT` flowing persona pills (`Default` pure white active pill, custom agents).
+/// State `UE09_MODEL_AND_MODE`: Official Model, Permissions & Custom Agent Picker sheet.
+/// - In live Antigravity 2.x mode (aligned with PC 2.x where Planning/Fast moved to `/plan`):
+///   displays grouped `MODEL` families with inline effort-tier segmented controls (`Low` / `Medium` / `High` / `XHigh`),
+///   `REMOTE PERMISSIONS` / `PERMISSIONS` (`Request Review`, `Default`, `Auto`, `Turbo`), and optional `AGENT` pills.
+/// - In ESDD verification mode (`UE09_MODEL_AND_MODE`), preserves compact equal-height `Planning` & `Fast` mode cards
+///   alongside `MODEL` and `AGENT` pills for full spec parity.
 public struct ModelAndModeSheetView: View {
     @Bindable public var store: AntigravitySessionStore
     public var isPresentedAsNativeSheet: Bool
     public var onSelectConfiguration: ((String, String, String) -> Void)?
     public var onDismiss: (() -> Void)?
 
-    public static let sheetSurfaceColor = Color(red: 0x16 / 255.0, green: 0x17 / 255.0, blue: 0x1C / 255.0)
-    private static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
-    private static let cardSurface = Color(red: 0x1F / 255.0, green: 0x21 / 255.0, blue: 0x29 / 255.0)
-    private static let activeModeSurface = Color(red: 0x1C / 255.0, green: 0x23 / 255.0, blue: 0x33 / 255.0)
-    private static let effortTrackSurface = Color(red: 0x14 / 255.0, green: 0x16 / 255.0, blue: 0x1C / 255.0)
-    private static let hairlineBorder = Color.white.opacity(0.07)
+    public static let sheetSurfaceColor = Color(red: 0x13 / 255.0, green: 0x14 / 255.0, blue: 0x1A / 255.0)
+    private static let periwinkle = AntigravityTheme.accentPeriwinkle // #8EB4FF
+    private static let emerald = AntigravityTheme.statusDone // #57C88A
+    private static let cardSurface = Color(red: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x24 / 255.0)
+    private static let modeSelectedTop = Color(red: 0x21 / 255.0, green: 0x2A / 255.0, blue: 0x3E / 255.0)
+    private static let modeSelectedBottom = Color(red: 0x18 / 255.0, green: 0x1E / 255.0, blue: 0x2C / 255.0)
+    private static let modeDescriptionSelected = Color(red: 0xB0 / 255.0, green: 0xB8 / 255.0, blue: 0xC8 / 255.0)
+    private static let segmentTrackSurface = Color(red: 0x11 / 255.0, green: 0x12 / 255.0, blue: 0x17 / 255.0)
+    private static let segmentActiveSurface = Color(red: 0x25 / 255.0, green: 0x30 / 255.0, blue: 0x47 / 255.0)
 
-    private struct ModelVariantEntry: Identifiable {
-        let id: String
-        let tierLabel: String
-        let sortRank: Int
-        let config: CascadeModelConfig
-        let originalIndex: Int
+    private struct ModelEffortVariant: Identifiable {
+        let option: CascadeModelConfig
+        let effortLabel: String
+        let effortRank: Int
+
+        var id: String { option.modelId }
     }
 
-    private struct ModelDisplayGroup: Identifiable {
+    private struct ModelFamilyGroup: Identifiable {
         let id: String
-        let baseName: String
-        let variants: [ModelVariantEntry]
-        let firstOriginalIndex: Int
+        let familyName: String
+        let variants: [ModelEffortVariant]
+        let singleOption: CascadeModelConfig?
+        let singleEffortBadge: String?
+        let preferredOption: CascadeModelConfig
+        let firstIndex: Int
 
-        var isMultiTier: Bool { variants.count >= 2 }
+        var isGroupedFamily: Bool {
+            variants.count >= 2
+        }
 
-        var defaultVariant: ModelVariantEntry {
-            variants.first(where: { $0.sortRank == 3 })
-                ?? variants.min(by: { $0.originalIndex < $1.originalIndex })
-                ?? variants[0]
+        func selectedVariant(for selected: CascadeModelConfig) -> CascadeModelConfig? {
+            if let single = singleOption {
+                return Self.matches(single, selected: selected) ? single : nil
+            }
+            return variants.first(where: { Self.matches($0.option, selected: selected) })?.option
+        }
+
+        static func matches(_ option: CascadeModelConfig, selected: CascadeModelConfig) -> Bool {
+            option.modelId == selected.modelId || option.displayName == selected.displayName
         }
     }
 
@@ -56,11 +68,19 @@ public struct ModelAndModeSheetView: View {
         self.onDismiss = onDismiss
     }
 
+    private var isLiveAntigravity2Mode: Bool {
+        !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected
+    }
+
+    private var sheetTitle: String {
+        isLiveAntigravity2Mode ? "Model & Permissions" : "Model & Mode"
+    }
+
     private var displayedModels: [CascadeModelConfig] {
         store.availableModels.isEmpty ? CascadeModelConfig.liveDefaultCatalog : store.availableModels
     }
 
-    private var displayedModelGroups: [ModelDisplayGroup] {
+    private var modelGroups: [ModelFamilyGroup] {
         Self.buildModelGroups(from: displayedModels)
     }
 
@@ -68,15 +88,50 @@ public struct ModelAndModeSheetView: View {
         store.availableAgents.isEmpty ? ["Default"] : store.availableAgents
     }
 
+    private var shouldShowAgentSection: Bool {
+        displayedAgents.count > 1 || (!isLiveAntigravity2Mode && store.isVerificationMode)
+    }
+
     public var body: some View {
         Group {
             if isPresentedAsNativeSheet {
-                nativeSheetContent
+                sheetInnerContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .background(Self.sheetSurfaceColor.ignoresSafeArea())
             } else {
-                standaloneBackdropContent
+                ZStack(alignment: .bottom) {
+                    AntigravityTheme.canvasObsidian.ignoresSafeArea()
+
+                    sheetInnerContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .background(
+                            UnevenRoundedRectangle(
+                                topLeadingRadius: 28,
+                                bottomLeadingRadius: 0,
+                                bottomTrailingRadius: 0,
+                                topTrailingRadius: 28,
+                                style: .continuous
+                            )
+                            .fill(Self.sheetSurfaceColor)
+                        )
+                        .overlay(
+                            UnevenRoundedRectangle(
+                                topLeadingRadius: 28,
+                                bottomLeadingRadius: 0,
+                                bottomTrailingRadius: 0,
+                                topTrailingRadius: 28,
+                                style: .continuous
+                            )
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                        .padding(.top, 118)
+                        .ignoresSafeArea(edges: .bottom)
+                }
             }
         }
-        .sensoryFeedback(.selection, trigger: store.selectedModelConfig)
+        .sensoryFeedback(.selection, trigger: store.selectedModelConfig.mode)
+        .sensoryFeedback(.selection, trigger: store.selectedModelConfig.modelId)
+        .sensoryFeedback(.selection, trigger: store.activePermissionPreset)
         .task {
             if store.hasPairedBackend || store.isLiveBackendConnected {
                 await store.refreshModelCatalog()
@@ -84,84 +139,53 @@ public struct ModelAndModeSheetView: View {
         }
     }
 
-    // MARK: - Presentation Containers
+    // MARK: - Sheet Content
 
-    private var nativeSheetContent: some View {
+    private var sheetInnerContent: some View {
         VStack(spacing: 0) {
-            sheetHeaderBar
-                .padding(.top, 16)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 10)
+            if !isPresentedAsNativeSheet {
+                Capsule()
+                    .fill(Color.white.opacity(0.24))
+                    .frame(width: 36, height: 4.5)
+                    .padding(.top, 10)
+            }
+
+            headerBar
+                .padding(.horizontal, 16)
+                .padding(.top, isPresentedAsNativeSheet ? 14 : 6)
+                .padding(.bottom, 8)
+
+            Divider()
+                .overlay(Color.white.opacity(0.06))
 
             ScrollView(.vertical, showsIndicators: false) {
-                sheetSectionsBody
-                    .padding(.horizontal, 18)
-                    .padding(.top, 4)
-                    .padding(.bottom, 28)
+                VStack(alignment: .leading, spacing: 20) {
+                    if !isLiveAntigravity2Mode {
+                        modeSection
+                    }
+
+                    modelSection
+
+                    if isLiveAntigravity2Mode {
+                        permissionsSection
+                    }
+
+                    if shouldShowAgentSection {
+                        agentSection
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 28)
             }
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Self.sheetSurfaceColor.ignoresSafeArea())
     }
 
-    private var standaloneBackdropContent: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                // Top Grabber (only rendered in standalone ESDD showcase mode)
-                HStack {
-                    Spacer()
-                    Capsule()
-                        .fill(Color.white.opacity(0.26))
-                        .frame(width: 38, height: 5)
-                    Spacer()
-                }
-                .padding(.top, 10)
-                .padding(.bottom, 4)
-
-                sheetHeaderBar
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 10)
-
-                ScrollView(.vertical, showsIndicators: false) {
-                    sheetSectionsBody
-                        .padding(.horizontal, 18)
-                        .padding(.top, 4)
-                        .padding(.bottom, 28)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 28,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 28,
-                    style: .continuous
-                )
-                .fill(Self.sheetSurfaceColor)
-            )
-            .overlay(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 28,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 28,
-                    style: .continuous
-                )
-                .strokeBorder(Self.hairlineBorder, lineWidth: 1)
-            )
-            .padding(.top, 118)
-            .ignoresSafeArea(edges: .bottom)
-        }
-        .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
-    }
-
-    // MARK: - Header & Main Sections
-
-    private var sheetHeaderBar: some View {
+    private var headerBar: some View {
         ZStack {
-            Text("Model & Mode")
-                .font(.system(size: 17.5, weight: .bold))
+            Text(sheetTitle)
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
 
             HStack {
@@ -170,8 +194,16 @@ public struct ModelAndModeSheetView: View {
                     applyAndDismiss()
                 } label: {
                     Text("Done")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(Self.periwinkle)
+                        .padding(.horizontal, 14)
+                        .frame(height: 32)
+                        .background(Self.periwinkle.opacity(0.14))
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Self.periwinkle.opacity(0.28), lineWidth: 1)
+                        )
+                        .clipShape(Capsule())
                         .frame(
                             minWidth: AntigravityTheme.minTouchTargetPt,
                             minHeight: AntigravityTheme.minTouchTargetPt,
@@ -183,15 +215,28 @@ public struct ModelAndModeSheetView: View {
                 .accessibilityIdentifier("btn-model-done")
             }
         }
+        .frame(height: 44)
     }
 
-    private var sheetSectionsBody: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            // Planning vs Fast Mode Cards (compact equal height, never vertically stretched)
-            HStack(alignment: .top, spacing: 10) {
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11.5, weight: .semibold))
+            .tracking(0.8)
+            .foregroundStyle(AntigravityTheme.inkSecondary)
+            .padding(.leading, 4)
+    }
+
+    // MARK: - MODE Section (ESDD UE09 Verification Parity)
+
+    private var modeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("MODE")
+
+            HStack(spacing: 10) {
                 modeCardButton(
                     mode: .planning,
                     iconName: "doc.text",
+                    activeIconName: "doc.text.fill",
                     description: "Plans first and writes artifacts for you to review",
                     testId: "mode-card-planning"
                 )
@@ -199,55 +244,19 @@ public struct ModelAndModeSheetView: View {
                 modeCardButton(
                     mode: .fast,
                     iconName: "bolt",
+                    activeIconName: "bolt.fill",
                     description: "Acts directly — best for small, local edits",
                     testId: "mode-card-fast"
                 )
             }
             .fixedSize(horizontal: false, vertical: true)
-
-            // MODEL Picker Section
-            VStack(alignment: .leading, spacing: 8) {
-                Text("MODEL")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(AntigravityTheme.inkSecondary)
-                    .padding(.leading, 2)
-
-                modelRowsCard
-
-                Text("A new model takes effect on the next turn.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(AntigravityTheme.inkSecondary)
-                    .padding(.leading, 2)
-                    .padding(.top, 2)
-            }
-
-            // AGENT Persona Section
-            VStack(alignment: .leading, spacing: 8) {
-                Text("AGENT")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(AntigravityTheme.inkSecondary)
-                    .padding(.leading, 2)
-
-                FlowPillLayout(horizontalSpacing: 8, verticalSpacing: 6) {
-                    ForEach(displayedAgents, id: \.self) { agentName in
-                        agentPersonaPill(
-                            name: agentName,
-                            isMonospaced: agentName != "Default",
-                            testId: "agent-pill-\(agentName.lowercased())"
-                        )
-                    }
-                }
-            }
         }
     }
-
-    // MARK: - Mode Cards
 
     private func modeCardButton(
         mode: CascadeExecutionMode,
         iconName: String,
+        activeIconName: String,
         description: String,
         testId: String
     ) -> some View {
@@ -262,212 +271,337 @@ public struct ModelAndModeSheetView: View {
                 store.selectedModelConfig.agentPersona
             )
         } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
-                    Image(systemName: iconName)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(isSelected ? Self.periwinkle : AntigravityTheme.inkSecondary)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(isSelected ? Self.periwinkle.opacity(0.18) : Color.white.opacity(0.06))
+                            .frame(width: 28, height: 28)
+                        Image(systemName: isSelected ? activeIconName : iconName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(isSelected ? Self.periwinkle : AntigravityTheme.inkSecondary)
+                    }
 
                     Text(mode.rawValue)
-                        .font(.system(size: 15.5, weight: .bold))
-                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .font(.system(size: 15.5, weight: .semibold))
+                        .foregroundStyle(isSelected ? AntigravityTheme.inkReading : AntigravityTheme.inkLabel)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.88)
 
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 2)
 
                     if isSelected {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Self.periwinkle)
+                    } else {
+                        Circle()
+                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1.25)
+                            .frame(width: 16, height: 16)
                     }
                 }
 
                 Text(description)
                     .font(.system(size: 12.5, weight: .regular))
-                    .foregroundStyle(isSelected ? AntigravityTheme.inkLabel.opacity(0.84) : AntigravityTheme.inkSecondary)
-                    .multilineTextAlignment(.leading)
+                    .foregroundStyle(isSelected ? Self.modeDescriptionSelected : AntigravityTheme.inkSecondary)
                     .lineSpacing(2)
+                    .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .frame(maxWidth: .infinity, minHeight: 96, maxHeight: .infinity, alignment: .topLeading)
+            .padding(13)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isSelected ? Self.activeModeSurface : Self.cardSurface)
+                    .fill(
+                        isSelected
+                            ? AnyShapeStyle(
+                                LinearGradient(
+                                    colors: [Self.modeSelectedTop, Self.modeSelectedBottom],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            : AnyShapeStyle(Self.cardSurface)
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(
-                        isSelected ? Self.periwinkle : Self.hairlineBorder,
-                        lineWidth: isSelected ? 1.5 : 1
+                        isSelected ? Self.periwinkle.opacity(0.85) : Color.white.opacity(0.07),
+                        lineWidth: isSelected ? 1.4 : 1
                     )
             )
+            .shadow(color: isSelected ? Self.periwinkle.opacity(0.12) : .clear, radius: 10, x: 0, y: 3)
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(testId)
     }
 
-    // MARK: - Model Grouped Card
+    // MARK: - MODEL Section
 
-    private var modelRowsCard: some View {
-        let groups = displayedModelGroups
-        return VStack(spacing: 0) {
-            ForEach(Array(groups.enumerated()), id: \.element.id) { idx, group in
-                modelGroupRow(group)
-                if idx < groups.count - 1 {
-                    Divider()
-                        .overlay(Color.white.opacity(0.06))
-                        .padding(.leading, 16)
+    private var modelSection: some View {
+        let groups = modelGroups
+        return VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("MODEL")
+
+            VStack(spacing: 0) {
+                ForEach(Array(groups.enumerated()), id: \.element.id) { idx, group in
+                    modelGroupRow(group)
+                    if idx < groups.count - 1 {
+                        Divider()
+                            .overlay(Color.white.opacity(0.06))
+                            .padding(.leading, 14)
+                    }
                 }
             }
+            .background(Self.cardSurface)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+            )
+
+            HStack(spacing: 5) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11.5, weight: .medium))
+                Text("A new model takes effect on the next turn.")
+                    .font(.system(size: 12))
+            }
+            .foregroundStyle(AntigravityTheme.inkMuted)
+            .padding(.leading, 4)
+            .padding(.top, 2)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Self.cardSurface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Self.hairlineBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func modelGroupRow(_ group: ModelDisplayGroup) -> some View {
-        let matchedVariant = group.variants.first(where: { isOptionSelected($0.config) })
-        let isGroupSelected = matchedVariant != nil
-        let activeVariant = matchedVariant ?? group.defaultVariant
-        let option = activeVariant.config
-        let titleText = Self.cleanedRowTitle(for: group, activeOption: option)
-        let badgeLabel = Self.resolvedBadgeTitle(for: option)
-        let subtitleText = Self.resolvedSubtitle(for: option)
+    // MARK: - PERMISSIONS Section (Antigravity 2.x Local & Remote Permissions)
 
-        return VStack(alignment: .leading, spacing: 0) {
+    private var permissionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader(store.isActiveSessionCloud ? "REMOTE PERMISSIONS" : "PERMISSIONS")
+            PermissionsPresetListCard(store: store)
+        }
+    }
+
+    @ViewBuilder
+    private func modelGroupRow(_ group: ModelFamilyGroup) -> some View {
+        let selectedOption = group.selectedVariant(for: store.selectedModelConfig)
+        let isSelected = selectedOption != nil
+        let activeOption = selectedOption ?? group.preferredOption
+        let tagBadge = Self.effectiveBadgeTitle(for: activeOption)
+            ?? group.variants.compactMap { Self.effectiveBadgeTitle(for: $0.option) }.first
+        let subtitle = Self.effectiveSubtitle(for: activeOption)
+
+        if group.isGroupedFamily {
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    withAnimation(.snappy(duration: 0.22)) {
+                        selectModelOption(activeOption)
+                    }
+                } label: {
+                    modelRowHeaderContent(
+                        title: group.familyName,
+                        subtitle: subtitle,
+                        tagBadge: tagBadge,
+                        effortBadge: nil,
+                        hasThinkingBadge: activeOption.hasThinkingBadge,
+                        isSelected: isSelected,
+                        unselectedTierCount: group.variants.count
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(Self.accessibilityId(for: group.preferredOption, index: group.firstIndex))
+
+                if isSelected {
+                    effortTierSegmentedBar(variants: group.variants)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+            .background(isSelected ? Self.periwinkle.opacity(0.08) : Color.clear)
+        } else {
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
-                    selectModel(activeVariant.config)
+                    selectModelOption(activeOption)
                 }
             } label: {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 7) {
-                            Text(titleText)
-                                .font(.system(size: 15.5, weight: isGroupSelected ? .semibold : .medium))
-                                .foregroundStyle(AntigravityTheme.inkReading)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .minimumScaleFactor(0.86)
-
-                            if let badgeLabel {
-                                Text(badgeLabel)
-                                    .font(.system(size: 10.5, weight: .semibold))
-                                    .foregroundStyle(Self.periwinkle)
-                                    .padding(.horizontal, 6.5)
-                                    .padding(.vertical, 2)
-                                    .background(Self.periwinkle.opacity(0.15))
-                                    .clipShape(Capsule())
-                                    .fixedSize()
-                            }
-
-                            if option.hasThinkingBadge {
-                                Text("Thinking")
-                                    .font(.system(size: 10.5, weight: .semibold))
-                                    .foregroundStyle(AntigravityTheme.inkLabel)
-                                    .padding(.horizontal, 6.5)
-                                    .padding(.vertical, 2)
-                                    .background(Color.white.opacity(0.09))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                    .fixedSize()
-                            }
-                        }
-
-                        Text(subtitleText)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(AntigravityTheme.inkSecondary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Spacer(minLength: 8)
-
-                    if isGroupSelected {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(Self.periwinkle)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, group.isMultiTier ? 10 : 12)
-                .frame(minHeight: 58)
+                modelRowHeaderContent(
+                    title: group.familyName,
+                    subtitle: subtitle,
+                    tagBadge: tagBadge,
+                    effortBadge: group.singleEffortBadge,
+                    hasThinkingBadge: activeOption.hasThinkingBadge,
+                    isSelected: isSelected,
+                    unselectedTierCount: nil
+                )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+                .background(isSelected ? Self.periwinkle.opacity(0.08) : Color.clear)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier(
-                group.isMultiTier
-                    ? Self.groupAccessibilityId(for: group)
-                    : Self.accessibilityId(for: option, index: activeVariant.originalIndex)
-            )
-
-            if group.isMultiTier {
-                effortTierSelector(for: group, isGroupSelected: isGroupSelected)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
-            }
+            .accessibilityIdentifier(Self.accessibilityId(for: activeOption, index: group.firstIndex))
         }
-        .background(isGroupSelected ? Self.periwinkle.opacity(0.065) : Color.clear)
     }
 
-    private func effortTierSelector(for group: ModelDisplayGroup, isGroupSelected: Bool) -> some View {
+    private func modelRowHeaderContent(
+        title: String,
+        subtitle: String,
+        tagBadge: String?,
+        effortBadge: String?,
+        hasThinkingBadge: Bool,
+        isSelected: Bool,
+        unselectedTierCount: Int?
+    ) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 15.5, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .lineLimit(1)
+
+                    if let tagBadge {
+                        Text(tagBadge)
+                            .font(.system(size: 10.5, weight: .bold))
+                            .foregroundStyle(Self.emerald)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 6.5)
+                            .padding(.vertical, 2)
+                            .background(Self.emerald.opacity(0.14))
+                            .clipShape(Capsule())
+                    }
+
+                    if let effortBadge {
+                        Text(effortBadge)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkLabel)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 6.5)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(Capsule())
+                    }
+
+                    if hasThinkingBadge {
+                        Text("Thinking")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkLabel)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 6.5)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.09))
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                }
+
+                Text(subtitle)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(isSelected ? Self.modeDescriptionSelected : AntigravityTheme.inkSecondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 4)
+
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Self.periwinkle)
+            } else if let tierCount = unselectedTierCount {
+                Text("\(tierCount) levels")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(Capsule())
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func effortTierSegmentedBar(variants: [ModelEffortVariant]) -> some View {
         HStack(spacing: 4) {
-            ForEach(group.variants) { variant in
-                let isTierSelected = isGroupSelected && isOptionSelected(variant.config)
+            ForEach(variants) { variant in
+                let isVariantSelected = ModelFamilyGroup.matches(variant.option, selected: store.selectedModelConfig)
                 Button {
-                    withAnimation(.snappy(duration: 0.2)) {
-                        selectModel(variant.config)
+                    withAnimation(.snappy(duration: 0.18)) {
+                        selectModelOption(variant.option)
                     }
                 } label: {
-                    Text(variant.tierLabel)
-                        .font(.system(size: 12, weight: isTierSelected ? .semibold : .medium))
-                        .foregroundStyle(
-                            isTierSelected
-                                ? Self.periwinkle
-                                : (isGroupSelected ? AntigravityTheme.inkLabel.opacity(0.82) : AntigravityTheme.inkSecondary)
-                        )
+                    Text(variant.effortLabel)
+                        .font(.system(size: 12.5, weight: isVariantSelected ? .semibold : .medium))
+                        .foregroundStyle(isVariantSelected ? Self.periwinkle : AntigravityTheme.inkSecondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .frame(maxWidth: .infinity)
                         .frame(height: 32)
                         .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(isTierSelected ? Self.periwinkle.opacity(0.16) : Color.clear)
+                            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                                .fill(isVariantSelected ? Self.segmentActiveSurface : Color.clear)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
                                 .strokeBorder(
-                                    isTierSelected ? Self.periwinkle.opacity(0.50) : Color.clear,
+                                    isVariantSelected ? Self.periwinkle.opacity(0.45) : Color.clear,
                                     lineWidth: 1
                                 )
                         )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier(Self.accessibilityId(for: variant.config, index: variant.originalIndex))
+                .accessibilityIdentifier("model-effort-\(variant.option.modelId)")
             }
         }
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Self.effortTrackSurface)
+                .fill(Self.segmentTrackSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.05), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
         )
     }
 
-    // MARK: - Agent Persona Pills
+    // MARK: - AGENT Section
+
+    private var agentSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("AGENT")
+
+            VStack(alignment: .leading, spacing: 6) {
+                let agentList = displayedAgents
+                ForEach(Array(stride(from: 0, to: agentList.count, by: 2)), id: \.self) { rowStart in
+                    HStack(spacing: 8) {
+                        let firstName = agentList[rowStart]
+                        agentPersonaPill(
+                            name: firstName,
+                            isMonospaced: firstName != "Default",
+                            testId: "agent-pill-\(firstName.lowercased())"
+                        )
+                        if rowStart + 1 < agentList.count {
+                            let secondName = agentList[rowStart + 1]
+                            agentPersonaPill(
+                                name: secondName,
+                                isMonospaced: secondName != "Default",
+                                testId: "agent-pill-\(secondName.lowercased())"
+                            )
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+    }
 
     private func agentPersonaPill(
         name: String,
@@ -476,7 +610,7 @@ public struct ModelAndModeSheetView: View {
     ) -> some View {
         let isSelected = store.selectedModelConfig.agentPersona == name
         return Button {
-            withAnimation(.snappy(duration: 0.2)) {
+            withAnimation(.snappy(duration: 0.18)) {
                 store.selectedModelConfig.agentPersona = name
             }
             onSelectConfiguration?(
@@ -488,16 +622,16 @@ public struct ModelAndModeSheetView: View {
             Text(name)
                 .font(
                     isMonospaced
-                        ? .system(size: 13.5, weight: isSelected ? .bold : .medium, design: .monospaced)
-                        : .system(size: 14, weight: .semibold)
+                        ? .system(size: 13, weight: isSelected ? .bold : .medium, design: .monospaced)
+                        : .system(size: 13.5, weight: .semibold)
                 )
-                .foregroundStyle(isSelected ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.inkReading)
+                .foregroundStyle(isSelected ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.inkLabel)
                 .padding(.horizontal, 16)
                 .frame(height: 36)
                 .background(isSelected ? Color.white : Self.cardSurface)
                 .overlay(
                     Capsule()
-                        .strokeBorder(isSelected ? Color.clear : Self.hairlineBorder, lineWidth: 1)
+                        .strokeBorder(isSelected ? Color.clear : Color.white.opacity(0.08), lineWidth: 1)
                 )
                 .clipShape(Capsule())
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -507,14 +641,9 @@ public struct ModelAndModeSheetView: View {
         .accessibilityIdentifier(testId)
     }
 
-    // MARK: - Selection & Model Grouping Helpers
+    // MARK: - Actions & Model Grouping Helpers
 
-    private func isOptionSelected(_ option: CascadeModelConfig) -> Bool {
-        store.selectedModelConfig.modelId == option.modelId
-            || store.selectedModelConfig.displayName == option.displayName
-    }
-
-    private func selectModel(_ option: CascadeModelConfig) {
+    private func selectModelOption(_ option: CascadeModelConfig) {
         store.selectedModelConfig = CascadeModelConfig(
             modelId: option.modelId,
             displayName: option.displayName,
@@ -547,152 +676,6 @@ public struct ModelAndModeSheetView: View {
         }
     }
 
-    private static func extractEffortSuffix(from displayName: String) -> (baseName: String, tierLabel: String, sortRank: Int)? {
-        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasSuffix(")"),
-              let openRange = trimmed.range(of: " (", options: .backwards) else {
-            return nil
-        }
-        let baseName = String(trimmed[..<openRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !baseName.isEmpty else { return nil }
-        let suffixStart = openRange.upperBound
-        let suffixEnd = trimmed.index(before: trimmed.endIndex)
-        guard suffixStart < suffixEnd else { return nil }
-        let rawTier = String(trimmed[suffixStart..<suffixEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-        switch rawTier.lowercased() {
-        case "minimal":
-            return (baseName, "Minimal", 0)
-        case "low":
-            return (baseName, "Low", 1)
-        case "medium", "med":
-            return (baseName, "Medium", 2)
-        case "high":
-            return (baseName, "High", 3)
-        case "xhigh", "x-high", "extra high":
-            return (baseName, "XHigh", 4)
-        case "max":
-            return (baseName, "Max", 5)
-        default:
-            return nil
-        }
-    }
-
-    private static func buildModelGroups(from models: [CascadeModelConfig]) -> [ModelDisplayGroup] {
-        var bucketByKey: [String: (baseName: String, variants: [ModelVariantEntry])] = [:]
-        for (idx, model) in models.enumerated() {
-            guard let parsed = extractEffortSuffix(from: model.displayName) else { continue }
-            let key = parsed.baseName.lowercased()
-            let entry = ModelVariantEntry(
-                id: model.modelId,
-                tierLabel: parsed.tierLabel,
-                sortRank: parsed.sortRank,
-                config: model,
-                originalIndex: idx
-            )
-            if var existing = bucketByKey[key] {
-                existing.variants.append(entry)
-                bucketByKey[key] = existing
-            } else {
-                bucketByKey[key] = (baseName: parsed.baseName, variants: [entry])
-            }
-        }
-
-        let groupableKeys = Set(
-            bucketByKey.compactMap { key, bucket -> String? in
-                guard bucket.variants.count >= 2 else { return nil }
-                let distinctTiers = Set(bucket.variants.map(\.tierLabel))
-                return distinctTiers.count == bucket.variants.count ? key : nil
-            }
-        )
-
-        var emittedGroupKeys = Set<String>()
-        var result: [ModelDisplayGroup] = []
-
-        for (idx, model) in models.enumerated() {
-            if let parsed = extractEffortSuffix(from: model.displayName) {
-                let key = parsed.baseName.lowercased()
-                if groupableKeys.contains(key) {
-                    if emittedGroupKeys.contains(key) { continue }
-                    emittedGroupKeys.insert(key)
-                    if let bucket = bucketByKey[key] {
-                        let sortedVariants = bucket.variants.sorted { lhs, rhs in
-                            if lhs.sortRank != rhs.sortRank { return lhs.sortRank < rhs.sortRank }
-                            return lhs.originalIndex < rhs.originalIndex
-                        }
-                        result.append(
-                            ModelDisplayGroup(
-                                id: "group-\(key)",
-                                baseName: bucket.baseName,
-                                variants: sortedVariants,
-                                firstOriginalIndex: idx
-                            )
-                        )
-                    }
-                    continue
-                }
-            }
-
-            result.append(
-                ModelDisplayGroup(
-                    id: model.modelId,
-                    baseName: model.displayName,
-                    variants: [
-                        ModelVariantEntry(
-                            id: model.modelId,
-                            tierLabel: "",
-                            sortRank: 0,
-                            config: model,
-                            originalIndex: idx
-                        )
-                    ],
-                    firstOriginalIndex: idx
-                )
-            )
-        }
-
-        return result
-    }
-
-    private static func cleanedRowTitle(for group: ModelDisplayGroup, activeOption: CascadeModelConfig) -> String {
-        let raw = (group.isMultiTier ? group.baseName : activeOption.displayName)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard activeOption.hasThinkingBadge else { return raw }
-        if let range = raw.range(of: " (Thinking)", options: [.caseInsensitive, .anchored, .backwards]) {
-            let trimmed = String(raw[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-        return raw
-    }
-
-    private static func resolvedBadgeTitle(for option: CascadeModelConfig) -> String? {
-        if let explicit = option.badgeTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
-            return explicit
-        }
-        let sub = option.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if CascadeModelConfig.isGenericBadgeLabel(sub) {
-            return sub
-        }
-        return nil
-    }
-
-    private static func resolvedSubtitle(for option: CascadeModelConfig) -> String {
-        let sub = option.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if sub.isEmpty || CascadeModelConfig.isGenericBadgeLabel(sub) {
-            return CascadeModelConfig.descriptiveSubtitle(forModelLabel: option.displayName)
-        }
-        return sub
-    }
-
-    private static func groupAccessibilityId(for group: ModelDisplayGroup) -> String {
-        let slug = group.baseName
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "-")
-        return "model-group-\(slug)"
-    }
-
     private static func accessibilityId(for option: CascadeModelConfig, index: Int) -> String {
         let lower = option.displayName.lowercased()
         if option.modelId == "gemini-3-1-pro" || (index == 0 && lower.contains("gemini") && lower.contains("pro")) {
@@ -709,64 +692,136 @@ public struct ModelAndModeSheetView: View {
         }
         return "model-row-\(option.modelId)"
     }
-}
 
-/// Compact flow layout that wraps agent persona pills naturally across rows without clipping.
-private struct FlowPillLayout: Layout {
-    var horizontalSpacing: CGFloat = 8
-    var verticalSpacing: CGFloat = 6
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
-        var currentX: CGFloat = 0
-        var currentY: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var maxRowWidth: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if currentX > 0 && currentX + size.width > maxWidth {
-                currentY += rowHeight + verticalSpacing
-                currentX = 0
-                rowHeight = 0
-            }
-            rowHeight = max(rowHeight, size.height)
-            currentX += size.width
-            maxRowWidth = max(maxRowWidth, currentX)
-            currentX += horizontalSpacing
+    private static func parseEffortSuffix(from displayName: String) -> (baseName: String, effortLabel: String, rank: Int)? {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasSuffix(")"), let openIdx = trimmed.lastIndex(of: "(") else {
+            return nil
         }
+        let insideStart = trimmed.index(after: openIdx)
+        let insideEnd = trimmed.index(before: trimmed.endIndex)
+        guard insideStart < insideEnd else { return nil }
+        let token = trimmed[insideStart..<insideEnd]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let base = trimmed[..<openIdx].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return nil }
 
-        let resolvedWidth = proposal.width ?? maxRowWidth
-        return CGSize(width: resolvedWidth, height: currentY + rowHeight)
+        switch token {
+        case "minimal":
+            return (base, "Minimal", 0)
+        case "low":
+            return (base, "Low", 1)
+        case "med", "medium":
+            return (base, "Medium", 2)
+        case "high":
+            return (base, "High", 3)
+        case "xhigh", "x-high", "extra", "extra high":
+            return (base, "XHigh", 4)
+        case "max":
+            return (base, "Max", 5)
+        default:
+            return nil
+        }
     }
 
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        var currentX = bounds.minX
-        var currentY = bounds.minY
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if currentX > bounds.minX && currentX + size.width > bounds.maxX {
-                currentY += rowHeight + verticalSpacing
-                currentX = bounds.minX
-                rowHeight = 0
-            }
-            subview.place(
-                at: CGPoint(x: currentX, y: currentY),
-                proposal: ProposedViewSize(size)
-            )
-            rowHeight = max(rowHeight, size.height)
-            currentX += size.width + horizontalSpacing
+    private static func cleanedSingleTitle(for option: CascadeModelConfig) -> (title: String, effortBadge: String?) {
+        let trimmed = option.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = parseEffortSuffix(from: trimmed) {
+            return (parsed.baseName, parsed.effortLabel)
         }
+        if option.hasThinkingBadge, trimmed.lowercased().hasSuffix(" (thinking)") {
+            return (String(trimmed.dropLast(" (thinking)".count)), nil)
+        }
+        return (trimmed, nil)
+    }
+
+    private static func buildModelGroups(from models: [CascadeModelConfig]) -> [ModelFamilyGroup] {
+        var familyOrder: [String] = []
+        var familyEntries: [String: [(index: Int, option: CascadeModelConfig, effortLabel: String, rank: Int)]] = [:]
+
+        for (idx, option) in models.enumerated() {
+            if let parsed = parseEffortSuffix(from: option.displayName) {
+                if familyEntries[parsed.baseName] == nil {
+                    familyOrder.append(parsed.baseName)
+                }
+                familyEntries[parsed.baseName, default: []].append(
+                    (index: idx, option: option, effortLabel: parsed.effortLabel, rank: parsed.rank)
+                )
+            }
+        }
+
+        var mergeableFamilies: Set<String> = []
+        for baseName in familyOrder {
+            if let entries = familyEntries[baseName], entries.count >= 2 {
+                let uniqueLabels = Set(entries.map(\.effortLabel))
+                if uniqueLabels.count == entries.count {
+                    mergeableFamilies.insert(baseName)
+                }
+            }
+        }
+
+        var groups: [ModelFamilyGroup] = []
+        var emittedFamilies: Set<String> = []
+
+        for (idx, option) in models.enumerated() {
+            if let parsed = parseEffortSuffix(from: option.displayName),
+               mergeableFamilies.contains(parsed.baseName) {
+                guard !emittedFamilies.contains(parsed.baseName),
+                      let entries = familyEntries[parsed.baseName] else {
+                    continue
+                }
+                emittedFamilies.insert(parsed.baseName)
+                let sortedVariants = entries
+                    .sorted { $0.rank < $1.rank }
+                    .map { ModelEffortVariant(option: $0.option, effortLabel: $0.effortLabel, effortRank: $0.rank) }
+                groups.append(
+                    ModelFamilyGroup(
+                        id: "family:\(parsed.baseName)",
+                        familyName: parsed.baseName,
+                        variants: sortedVariants,
+                        singleOption: nil,
+                        singleEffortBadge: nil,
+                        preferredOption: entries[0].option,
+                        firstIndex: entries[0].index
+                    )
+                )
+            } else {
+                let cleaned = cleanedSingleTitle(for: option)
+                groups.append(
+                    ModelFamilyGroup(
+                        id: "single:\(option.modelId)",
+                        familyName: cleaned.title,
+                        variants: [],
+                        singleOption: option,
+                        singleEffortBadge: cleaned.effortBadge,
+                        preferredOption: option,
+                        firstIndex: idx
+                    )
+                )
+            }
+        }
+
+        return groups
+    }
+
+    private static func effectiveBadgeTitle(for option: CascadeModelConfig) -> String? {
+        if let badge = option.badgeTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !badge.isEmpty {
+            return badge
+        }
+        let rawSub = option.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if CascadeModelConfig.isGenericBadgeLabel(rawSub) {
+            return rawSub
+        }
+        return nil
+    }
+
+    private static func effectiveSubtitle(for option: CascadeModelConfig) -> String {
+        let raw = option.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchesTag = option.badgeTitle.map { raw.caseInsensitiveCompare($0) == .orderedSame } ?? false
+        if raw.isEmpty || matchesTag || CascadeModelConfig.isGenericBadgeLabel(raw) {
+            return CascadeModelConfig.descriptiveSubtitle(forModelLabel: option.displayName)
+        }
+        return raw
     }
 }

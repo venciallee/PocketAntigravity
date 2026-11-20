@@ -2321,8 +2321,9 @@ public actor AntigravityRPCClient {
         return clientCid
     }
 
-    /// Sends a user prompt + `@file` context items + model/mode config (`SendUserCascadeMessage`).
-    /// Encodes `Planning` vs `Fast` via `conversational.agenticMode` (`CONVERSATIONAL_PLANNER_MODE_DEFAULT`)
+    /// Sends a user prompt + `@file` context items + model/mode/permission config (`SendUserCascadeMessage`).
+    /// Encodes `Planning` vs `Fast` via `conversational.agenticMode` (`CONVERSATIONAL_PLANNER_MODE_DEFAULT`),
+    /// applies the selected `AgentPermissionPreset` via `plannerConfig.toolConfig`,
     /// and sets `planModel` alongside `requestedModel` for Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) sessions.
     public func sendUserCascadeMessage(
         cascadeId: String,
@@ -2334,6 +2335,7 @@ public actor AntigravityRPCClient {
         agentPersona: String = "Default",
         isModelAlias: Bool = false,
         isCloud: Bool = false,
+        permissionPreset: AgentPermissionPreset? = nil,
         instanceUuidOverride: String? = nil
     ) async throws {
         var items: [JSONValue] = [.object(["text": .string(message)])]
@@ -2355,11 +2357,43 @@ public actor AntigravityRPCClient {
             ? .object(["alias": .string(modelId)])
             : .object(["model": .string(protoModel)])
 
+        let effectivePermission = permissionPreset ?? AgentPermissionPreset.defaultPreset(isRemote: isCloud || cascadeId.hasPrefix("v1/"))
+        var toolConfig: [String: JSONValue] = [
+            "code": .object(["allowEditGitignore": .bool(true)]),
+            "viewFile": .object(["allowViewGitignore": .bool(true)]),
+            "grep": .object(["allowAccessGitignore": .bool(true)])
+        ]
+        switch effectivePermission {
+        case .requestReview:
+            toolConfig["runCommand"] = .object([
+                "autoCommandConfig": .object([
+                    "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_OFF")
+                ])
+            ])
+            toolConfig["notifyUser"] = .object([
+                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_ALWAYS")
+            ])
+        case .defaultPolicy, .auto:
+            toolConfig["notifyUser"] = .object([
+                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_AUTO")
+            ])
+        case .turbo:
+            toolConfig["runCommand"] = .object([
+                "autoCommandConfig": .object([
+                    "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_EAGER")
+                ])
+            ])
+            toolConfig["notifyUser"] = .object([
+                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_TURBO")
+            ])
+        }
+
         var plannerConfig: [String: JSONValue] = [
             "conversational": .object([
                 "plannerMode": .string("CONVERSATIONAL_PLANNER_MODE_DEFAULT"),
                 "agenticMode": .bool(mode == .planning)
             ]),
+            "toolConfig": .object(toolConfig),
             "requestedModel": requestedModelPayload
         ]
         if (isCloud || cascadeId.hasPrefix("v1/")) && !isModelAlias && protoModel.hasPrefix("MODEL_") {
@@ -2383,7 +2417,8 @@ public actor AntigravityRPCClient {
                     "modelId": .string(modelId),
                     "thinkingEffort": .string(effort.rawValue.uppercased()),
                     "mode": .string(mode.rawValue.uppercased()),
-                    "agentPersona": .string(agentPersona)
+                    "agentPersona": .string(agentPersona),
+                    "permissionPreset": .string(effectivePermission.rawValue)
                 ])
             ],
             instanceUuidOverride: instanceUuidOverride,

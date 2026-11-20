@@ -1615,6 +1615,38 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertNil(legacyDecoded.badgeTitle)
         XCTAssertEqual(legacyDecoded.displayName, "Gemini 4 Neon (Low)")
     }
+
+    @MainActor
+    func testAgentPermissionPresetsAndStoreRuntimeIsolation() {
+        XCTAssertEqual(
+            AgentPermissionPreset.availablePresets(isRemote: true),
+            [.requestReview, .defaultPolicy, .turbo]
+        )
+        XCTAssertEqual(
+            AgentPermissionPreset.availablePresets(isRemote: false),
+            [.requestReview, .defaultPolicy, .auto, .turbo]
+        )
+        XCTAssertEqual(AgentPermissionPreset.defaultPreset(isRemote: true), .turbo)
+        XCTAssertEqual(AgentPermissionPreset.defaultPreset(isRemote: false), .defaultPolicy)
+
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        // Verification store defaults to local MacBook Pro (`cas-rate-limiter`)
+        XCTAssertFalse(store.isActiveSessionCloud)
+        XCTAssertEqual(store.activePermissionPreset, .defaultPolicy)
+
+        store.setActivePermissionPreset(.requestReview)
+        XCTAssertEqual(store.localPermissionPreset, .requestReview)
+        XCTAssertEqual(store.remotePermissionPreset, .turbo)
+
+        // Switching to a Cloud/Remote session exposes isolated Remote Permissions (default Turbo)
+        store.activeCascadeId = "v1/default/jetski_remote_agents_3p/demo-cloud-session"
+        XCTAssertTrue(store.isActiveSessionCloud)
+        XCTAssertEqual(store.activePermissionPreset, .turbo)
+
+        store.setActivePermissionPreset(.defaultPolicy)
+        XCTAssertEqual(store.remotePermissionPreset, .defaultPolicy)
+        XCTAssertEqual(store.localPermissionPreset, .requestReview)
+    }
 }
 
 private extension AntigravitySessionStore {
