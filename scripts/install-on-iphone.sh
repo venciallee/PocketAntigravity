@@ -118,9 +118,11 @@ if [[ "$DEVICE_REPORT" == READY\|* ]]; then
 fi
 
 # 2. Build ordered list of Signing Plans: (TEAM_ID, BUNDLE_PREFIX, REASON)
+#    - Auto-reads Xcode Accounts (`IDEProvisioningTeams` / `IDEProvisioningTeamByIdentifier`) via live `defaults export`
+#      and prioritizes your Personal Team (`isFreeProvisioningTeam` / `(Personal Team)`) FIRST!
+#    - Prevents corporate Keychain-only certs (e.g. `CG2SCM6AV5` with no Xcode Account) from blocking Personal Team signing.
 #    - Avoids shared corporate username collisions (e.g. `id -un == bytedance` -> `com.bytedance.*` rejected by Personal Team)
-#    - Reuses cached unexpired wildcard/exact `.mobileprovision` profiles covering DEVICE_UDID (works even offline!)
-#    - Tries all unlocked `Apple Development` / `iPhone Developer` identities in Keychain (active teams with valid profiles first)
+#    - Reuses cached unexpired exact/wildcard `.mobileprovision` profiles covering DEVICE_UDID when available.
 PROBE_UDID=""
 if [[ -n "$DEVICE_LINE" ]]; then
   IFS='|' read -r PROBE_UDID _ _ _ <<< "$DEVICE_LINE"
@@ -162,7 +164,93 @@ if env_team and env_prefix:
     print(f"{env_team}|{env_prefix}|explicit TEAM_ID & BUNDLE_PREFIX")
     sys.exit(0)
 
-# Enumerate unlocked codesigning Team IDs from Keychain (Apple Development / iPhone Developer first)
+# 2a. Read signed-in Xcode Accounts & Personal Teams from live cfprefsd (`defaults export`) or Xcode plist
+xcode_prefs = {}
+try:
+    raw_plist = subprocess.check_output(
+        ["defaults", "export", "com.apple.dt.Xcode", "-"],
+        stderr=subprocess.DEVNULL,
+    )
+    if raw_plist:
+        xcode_prefs = plistlib.loads(raw_plist)
+except Exception:
+    pass
+
+if not xcode_prefs:
+    plist_path = Path.home() / "Library/Preferences/com.apple.dt.Xcode.plist"
+    if plist_path.is_file():
+        try:
+            xcode_prefs = plistlib.loads(plist_path.read_bytes())
+        except Exception:
+            xcode_prefs = {}
+
+active_apple_ids = set()
+raw_accounts = xcode_prefs.get("DVTDeveloperAccountManagerAppleIDAccounts")
+if isinstance(raw_accounts, list):
+    for acc in raw_accounts:
+        if isinstance(acc, dict):
+            uname = str(acc.get("username") or acc.get("accountName") or "").strip().lower()
+            if uname:
+                active_apple_ids.add(uname)
+
+team_meta = {}  # tid -> {"name": str, "is_personal": bool, "active_account": bool, "account": str}
+
+def record_xcode_team(entry: dict, account_key: str = ""):
+    if not isinstance(entry, dict):
+        return
+    tid = str(entry.get("teamID") or entry.get("teamId") or entry.get("identifier") or "").strip()
+    if not re.fullmatch(r"[A-Z0-9]{10}", tid):
+        return
+    if env_team and tid != env_team:
+        return
+    tname = str(entry.get("teamName") or entry.get("name") or "").strip()
+    ttype = str(entry.get("teamType") or "").strip().lower()
+    is_free = bool(entry.get("isFreeProvisioningTeam"))
+    is_personal = is_free or ("personal" in tname.lower()) or (ttype in ("personal", "free"))
+    acct_norm = str(account_key or "").strip().lower()
+    is_active = (not active_apple_ids) or (not acct_norm) or (acct_norm in active_apple_ids)
+
+    prev = team_meta.get(tid)
+    if prev is None:
+        team_meta[tid] = {
+            "name": tname,
+            "is_personal": is_personal,
+            "active_account": is_active,
+            "account": str(account_key or "").strip(),
+        }
+    else:
+        prev["is_personal"] = prev["is_personal"] or is_personal
+        prev["active_account"] = prev["active_account"] or is_active
+        if tname and not prev["name"]:
+            prev["name"] = tname
+        if account_key and not prev["account"]:
+            prev["account"] = str(account_key).strip()
+
+def walk_xcode_teams(obj, account_hint: str = ""):
+    if isinstance(obj, dict):
+        if any(k in obj for k in ("teamID", "teamId")):
+            record_xcode_team(obj, account_hint)
+        for k, v in obj.items():
+            ks = str(k)
+            next_hint = ks if "@" in ks else account_hint
+            if isinstance(v, dict) and re.fullmatch(r"[A-Z0-9]{10}", ks) and any(
+                fld in v for fld in ("teamName", "name", "isFreeProvisioningTeam", "teamType")
+            ):
+                merged = dict(v)
+                merged.setdefault("teamID", ks)
+                record_xcode_team(merged, next_hint)
+            else:
+                walk_xcode_teams(v, next_hint)
+    elif isinstance(obj, list):
+        for item in obj:
+            walk_xcode_teams(item, account_hint)
+
+for pref_key, pref_val in xcode_prefs.items():
+    ks = str(pref_key)
+    if ks.startswith("IDEProvisioning") or ks.startswith("DVTDeveloperAccount"):
+        walk_xcode_teams(pref_val, "")
+
+# 2b. Enumerate unlocked codesigning Team IDs from Keychain (Apple Development / iPhone Developer first)
 dev_teams = []
 other_teams = []
 try:
@@ -185,20 +273,14 @@ try:
 except Exception:
     pass
 
-all_teams = [env_team] if (env_team and env_team not in dev_teams + other_teams) else (dev_teams + other_teams)
-if not all_teams:
-    sys.exit(0)
-
-# Inspect local cached Provisioning Profiles (Xcode 16/26/27 UserData + Legacy MobileDevice)
+# 2c. Inspect local cached Provisioning Profiles (Xcode 16/26/27 UserData + Legacy MobileDevice)
+#     Also captures Personal Team IDs from cached profile `TeamName` (`(Personal Team)`) even if plist schema changed.
 profile_dirs = [
     Path.home() / "Library/Developer/Xcode/UserData/Provisioning Profiles",
     Path.home() / "Library/MobileDevice/Provisioning Profiles",
 ]
 now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-team_active_profile_count = {t: 0 for t in all_teams}
-exact_prefixes_by_team = {}  # (team, prefix) -> set of matched suffixes (.app, .app.LiveActivity, .app.Share)
-wildcard_plans = []
-
+parsed_profiles = []
 for pdir in profile_dirs:
     if not pdir.is_dir():
         continue
@@ -212,51 +294,84 @@ for pdir in profile_dirs:
             pl = plistlib.loads(raw[s : e + len(b"</plist>")])
         except Exception:
             continue
-
-        exp = pl.get("ExpirationDate")
-        if isinstance(exp, datetime):
-            exp_naive = exp.astimezone(timezone.utc).replace(tzinfo=None) if exp.tzinfo else exp
-            if exp_naive <= now_utc:
-                continue
-
         tids = pl.get("TeamIdentifier") or []
         tid = str(tids[0]).strip() if tids else ""
-        if tid not in all_teams:
+        if not re.fullmatch(r"[A-Z0-9]{10}", tid):
+            continue
+        if env_team and tid != env_team:
+            continue
+        tname = str(pl.get("TeamName") or "").strip()
+        if "personal" in tname.lower():
+            record_xcode_team({"teamID": tid, "teamName": tname, "isFreeProvisioningTeam": True}, "")
+        parsed_profiles.append((tid, pl))
+
+xcode_personal_teams = sorted(
+    [tid for tid, info in team_meta.items() if info["is_personal"]],
+    key=lambda t: (0 if team_meta[t]["active_account"] else 1, t),
+)
+xcode_other_account_teams = sorted(
+    [tid for tid, info in team_meta.items() if not info["is_personal"]],
+    key=lambda t: (0 if team_meta[t]["active_account"] else 1, t),
+)
+xcode_account_team_set = set(xcode_personal_teams) | set(xcode_other_account_teams)
+keychain_only_teams = [t for t in (dev_teams + other_teams) if t not in xcode_account_team_set]
+
+all_teams = []
+for tid in (xcode_personal_teams + xcode_other_account_teams + keychain_only_teams):
+    if tid not in all_teams:
+        all_teams.append(tid)
+if env_team and env_team not in all_teams:
+    all_teams = [env_team]
+if not all_teams:
+    sys.exit(0)
+
+team_active_profile_count = {t: 0 for t in all_teams}
+exact_prefixes_by_team = {}  # (team, prefix) -> set of matched suffixes (.app, .app.LiveActivity, .app.Share)
+wildcard_plans_by_team = {}  # team -> list[(rank, cand_prefix, reason)]
+
+for tid, pl in parsed_profiles:
+    if tid not in all_teams:
+        continue
+
+    exp = pl.get("ExpirationDate")
+    if isinstance(exp, datetime):
+        exp_naive = exp.astimezone(timezone.utc).replace(tzinfo=None) if exp.tzinfo else exp
+        if exp_naive <= now_utc:
             continue
 
-        ent = pl.get("Entitlements") or {}
-        # Only Development profiles (`get-task-allow == True`) can sign Debug iphoneos builds
-        if ent.get("get-task-allow") is not True:
-            continue
+    ent = pl.get("Entitlements") or {}
+    # Only Development profiles (`get-task-allow == True`) can sign Debug iphoneos builds
+    if ent.get("get-task-allow") is not True:
+        continue
 
-        team_active_profile_count[tid] = team_active_profile_count.get(tid, 0) + 1
+    team_active_profile_count[tid] = team_active_profile_count.get(tid, 0) + 1
 
-        prov_devs = [str(d).strip().lower() for d in (pl.get("ProvisionedDevices") or [])]
-        if device_udid and device_udid.lower() not in prov_devs:
-            continue
+    prov_devs = [str(d).strip().lower() for d in (pl.get("ProvisionedDevices") or [])]
+    if device_udid and device_udid.lower() not in prov_devs:
+        continue
 
-        app_id = str(ent.get("application-identifier") or "")
-        if not app_id.startswith(f"{tid}."):
-            continue
-        pattern = app_id[len(tid) + 1 :]
+    app_id = str(ent.get("application-identifier") or "")
+    if not app_id.startswith(f"{tid}."):
+        continue
+    pattern = app_id[len(tid) + 1 :]
 
-        if pattern == "*":
-            cand_prefix = env_prefix or default_prefix
-            wildcard_plans.append((0, tid, cand_prefix, "cached '*' wildcard profile"))
-        elif pattern.endswith(".*"):
-            ns = pattern[:-2]
-            if not env_prefix:
-                cand_prefix = f"{ns}.agy{mac_hash[:6]}"
-                wildcard_plans.append((1, tid, cand_prefix, f"cached '{ns}.*' wildcard profile"))
-            elif env_prefix.startswith(ns + "."):
-                wildcard_plans.append((1, tid, env_prefix, f"cached '{ns}.*' wildcard profile"))
-        else:
-            for suffix in (".app.LiveActivity", ".app.Share", ".app"):
-                if pattern.endswith(suffix):
-                    base_p = pattern[: -len(suffix)]
-                    if not env_prefix or env_prefix == base_p:
-                        exact_prefixes_by_team.setdefault((tid, base_p), set()).add(suffix)
-                    break
+    if pattern == "*":
+        cand_prefix = env_prefix or default_prefix
+        wildcard_plans_by_team.setdefault(tid, []).append((0, cand_prefix, "cached '*' wildcard profile"))
+    elif pattern.endswith(".*"):
+        ns = pattern[:-2]
+        if not env_prefix:
+            cand_prefix = f"{ns}.agy{mac_hash[:6]}"
+            wildcard_plans_by_team.setdefault(tid, []).append((1, cand_prefix, f"cached '{ns}.*' wildcard profile"))
+        elif env_prefix.startswith(ns + "."):
+            wildcard_plans_by_team.setdefault(tid, []).append((1, env_prefix, f"cached '{ns}.*' wildcard profile"))
+    else:
+        for suffix in (".app.LiveActivity", ".app.Share", ".app"):
+            if pattern.endswith(suffix):
+                base_p = pattern[: -len(suffix)]
+                if not env_prefix or env_prefix == base_p:
+                    exact_prefixes_by_team.setdefault((tid, base_p), set()).add(suffix)
+                break
 
 plans = []
 seen = set()
@@ -266,23 +381,46 @@ def add_plan(t: str, p: str, reason: str):
         seen.add((t, p))
         plans.append((t, p, reason))
 
-# 1. Exact cached profile triples covering all 3 targets (.app + .LiveActivity + .Share)
-for (tid, base_p), suffixes in exact_prefixes_by_team.items():
-    if {".app", ".app.LiveActivity", ".app.Share"}.issubset(suffixes):
-        add_plan(tid, base_p, "cached exact provisioning profiles")
+def describe_team(tid: str, fallback: str) -> str:
+    info = team_meta.get(tid)
+    if info and info.get("name"):
+        return f"{fallback} · {info['name']}"
+    return fallback
 
-# 2. Cached wildcard profiles covering DEVICE_UDID (works 100% offline without Xcode account login!)
-wildcard_plans.sort(key=lambda item: item[0])
-for _, tid, cand_p, reason in wildcard_plans:
-    add_plan(tid, cand_p, reason)
+def enqueue_team_plans(tid: str, tier_label: str):
+    # Exact cached 3-target profiles for this team first
+    for (t, base_p), suffixes in exact_prefixes_by_team.items():
+        if t == tid and {".app", ".app.LiveActivity", ".app.Share"}.issubset(suffixes):
+            add_plan(tid, base_p, describe_team(tid, f"{tier_label} · cached exact profiles"))
+    # Wildcard profiles for this team
+    for _, cand_p, reason in sorted(wildcard_plans_by_team.get(tid, []), key=lambda x: x[0]):
+        add_plan(tid, cand_p, describe_team(tid, f"{tier_label} · {reason}"))
+    # Automatic signing with unique per-Mac prefix
+    add_plan(tid, default_prefix, describe_team(tid, f"{tier_label} · Automatic Signing"))
 
-# 3. Automatic signing across all unlocked Development teams (prioritize teams with active local profiles)
-sorted_teams = sorted(
-    all_teams,
+# Priority 1: Signed-in Xcode Personal Teams (auto-read from Xcode Accounts — avoids corporate Keychain collisions!)
+for tid in xcode_personal_teams:
+    enqueue_team_plans(tid, "Xcode Personal Team")
+
+# Priority 2: Other signed-in Xcode Account Teams (paid Individual / Organization accounts)
+sorted_other_xcode = sorted(
+    xcode_other_account_teams,
+    key=lambda t: (0 if team_meta[t]["active_account"] else 1, -team_active_profile_count.get(t, 0), t),
+)
+for tid in sorted_other_xcode:
+    enqueue_team_plans(tid, "Xcode Account Team")
+
+# Priority 3: Keychain-only Teams without an active Xcode Account (last-resort offline fallback)
+sorted_keychain_only = sorted(
+    keychain_only_teams,
     key=lambda t: (0 if t in dev_teams else 1, -team_active_profile_count.get(t, 0)),
 )
-for tid in sorted_teams:
-    add_plan(tid, default_prefix, "Xcode Automatic Signing")
+for tid in sorted_keychain_only:
+    enqueue_team_plans(tid, "Keychain-only Team")
+
+# Explicit TEAM_ID override if not already in the discovered lists
+if env_team and env_team not in (xcode_personal_teams + xcode_other_account_teams + keychain_only_teams):
+    enqueue_team_plans(env_team, "Explicit TEAM_ID")
 
 for tid, cand_p, reason in plans:
     print(f"{tid}|{cand_p}|{reason}")
@@ -317,9 +455,9 @@ PY
 
 FIRST_PLAN="$(head -n 1 "$SIGN_PLAN_FILE" || true)"
 if [[ -z "$FIRST_PLAN" ]]; then
-  echo "[!] No Apple Development signing certificate found in Keychain yet."
-  echo "    Opening iOSAntigravity.xcodeproj in Xcode — sign in under Xcode > Settings (Cmd+,) > Accounts,"
-  echo "    select your Team on the 'Antigravity' target, pick your iPhone, and press Cmd+R!"
+  echo "[!] 未检测到 Xcode 已登录的 Personal Team 或本地签名证书。"
+  echo "    正在打开 iOSAntigravity.xcodeproj —— 请按 Cmd + , 打开 Xcode Settings -> Accounts 登录你的 Apple ID，"
+  echo "    然后重新运行 'bash scripts/install-on-iphone.sh'（脚本将自动读取你的 Personal Team），或在 Xcode 顶部选你的 iPhone 按 Cmd + R。"
   open iOSAntigravity.xcodeproj
   if [[ "$WITH_BRIDGE" -eq 1 ]]; then
     exec python3 -u scripts/mac-companion-bridge.py
@@ -327,7 +465,9 @@ if [[ -z "$FIRST_PLAN" ]]; then
   exit 0
 fi
 
-IFS='|' read -r TEAM_ID BUNDLE_PREFIX _ <<< "$FIRST_PLAN"
+IFS='|' read -r FIRST_TEAM_ID FIRST_BUNDLE_PREFIX _ <<< "$FIRST_PLAN"
+TEAM_ID="$FIRST_TEAM_ID"
+BUNDLE_PREFIX="$FIRST_BUNDLE_PREFIX"
 apply_xcodeproj_signing_defaults "$TEAM_ID" "$BUNDLE_PREFIX"
 
 if [[ -z "$DEVICE_LINE" ]]; then
@@ -353,6 +493,7 @@ echo "[+] Detected Physical iPhone: ${DEVICE_NAME} (UDID=${DEVICE_UDID}, via=${D
 mkdir -p "$ROOT_DIR/.build"
 DERIVED_DATA="$ROOT_DIR/.build/DerivedDataDevice"
 BUILD_LOG="$ROOT_DIR/.build/xcodebuild-device.log"
+ATTEMPT_LOG="$ROOT_DIR/.build/xcodebuild-attempt.log"
 
 : >"$BUILD_LOG"
 BUILD_SUCCEEDED=0
@@ -363,6 +504,7 @@ while IFS='|' read -r -u 3 CAND_TEAM CAND_PREFIX CAND_REASON; do
   apply_xcodeproj_signing_defaults "$TEAM_ID" "$BUNDLE_PREFIX"
   echo "[*] Trying Team ${TEAM_ID} · Bundle ${BUNDLE_PREFIX}.app (${CAND_REASON})..."
 
+  : >"$ATTEMPT_LOG"
   if xcodebuild \
     -project iOSAntigravity.xcodeproj \
     -scheme Antigravity \
@@ -373,23 +515,51 @@ while IFS='|' read -r -u 3 CAND_TEAM CAND_PREFIX CAND_REASON; do
     -allowProvisioningUpdates \
     DEVELOPMENT_TEAM="$TEAM_ID" \
     ANTIGRAVITY_BUNDLE_PREFIX="$BUNDLE_PREFIX" \
-    build </dev/null >>"$BUILD_LOG" 2>&1; then
+    build </dev/null >"$ATTEMPT_LOG" 2>&1; then
+    cat "$ATTEMPT_LOG" >>"$BUILD_LOG"
     BUILD_SUCCEEDED=1
     break
   else
-    echo "    [x] Signing/build attempt with Team ${TEAM_ID} (${BUNDLE_PREFIX}.app) did not succeed."
+    cat "$ATTEMPT_LOG" >>"$BUILD_LOG"
+    FIRST_ERR="$(grep -m 1 -E "error: " "$ATTEMPT_LOG" | sed 's/.*error: //' || true)"
+    if [[ -n "$FIRST_ERR" ]]; then
+      echo "    [x] Team ${TEAM_ID} (${BUNDLE_PREFIX}.app) failed: ${FIRST_ERR}"
+    else
+      echo "    [x] Signing/build attempt with Team ${TEAM_ID} (${BUNDLE_PREFIX}.app) did not succeed."
+    fi
   fi
 done 3< "$SIGN_PLAN_FILE"
+rm -f "$ATTEMPT_LOG"
 
 if [[ "$BUILD_SUCCEEDED" -ne 1 ]]; then
+  # Restore top-priority team (e.g. Xcode Personal Team) in project.pbxproj before opening Xcode
+  apply_xcodeproj_signing_defaults "$FIRST_TEAM_ID" "$FIRST_BUNDLE_PREFIX"
   echo ""
   EXPIRED_ACCOUNT="$(sed -n "s/.*Unable to log in with account '\([^']*\)'.*/\1/p" "$BUILD_LOG" | head -n 1 || true)"
   if [[ -n "$EXPIRED_ACCOUNT" ]]; then
     echo "[!] Xcode Apple ID 登录会话已过期 (${EXPIRED_ACCOUNT})，无法自动向 Apple 申请真机描述文件。"
-    echo "    工程已自动预填唯一 Bundle ID (${BUNDLE_PREFIX}.app) 与 Team (${TEAM_ID})，只需两步即可恢复："
+    echo "    工程已自动预填唯一 Bundle ID (${FIRST_BUNDLE_PREFIX}.app) 与 Team (${FIRST_TEAM_ID})，只需两步即可恢复："
     echo "      1. 在即将弹出的 Xcode 中按 Cmd + , 打开 Settings -> Accounts"
     echo "      2. 选中 '${EXPIRED_ACCOUNT}'，点击 'Sign In Again' 重新输入 Apple ID 密码完成登录"
     echo "      3. 重新执行: bash scripts/install-on-iphone.sh （或直接在 Xcode 顶部选中 ${DEVICE_NAME} 按 Cmd + R）"
+    open iOSAntigravity.xcodeproj
+    exit 1
+  fi
+
+  if grep -qE "maximum number of App IDs|App ID limit|cannot be registered to your development team" "$BUILD_LOG"; then
+    echo "[!] 免费 Personal Team 的 7 天 App ID 配额受限或 Bundle ID 冲突。"
+    echo "    请换一个未占用的自定义前缀重试，例如："
+    echo "      BUNDLE_PREFIX=io.agy.personal1 bash scripts/install-on-iphone.sh"
+    exit 1
+  fi
+
+  MISSING_TEAM="$(sed -n 's/.*No Account for Team "\([^"]*\)".*/\1/p' "$BUILD_LOG" | head -n 1 || true)"
+  if [[ -n "$MISSING_TEAM" ]]; then
+    echo "[!] Xcode Accounts 中未登录 Team '${MISSING_TEAM}' 对应的 Apple ID（也未找到可用的 Personal Team 登录态）。"
+    echo "    请按以下步骤登录你的个人 Apple ID（Personal Team）："
+    echo "      1. 在即将弹出的 Xcode 中按 Cmd + , 打开 Settings -> Accounts -> 左下角 '+' -> Apple Account"
+    echo "      2. 登录你的个人 Apple ID 后等待 Personal Team 出现"
+    echo "      3. 回到终端重新执行: bash scripts/install-on-iphone.sh（脚本会自动读取并优先使用你的 Personal Team）"
     open iOSAntigravity.xcodeproj
     exit 1
   fi
