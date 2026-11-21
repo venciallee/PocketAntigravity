@@ -6,6 +6,10 @@ public enum ArtifactKind: String, Codable, Sendable {
     case taskList
     case generativeUIHTML
     case urlBookmark
+    case pdfDocument
+    case jupyterNotebook
+    case imageAsset
+    case videoAsset
 }
 
 /// Represents an Antigravity artifact (`GetArtifactSnapshots` / `GetRevisionArtifact`).
@@ -101,7 +105,7 @@ public struct PlanInlineComment: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-// MARK: - Multi-Turn Line-Level Diff Review Models (UE12)
+// MARK: - Multi-Turn Line-Level Diff Review Models (UE12 + Git VCS)
 
 public struct DiffLine: Codable, Sendable, Equatable, Identifiable {
     public enum Kind: String, Codable, Sendable {
@@ -150,6 +154,9 @@ public struct FilePatchDiff: Codable, Sendable, Equatable, Identifiable {
     public var deletions: Int
     public var hunkHeader: String
     public var isReviewed: Bool
+    public var statusLetter: GitFileStatusLetter
+    public var isStaged: Bool
+    public var compareScope: DiffCompareMode
     public var lines: [DiffLine]
 
     public init(
@@ -159,6 +166,9 @@ public struct FilePatchDiff: Codable, Sendable, Equatable, Identifiable {
         deletions: Int,
         hunkHeader: String = "@@ -18,9 +18,27 @@ Allow",
         isReviewed: Bool = false,
+        statusLetter: GitFileStatusLetter = .modified,
+        isStaged: Bool = false,
+        compareScope: DiffCompareMode = .turn,
         lines: [DiffLine]
     ) {
         self.turnNumber = turnNumber
@@ -167,6 +177,9 @@ public struct FilePatchDiff: Codable, Sendable, Equatable, Identifiable {
         self.deletions = deletions
         self.hunkHeader = hunkHeader
         self.isReviewed = isReviewed
+        self.statusLetter = statusLetter
+        self.isStaged = isStaged
+        self.compareScope = compareScope
         self.lines = lines
     }
 }

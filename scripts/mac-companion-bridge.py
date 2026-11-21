@@ -1487,23 +1487,132 @@ def create_bridge_server(
                 return
 
             if method == "GetTurnDiff":
+                req_obj = self._parse_json(raw_body)
+                compare_mode = str(req_obj.get("compareMode") or "Per Turn")
                 files = []
                 try:
-                    diff_out = subprocess.check_output(
-                        ["git", "diff", "--numstat"],
+                    status_out = subprocess.check_output(
+                        ["git", "status", "--porcelain"],
                         cwd=state.workspace_root,
                         text=True,
                         stderr=subprocess.DEVNULL,
                     )
-                    for row in diff_out.splitlines():
-                        parts = row.split("\t")
-                        if len(parts) == 3:
-                            add_c = int(parts[0]) if parts[0].isdigit() else 0
-                            del_c = int(parts[1]) if parts[1].isdigit() else 0
-                            files.append({"filePath": parts[2], "additions": add_c, "deletions": del_c})
+                    for row in status_out.splitlines():
+                        if len(row) < 4:
+                            continue
+                        x_flag = row[0]
+                        y_flag = row[1]
+                        file_path = row[3:].strip()
+                        if not file_path:
+                            continue
+                        is_staged = x_flag not in (" ", "?")
+                        letter = "U" if (x_flag == "?" and y_flag == "?") else (x_flag if x_flag not in (" ", "?") else y_flag)
+                        diff_args = ["git", "diff", "-U3"]
+                        if is_staged and y_flag == " ":
+                            diff_args.append("--cached")
+                        diff_args.extend(["--", file_path])
+                        try:
+                            patch_text = subprocess.check_output(
+                                diff_args,
+                                cwd=state.workspace_root,
+                                text=True,
+                                stderr=subprocess.DEVNULL,
+                            )
+                        except Exception:
+                            patch_text = ""
+                        add_c = sum(1 for l in patch_text.splitlines() if l.startswith("+") and not l.startswith("+++"))
+                        del_c = sum(1 for l in patch_text.splitlines() if l.startswith("-") and not l.startswith("---"))
+                        files.append(
+                            {
+                                "turnNumber": req_obj.get("turnNumber") or 1,
+                                "filePath": file_path,
+                                "additions": add_c,
+                                "deletions": del_c,
+                                "statusLetter": letter if letter in ("M", "A", "U", "D", "R") else "M",
+                                "isStaged": is_staged,
+                                "compareScope": compare_mode,
+                                "patch": patch_text,
+                            }
+                        )
                 except Exception:
                     pass
-                self._write_json(200, {"files": files})
+                self._write_json(200, {"files": files, "compareMode": compare_mode})
+                return
+
+            if method in ("GitStageFile", "GitUnstageFile", "GitDiscardFile"):
+                req_obj = self._parse_json(raw_body)
+                rel_path = str(req_obj.get("filePath") or "").strip()
+                if not rel_path or rel_path.startswith("/") or ".." in Path(rel_path).parts:
+                    self._write_json(400, {"ok": False, "error": "Invalid workspace-relative filePath"})
+                    return
+                cmd_map = {
+                    "GitStageFile": ["git", "add", "--", rel_path],
+                    "GitUnstageFile": ["git", "reset", "HEAD", "--", rel_path],
+                    "GitDiscardFile": ["git", "checkout", "--", rel_path],
+                }
+                try:
+                    subprocess.check_call(cmd_map[method], cwd=state.workspace_root, stderr=subprocess.DEVNULL)
+                    self._write_json(200, {"ok": True, "filePath": rel_path})
+                except Exception as exc:
+                    self._write_json(500, {"ok": False, "error": str(exc)})
+                return
+
+            if method == "GitCommit":
+                req_obj = self._parse_json(raw_body)
+                msg = str(req_obj.get("message") or "").strip()
+                if not msg:
+                    self._write_json(400, {"ok": False, "error": "Commit message is required"})
+                    return
+                try:
+                    if req_obj.get("includeUnstaged"):
+                        subprocess.check_call(["git", "add", "-A"], cwd=state.workspace_root, stderr=subprocess.DEVNULL)
+                    args = ["git", "commit", "-m", msg]
+                    if req_obj.get("amend"):
+                        args.append("--amend")
+                    subprocess.check_call(args, cwd=state.workspace_root, stderr=subprocess.DEVNULL)
+                    sha = subprocess.check_output(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        cwd=state.workspace_root,
+                        text=True,
+                    ).strip()
+                    branch = subprocess.check_output(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=state.workspace_root,
+                        text=True,
+                    ).strip()
+                    self._write_json(200, {"ok": True, "commitSha": sha, "commitMessage": msg, "branchName": branch, "pushed": False})
+                except Exception as exc:
+                    self._write_json(500, {"ok": False, "error": str(exc)})
+                return
+
+            if method == "GitPush":
+                req_obj = self._parse_json(raw_body)
+                branch = str(req_obj.get("branchName") or "").strip()
+                try:
+                    args = ["git", "push", "origin", branch] if branch else ["git", "push"]
+                    subprocess.check_call(args, cwd=state.workspace_root, stderr=subprocess.DEVNULL)
+                    self._write_json(200, {"ok": True, "pushed": True, "branchName": branch})
+                except Exception as exc:
+                    self._write_json(500, {"ok": False, "error": str(exc)})
+                return
+
+            if method == "GetCustomizationsCatalog":
+                skills_dir = Path(state.workspace_root) / ".agents" / "skills"
+                skills = []
+                if skills_dir.is_dir():
+                    for p in sorted(skills_dir.glob("*/SKILL.md")):
+                        skills.append({"name": p.parent.name, "description": "Workspace project skill", "scope": "Workspace", "isEnabled": True})
+                self._write_json(
+                    200,
+                    {
+                        "skills": skills,
+                        "rules": [{"name": "AGENTS.md", "scope": "Workspace", "preview": "Workspace engineering rules", "isActive": True}],
+                        "customAgents": ["Default"],
+                        "mcpServers": [],
+                        "plugins": [],
+                        "hooks": [],
+                    },
+                )
                 return
 
             if method == "ListAutomations":

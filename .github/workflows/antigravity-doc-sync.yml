@@ -1,0 +1,195 @@
+name: Antigravity 2.0 Official Docs Auto-Sync (Pure Cloud)
+
+on:
+  schedule:
+    # Daily check at 08:00 UTC against official Google Antigravity 2.0 docs & changelog
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: "Run analysis even if no new version delta is detected"
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: "Only generate delta PRD/Tech/Test specs without calling LLM or modifying Swift code"
+        required: false
+        default: false
+        type: boolean
+      max_tier:
+        description: "Highest tier allowed for automated implementation (tier1 = Ready PR, tier2 = Draft PR)"
+        required: false
+        default: "tier1"
+        type: choice
+        options:
+          - tier1
+          - tier2
+  repository_dispatch:
+    types: [antigravity-docs-updated]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: antigravity-doc-sync
+  cancel-in-progress: false
+
+jobs:
+  detect-upstream-delta:
+    name: "[Stage 0] Fetch Official Antigravity 2.0 Docs & Detect Semantic Delta"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      has_delta: ${{ steps.watch.outputs.has_delta }}
+      stale_cdn: ${{ steps.watch.outputs.stale_cdn }}
+      previous_version: ${{ steps.watch.outputs.previous_version }}
+      new_version: ${{ steps.watch.outputs.new_version }}
+      max_tier: ${{ steps.watch.outputs.max_tier }}
+      item_count: ${{ steps.watch.outputs.item_count }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Self-test Doc Sync Watcher
+        run: python3 scripts/sync-antigravity-docs.py --self-test
+
+      - name: Fetch Official Antigravity 2.0 Docs & Compute Semantic Delta
+        id: watch
+        run: |
+          python3 scripts/sync-antigravity-docs.py \
+            --check \
+            --output-dir /tmp/ag-doc-sync \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload Delta Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: antigravity-upstream-delta
+          path: /tmp/ag-doc-sync/
+          retention-days: 30
+
+  analyze-and-sync:
+    name: "[Stage 1-4] Auto PRD / Tech Design / Test Plan / Implementation & PR"
+    needs: detect-upstream-delta
+    if: >-
+      needs.detect-upstream-delta.outputs.stale_cdn != 'true' &&
+      (needs.detect-upstream-delta.outputs.has_delta == 'true' || inputs.force_run == true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11 & Verification Dependencies
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Verification & Optional SDK Packages
+        run: |
+          python3 -m pip install --quiet pillow wsproto
+          if [ "${{ inputs.dry_run }}" != "true" ] && [ -n "${GEMINI_API_KEY:-}" ]; then
+            python3 -m pip install --quiet google-antigravity || true
+          fi
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: Download Upstream Delta Report
+        uses: actions/download-artifact@v4
+        with:
+          name: antigravity-upstream-delta
+          path: /tmp/ag-doc-sync
+
+      - name: Configure Git Identity
+        run: |
+          git config user.name "antigravity-doc-sync[bot]"
+          git config user.email "antigravity-doc-sync[bot]@users.noreply.github.com"
+
+      - name: Create Release Sync Branch & Persist Upstream Snapshots
+        id: branch
+        run: |
+          NEW_VER="${{ needs.detect-upstream-delta.outputs.new_version }}"
+          SAFE_VER="${NEW_VER:-vnext}"
+          BRANCH="feat/sync-antigravity-${SAFE_VER}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          git checkout -B "${BRANCH}"
+          python3 scripts/sync-antigravity-docs.py --apply --output-dir /tmp/ag-doc-sync
+
+      - name: Run 4-Stage Cloud Sync Agent (PRD -> Tech Design -> Test Plan -> Implementation)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_GENAI_USE_VERTEXAI: ${{ vars.GOOGLE_GENAI_USE_VERTEXAI }}
+          GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
+          GOOGLE_CLOUD_LOCATION: ${{ vars.GOOGLE_CLOUD_LOCATION }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ] || [ -z "${GEMINI_API_KEY:-}" ]; then
+            python3 scripts/run-doc-sync-agent.py \
+              --delta-json /tmp/ag-doc-sync/delta-report.json \
+              --delta-md /tmp/ag-doc-sync/delta-summary.md \
+              --max-tier "${{ inputs.max_tier || 'tier1' }}" \
+              --dry-run \
+              --dry-run-out specs/deltas
+          else
+            python3 scripts/run-doc-sync-agent.py \
+              --delta-json /tmp/ag-doc-sync/delta-report.json \
+              --delta-md /tmp/ag-doc-sync/delta-summary.md \
+              --max-tier "${{ inputs.max_tier || 'tier1' }}"
+          fi
+
+      - name: "[Gate] Run Local Connect-RPC, v2.33 Capabilities & 4-Gate ESDD Verification"
+        run: |
+          python3 scripts/sync-antigravity-docs.py --self-test
+          python3 verification/verify-live-rpc-flow.py
+          python3 verification/verify-v233-capabilities.py
+          python3 verification/esdd-verify.py
+
+      - name: Commit Changes & Open Pull Request / Tier 3 RFC Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VER="${{ needs.detect-upstream-delta.outputs.new_version }}"
+          MAX_TIER="${{ needs.detect-upstream-delta.outputs.max_tier }}"
+          BRANCH="${{ steps.branch.outputs.branch }}"
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No repository changes produced; skipping PR."
+            exit 0
+          fi
+
+          git add -A
+          git commit -m "feat(sync): align iOSAntigravity with Google Antigravity ${NEW_VER}"
+          git push -u origin "${BRANCH}" --force-with-lease
+
+          PR_FLAG=""
+          if [ "${MAX_TIER}" = "tier2" ] || [ "${MAX_TIER}" = "tier3" ] || [ "${{ inputs.dry_run }}" = "true" ]; then
+            PR_FLAG="--draft"
+          fi
+
+          EXISTING_PR="$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty')"
+          if [ -z "${EXISTING_PR}" ]; then
+            gh pr create \
+              --base main \
+              --head "${BRANCH}" \
+              --title "feat(sync): Antigravity ${NEW_VER} official docs sync (${MAX_TIER})" \
+              --body-file /tmp/ag-doc-sync/delta-summary.md \
+              ${PR_FLAG}
+          else
+            gh pr comment "${EXISTING_PR}" --body-file /tmp/ag-doc-sync/delta-summary.md
+          fi
+
+          if [ "${MAX_TIER}" = "tier3" ]; then
+            gh issue create \
+              --title "[RFC] Antigravity ${NEW_VER} Tier 3 capabilities require architecture review" \
+              --body-file /tmp/ag-doc-sync/delta-summary.md || true
+          fi

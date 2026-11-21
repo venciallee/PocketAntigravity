@@ -23,6 +23,10 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
         case permission
         case askQuestion
         case approvalInteraction
+        case executeUrl
+        case downloadUrl
+        case browserUpload
+        case workflowScript
     }
 
     public var kind: MemberKind
@@ -30,8 +34,13 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
     public var filePermission: FilePermissionInteractionSpec?
     public var runCommand: RunCommandInteractionSpec?
     public var askQuestion: AskQuestionInteractionSpec?
+    public var executeUrl: ExecuteUrlInteractionSpec?
+    public var downloadUrl: DownloadUrlInteractionSpec?
+    public var browserUpload: BrowserUploadInteractionSpec?
+    public var workflowScript: WorkflowScriptInteractionSpec?
     public var mcpServerName: String?
     public var mcpToolName: String?
+    public var pluginName: String?
 
     public init(
         kind: MemberKind,
@@ -39,16 +48,26 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
         filePermission: FilePermissionInteractionSpec? = nil,
         runCommand: RunCommandInteractionSpec? = nil,
         askQuestion: AskQuestionInteractionSpec? = nil,
+        executeUrl: ExecuteUrlInteractionSpec? = nil,
+        downloadUrl: DownloadUrlInteractionSpec? = nil,
+        browserUpload: BrowserUploadInteractionSpec? = nil,
+        workflowScript: WorkflowScriptInteractionSpec? = nil,
         mcpServerName: String? = nil,
-        mcpToolName: String? = nil
+        mcpToolName: String? = nil,
+        pluginName: String? = nil
     ) {
         self.kind = kind
         self.permission = permission
         self.filePermission = filePermission
         self.runCommand = runCommand
         self.askQuestion = askQuestion
+        self.executeUrl = executeUrl
+        self.downloadUrl = downloadUrl
+        self.browserUpload = browserUpload
+        self.workflowScript = workflowScript
         self.mcpServerName = mcpServerName
         self.mcpToolName = mcpToolName
+        self.pluginName = pluginName
     }
 }
 
@@ -65,19 +84,85 @@ public struct PermissionInteractionSpec: Codable, Sendable, Equatable {
     public var suggestedPersistPattern: String?
     public var persistSuggestionType: PersistSuggestionType
     public var reason: String?
+    public var pluginName: String?
+    public var toolIconName: String?
 
     public init(
         action: String,
         target: String,
         suggestedPersistPattern: String? = nil,
         persistSuggestionType: PersistSuggestionType = .suggested,
-        reason: String? = nil
+        reason: String? = nil,
+        pluginName: String? = nil,
+        toolIconName: String? = nil
     ) {
         self.action = action
         self.target = target
         self.suggestedPersistPattern = suggestedPersistPattern
         self.persistSuggestionType = persistSuggestionType
         self.reason = reason
+        self.pluginName = pluginName
+        self.toolIconName = toolIconName
+    }
+}
+
+/// Built-in browser navigation / actuation approval (`execute_url`, v2.30.0+).
+public struct ExecuteUrlInteractionSpec: Codable, Sendable, Equatable {
+    public var url: String
+    public var domain: String
+    public var isRedirect: Bool
+
+    public init(url: String, domain: String, isRedirect: Bool = false) {
+        self.url = url
+        self.domain = domain
+        self.isRedirect = isRedirect
+    }
+}
+
+/// Built-in browser file download approval (`download_url`, v2.31.0+).
+public struct DownloadUrlInteractionSpec: Codable, Sendable, Equatable {
+    public var url: String
+    public var origin: String
+    public var fileName: String
+    public var mimeType: String
+    public var destinationFolder: String
+
+    public init(
+        url: String,
+        origin: String,
+        fileName: String,
+        mimeType: String = "application/octet-stream",
+        destinationFolder: String = "~/Downloads"
+    ) {
+        self.url = url
+        self.origin = origin
+        self.fileName = fileName
+        self.mimeType = mimeType
+        self.destinationFolder = destinationFolder
+    }
+}
+
+/// One-time browser file upload confirmation (required even in Turbo preset).
+public struct BrowserUploadInteractionSpec: Codable, Sendable, Equatable {
+    public var origin: String
+    public var fileNames: [String]
+
+    public init(origin: String, fileNames: [String]) {
+        self.origin = origin
+        self.fileNames = fileNames
+    }
+}
+
+/// Dynamic Workflows (`/run-workflow`, v2.32.0+) Python script approval prompt.
+public struct WorkflowScriptInteractionSpec: Codable, Sendable, Equatable {
+    public var title: String
+    public var pythonScript: String
+    public var phaseNames: [String]
+
+    public init(title: String, pythonScript: String, phaseNames: [String] = []) {
+        self.title = title
+        self.pythonScript = pythonScript
+        self.phaseNames = phaseNames
     }
 }
 
@@ -164,6 +249,8 @@ public enum InteractionDecision: Sendable, Equatable {
     case allowOnce
     case allowWithFaceID
     case alwaysAllowInTurn
+    case allowInConversation
+    case alwaysAllow
     case allowWithModifiedCommand(String)
     case answerQuestion(selectedOptions: [String], customWriteIn: String?)
     case reject
@@ -196,10 +283,12 @@ public struct CascadeUserInteractionPayload: Codable, Sendable, Equatable {
     public struct PermissionAnswer: Codable, Sendable, Equatable {
         public var allow: Bool
         public var grantPatterns: [String]
+        public var scope: String
 
-        public init(allow: Bool, grantPatterns: [String] = []) {
+        public init(allow: Bool, grantPatterns: [String] = [], scope: String = "PERMISSION_SCOPE_ONCE") {
             self.allow = allow
             self.grantPatterns = grantPatterns
+            self.scope = scope
         }
     }
 
@@ -234,6 +323,7 @@ public struct CascadeUserInteractionPayload: Codable, Sendable, Equatable {
     public var filePermission: FilePermissionAnswer?
     public var askQuestion: AskQuestionAnswer?
     public var genericConfirm: Bool?
+    public var approvalScope: String?
 
     public init(
         cascadeId: String,
@@ -244,7 +334,8 @@ public struct CascadeUserInteractionPayload: Codable, Sendable, Equatable {
         permission: PermissionAnswer? = nil,
         filePermission: FilePermissionAnswer? = nil,
         askQuestion: AskQuestionAnswer? = nil,
-        genericConfirm: Bool? = nil
+        genericConfirm: Bool? = nil,
+        approvalScope: String? = nil
     ) {
         self.cascadeId = cascadeId
         self.stepIndex = stepIndex
@@ -255,5 +346,6 @@ public struct CascadeUserInteractionPayload: Codable, Sendable, Equatable {
         self.filePermission = filePermission
         self.askQuestion = askQuestion
         self.genericConfirm = genericConfirm
+        self.approvalScope = approvalScope
     }
 }

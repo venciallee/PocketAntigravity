@@ -196,6 +196,37 @@ public struct RemotePairingViewController: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
+                // Antigravity 2.0 (v2.33) Permissions, Customizations Hub & Appearance Card
+                Button {
+                    store.presentedSheet = .customizationsSettings
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                            .frame(width: 38, height: 38)
+                            .background(AntigravityTheme.accentPeriwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Permissions, Customizations & Layout")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color.white)
+                            Text("\(store.appearancePreferences.globalPermissionPreset.rawValue) · \(store.customizations.plugins.filter(\.isInstalled).count) plugins · \(store.appearancePreferences.interfaceLayout.rawValue)")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(UEChromePalette.textSecondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(UEChromePalette.textMuted)
+                    }
+                    .padding(14)
+                    .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("btn-open-customizations-settings")
+
                 // Multi-instance switcher (shown only when >1 Desktop instance is online on the signed-in Google account)
                 if store.availableRelayInstances.count > 1 {
                     VStack(alignment: .leading, spacing: 8) {

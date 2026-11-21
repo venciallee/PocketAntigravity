@@ -42,6 +42,9 @@ public actor LocalProjectionStore {
     private var cachedProjects: [ProjectWorkspace] = []
     private var cachedAutomations: [AutomationItem] = []
     private var cachedDisplayOptions: AgentDisplayOptions?
+    private var cachedAppearancePreferences: AppAppearancePreferences?
+    private var cachedUsageQuota: ModelUsageQuota?
+    private var cachedCustomizations: CustomizationsCatalog?
     private var outboxQueue: [OutboxEntry] = []
     private var hasLoadedOutboxFromDisk: Bool = false
 
@@ -114,6 +117,63 @@ public actor LocalProjectionStore {
         cachedDisplayOptions = options
         let file = storageDirectory.appendingPathComponent("display_options.json")
         if let data = try? JSONEncoder().encode(options) {
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
+    public func loadAppearancePreferences() -> AppAppearancePreferences? {
+        if let cachedAppearancePreferences { return cachedAppearancePreferences }
+        let file = storageDirectory.appendingPathComponent("appearance_prefs.json")
+        guard let data = try? Data(contentsOf: file),
+              let decoded = try? JSONDecoder().decode(AppAppearancePreferences.self, from: data) else {
+            return nil
+        }
+        cachedAppearancePreferences = decoded
+        return decoded
+    }
+
+    public func saveAppearancePreferences(_ preferences: AppAppearancePreferences) {
+        cachedAppearancePreferences = preferences
+        let file = storageDirectory.appendingPathComponent("appearance_prefs.json")
+        if let data = try? JSONEncoder().encode(preferences) {
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
+    public func loadUsageQuota() -> ModelUsageQuota? {
+        if let cachedUsageQuota { return cachedUsageQuota }
+        let file = storageDirectory.appendingPathComponent("usage_quota.json")
+        guard let data = try? Data(contentsOf: file),
+              let decoded = try? JSONDecoder().decode(ModelUsageQuota.self, from: data) else {
+            return nil
+        }
+        cachedUsageQuota = decoded
+        return decoded
+    }
+
+    public func saveUsageQuota(_ quota: ModelUsageQuota) {
+        cachedUsageQuota = quota
+        let file = storageDirectory.appendingPathComponent("usage_quota.json")
+        if let data = try? JSONEncoder().encode(quota) {
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
+    public func loadCustomizations() -> CustomizationsCatalog? {
+        if let cachedCustomizations { return cachedCustomizations }
+        let file = storageDirectory.appendingPathComponent("customizations_catalog.json")
+        guard let data = try? Data(contentsOf: file),
+              let decoded = try? JSONDecoder().decode(CustomizationsCatalog.self, from: data) else {
+            return nil
+        }
+        cachedCustomizations = decoded
+        return decoded
+    }
+
+    public func saveCustomizations(_ catalog: CustomizationsCatalog) {
+        cachedCustomizations = catalog
+        let file = storageDirectory.appendingPathComponent("customizations_catalog.json")
+        if let data = try? JSONEncoder().encode(catalog) {
             try? data.write(to: file, options: .atomic)
         }
     }

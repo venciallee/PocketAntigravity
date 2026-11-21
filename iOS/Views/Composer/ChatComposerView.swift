@@ -1,14 +1,13 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import AntigravityData
 
 /// Native Matte Obsidian / Liquid Glass Composer (`ChatComposerView`) pinned at the bottom of `UE07_CHAT_AND_COMPOSER`.
 /// Features:
-/// - Removable `[@ratelimit.go ×]` context chip (`composer-chip-ratelimit`)
-/// - Multi-line `TextField` (`Use 1000/s instead — staging is smaller than prod.`)
-/// - Bottom toolbar with circular `+` (`composer-btn-add-context` -> `AddContextSheetView`),
-///   `[Planning ⌄]` pill (`composer-pill-mode` -> `ModelAndModeSheetView`),
-///   `[Gemini 3.1 Pro ⌄]` pill (`composer-pill-model` -> `ModelAndModeSheetView`),
-///   `mic` button, and circular `#8EB4FF` Periwinkle Send button (`composer-btn-send`).
+/// - Removable context chips (`composer-chip-ratelimit`), multi-line `TextField`, `/` slash popup, typo-tolerant `@` mention popup, Queued Messages strip
+/// - Live Antigravity 2.x toolbar matches PC layout: `+`, `[<Active Model> ⌄]` -> `ModelAndModeSheetView`,
+///   circular Permissions shield button (`composer-btn-permissions` -> `PermissionsSheetView`), real `SFSpeechRecognizer` `mic`, and `#8EB4FF` Send button.
+/// - ESDD verification mode (`UE07`) preserves the `[Planning ⌄]` pill (`composer-pill-mode`) alongside `[Gemini 3.1 Pro ⌄]`.
 public struct ChatComposerView: View {
     @Bindable public var store: AntigravitySessionStore
     @FocusState private var isInputFocused: Bool
@@ -17,8 +16,12 @@ public struct ChatComposerView: View {
     @State private var draftMessageText: String
     @State private var isShowingAddContextSheet: Bool = false
     @State private var isShowingModelAndModeSheet: Bool = false
+    @State private var isShowingPermissionsSheet: Bool = false
+    @State private var isShowingFileImporter: Bool = false
+    @State private var voiceManager = VoiceInputManager()
 
     private static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
+    private static let warmAmber = AntigravityTheme.statusWaiting // #EBB365
     private static let inkOnCTA = Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0) // #0A0E17
     private static let composerCardBg = Color(red: 0x14 / 255.0, green: 0x15 / 255.0, blue: 0x19 / 255.0) // #141519
     private static let controlPillBg = Color(red: 0x20 / 255.0, green: 0x22 / 255.0, blue: 0x2A / 255.0)
@@ -34,8 +37,254 @@ public struct ChatComposerView: View {
         }
     }
 
+    private var activeMentionQuery: String? {
+        guard !store.isVerificationMode else { return nil }
+        guard let lastToken = draftMessageText.split(whereSeparator: \.isWhitespace).last,
+              lastToken.hasPrefix("@"),
+              lastToken.count >= 2 else {
+            return nil
+        }
+        return String(lastToken.dropFirst())
+    }
+
+    private var activeSlashCommands: [SlashCommandItem] {
+        guard !store.isVerificationMode, !store.isSlashPopupDismissedManually else { return [] }
+        return store.filteredSlashCommands(for: draftMessageText)
+    }
+
+    private var activeQueuedMessages: [QueuedMessageItem] {
+        store.queuedMessages.filter { $0.cascadeId == store.activeCascadeId }
+    }
+
+    private var isLiveAntigravity2Mode: Bool {
+        !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected
+    }
+
+    private var compactModelPillLabel: String {
+        var name = store.selectedModelConfig.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.lowercased().hasSuffix(" (thinking)") {
+            name = String(name.dropLast(" (thinking)".count))
+        }
+        let suffixReplacements: [(String, String)] = [
+            (" (XHigh)", " · XHigh"),
+            (" (X-High)", " · XHigh"),
+            (" (Extra High)", " · XHigh"),
+            (" (High)", " · High"),
+            (" (Medium)", " · Med"),
+            (" (Low)", " · Low")
+        ]
+        for (suffix, replacement) in suffixReplacements where name.lowercased().hasSuffix(suffix.lowercased()) {
+            name = String(name.dropLast(suffix.count)) + replacement
+            break
+        }
+        return name
+    }
+
+    private var permissionButtonForeground: Color {
+        switch store.activePermissionPreset {
+        case .turbo:
+            return Self.warmAmber
+        case .auto:
+            return Self.periwinkle
+        case .defaultPolicy, .requestReview, .inheritGlobal:
+            return AntigravityTheme.inkLabel
+        }
+    }
+
+    private var permissionButtonBackground: Color {
+        switch store.activePermissionPreset {
+        case .turbo:
+            return Self.warmAmber.opacity(0.14)
+        case .auto:
+            return Self.periwinkle.opacity(0.14)
+        case .defaultPolicy, .requestReview, .inheritGlobal:
+            return Self.controlPillBg
+        }
+    }
+
+    private var permissionButtonStroke: Color {
+        switch store.activePermissionPreset {
+        case .turbo:
+            return Self.warmAmber.opacity(0.32)
+        case .auto:
+            return Self.periwinkle.opacity(0.32)
+        case .defaultPolicy, .requestReview, .inheritGlobal:
+            return Color.white.opacity(0.06)
+        }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Live-mode Slash Command Popup (`/plan`, `/btw`, `/swarm`, `/run-workflow`, etc.)
+            if !activeSlashCommands.isEmpty {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(activeSlashCommands.prefix(6)) { cmd in
+                            Button {
+                                draftMessageText = "\(cmd.command) "
+                                store.isSlashPopupDismissedManually = true
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: cmd.iconName)
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(Self.periwinkle)
+                                        .frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(cmd.command)
+                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(AntigravityTheme.inkReading)
+                                        Text(cmd.summary)
+                                            .font(.system(size: 11.5))
+                                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(Self.controlPillBg.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+                .accessibilityIdentifier("composer-slash-popup")
+            }
+
+            // Live-mode Typo-Tolerant @Mention Autocomplete Popup
+            if let mentionQuery = activeMentionQuery {
+                let matches = store.filteredMentionCandidates(for: mentionQuery)
+                if !matches.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(matches.prefix(5)) { candidate in
+                                Button {
+                                    let chipLabel = "@\(candidate.title)"
+                                    if !attachedChipLabels.contains(chipLabel) {
+                                        attachedChipLabels.append(chipLabel)
+                                    }
+                                    if let range = draftMessageText.range(of: "@[^\\s]*$", options: .regularExpression) {
+                                        draftMessageText.removeSubrange(range)
+                                    }
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "doc.text")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(Self.periwinkle)
+                                        Text("@\(candidate.title)")
+                                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(AntigravityTheme.inkReading)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Self.controlPillBg, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("composer-mention-popup")
+                }
+            }
+
+            // Queued Follow-Up Messages Strip (when messages were queued mid-stream)
+            if !store.isVerificationMode && !activeQueuedMessages.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(activeQueuedMessages) { queued in
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 11))
+                                .foregroundStyle(AntigravityTheme.statusWaiting)
+                            Text("Queued: \(queued.text)")
+                                .font(.system(size: 12))
+                                .foregroundStyle(AntigravityTheme.inkLabel)
+                                .lineLimit(1)
+                            Spacer()
+                            Button {
+                                store.removeQueuedMessage(id: queued.id)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(AntigravityTheme.inkMuted)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Self.controlPillBg.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+
+            // Live-mode Quick Controls Strip (Permission Preset + /btw + Voice Mode + Attach File)
+            if !store.isVerificationMode {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        Menu {
+                            ForEach(AgentPermissionPreset.allCases) { preset in
+                                Button {
+                                    store.setConversationPermissionPreset(preset)
+                                } label: {
+                                    Text(preset.rawValue)
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "shield.lefthalf.filled")
+                                    .font(.system(size: 10.5))
+                                Text(store.effectivePermissionPreset().rawValue)
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Self.controlPillBg.opacity(0.7), in: Capsule())
+                        }
+                        .accessibilityIdentifier("composer-permission-preset")
+
+                        Button {
+                            store.openSideQuestion()
+                        } label: {
+                            Label("/btw", systemImage: "questionmark.bubble")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Self.periwinkle)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Self.periwinkle.opacity(0.12), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("composer-btn-btw")
+
+                        Button {
+                            store.startVoiceMode()
+                        } label: {
+                            Label("Voice", systemImage: "waveform")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.inkLabel)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Self.controlPillBg.opacity(0.7), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("composer-btn-voice-mode")
+
+                        Button {
+                            isShowingFileImporter = true
+                        } label: {
+                            Label("Attach", systemImage: "paperclip")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.inkLabel)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Self.controlPillBg.opacity(0.7), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("composer-btn-attach-file")
+                    }
+                }
+            }
+
             // Context Chips Strip
             if !attachedChipLabels.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -43,6 +292,7 @@ public struct ChatComposerView: View {
                         ForEach(attachedChipLabels, id: \.self) { label in
                             Button {
                                 attachedChipLabels.removeAll { $0 == label }
+                                store.composerAttachments.removeAll { $0.label == label }
                             } label: {
                                 HStack(spacing: 6) {
                                     Text(label)
@@ -52,10 +302,12 @@ public struct ChatComposerView: View {
                                         .font(.system(size: 10, weight: .semibold))
                                         .foregroundStyle(AntigravityTheme.inkSecondary)
                                 }
-                                .padding(.horizontal, 12)
-                                .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                                .padding(.horizontal, 11)
+                                .frame(height: 30)
                                 .background(Self.controlPillBg)
                                 .clipShape(Capsule())
+                                .frame(minHeight: 36)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier(
@@ -107,6 +359,12 @@ public struct ChatComposerView: View {
                 }
             }
 
+            if let voiceErr = voiceManager.errorMessage {
+                Text(voiceErr)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
+            }
+
             // Multi-line Draft Input
             TextField(
                 "Reply to agent or @mention files...",
@@ -117,101 +375,164 @@ public struct ChatComposerView: View {
             .font(.system(size: 15.5))
             .foregroundStyle(AntigravityTheme.inkReading)
             .focused($isInputFocused)
+            .onChange(of: draftMessageText) { _, newValue in
+                if !newValue.hasPrefix("/") {
+                    store.isSlashPopupDismissedManually = false
+                }
+            }
             .onSubmit {
                 submitMessage()
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, 4)
+            .padding(.top, 2)
             .accessibilityIdentifier("composer-text-input")
 
-            // Bottom Toolbar: `+`, `Planning ⌄`, `<Active Model> ⌄`, `mic`, `↑` Send
-            HStack(spacing: 5) {
+            // Bottom Toolbar: `+`, [Legacy Mode Pill in UE07], `<Active Model> ⌄`, `(🛡!)` Permissions, `mic`, `↑` Send
+            HStack(spacing: 6) {
                 // 1. Circular `+` Add Context Button
                 Button {
                     isShowingAddContextSheet = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.system(size: 15.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkReading)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .frame(width: 34, height: 34)
                         .background(Self.controlPillBg)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                        )
                         .clipShape(Circle())
+                        .frame(width: 38, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer-btn-add-context")
 
-                // 2. `[Planning / Fast ⌄]` Mode Pill (bound directly to `store.selectedModelConfig.mode`)
-                Button {
-                    isShowingModelAndModeSheet = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(store.selectedModelConfig.mode.rawValue)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(AntigravityTheme.inkReading)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                // 2. Legacy `[Planning / Fast ⌄]` Mode Pill (ESDD UE07 verification mode only; Antigravity 2.x uses `/plan`)
+                if !isLiveAntigravity2Mode {
+                    Button {
+                        isShowingModelAndModeSheet = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: store.selectedModelConfig.mode == .planning ? "doc.text" : "bolt.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Self.periwinkle)
+                            Text(store.selectedModelConfig.mode.rawValue)
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.inkReading)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                        }
+                        .padding(.horizontal, 11)
+                        .frame(height: 34)
+                        .background(Self.controlPillBg)
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                        )
+                        .clipShape(Capsule())
+                        .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, 10)
-                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
-                    .background(Self.controlPillBg)
-                    .clipShape(Capsule())
+                    .buttonStyle(.plain)
+                    .layoutPriority(1)
+                    .accessibilityIdentifier("composer-pill-mode")
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("composer-pill-mode")
 
-                // 3. `[<Active Model> ⌄]` Model Pill (bound directly to `store.selectedModelConfig.displayName`)
+                // 3. `[<Active Model> ⌄]` Model Pill
                 Button {
                     isShowingModelAndModeSheet = true
                 } label: {
                     HStack(spacing: 4) {
-                        Text(store.selectedModelConfig.displayName)
+                        Text(compactModelPillLabel)
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.inkLabel)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.88)
+                            .truncationMode(.tail)
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 9.5, weight: .semibold))
+                            .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                     }
-                    .padding(.horizontal, 9)
-                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
+                    .padding(.horizontal, 11)
+                    .frame(height: 34)
                     .background(Self.controlPillBg)
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                    )
                     .clipShape(Capsule())
+                    .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer-pill-model")
 
                 Spacer(minLength: 0)
 
-                // 4. Voice Dictation Mic Button
+                // 4. Circular Permissions Button (`Remote Permissions` / `Permissions` matching Antigravity 2.x PC)
+                if isLiveAntigravity2Mode {
+                    Button {
+                        isShowingPermissionsSheet = true
+                    } label: {
+                        Image(systemName: store.activePermissionPreset.symbolName)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(permissionButtonForeground)
+                            .frame(width: 34, height: 34)
+                            .background(permissionButtonBackground)
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(permissionButtonStroke, lineWidth: 1)
+                            )
+                            .clipShape(Circle())
+                            .frame(width: 38, height: AntigravityTheme.minTouchTargetPt)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Permissions: \(store.activePermissionPreset.displayTitle)")
+                    .accessibilityIdentifier("composer-btn-permissions")
+                }
+
+                // 5. Real Live Speech-to-Text Mic Button (`SFSpeechRecognizer` + `AVAudioEngine`)
                 Button {
-                    isInputFocused = true
+                    if store.isVerificationMode {
+                        isInputFocused = true
+                    } else {
+                        voiceManager.toggleRecording { transcript in
+                            draftMessageText = transcript
+                        }
+                    }
                 } label: {
-                    Image(systemName: "mic")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                    Image(systemName: voiceManager.isRecording ? "waveform.circle.fill" : "mic")
+                        .font(.system(size: voiceManager.isRecording ? 19 : 15.5, weight: .medium))
+                        .foregroundStyle(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.inkSecondary)
+                        .frame(width: 34, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer-btn-mic")
 
-                // 5. Circular `#8EB4FF` Periwinkle Send Button
+                // 6. Circular `#8EB4FF` Periwinkle Send Button
                 Button {
                     submitMessage()
                 } label: {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 15.5, weight: .bold))
                         .foregroundStyle(Self.inkOnCTA)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .frame(width: 34, height: 34)
                         .background(Self.periwinkle)
                         .clipShape(Circle())
+                        .frame(width: 38, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer-btn-send")
             }
         }
-        .padding(10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(Self.composerCardBg)
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -226,6 +547,40 @@ public struct ChatComposerView: View {
         .onChange(of: store.composerDraftText) { _, newValue in
             if draftMessageText != newValue {
                 draftMessageText = newValue
+            }
+        }
+        .onChange(of: store.composerAttachments.count) { _, _ in
+            guard !store.isVerificationMode else { return }
+            attachedChipLabels = store.composerAttachments.map(\.label)
+        }
+        .onDisappear {
+            voiceManager.stopRecording()
+        }
+        .fileImporter(
+            isPresented: $isShowingFileImporter,
+            allowedContentTypes: [.item, .pdf, .image, .audio, .movie, .zip],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                for url in urls {
+                    let name = url.lastPathComponent
+                    let ext = url.pathExtension.lowercased()
+                    let kind: ComposerAttachmentChip.Kind = {
+                        if ext == "pdf" { return .pdfDocument }
+                        if ext == "zip" { return .archiveZip }
+                        if ["png", "jpg", "jpeg", "webp", "heic"].contains(ext) { return .imageScreenshot }
+                        if ["m4a", "mp3", "wav"].contains(ext) { return .audioRecording }
+                        if ["mp4", "mov"].contains(ext) { return .videoClip }
+                        return .genericFile
+                    }()
+                    let chip = ComposerAttachmentChip(kind: kind, label: name, targetUri: url.absoluteString)
+                    if !store.composerAttachments.contains(where: { $0.targetUri == chip.targetUri }) {
+                        store.composerAttachments.append(chip)
+                    }
+                    if !attachedChipLabels.contains(name) {
+                        attachedChipLabels.append(name)
+                    }
+                }
             }
         }
         .sheet(isPresented: $isShowingAddContextSheet) {
@@ -244,18 +599,40 @@ public struct ChatComposerView: View {
         .sheet(isPresented: $isShowingModelAndModeSheet) {
             ModelAndModeSheetView(
                 store: store,
+                isPresentedAsNativeSheet: true,
                 onDismiss: {
                     isShowingModelAndModeSheet = false
                 }
             )
+            .presentationDetents([.fraction(0.78), .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
+            .presentationBackground(ModelAndModeSheetView.sheetSurfaceColor)
+        }
+        .sheet(isPresented: $isShowingPermissionsSheet) {
+            PermissionsSheetView(
+                store: store,
+                onDismiss: {
+                    isShowingPermissionsSheet = false
+                }
+            )
+            .presentationDetents([.height(store.isActiveSessionCloud ? 356 : 428), .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
+            .presentationBackground(PermissionsSheetView.sheetSurfaceColor)
         }
     }
 
     private func submitMessage() {
+        voiceManager.stopRecording()
         let trimmed = draftMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasWorkflow = !(store.composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         guard !trimmed.isEmpty || !attachedChipLabels.isEmpty || hasWorkflow else { return }
+        let existingByLabel = Dictionary(uniqueKeysWithValues: store.composerAttachments.map { ($0.label, $0) })
         store.composerAttachments = attachedChipLabels.map { label in
+            if let existing = existingByLabel[label] {
+                return existing
+            }
             let cleanFile = label.replacingOccurrences(of: "@", with: "")
             let targetUri: String
             if store.selectedWorkspaceUri.hasPrefix("cloud://") || store.selectedWorkspaceUri.isEmpty {

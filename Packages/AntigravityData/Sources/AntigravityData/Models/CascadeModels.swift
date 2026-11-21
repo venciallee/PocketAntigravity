@@ -75,6 +75,17 @@ public enum CortexStepStatus: Int, Codable, Sendable, CaseIterable {
         // Maps `CASCADE_RUN_STATUS_IDLE` and `UNSPECIFIED` cleanly to `.unspecified` (`IDLE`)
         return .unspecified
     }
+
+    /// Maps upstream numeric `CascadeRunStatus` enum values:
+    /// `0 = UNSPECIFIED`, `1 = IDLE`, `2 = RUNNING`, `3 = WAITING_FOR_USER`, `4 = CANCELLED`.
+    public static func from(cascadeRunStatusCode code: Int) -> CortexStepStatus {
+        switch code {
+        case 2: return .inProgress
+        case 3: return .waiting
+        case 4: return .cancelled
+        default: return .unspecified
+        }
+    }
 }
 
 /// Maps to `exa.cortex_pb.CortexStepType` (binary field 1 on `gemini_coder.Step`).
@@ -101,6 +112,12 @@ public enum CortexStepType: Int, Codable, Sendable, CaseIterable {
     case conversationHistory = 98
     case knowledgeArtifacts = 99
     case sendCommandInput = 100
+    case subagentInvocation = 130
+    case dynamicWorkflow = 131
+    case swarmBoard = 132
+    case mcpToolCall = 133
+    case backgroundTask = 134
+    case sideQuestion = 135
 
     public var jsonName: String {
         switch self {
@@ -126,6 +143,12 @@ public enum CortexStepType: Int, Codable, Sendable, CaseIterable {
         case .conversationHistory: return "CORTEX_STEP_TYPE_CONVERSATION_HISTORY"
         case .knowledgeArtifacts: return "CORTEX_STEP_TYPE_KNOWLEDGE_ARTIFACTS"
         case .sendCommandInput: return "CORTEX_STEP_TYPE_SEND_COMMAND_INPUT"
+        case .subagentInvocation: return "CORTEX_STEP_TYPE_SUBAGENT_INVOCATION"
+        case .dynamicWorkflow: return "CORTEX_STEP_TYPE_DYNAMIC_WORKFLOW"
+        case .swarmBoard: return "CORTEX_STEP_TYPE_SWARM_BOARD"
+        case .mcpToolCall: return "CORTEX_STEP_TYPE_MCP_TOOL_CALL"
+        case .backgroundTask: return "CORTEX_STEP_TYPE_BACKGROUND_TASK"
+        case .sideQuestion: return "CORTEX_STEP_TYPE_SIDE_QUESTION"
         }
     }
 
@@ -354,6 +377,11 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
     public var requestedInteraction: RequestedInteraction?
     public var recordedExecutionMode: CascadeExecutionMode?
     public var recordedModelId: String?
+    public var subagent: SubagentPayload?
+    public var dynamicWorkflow: DynamicWorkflowPayload?
+    public var swarmBoard: SwarmBoardPayload?
+    public var mcpToolCall: McpToolCallPayload?
+    public var voiceSummary: VoiceCallTranscriptSummary?
 
     public init(
         cascadeId: String,
@@ -372,7 +400,12 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         search: SearchPayload? = nil,
         requestedInteraction: RequestedInteraction? = nil,
         recordedExecutionMode: CascadeExecutionMode? = nil,
-        recordedModelId: String? = nil
+        recordedModelId: String? = nil,
+        subagent: SubagentPayload? = nil,
+        dynamicWorkflow: DynamicWorkflowPayload? = nil,
+        swarmBoard: SwarmBoardPayload? = nil,
+        mcpToolCall: McpToolCallPayload? = nil,
+        voiceSummary: VoiceCallTranscriptSummary? = nil
     ) {
         self.cascadeId = cascadeId
         self.stepIndex = stepIndex
@@ -391,12 +424,20 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         self.requestedInteraction = requestedInteraction
         self.recordedExecutionMode = recordedExecutionMode
         self.recordedModelId = recordedModelId
+        self.subagent = subagent
+        self.dynamicWorkflow = dynamicWorkflow
+        self.swarmBoard = swarmBoard
+        self.mcpToolCall = mcpToolCall
+        self.voiceSummary = voiceSummary
     }
 
     /// Returns true if this step carries user-visible chat, tool evidence, task progress, or approval UI.
     /// Filters out internal Desktop housekeeping steps (`CHECKPOINT`, `EPHEMERAL_MESSAGE`, empty tool-call wrappers).
     public var hasRenderableChatContent: Bool {
         if status == .waiting || requestedInteraction != nil {
+            return true
+        }
+        if voiceSummary != nil || subagent != nil || dynamicWorkflow != nil || swarmBoard != nil || mcpToolCall != nil {
             return true
         }
         switch type {
@@ -417,6 +458,14 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
             return viewFile != nil
         case .search, .listDirectory:
             return search != nil || viewFile != nil
+        case .subagentInvocation:
+            return subagent != nil
+        case .dynamicWorkflow:
+            return dynamicWorkflow != nil
+        case .swarmBoard:
+            return swarmBoard != nil
+        case .mcpToolCall:
+            return mcpToolCall != nil
         default:
             let hasResponse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return hasResponse
@@ -499,6 +548,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
     public var cloudProjectId: String?
     public var originInstanceUuid: String?
     public var originHostName: String?
+    public var lastUserViewTime: Date?
 
     public init(
         cascadeId: String,
@@ -524,7 +574,8 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         isCloud: Bool? = nil,
         cloudProjectId: String? = nil,
         originInstanceUuid: String? = nil,
-        originHostName: String? = nil
+        originHostName: String? = nil,
+        lastUserViewTime: Date? = nil
     ) {
         self.cascadeId = cascadeId
         self.title = title
@@ -550,6 +601,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         self.cloudProjectId = cloudProjectId
         self.originInstanceUuid = originInstanceUuid
         self.originHostName = originHostName
+        self.lastUserViewTime = lastUserViewTime
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -577,6 +629,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         case cloudProjectId
         case originInstanceUuid
         case originHostName
+        case lastUserViewTime
     }
 
     public init(from decoder: Decoder) throws {
@@ -611,5 +664,6 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         self.cloudProjectId = try container.decodeIfPresent(String.self, forKey: .cloudProjectId)
         self.originInstanceUuid = try container.decodeIfPresent(String.self, forKey: .originInstanceUuid)
         self.originHostName = try container.decodeIfPresent(String.self, forKey: .originHostName)
+        self.lastUserViewTime = try container.decodeIfPresent(Date.self, forKey: .lastUserViewTime)
     }
 }

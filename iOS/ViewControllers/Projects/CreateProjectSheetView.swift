@@ -399,10 +399,19 @@ public struct CreateProjectSheetView: View {
     }
 
     private var githubConfigureButton: some View {
-        Text("Missing a repo? Configure on GitHub")
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-            .padding(.leading, 2)
+        Group {
+            if let url = URL(string: "https://github.com/settings/installations") {
+                Link("Missing a repo? Configure on GitHub", destination: url)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    .padding(.leading, 2)
+            } else {
+                Text("Missing a repo? Configure on GitHub")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    .padding(.leading, 2)
+            }
+        }
     }
 
     // MARK: - 6. Branch & Worktree + Name Card
@@ -450,6 +459,46 @@ public struct CreateProjectSheetView: View {
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 46)
+
+            if !store.isVerificationMode {
+                Divider()
+                    .overlay(UEChromePalette.subtleDivider)
+
+                HStack {
+                    Text("Drive URL")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Color.white)
+                    Spacer()
+                    TextField("Optional Google Drive folder link", text: Binding(
+                        get: { store.newProjectDraft.driveResourceLinks.first ?? "" },
+                        set: { val in
+                            let clean = val.trimmingCharacters(in: .whitespacesAndNewlines)
+                            store.newProjectDraft.driveResourceLinks = clean.isEmpty ? [] : [clean]
+                        }
+                    ))
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(UEChromePalette.textBody)
+                    .multilineTextAlignment(.trailing)
+                    .tint(AntigravityTheme.accentPeriwinkle)
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+
+                Divider()
+                    .overlay(UEChromePalette.subtleDivider)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Environment Setup (`env-setup.sh`)")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(UEChromePalette.textSecondary)
+                    TextField("e.g. npm ci && go mod download", text: $store.newProjectDraft.envSetupScript)
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundStyle(UEChromePalette.textBody)
+                        .tint(AntigravityTheme.accentPeriwinkle)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -461,6 +510,18 @@ public struct CreateProjectSheetView: View {
 
     private var submitButton: some View {
         Button {
+            if !store.isVerificationMode {
+                let targetRuntime: ProjectRuntimeTarget = (runsOn == .cloud) ? .cloud : .macBookPro
+                let targetSource: ProjectSourceKind = (sourceKind == .drive) ? .driveFolder : .githubRepo
+                let chosenRepo = store.availableGitHubRepos.first(where: { $0.id == selectedRepoId })
+                _ = store.createNewProject(
+                    name: projectName.trimmingCharacters(in: .whitespacesAndNewlines),
+                    runtime: targetRuntime,
+                    source: targetSource,
+                    selectedRepo: chosenRepo,
+                    branchWorktree: branchWorktreeLabel
+                )
+            }
             onDismiss?()
         } label: {
             Text("Create Project")
