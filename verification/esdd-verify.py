@@ -201,6 +201,7 @@ class CDPPageDriver:
                     "--headless=new",
                     "--no-sandbox",
                     "--disable-gpu",
+                    "--disable-software-rasterizer",
                     "--hide-scrollbars",
                     "--disable-dev-shm-usage",
                     "--no-first-run",
@@ -1121,10 +1122,13 @@ def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids
         is_release = bool(plan.get("isRelease", False)) or is_release
         is_full = bool(esdd_plan.get("full", False)) or is_release or bool(args.full)
         mode_label = plan.get("mode", "scoped")
+        run_compat_guardrails = bool(plan.get("gates", {}).get("gate0CompatGuardrails", True)) or is_full or is_release
         if not is_full:
             stages = set(esdd_plan.get("stages", [1]))
             selected_tcs = list(esdd_plan.get("testCases", []))
             selected_screens = list(esdd_plan.get("screens", []))
+    else:
+        run_compat_guardrails = True
 
     if args.stages:
         stages = {int(s.strip()) for s in args.stages.split(",") if s.strip()}
@@ -1142,6 +1146,7 @@ def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids
 
     if args.full or args.release:
         is_full = True
+        run_compat_guardrails = True
         stages = {1, 2, 3, 4}
         selected_tcs = list(all_tcs)
         selected_screens = list(all_state_ids)
@@ -1157,6 +1162,7 @@ def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids
         "mode": mode_label,
         "isFull": is_full,
         "isRelease": is_release,
+        "runCompatGuardrails": run_compat_guardrails,
         "stages": sorted(stages),
         "testCases": selected_tcs,
         "screens": selected_screens,
@@ -1195,7 +1201,10 @@ def main():
     )
 
     print("=== [Stage 1/4] ESDD Spec-DAG & Contract Inspection ===")
-    spec_report = inspect_esdd_spec_and_swift_contracts(repo_root)
+    spec_report = inspect_esdd_spec_and_swift_contracts(
+        repo_root,
+        run_compat_guardrails=scope.get("runCompatGuardrails", True),
+    )
     for chk in spec_report["checks"]:
         print(f"  ✓ {chk}")
     if not spec_report["passed"]:

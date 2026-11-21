@@ -69,9 +69,7 @@ GLOBAL_FULL_ESCALATION_PATTERNS: list[tuple[str, str]] = [
     ("apps/ios/SharedUI/DesignSystem/*", "Shared Design System tokens/glass/icons affect all 13 screens"),
     ("apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore.swift", "Central session store root state changed"),
     ("apps/ios/Packages/AntigravityData/Sources/AntigravityData/Fixtures/ESDDVerificationFixtures.swift", "Shared ESDD fixtures changed"),
-    (".github/workflows/macos-xcode-verify.yml", "macOS E2E CI workflow changed"),
     ("verification/ios-simulator-runner.py", "iOS Simulator E2E runner changed"),
-    ("verification/e2e_impact_planner.py", "E2E impact planner changed"),
 ]
 
 
@@ -100,7 +98,7 @@ def classify_file(path: str) -> dict[str, Any]:
     if norm.startswith("./"):
         norm = norm[2:]
 
-    # 1. Global core / CI infrastructure -> auto-escalate to full verification
+    # 1. Global core / iOS Simulator runner infrastructure -> auto-escalate to full verification
     for pattern, reason in GLOBAL_FULL_ESCALATION_PATTERNS:
         if fnmatch.fnmatch(norm, pattern):
             res = _empty_impact("core-global", reason)
@@ -131,7 +129,16 @@ def classify_file(path: str) -> dict[str, Any]:
         res["gate2_v233"] = True
         return res
 
-    # 4b. Client + Security/Compliance CR Agent (run-gemini-cli) & CI workflow security audit
+    # 4b. CI workflow YAML & impact planner -> Ubuntu fast gates + Stage 1 (zero macOS/Chrome unless Swift/UI changed or [full-e2e])
+    if norm in {
+        "verification/e2e_impact_planner.py",
+        ".github/workflows/macos-xcode-verify.yml",
+    }:
+        res = _empty_impact("ci-planner-workflow", "CI impact planner or workflow orchestration changed (verified via Ubuntu fast gates & self-tests)")
+        res["esdd_stages"] = [1]
+        return res
+
+    # 4c. Client + Security/Compliance CR Agent (run-gemini-cli) & CI workflow security audit
     if (
         norm in {
             "scripts/prepare-cr-context.py",
@@ -161,10 +168,15 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_tcs"] = ["TC-15"]
         return res
 
-    # 6. Local ESDD visual/headless verification harness
+    # 6. ESDD static Stage 1 inspector (Spec-DAG, secret hygiene, compat guardrails — zero Chrome / zero macOS)
+    if norm == "verification/esdd_inspector.py":
+        res = _empty_impact("esdd-stage1-inspector", "ESDD Stage 1 static contract inspector changed")
+        res["esdd_stages"] = [1]
+        return res
+
+    # 6b. Local ESDD visual/headless verification harness (Ubuntu headless only — zero macOS)
     if norm in {
         "verification/esdd-verify.py",
-        "verification/esdd_inspector.py",
         "verification/ui_renderer.py",
     }:
         res = _empty_impact("esdd-harness", "ESDD headless verification harness changed")
@@ -733,6 +745,7 @@ def build_verification_plan(
 
     file_impacts: list[dict[str, Any]] = []
     domains: set[str] = set()
+    gate0_compat_guardrails = False
     gate1 = False
     gate2_live_rpc = False
     gate2_v233 = False
@@ -745,6 +758,25 @@ def build_verification_plan(
     esdd_screens: set[str] = set()
     esdd_full = False
 
+    def _impacts_compat_guardrails(norm_path: str) -> bool:
+        data_prefixes = (
+            "apps/ios/Packages/AntigravityData/Sources/AntigravityData/",
+            "Packages/AntigravityData/Sources/AntigravityData/",
+        )
+        for prefix in data_prefixes:
+            if (
+                norm_path.startswith(f"{prefix}Protocol/")
+                or norm_path.startswith(f"{prefix}Models/")
+                or norm_path.startswith(f"{prefix}Store/")
+            ):
+                return True
+        return norm_path in {
+            "scripts/mac-companion-bridge.py",
+            "verification/verify_compat_guardrails.py",
+            "verification/verify-compat-matrix.py",
+            "verification/esdd_inspector.py",
+        }
+
     for fpath in clean_files:
         imp = classify_file(fpath)
         file_impacts.append({"file": fpath, "domain": imp["domain"], "reason": imp["reason"], "escalateFull": imp["escalate_full"]})
@@ -753,6 +785,8 @@ def build_verification_plan(
             escalation_reasons.append(f"{fpath}: {imp['reason']}")
             if mode == "scoped":
                 mode = "full"
+        if _impacts_compat_guardrails(fpath):
+            gate0_compat_guardrails = True
         gate1 = gate1 or imp["gate1_swift_data_tests"]
         gate2_live_rpc = gate2_live_rpc or imp["gate2_live_rpc"]
         gate2_v233 = gate2_v233 or imp["gate2_v233"]
@@ -766,6 +800,7 @@ def build_verification_plan(
         esdd_full = esdd_full or imp["esdd_full"]
 
     if mode in ("release", "full"):
+        gate0_compat_guardrails = True
         gate1 = True
         gate2_live_rpc = True
         gate2_v233 = True
@@ -810,6 +845,7 @@ def build_verification_plan(
         "fileImpacts": file_impacts,
         "gates": {
             "gate0DocSync": True,
+            "gate0CompatGuardrails": gate0_compat_guardrails,
             "gate1SwiftDataTests": gate1,
             "gate2LiveRPC": gate2_live_rpc,
             "gate2V233Capabilities": gate2_v233,
@@ -866,8 +902,9 @@ def render_markdown_summary(plan: dict[str, Any]) -> str:
             "| Gate | Action | Detail |",
             "| :--- | :--- | :--- |",
             f"| `[Gate 0]` Script Syntax & Doc-Sync Self-Test | ✅ RUN | Always runs (~1s on Ubuntu) |",
+            f"| `[Gate 0c]` Static Compatibility Guardrails | {'✅ RUN' if gates.get('gate0CompatGuardrails') else '⏭️ SKIP'} | {'Protocol/Models/Store/Bridge impacted or full' if gates.get('gate0CompatGuardrails') else 'Protocol/Models/Store/Bridge untouched'} |",
             f"| `[Gate 1]` Swift 6 `AntigravityData` XCTests | {'✅ RUN' if gates['gate1SwiftDataTests'] else '⏭️ SKIP'} | {'apps/ios/Packages/AntigravityData impacted or full' if gates['gate1SwiftDataTests'] else 'apps/ios/Packages/AntigravityData untouched'} |",
-            f"| `[Gate 2]` Live Connect-RPC + v2.33 Capabilities | {'✅ RUN' if (gates['gate2LiveRPC'] or gates['gate2V233Capabilities']) else '⏭️ SKIP'} | LiveRPC=`{gates['gate2LiveRPC']}`, v2.33=`{gates['gate2V233Capabilities']}` |",
+            f"| `[Gate 2]` Live Connect-RPC + v2.33 Capabilities + Compat Matrix | {'✅ RUN' if (gates['gate2LiveRPC'] or gates['gate2V233Capabilities']) else '⏭️ SKIP'} | LiveRPC/Matrix=`{gates['gate2LiveRPC']}`, v2.33=`{gates['gate2V233Capabilities']}` |",
             f"| `[Gate 3]` Xcode iOS Build (`Antigravity.app`) | {'✅ RUN' if gates['gate3IOSBuild'] else '⏭️ SKIP'} | Mode=`{gates['iosSimulatorMode']}` |",
             f"| `[Gate 3b]` Real Simulator XCUITests | {'✅ RUN (' + str(len(plan['xcuitests'])) + '/' + str(len(ALL_XCUITESTS)) + ')' if plan['xcuitests'] else '⏭️ SKIP (0/' + str(len(ALL_XCUITESTS)) + ')'} | {', '.join(f'`{t}`' for t in plan['xcuitests']) or 'None impacted'} |",
             f"| `[Gate 4]` Live Simulator App Connect-RPC Handshake | {'✅ RUN' if gates['runLiveAppRPC'] else '⏭️ SKIP'} | {'Connection/RPC impacted or full' if gates['runLiveAppRPC'] else 'Unaffected'} |",
@@ -1009,6 +1046,7 @@ def write_github_outputs(github_output_path: Path, plan: dict[str, Any]) -> None
         "is_release": "true" if plan["isRelease"] else "false",
         "needs_macos": "true" if gates["needsMacOS"] else "false",
         "run_gate0": "true" if gates["gate0DocSync"] else "false",
+        "run_compat_guardrails": "true" if gates.get("gate0CompatGuardrails", False) else "false",
         "run_gate1": "true" if gates["gate1SwiftDataTests"] else "false",
         "run_gate2_live_rpc": "true" if gates["gate2LiveRPC"] else "false",
         "run_gate2_v233": "true" if gates["gate2V233Capabilities"] else "false",
@@ -1029,39 +1067,50 @@ def write_github_outputs(github_output_path: Path, plan: dict[str, Any]) -> None
 
 def run_self_tests() -> None:
     """Comprehensive deterministic self-test verifying scoped impact mapping and release enforcement."""
-    # 1. Docs-only -> fast Ubuntu only, zero macOS runner
+    # 1. Docs-only -> fast Ubuntu only, zero macOS runner, compat guardrails skipped
     p1 = build_verification_plan(changed_files=["AGENTS.md", "README.md", "docs/images/architecture-dark.svg"])
     assert p1["mode"] == "scoped" and not p1["isRelease"]
     assert p1["gates"]["needsMacOS"] is False
+    assert p1["gates"]["gate0CompatGuardrails"] is False
     assert p1["gates"]["gate1SwiftDataTests"] is False
     assert p1["gates"]["gate2LiveRPC"] is False
     assert p1["gates"]["iosSimulatorMode"] == "skip"
 
-    # 2. Companion Bridge / Mock Server only -> Gate 0 + Gate 2 only, no macOS
+    # 2. Companion Bridge / Mock Server only -> Gate 0 + Compat Guardrails + Gate 2 only, no macOS
     p2 = build_verification_plan(changed_files=["scripts/mac-companion-bridge.py"])
     assert p2["mode"] == "scoped"
     assert p2["gates"]["needsMacOS"] is False
+    assert p2["gates"]["gate0CompatGuardrails"] is True
     assert p2["gates"]["gate2LiveRPC"] is True and p2["gates"]["gate2V233Capabilities"] is True
     assert p2["gates"]["iosSimulatorMode"] == "skip"
 
-    # 3. Swift XCTests only -> Gate 1 only, skip Xcode/Simulator completely
+    # 3. Swift XCTests only -> Gate 1 only, skip Xcode/Simulator and compat static guardrails
     p3 = build_verification_plan(changed_files=["apps/ios/Packages/AntigravityData/Tests/AntigravityDataTests/AntigravityProtocolTests.swift"])
     assert p3["mode"] == "scoped"
     assert p3["gates"]["needsMacOS"] is True
+    assert p3["gates"]["gate0CompatGuardrails"] is False
     assert p3["gates"]["gate1SwiftDataTests"] is True
     assert p3["gates"]["gate3IOSBuild"] is False
     assert p3["gates"]["iosSimulatorMode"] == "skip"
 
-    # 4. Pure Markdown parser -> Gate 1 + build-only (zero simulator boot!)
+    # 4. Pure Markdown parser / ResilientCodable -> Gate 0 compat guardrails + Gate 1 + build-only (zero simulator boot!)
     p4 = build_verification_plan(changed_files=["apps/ios/Packages/AntigravityData/Sources/AntigravityData/Models/AntigravityMarkdownParser.swift"])
     assert p4["mode"] == "scoped"
+    assert p4["gates"]["gate0CompatGuardrails"] is True
     assert p4["gates"]["gate1SwiftDataTests"] is True
     assert p4["gates"]["iosSimulatorMode"] == "build-only"
     assert p4["xcuitests"] == [] and p4["simulatorScreens"] == []
 
-    # 5. Single UI screen (Automations) -> ONLY Automations XCUITest + UE06 screen!
+    p4b = build_verification_plan(changed_files=["apps/ios/Packages/AntigravityData/Sources/AntigravityData/Models/ResilientCodable.swift"])
+    assert p4b["mode"] == "scoped"
+    assert p4b["gates"]["gate0CompatGuardrails"] is True
+    assert p4b["gates"]["gate1SwiftDataTests"] is True
+    assert p4b["gates"]["iosSimulatorMode"] == "build-only"
+
+    # 5. Single UI screen (Automations) -> ONLY Automations XCUITest + UE06 screen, compat guardrails skipped!
     p5 = build_verification_plan(changed_files=["apps/ios/App/ViewControllers/Automations/AutomationsViewController.swift"])
     assert p5["mode"] == "scoped"
+    assert p5["gates"]["gate0CompatGuardrails"] is False
     assert p5["gates"]["gate1SwiftDataTests"] is False
     assert p5["gates"]["gate2LiveRPC"] is False
     assert p5["gates"]["iosSimulatorMode"] == "scoped"
@@ -1074,6 +1123,7 @@ def run_self_tests() -> None:
     # 6. TurnDiffReview only -> build + UE12 screenshot only, zero XCUITests!
     p6 = build_verification_plan(changed_files=["apps/ios/App/ViewControllers/Inspector/TurnDiffReviewViewController.swift"])
     assert p6["mode"] == "scoped"
+    assert p6["gates"]["gate0CompatGuardrails"] is False
     assert p6["gates"]["iosSimulatorMode"] == "scoped"
     assert p6["xcuitests"] == []
     assert p6["simulatorScreens"] == ["UE12_TURN_DIFF_REVIEW"]
@@ -1081,6 +1131,7 @@ def run_self_tests() -> None:
     # 7. Live Activity widget only -> build + UE13 screenshot only
     p7 = build_verification_plan(changed_files=["apps/ios/Extensions/LiveActivity/AntigravityLiveActivityWidget.swift"])
     assert p7["mode"] == "scoped"
+    assert p7["gates"]["gate0CompatGuardrails"] is False
     assert p7["xcuitests"] == []
     assert p7["simulatorScreens"] == ["UE13_LIVE_ACTIVITY_SPEC"]
 
@@ -1093,9 +1144,11 @@ def run_self_tests() -> None:
     p9 = build_verification_plan(changed_files=["shared/core-model/src/commonMain/kotlin/dev/antigravity/shared/model/CascadeModels.kt"])
     assert p9["mode"] == "scoped"
     assert p9["gates"]["needsMacOS"] is False
+    assert p9["gates"]["gate0CompatGuardrails"] is False
     p9a = build_verification_plan(changed_files=["apps/android/app/src/main/kotlin/MainActivity.kt"])
     assert p9a["mode"] == "scoped"
     assert p9a["gates"]["needsMacOS"] is False
+    assert p9a["gates"]["gate0CompatGuardrails"] is False
     p9b = build_verification_plan(changed_files=["shared/umbrella/src/commonMain/kotlin/dev/antigravity/shared/AntigravitySharedFacade.kt"])
     assert p9b["mode"] == "scoped"
     assert p9b["gates"]["iosSimulatorMode"] == "build-only"
@@ -1117,6 +1170,7 @@ def run_self_tests() -> None:
     # 11. Core global file -> auto-escalated to full
     p11 = build_verification_plan(changed_files=["apps/ios/SharedUI/DesignSystem/AntigravityTheme.swift"])
     assert p11["mode"] == "full" and not p11["isRelease"]
+    assert p11["gates"]["gate0CompatGuardrails"] is True
     assert p11["xcuitests"] == ALL_XCUITESTS
     assert p11["simulatorScreens"] == ALL_UE_STATES
 
@@ -1140,6 +1194,7 @@ def run_self_tests() -> None:
         pr = build_verification_plan(**kwargs)
         assert pr["mode"] == "release" and pr["isRelease"] is True, f"Release case #{idx} failed: {pr}"
         assert pr["gates"]["needsMacOS"] is True
+        assert pr["gates"]["gate0CompatGuardrails"] is True
         assert pr["gates"]["gate1SwiftDataTests"] is True
         assert pr["gates"]["gate2LiveRPC"] is True
         assert pr["gates"]["gate2V233Capabilities"] is True
@@ -1161,7 +1216,24 @@ def run_self_tests() -> None:
             f"ALL_XCUITESTS drift detected!\n  Swift:   {swift_methods}\n  Planner: {ALL_XCUITESTS}"
         )
 
-    print("✓ e2e_impact_planner self-test PASSED (14/14 scenarios + 8/8 release triggers + XCUITest parity verified)")
+    # 15. CI planner, workflow YAML, and ESDD Stage 1 inspector -> fast Ubuntu only (zero macOS, zero Chrome)
+    p15 = build_verification_plan(
+        changed_files=[
+            "verification/e2e_impact_planner.py",
+            ".github/workflows/macos-xcode-verify.yml",
+            "verification/esdd_inspector.py",
+            "AGENTS.md",
+        ]
+    )
+    assert p15["mode"] == "scoped" and not p15["isRelease"]
+    assert p15["gates"]["needsMacOS"] is False
+    assert p15["gates"]["iosSimulatorMode"] == "skip"
+    assert p15["gates"]["gate0CompatGuardrails"] is True
+    assert p15["esdd"]["full"] is False
+    assert p15["esdd"]["stages"] == [1]
+    assert p15["esdd"]["testCases"] == [] and p15["esdd"]["screens"] == []
+
+    print("✓ e2e_impact_planner self-test PASSED (15/15 scenarios + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
 
 
 def main() -> int:
