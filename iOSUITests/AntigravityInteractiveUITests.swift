@@ -643,6 +643,61 @@ final class AntigravityInteractiveUITests: XCTestCase {
             waitForTextContaining("Google LLC", in: app, timeout: 5),
             "Settings screen must display Google LLC App Icon & Trademark copyright attribution"
         )
+        // 3d. Open Automations tab -> verify 'Create with Prompt' & 'New' buttons -> verify Create with Prompt opens an unsent draft instead of immediately creating/streaming
+        let automationsTab = app.buttons["tab-item-automations"]
+        XCTAssertTrue(automationsTab.waitForExistence(timeout: 5))
+        automationsTab.tap()
+
+        let createWithPromptButton = app.buttons["btn-empty-agent-automation"]
+        XCTAssertTrue(
+            createWithPromptButton.waitForExistence(timeout: 5),
+            "Automations empty state must render 'Create with Prompt' button"
+        )
+        XCTAssertTrue(
+            createWithPromptButton.label.contains("Create with Prompt"),
+            "Create with Prompt button copy must match PC reference"
+        )
+        let newAutomationButton = app.buttons["btn-empty-new-automation"]
+        XCTAssertTrue(
+            newAutomationButton.waitForExistence(timeout: 5),
+            "Automations empty state must render '+ New' button"
+        )
+        XCTAssertTrue(
+            newAutomationButton.label.contains("New"),
+            "New automation button copy must match PC reference"
+        )
+
+        createWithPromptButton.tap()
+        XCTAssertTrue(
+            backToSessionsButton.waitForExistence(timeout: 5),
+            "Tapping Create with Prompt must open the draft composer view"
+        )
+        let workflowChip = app.buttons["composer-workflow-chip"]
+        XCTAssertTrue(
+            workflowChip.waitForExistence(timeout: 5),
+            "Draft composer must display the removable 'automation' workflow chip"
+        )
+        let draftCard = app.descendants(matching: .any)["chat-pending-draft-card"].firstMatch
+        XCTAssertTrue(
+            draftCard.waitForExistence(timeout: 5),
+            "Create with Prompt must show the unsent draft card rather than immediately sending /automation"
+        )
+        XCTAssertFalse(
+            app.buttons["btn-stop-turn"].exists,
+            "Create with Prompt must NOT immediately start streaming before user taps Send"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["chat-inline-four-dot-loading"].firstMatch.exists,
+            "Create with Prompt must NOT immediately start agent execution"
+        )
+        attachScreenshot(named: "03d_Automations_CreateWithPrompt_Draft")
+
+        backToSessionsButton.tap()
+        XCTAssertTrue(
+            createWithPromptButton.waitForExistence(timeout: 5),
+            "Navigating back from an unsent Create with Prompt draft must return cleanly to Automations"
+        )
+
         let agentsTab = app.buttons["tab-item-agents"]
         XCTAssertTrue(agentsTab.waitForExistence(timeout: 5))
         agentsTab.tap()

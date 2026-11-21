@@ -1816,6 +1816,70 @@ final class AntigravityProtocolTests: XCTestCase {
         store.deleteAutomation(digest.id)
         XCTAssertNil(store.automations.first(where: { $0.id == digest.id }))
     }
+
+    @MainActor
+    func testAutomationPromptDraftDoesNotAutoCreateUntilSent() throws {
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        let initialSummaryCount = store.summaries.count
+
+        // 1. Tapping "Create with Prompt" opens an unsent draft without adding a summary or streaming
+        store.openAutomationPromptDraft()
+        XCTAssertEqual(store.summaries.count, initialSummaryCount)
+        XCTAssertEqual(store.activeCascadeId, "")
+        XCTAssertEqual(store.activeRoute, .cascadeChat(""))
+        XCTAssertFalse(store.isCascadeStreaming)
+        XCTAssertTrue(store.activeSteps.isEmpty)
+        XCTAssertEqual(store.composerWorkflowCommand, "/automation")
+        XCTAssertEqual(store.composerDraftText, AntigravitySessionStore.defaultAutomationGuidedPrompt)
+        XCTAssertTrue(store.canSendCurrentDraft)
+
+        let draft = try XCTUnwrap(store.pendingDraftConversation)
+        XCTAssertEqual(draft.title, "New Automation")
+        XCTAssertEqual(draft.projectSlug, AntigravityCloudDetector.noProjectDisplayName)
+        XCTAssertEqual(draft.workflowCommand, "/automation")
+
+        // 2. Navigating back before sending discards the draft cleanly with zero orphan conversations
+        store.discardPendingDraftConversation()
+        XCTAssertNil(store.pendingDraftConversation)
+        XCTAssertNil(store.composerWorkflowCommand)
+        XCTAssertEqual(store.composerDraftText, "")
+        XCTAssertEqual(store.summaries.count, initialSummaryCount)
+
+        // 3. Re-opening with a `/automation ...` seed strips duplicate prefix, allows switching project,
+        //    and materializes the conversation only when the user taps Send.
+        store.createAutomationWithAgent(prompt: "/automation Summarize open PRs every weekday at 9am")
+        XCTAssertEqual(store.summaries.count, initialSummaryCount)
+        XCTAssertEqual(store.composerWorkflowCommand, "/automation")
+        XCTAssertEqual(store.composerDraftText, "Summarize open PRs every weekday at 9am")
+
+        store.updatePendingDraftProject("ledger-svc")
+        XCTAssertEqual(store.pendingDraftConversation?.projectSlug, "ledger-svc")
+
+        store.sendCurrentDraft()
+        XCTAssertNil(store.pendingDraftConversation)
+        XCTAssertNil(store.composerWorkflowCommand)
+        XCTAssertEqual(store.composerDraftText, "")
+        XCTAssertEqual(store.summaries.count, initialSummaryCount + 1)
+        XCTAssertFalse(store.activeCascadeId.isEmpty)
+
+        let createdSummary = try XCTUnwrap(store.summaries.first(where: { $0.cascadeId == store.activeCascadeId }))
+        XCTAssertEqual(createdSummary.projectSlug, "ledger-svc")
+        XCTAssertEqual(createdSummary.title, "Summarize open PRs every weekday at 9am")
+
+        let firstUserStep = try XCTUnwrap(store.activeSteps.first(where: { $0.type == .userInput }))
+        XCTAssertEqual(firstUserStep.userInput, "/automation Summarize open PRs every weekday at 9am")
+
+        // 4. Sending the default guided prompt with No Project preserves "New Automation" title and sends full command
+        store.openAutomationPromptDraft()
+        XCTAssertEqual(store.summaries.count, initialSummaryCount + 1)
+        store.sendCurrentDraft()
+        XCTAssertEqual(store.summaries.count, initialSummaryCount + 2)
+        let guidedSummary = try XCTUnwrap(store.summaries.first(where: { $0.cascadeId == store.activeCascadeId }))
+        XCTAssertEqual(guidedSummary.projectSlug, AntigravityCloudDetector.noProjectDisplayName)
+        XCTAssertEqual(guidedSummary.title, "New Automation")
+        let guidedStep = try XCTUnwrap(store.activeSteps.first(where: { $0.type == .userInput }))
+        XCTAssertEqual(guidedStep.userInput, "/automation Guide me through creating an automated task")
+    }
 }
 
 private extension AntigravitySessionStore {

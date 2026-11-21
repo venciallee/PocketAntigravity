@@ -1361,3 +1361,29 @@ public struct ComposerAttachmentChip: Codable, Sendable, Equatable, Identifiable
         self.targetUri = targetUri
     }
 }
+
+/// Represents an unsent draft conversation (such as Automations "Create with Prompt").
+/// Stays purely client-side until the user taps Send — navigating back discards it without
+/// invoking `StartCascade` or polluting `summaries`.
+public struct PendingDraftConversation: Codable, Sendable, Equatable {
+    public var title: String
+    public var projectSlug: String
+    public var isCloud: Bool
+    public var workflowCommand: String?
+    public var defaultGuidedPrompt: String?
+
+    public init(
+        title: String = "New Conversation",
+        projectSlug: String = AntigravityCloudDetector.noProjectDisplayName,
+        isCloud: Bool = false,
+        workflowCommand: String? = nil,
+        defaultGuidedPrompt: String? = nil
+    ) {
+        self.title = title
+        self.projectSlug = projectSlug
+        self.isCloud = isCloud
+        self.workflowCommand = workflowCommand
+        self.defaultGuidedPrompt = defaultGuidedPrompt
+    }
+}
+

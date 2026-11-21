@@ -116,6 +116,9 @@ public final class AntigravitySessionStore {
     public var unreadStreamingStepCount: Int = 0
 
     // MARK: - Composer & Model Config State (`UE07`, `UE08`, `UE09`)
+    public static let defaultAutomationGuidedPrompt = "Guide me through creating an automated task"
+    public var pendingDraftConversation: PendingDraftConversation? = nil
+    public var composerWorkflowCommand: String? = nil
     public var composerDraftText: String = ""
     public var composerAttachments: [ComposerAttachmentChip] = []
     public var selectedModelConfig: CascadeModelConfig
@@ -525,7 +528,9 @@ public final class AntigravitySessionStore {
     }
 
     public var canSendCurrentDraft: Bool {
-        !composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerAttachments.isEmpty
+        !composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !composerAttachments.isEmpty
+            || !(composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     // MARK: - Live Backend Login, Pairing & Streaming Actions
@@ -956,6 +961,8 @@ public final class AntigravitySessionStore {
         isMutatingAutomation = false
         automationsErrorText = nil
         isAutomationsAuthExpired = false
+        pendingDraftConversation = nil
+        composerWorkflowCommand = nil
         optimisticActiveUntilByCascadeId.removeAll()
         syncedConfigCascadeIds.removeAll()
         locallyCreatedEmptyCascadeIds.removeAll()
@@ -1733,6 +1740,8 @@ public final class AntigravitySessionStore {
         stepsByCascadeId = [:]
         syncedConfigCascadeIds.removeAll()
         activeTurnDiffs = []
+        pendingDraftConversation = nil
+        composerWorkflowCommand = nil
         composerDraftText = ""
         composerAttachments = []
         stepLoadErrorText = nil
@@ -2497,6 +2506,7 @@ public final class AntigravitySessionStore {
     }
 
     public func selectCascade(_ cascadeId: String) {
+        discardPendingDraftConversation()
         activeCascadeId = cascadeId
         locallyViewedAtByCascadeId[cascadeId] = Date()
         if let idx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
@@ -2709,6 +2719,7 @@ public final class AntigravitySessionStore {
         title: String = "New Conversation",
         initialPrompt: String? = nil
     ) -> String {
+        discardPendingDraftConversation()
         let optimisticId = "cas-\(UUID().uuidString.prefix(8).lowercased())"
         let trimmedSlug = projectSlug.trimmingCharacters(in: .whitespacesAndNewlines)
         let project = projects.first(where: { $0.id == trimmedSlug })
@@ -3591,30 +3602,86 @@ public final class AntigravitySessionStore {
         }
     }
 
-    /// Launches Antigravity Desktop's official interactive `/automation` builder in a local host conversation.
-    /// The host agent clarifies schedule/permissions (via `UE10` Structured Question) and writes the sidecar.
-    public func createAutomationWithAgent(prompt: String = "", projectSlug: String? = nil) {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let slashPrompt = trimmed.isEmpty ? "/automation" : "/automation \(trimmed)"
+    /// Opens an unsent draft composer pre-filled with the `/automation` workflow chip and editable guided prompt,
+    /// matching Antigravity Desktop's "Create with Prompt" flow.
+    /// Does NOT call `StartCascade`, does NOT auto-send, and does NOT add an entry to `summaries` until the user taps Send.
+    public func openAutomationPromptDraft(prompt: String = "", projectSlug: String? = nil) {
+        let trimmedRaw = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let strippedBody: String = {
+            if trimmedRaw.lowercased() == "/automation" {
+                return ""
+            }
+            if trimmedRaw.lowercased().hasPrefix("/automation ") {
+                return String(trimmedRaw.dropFirst("/automation ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return trimmedRaw
+        }()
+        let initialBody = strippedBody.isEmpty ? Self.defaultAutomationGuidedPrompt : strippedBody
         let targetSlug: String = {
             if let explicit = projectSlug,
+               !explicit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                let match = projects.first(where: { ($0.id == explicit || $0.name == explicit) && $0.runtime != .cloud }) {
                 return match.id
             }
-            if let selected = selectedProject, selected.runtime != .cloud, !selected.isNoProject {
-                return selected.id
-            }
-            if let firstLocal = projects.first(where: { $0.runtime != .cloud && !$0.isNoProject }) {
-                return firstLocal.id
-            }
             return AntigravityCloudDetector.noProjectDisplayName
         }()
-        let convTitle = trimmed.isEmpty ? "New Automation" : String(trimmed.prefix(48))
-        _ = createConversationInProject(
-            targetSlug,
-            title: convTitle,
-            initialPrompt: slashPrompt
+        let workspaceUri: String = {
+            if AntigravityCloudDetector.isNoProjectSlug(targetSlug) {
+                return ""
+            }
+            return projects.first(where: { $0.id == targetSlug || $0.name == targetSlug })?.workspaceUri ?? ""
+        }()
+
+        stepPollingTask?.cancel()
+        stepPollingTask = nil
+        isLoadingSteps = false
+        stepLoadErrorText = nil
+
+        pendingDraftConversation = PendingDraftConversation(
+            title: "New Automation",
+            projectSlug: targetSlug,
+            isCloud: false,
+            workflowCommand: "/automation",
+            defaultGuidedPrompt: Self.defaultAutomationGuidedPrompt
         )
+        activeCascadeId = ""
+        selectedProjectId = targetSlug
+        selectedWorkspaceUri = workspaceUri
+        composerWorkflowCommand = "/automation"
+        composerDraftText = initialBody
+        composerAttachments.removeAll()
+        isSlashPopupDismissedManually = true
+        activeRoute = .cascadeChat("")
+    }
+
+    /// Discards an unsent draft conversation (e.g., tapping Back before sending) without creating any backend session.
+    public func discardPendingDraftConversation() {
+        guard pendingDraftConversation != nil else { return }
+        pendingDraftConversation = nil
+        composerWorkflowCommand = nil
+        composerDraftText = ""
+        composerAttachments.removeAll()
+        isSlashPopupDismissedManually = false
+    }
+
+    /// Updates the target project for an unsent draft conversation (matching PC's `No Project ⌄` picker).
+    public func updatePendingDraftProject(_ projectSlug: String) {
+        guard var draft = pendingDraftConversation else { return }
+        let trimmed = projectSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.projectSlug = trimmed.isEmpty ? AntigravityCloudDetector.noProjectDisplayName : trimmed
+        pendingDraftConversation = draft
+        selectedProjectId = draft.projectSlug
+        if let proj = projects.first(where: { $0.id == draft.projectSlug || $0.name == draft.projectSlug }),
+           !proj.isNoProject {
+            selectedWorkspaceUri = proj.workspaceUri
+        } else {
+            selectedWorkspaceUri = ""
+        }
+    }
+
+    /// Backwards-compatible alias that opens the interactive `/automation` prompt draft without auto-sending.
+    public func createAutomationWithAgent(prompt: String = "", projectSlug: String? = nil) {
+        openAutomationPromptDraft(prompt: prompt, projectSlug: projectSlug)
     }
 
     // MARK: - Add Context & Composer Actions (`UE07`, `UE08`, `UE09`)
@@ -3676,12 +3743,108 @@ public final class AntigravitySessionStore {
 
     public func sendCurrentDraft() {
         let trimmed = composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !composerAttachments.isEmpty else { return }
+        let workflowPrefix = composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty || !composerAttachments.isEmpty || !workflowPrefix.isEmpty else { return }
 
-        let messageBody = trimmed.isEmpty
+        let combinedText: String = {
+            if workflowPrefix.isEmpty {
+                return trimmed
+            }
+            if trimmed.isEmpty {
+                return workflowPrefix
+            }
+            if trimmed.lowercased().hasPrefix(workflowPrefix.lowercased()) {
+                return trimmed
+            }
+            return "\(workflowPrefix) \(trimmed)"
+        }()
+
+        let messageBody = combinedText.isEmpty
             ? "Inspect attached context: \(composerAttachments.map(\.label).joined(separator: ", "))"
-            : trimmed
+            : combinedText
         let mentionLabels = composerAttachments.map(\.label)
+
+        // Materialize an unsent pending draft conversation (e.g. Automations "Create with Prompt") only on Send.
+        var materializedDirectly = false
+        if let draft = pendingDraftConversation, activeCascadeId.isEmpty {
+            materializedDirectly = true
+            pendingDraftConversation = nil
+            let optimisticId = "cas-\(UUID().uuidString.prefix(8).lowercased())"
+            let project = projects.first(where: { $0.id == draft.projectSlug || $0.name == draft.projectSlug })
+            let isUnassigned = (project?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug)
+            let isCloudProj = draft.isCloud || (project?.runtime == .cloud) || draft.projectSlug.lowercased().hasPrefix("cloud:")
+            let effectiveSlug: String = {
+                if let project { return project.id }
+                if isUnassigned {
+                    let hasLocalNoProj = projects.contains(where: { $0.isNoProject && $0.runtime != .cloud })
+                    if isCloudProj && hasLocalNoProj {
+                        return "cloud:\(AntigravityCloudDetector.noProjectDisplayName)"
+                    }
+                    return AntigravityCloudDetector.noProjectDisplayName
+                }
+                return draft.projectSlug
+            }()
+            let draftWorkspaceUri: String = {
+                if isUnassigned { return "" }
+                if let existingUri = project?.workspaceUri, !existingUri.isEmpty {
+                    return existingUri
+                }
+                if hasPairedBackend || isLiveBackendConnected {
+                    return ""
+                }
+                return isCloudProj ? "cloud://\(effectiveSlug)" : "file:///Users/wl/code/\(effectiveSlug)"
+            }()
+            let branch = isUnassigned ? "" : (project?.activeBranch ?? "main")
+            let effectiveTitle: String = {
+                let isDefaultGuided = (trimmed == draft.defaultGuidedPrompt)
+                if !trimmed.isEmpty && !isDefaultGuided && draft.title == "New Automation" {
+                    return String(trimmed.prefix(48))
+                }
+                return draft.title
+            }()
+            let newSummary = CascadeSummary(
+                cascadeId: optimisticId,
+                title: effectiveTitle,
+                projectSlug: effectiveSlug,
+                workspaceUri: draftWorkspaceUri,
+                branchName: branch,
+                status: .inProgress,
+                stepCount: 1,
+                currentStepIndex: 1,
+                totalSteps: 1,
+                updatedAt: Date(),
+                relativeTimeLabel: "now",
+                statusSubtitle: "Running · Step 1 of 1",
+                isPinned: displayOptions.autoPinOnMessage,
+                isArchived: false,
+                isUnread: false,
+                modelLabel: selectedModelConfig.displayName,
+                lastMessagePreview: messageBody,
+                isCloud: isCloudProj,
+                cloudProjectId: isUnassigned ? nil : project?.cloudProjectId,
+                originInstanceUuid: project?.originInstanceUuid,
+                originHostName: isCloudProj ? "Antigravity" : activeHost.hostname
+            )
+            summaries.insert(newSummary, at: 0)
+            if hasPairedBackend || isLiveBackendConnected {
+                let existingCloudProjects = projects.filter { $0.runtime == .cloud && $0.cloudProjectId != nil }
+                var nextSummaries = summaries
+                projects = Self.reconcileLiveProjects(
+                    workspaces: workspaces,
+                    summaries: &nextSummaries,
+                    existingProjects: projects,
+                    hostName: activeHost.hostname,
+                    cloudProjects: existingCloudProjects
+                )
+                summaries = nextSummaries
+            }
+            stepsByCascadeId[optimisticId] = []
+            activeCascadeId = optimisticId
+            selectedProjectId = summaries.first(where: { $0.cascadeId == optimisticId })?.projectSlug ?? effectiveSlug
+            selectedWorkspaceUri = draftWorkspaceUri
+            activeRoute = .cascadeChat(optimisticId)
+        }
+        let skipUpgradeWait = materializedDirectly
 
         var currentSteps = stepsByCascadeId[activeCascadeId] ?? []
         let nextIndex = (currentSteps.map(\.stepIndex).max() ?? 0) + 1
@@ -3745,6 +3908,7 @@ public final class AntigravitySessionStore {
         }
 
         let attachmentsSnapshot = composerAttachments
+        composerWorkflowCommand = nil
         composerDraftText = ""
         composerAttachments.removeAll()
         isSlashPopupDismissedManually = false
@@ -3803,7 +3967,7 @@ public final class AntigravitySessionStore {
             }
 
             var targetCascadeId = cid
-            if targetCascadeId.hasPrefix("cas-") {
+            if !skipUpgradeWait && targetCascadeId.hasPrefix("cas-") {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 if let upgraded = self?.activeCascadeId, !upgraded.isEmpty, !upgraded.hasPrefix("cas-") {
                     targetCascadeId = upgraded

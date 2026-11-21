@@ -256,9 +256,11 @@ public struct AutomationsViewController: View {
                         Label("Refresh Automations", systemImage: "arrow.clockwise")
                     }
                     Button {
-                        store.createAutomationWithAgent(prompt: quickPromptText)
+                        let seed = quickPromptText
+                        quickPromptText = ""
+                        store.openAutomationPromptDraft(prompt: seed)
                     } label: {
-                        Label("Create with /automation", systemImage: "sparkles")
+                        Label("Create with Prompt", systemImage: "sparkles")
                     }
                 } label: {
                     ZStack(alignment: .topTrailing) {
@@ -677,7 +679,7 @@ public struct AutomationsViewController: View {
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("No Automations Yet")
+                            Text("No automations yet")
                                 .font(.system(size: 16.5, weight: .semibold))
                                 .foregroundStyle(Color.white)
                             Text("Running on \(store.activeHost.hostname)")
@@ -686,43 +688,28 @@ public struct AutomationsViewController: View {
                         }
                     }
 
-                    Text("Create a recurring schedule directly, type a natural-language schedule above, or let Antigravity build one interactively with /automation.")
+                    Text("Run a prompt on a schedule, like a morning summary of yesterday's changes. Runs show up here.")
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(UEChromePalette.textSecondary)
                         .lineSpacing(2)
 
                     HStack(spacing: 10) {
                         Button {
-                            editingAutomation = nil
-                            isShowingEditorSheet = true
+                            let seed = quickPromptText
+                            quickPromptText = ""
+                            store.openAutomationPromptDraft(prompt: seed)
                         } label: {
                             HStack(spacing: 6) {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 13, weight: .bold))
-                                Text("New Automation")
-                                    .font(.system(size: 14, weight: .semibold))
-                            }
-                            .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
-                            .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
-                            .background(
-                                Capsule().fill(AntigravityTheme.accentPeriwinkle)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("btn-empty-new-automation")
-
-                        Button {
-                            store.createAutomationWithAgent(prompt: quickPromptText)
-                        } label: {
-                            HStack(spacing: 5) {
                                 Image(systemName: "sparkles")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                Text("/automation")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("Create with Prompt")
                                     .font(.system(size: 14, weight: .semibold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.88)
                             }
                             .foregroundStyle(UEChromePalette.textPrimary)
                             .padding(.horizontal, 14)
-                            .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                            .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
                             .background(
                                 Capsule().fill(UEChromePalette.surfaceSheetGroup)
                             )
@@ -732,6 +719,27 @@ public struct AutomationsViewController: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("btn-empty-agent-automation")
+
+                        Button {
+                            editingAutomation = nil
+                            isShowingEditorSheet = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 13, weight: .bold))
+                                Text("New")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                            .padding(.horizontal, 20)
+                            .frame(minWidth: 96, minHeight: AntigravityTheme.minTouchTargetPt)
+                            .background(
+                                Capsule().fill(AntigravityTheme.accentPeriwinkle)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("btn-empty-new-automation")
                     }
                 }
                 .padding(16)
