@@ -27,7 +27,7 @@ With the recent leap in **Gemini**'s reasoning and coding capabilities, Antigrav
 
 ## 3. Core Principle — How It Interacts with Antigravity
 
-Rather than embedding a mobile browser or wrapping the ~9 MB desktop React bundle, the client implements Antigravity's native **Connect-RPC wire protocol** (`exa.language_server_pb.LanguageServerService`) directly on-device and supports **two zero-wrapper transport channels**:
+Rather than embedding a mobile browser or wrapping the ~9 MB desktop React bundle, the client speaks Antigravity's native **Connect-RPC wire protocol** (`exa.language_server_pb.LanguageServerService`) directly over the **Official Cloud Relay** — working seamlessly across Wi-Fi and 5G with zero desktop scripts or network configuration:
 
 <p align="center">
   <picture>
@@ -37,15 +37,11 @@ Rather than embedding a mobile browser or wrapping the ~9 MB desktop React bundl
   </picture>
 </p>
 
-### Dual Native Transport Channels
+### One-Tap Pairing & Cloud Relay Tunnel
 
-- **Channel A — Official Cloud Relay (Recommended · Any Network: Wi-Fi / 5G)**
-  1. Open **Remote Control** in Antigravity Desktop to reveal your pairing QR code (`https://antigravity.google.com/r/<instance-id>`).
-  2. Scan the QR code (or paste the `/r/<id>` URL) on mobile and sign in once with your Google account; session credentials are persisted strictly inside **iOS Keychain / Android Keystore**.
-  3. The client dynamically discovers the Relay Web API key (zero hardcoded keys in source), signs requests with `SAPISIDHASH`, resolves your online PC host UUID via `devtools_jetski_boq_api_proto.ApiService/ListInstances` (auto-probing multi-account `X-Goog-AuthUser` + live reachability), and tunnels all unary & streaming `LanguageServerService` RPCs through `ApiService/ProxyCommand` and `ApiService/StreamProxyCommand`.
-- **Channel B — Direct LAN / Tailscale Companion Bridge (Optional Local-Only Fallback)**
-  1. Run the zero-dependency [`scripts/mac-companion-bridge.py`](scripts/mac-companion-bridge.py) on your desktop to auto-discover running `language_server` / `agy --hub` loopback ports and dynamic `--csrf_token` values.
-  2. Pair directly over LAN or Tailscale with SHA-256 TLS pinning / local self-signed TOFU trust and the `x-codeium-csrf-token` header.
+1. **Scan the Desktop Remote Control QR**: Open **Remote Control** in Antigravity Desktop (`https://antigravity.google.com/r/<instance-id>`) and scan the QR code (or paste the link) on your phone.
+2. **One-Time Sign-In & Live Host Discovery**: Sign in once with your Google account — credentials stay strictly inside **iOS Keychain / Android Keystore**. The client dynamically discovers the Relay Web API key (zero hardcoded keys in source), signs requests with `SAPISIDHASH`, and calls `devtools_jetski_boq_api_proto.ApiService/ListInstances` (auto-probing multi-account `X-Goog-AuthUser` + live reachability) to resolve your online PC host UUID.
+3. **Direct Connect-RPC Tunneling**: All unary and streaming `LanguageServerService` RPCs tunnel transparently through `ApiService/ProxyCommand` and `ApiService/StreamProxyCommand`, completely bypassing the ~9 MB desktop web bundle.
 
 ### Wire Protocol & Interaction Lifecycle
 
@@ -72,8 +68,8 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 | Layer | Responsibility | Key Modules & Paths |
 | :--- | :--- | :--- |
 | **Layer 1 · Application Layer** | **100% Native UI, Navigation & OS Extensions.** Owns all visual surfaces, gestures, haptics, and platform extensions while observing state unidirectionally. | • **iOS (`iOS/`, `Shared/`, `Extensions/`)**: Swift 6 + SwiftUI/UIKit implementing all 13 UE screens (`UE01`–`UE13`), Floating Liquid Glass shell, Dynamic Island & Lock Screen Live Activity, Share Extension, Face ID, and Voice Input.<br>• **Android (Kotlin / Jetpack Compose)**: Native Material 3 UI, `BiometricPrompt`, and live progress notifications consuming the KMP `shared/` JVM/Android modules.<br>• **Design System**: Matte Obsidian (`#090A0D`), Periwinkle CTA (`#8EB4FF`), Face ID Amber (`#EBB365`), and cross-platform `SemanticIcon` tokens. |
-| **Layer 2 · Capability Layer** | **Domain Orchestration, Offline Continuity & Universal Rendering.** Coordinates multi-host state, offline storage, streaming rich content, and OS services. | • **Session & Multi-Host Sync (`AntigravitySessionStore`)**: Multi-host isolation, host switcher, live reachability probing, workspaces/projects, and automations.<br>• **Offline Cache & Outbox (`LocalProjectionStore`)**: Per-host sharded local snapshots preserving offline hosts, instant cold-start reads, and Durable Outbox replay.<br>• **Universal Rendering & Review (`shared/core-markdown`, `iOS/Views/Cascade/`, `iOS/ViewControllers/Inspector/`)**: Streaming Markdown AST, TextKit code pills, Mermaid diagrams, `<agent-embed>` previews, Implementation Plan inline comments, and line-level Turn Diff review.<br>• **Approvals & Coordinators (`iOS/Services/`)**: Biometric interaction gate, structured Q&A wizard, `LiveActivityCoordinator`, `NotificationCoordinator`, and `VoiceInputManager`. |
-| **Layer 3 · Core Layer** | **Cross-Platform Shared Core, Wire Protocol & Platform Ports.** Pure, UI-free protocol and model engine compiled for both iOS and Android. | • **KMP Shared Core (`shared/`)**: `:shared:core-model` (canonical models), `:shared:core-protocol` (5B Connect framing, binary Protobuf codec, `SAPISIDHASH` Cloud Relay, `InteractionBuilder`, lifecycle policy), `:shared:core-markdown` (AST parser), and `:shared:umbrella` (`AntigravityShared.xcframework` + Android/JVM artifacts).<br>• **Pure Swift 6 Data Package (`Packages/AntigravityData/`)**: Zero-UIKit Connect-RPC & Cloud Relay engine keeping iOS WidgetKit & Share extensions safely under the 30 MB memory ceiling.<br>• **Platform Ports (`PlatformPorts`)**: `expect`/`actual` & protocol contracts abstracting `SecretStore` (Keychain / Keystore), `NetworkReachabilityMonitoring` (`NWPathMonitor` / `ConnectivityManager`), `PowerStateProviding`, `KeyValuePreferencesStore`, and Biometrics. |
+| **Layer 2 · Capability Layer** | **Domain Orchestration, Offline Continuity & Universal Rendering.** Coordinates multi-host state, offline storage, streaming rich content, and OS services. | • **Session & Multi-Host Sync (`shared/core-domain`, `AntigravitySessionStore`)**: Multi-host isolation, host switcher, live reachability probing, workspaces/projects, and automations.<br>• **Offline Cache & Outbox (`LocalProjectionStore`)**: Per-host sharded local snapshots preserving offline hosts, instant cold-start reads, and Durable Outbox replay.<br>• **Universal Rendering & Review (`shared/core-markdown`, `iOS/Views/Cascade/`, `iOS/ViewControllers/Inspector/`)**: Streaming Markdown AST, TextKit code pills, Mermaid diagrams, `<agent-embed>` previews, Implementation Plan inline comments, and line-level Turn Diff review.<br>• **Approvals & Coordinators (`iOS/Services/`)**: Biometric interaction gate, structured Q&A wizard, `LiveActivityCoordinator`, `NotificationCoordinator`, and `VoiceInputManager`. |
+| **Layer 3 · Core Layer** | **Cross-Platform Shared Core, Wire Protocol & Platform Ports.** Pure, UI-free protocol and model engine compiled for both iOS and Android. | • **KMP Shared Core (`shared/`)**: `:shared:core-model` (canonical models), `:shared:core-protocol` (5B Connect framing, binary Protobuf codec, `SAPISIDHASH` Cloud Relay, `InteractionBuilder`, lifecycle policy), `:shared:core-markdown` (AST parser), `:shared:core-domain` (Coroutines & `StateFlow` stores), and `:shared:umbrella` (`AntigravityShared.xcframework` + Android/JVM artifacts).<br>• **Pure Swift 6 Data Package (`Packages/AntigravityData/`)**: Zero-UIKit Connect-RPC & Cloud Relay engine keeping iOS WidgetKit & Share extensions safely under the 30 MB memory ceiling.<br>• **Platform Ports (`PlatformPorts`)**: `expect`/`actual` & protocol contracts abstracting `SecretStore` (Keychain / Keystore), `NetworkReachabilityMonitoring` (`NWPathMonitor` / `ConnectivityManager`), `PowerStateProviding`, `KeyValuePreferencesStore`, and Biometrics. |
 
 ### Repository Layout
 
@@ -89,7 +85,7 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 │   ├── core-markdown/          #   Cross-platform streaming Markdown AST parser
 │   ├── core-domain/            #   Coroutines & StateFlow domain stores and coordinator
 │   └── umbrella/               #   Unified facade exporting AntigravityShared.xcframework & JVM/Android
-├── scripts/                    # Unified verify CLI, Companion Bridge, icon renderer & doc-sync automation
+├── scripts/                    # Unified verify CLI, icon renderer & upstream doc-sync automation
 ├── specs/                      # Normative ESDD product, protocol & E2E test specifications
 └── verification/               # 4-gate ESDD verifier, mock LanguageServer & Simulator E2E runner
 ```
