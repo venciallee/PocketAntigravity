@@ -404,17 +404,33 @@ public actor AntigravityRPCClient {
                 return true
             }
         }
-        if let invalidEnum = ProtocolCompatibilityEngine.extractInvalidEnumValue(from: errorMessage),
-           let replacement = ProtocolCompatibilityEngine.downgradedEnumReplacement(for: invalidEnum) {
-            let (updated, replaced) = ProtocolCompatibilityEngine.recursivelyReplaceEnumValue(
+        if let invalidEnum = ProtocolCompatibilityEngine.extractInvalidEnumValue(from: errorMessage) {
+            if let replacement = ProtocolCompatibilityEngine.downgradedEnumReplacement(for: invalidEnum) {
+                let (updated, replaced) = ProtocolCompatibilityEngine.recursivelyReplaceEnumValue(
+                    invalidEnum,
+                    with: replacement,
+                    in: body
+                )
+                if replaced {
+                    body = updated
+                    mutateCapabilityProfile(for: instanceUuidOverride) { profile in
+                        profile.recordDowngradedEnum(from: invalidEnum, to: replacement, forMethod: method)
+                    }
+                    return true
+                }
+            }
+            // Secondary fallback for unrecognized future enum values not in the explicit downgrade table:
+            // strip the holding JSON key(s) so older Desktop hosts fall back to protobuf default values.
+            let (strippedBody, removedKeys) = ProtocolCompatibilityEngine.recursivelyRemoveKeysWithValue(
                 invalidEnum,
-                with: replacement,
-                in: body
+                from: body
             )
-            if replaced {
-                body = updated
+            if !removedKeys.isEmpty {
+                body = strippedBody
                 mutateCapabilityProfile(for: instanceUuidOverride) { profile in
-                    profile.recordDowngradedEnum(from: invalidEnum, to: replacement, forMethod: method)
+                    for key in removedKeys {
+                        profile.recordStrippedField(key, forMethod: method)
+                    }
                 }
                 return true
             }
@@ -432,9 +448,10 @@ public actor AntigravityRPCClient {
         timeoutInterval: TimeInterval? = nil,
         respectNegativeCache: Bool = true
     ) async throws -> [String: JSONValue] {
-        // Fast-fail known-unsupported optional capability RPCs for this host to avoid wasted round-trips.
+        // Inverse-allowlist negative cache: fast-fail any non-core RPC previously rejected as
+        // unimplemented by this host (even future optional RPCs not yet assigned a HostCapability).
         if respectNegativeCache,
-           HostCapability.capability(forMethod: method) != nil {
+           HostCapability.shouldNegativeCacheOnUnimplemented(method) {
             let profile = capabilityProfile(forHostKey: capabilityHostKey(for: instanceUuidOverride))
             if profile.isMethodKnownUnsupported(method) {
                 throw AntigravityRPCError.httpError(
@@ -503,7 +520,8 @@ public actor AntigravityRPCClient {
                    ) {
                     continue
                 }
-                if ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: http.statusCode, body: text) {
+                if ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: http.statusCode, body: text),
+                   HostCapability.shouldNegativeCacheOnUnimplemented(method) {
                     mutateCapabilityProfile(for: instanceUuidOverride) { p in
                         p.recordMethodUnsupported(method)
                     }
@@ -579,7 +597,8 @@ public actor AntigravityRPCClient {
                 rawRespData = res.payload
                 respHeaders = res.headers
             } catch let err {
-                if ProtocolCompatibilityEngine.isMethodUnimplementedError(err) {
+                if ProtocolCompatibilityEngine.isMethodUnimplementedError(err),
+                   HostCapability.shouldNegativeCacheOnUnimplemented(method) {
                     mutateCapabilityProfile(for: instanceUuidOverride) { p in
                         p.recordMethodUnsupported(method)
                     }
@@ -611,7 +630,8 @@ public actor AntigravityRPCClient {
                         continue
                     }
                     let statusCode = ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: combinedError) ? 501 : 400
-                    if statusCode == 501 {
+                    if statusCode == 501,
+                       HostCapability.shouldNegativeCacheOnUnimplemented(method) {
                         mutateCapabilityProfile(for: instanceUuidOverride) { p in
                             p.recordMethodUnsupported(method)
                         }
@@ -637,8 +657,10 @@ public actor AntigravityRPCClient {
                 continue
             }
             if ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: rawText) {
-                mutateCapabilityProfile(for: instanceUuidOverride) { p in
-                    p.recordMethodUnsupported(method)
+                if HostCapability.shouldNegativeCacheOnUnimplemented(method) {
+                    mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                        p.recordMethodUnsupported(method)
+                    }
                 }
                 throw AntigravityRPCError.httpError(statusCode: 501, body: rawText)
             }

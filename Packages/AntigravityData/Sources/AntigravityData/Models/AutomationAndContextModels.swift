@@ -3,18 +3,19 @@ import Foundation
 // MARK: - Automations Models (UE06)
 
 /// Section grouping in `AutomationsViewController` (`UE06`).
-public enum AutomationSectionKind: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum AutomationSectionKind: String, ResilientStringEnum, CaseIterable, Identifiable {
     case scheduled = "SCHEDULED"
     case alwaysOn = "ALWAYS ON"
     case paused = "PAUSED"
 
     public var id: String { rawValue }
+    public static var unknownFallback: AutomationSectionKind { .scheduled }
 }
 
 public typealias AutomationCategory = AutomationSectionKind
 
 /// Native Antigravity 2.0 `exa.language_server_pb.SidecarAction` enum values for `ManageSidecar`.
-public enum SidecarManageAction: String, Codable, Sendable, Equatable {
+public enum SidecarManageAction: String, ResilientStringEnum, Equatable {
     case unspecified = "SIDECAR_ACTION_UNSPECIFIED"
     case disable = "SIDECAR_ACTION_DISABLE"
     case enable = "SIDECAR_ACTION_ENABLE"
@@ -26,6 +27,8 @@ public enum SidecarManageAction: String, Codable, Sendable, Equatable {
     case setAllProjects = "SIDECAR_ACTION_SET_ALL_PROJECTS"
     case updateArgs = "SIDECAR_ACTION_UPDATE_ARGS"
     case runNow = "SIDECAR_ACTION_RUN_NOW"
+
+    public static var unknownFallback: SidecarManageAction { .unspecified }
 }
 
 /// Decoded event from `exa.language_server_pb.LanguageServerService/GetSidecarEvents`.
@@ -705,7 +708,7 @@ public enum AutomationScheduleCodec: Sendable {
 // MARK: - Add Context Sheet Models (UE08)
 
 /// Category tiles at the top of `AddContextSheetView` (`UE08`).
-public enum ContextCategory: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum ContextCategory: String, ResilientStringEnum, CaseIterable, Identifiable {
     case files = "Files"
     case folder = "Folder"
     case mentions = "Mentions"
@@ -713,6 +716,7 @@ public enum ContextCategory: String, Codable, CaseIterable, Sendable, Identifiab
     case skills = "Skills"
 
     public var id: String { rawValue }
+    public static var unknownFallback: ContextCategory { .files }
 }
 
 /// Selectable file, folder, mention, action, or skill item in `AddContextSheetView` (`UE08`).

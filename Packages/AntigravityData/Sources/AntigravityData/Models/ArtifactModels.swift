@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ArtifactKind: String, Codable, Sendable {
+public enum ArtifactKind: String, ResilientStringEnum {
     case implementationPlan
     case walkthrough
     case taskList
@@ -13,11 +13,7 @@ public enum ArtifactKind: String, Codable, Sendable {
     /// Forward-compatible fallback for unrecognized artifact kinds produced by newer Desktop hosts.
     case unsupportedAsset
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode(String.self)
-        self = ArtifactKind(rawValue: raw) ?? .unsupportedAsset
-    }
+    public static var unknownFallback: ArtifactKind { .unsupportedAsset }
 }
 
 /// Represents an Antigravity artifact (`GetArtifactSnapshots` / `GetRevisionArtifact`).
@@ -79,12 +75,14 @@ public struct ArtifactSnapshot: Codable, Sendable, Equatable, Identifiable {
 
 // MARK: - Remote Artifact & `<agent-embed>` Resource Resolution Models
 
-public enum EmbedResourceSource: String, Codable, Sendable, Equatable {
+public enum EmbedResourceSource: String, ResilientStringEnum, Equatable {
     case trajectoryStep
     case artifactSnapshot
     case remoteHost
     case directNetwork
     case inlineDataURI
+
+    public static var unknownFallback: EmbedResourceSource { .remoteHost }
 }
 
 /// Resolved content backing an `<agent-embed src="file:///...">`, standalone image, or artifact preview.
@@ -270,11 +268,13 @@ public struct PlanInlineComment: Codable, Sendable, Equatable, Identifiable {
 // MARK: - Multi-Turn Line-Level Diff Review Models (UE12 + Git VCS)
 
 public struct DiffLine: Codable, Sendable, Equatable, Identifiable {
-    public enum Kind: String, Codable, Sendable {
+    public enum Kind: String, ResilientStringEnum {
         case context
         case addition
         case deletion
         case hunkHeader
+
+        public static var unknownFallback: Kind { .context }
     }
 
     public var id: Int

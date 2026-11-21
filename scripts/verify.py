@@ -10,10 +10,10 @@ Single stateless entrypoint that replaces juggling 5+ disparate scripts and `cd`
     artifacts after `esdd` (unless `--keep-artifacts` is passed).
 
 Examples:
-  ./scripts/verify.py                     # Fast default gates: spec + rpc + v233 (~4s)
-  ./scripts/verify.py --full              # All available gates: spec + rpc + v233 + esdd + kmp + swift
+  ./scripts/verify.py                     # Fast default gates: spec + rpc + v233 + compat (~6s)
+  ./scripts/verify.py --full              # All available gates: fast + esdd + kmp + swift
   ./scripts/verify.py --json              # Machine-readable JSON report for agents
-  ./scripts/verify.py --suite rpc,kmp     # Run specific suite(s) only
+  ./scripts/verify.py --suite rpc,compat  # Run specific suite(s) only
   ./scripts/verify.py --suite swift       # Run Swift 6 XCTest (stateless `--package-path`)
   ./scripts/verify.py --suite bridge      # Verify against a running Mac Companion Bridge
   ./scripts/verify.py --list              # Show suites & detected toolchains
@@ -38,9 +38,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 VERIFICATION_DIR = REPO_ROOT / "verification"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
-FAST_SUITES = ["spec", "rpc", "v233"]
-FULL_SUITES = ["spec", "rpc", "v233", "esdd", "kmp", "swift"]
-ALL_SUITES = ["spec", "rpc", "v233", "esdd", "kmp", "swift", "bridge", "sim"]
+FAST_SUITES = ["spec", "rpc", "v233", "compat"]
+FULL_SUITES = ["spec", "rpc", "v233", "compat", "esdd", "kmp", "swift"]
+ALL_SUITES = ["spec", "rpc", "v233", "compat", "esdd", "kmp", "swift", "bridge", "sim"]
 
 KMP_JVM_TASKS = [
     ":shared:core-model:jvmTest",
@@ -58,6 +58,8 @@ PY_COMPILE_FILES = [
     "verification/mock_language_server.py",
     "verification/verify-live-rpc-flow.py",
     "verification/verify-v233-capabilities.py",
+    "verification/verify_compat_guardrails.py",
+    "verification/verify-compat-matrix.py",
     "verification/esdd_inspector.py",
 ]
 
@@ -104,6 +106,12 @@ SUITE_SPECS: dict[str, SuiteSpec] = {
     "v233": SuiteSpec(
         name="v233",
         description="Antigravity 2.0 (v2.33–v3.0) capabilities, Cloud Relay, VCS helpers & Doc-Sync self-test",
+        in_fast=True,
+        in_full=True,
+    ),
+    "compat": SuiteSpec(
+        name="compat",
+        description="4-layer bidirectional compatibility static guardrails + 3-version matrix (Legacy v2.31 / Current / Future v2.99)",
         in_fast=True,
         in_full=True,
     ),
@@ -389,6 +397,15 @@ def run_suite(
         )
         return res, False
 
+    if suite == "compat":
+        res = run_command_gate(
+            "compat",
+            [sys.executable, "verification/verify-compat-matrix.py"],
+            args,
+            success_summary=lambda lines: "4-layer compat guardrails + 3-version matrix (Legacy/Current/Future) passed",
+        )
+        return res, False
+
     if suite == "esdd":
         pre_dirty = git_status_verification_output()
         res = run_command_gate(
@@ -578,12 +595,12 @@ def build_parser() -> argparse.ArgumentParser:
     mode_group.add_argument(
         "--fast",
         action="store_true",
-        help="Run fast default gates (spec + rpc + v233; default when no flags given).",
+        help=f"Run fast default gates ({' + '.join(FAST_SUITES)}; default when no flags given).",
     )
     mode_group.add_argument(
         "--full",
         action="store_true",
-        help="Run all available gates (spec + rpc + v233 + esdd + kmp + swift).",
+        help=f"Run all available gates ({' + '.join(FULL_SUITES)}).",
     )
     parser.add_argument(
         "--suite",

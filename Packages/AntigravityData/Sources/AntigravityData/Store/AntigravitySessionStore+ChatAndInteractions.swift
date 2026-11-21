@@ -690,11 +690,24 @@ extension AntigravitySessionStore {
         let cid = activeCascadeId
         let clientRef = rpcClient
         let engineRef = kmpEngine
-        Task {
-            if let engineRef {
-                try? await engineRef.cancelActiveTurn(cascadeId: cid, instanceUuidOverride: originUuid)
-            } else {
-                try? await clientRef?.cancelCascadeInvocation(cascadeId: cid, instanceUuidOverride: originUuid)
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
+            do {
+                if let engineRef {
+                    try await engineRef.cancelActiveTurn(cascadeId: cid, instanceUuidOverride: originUuid)
+                } else if let clientRef {
+                    try await clientRef.cancelCascadeInvocation(cascadeId: cid, instanceUuidOverride: originUuid)
+                } else {
+                    return
+                }
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .backgroundTaskControl,
+                    fallbackActionLabel: "Stopping agent"
+                )
             }
         }
     }
