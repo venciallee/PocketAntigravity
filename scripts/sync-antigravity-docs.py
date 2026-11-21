@@ -84,8 +84,13 @@ CORE_DOC_SLUGS: list[str] = [
 
 DESKTOP_ONLY_NOISE_PATTERNS = (
     r"\bwindows\s*(?:10|11|installer|defender|credential|powershell|git\.exe)\b",
+    r"\b(?:on|for)\s+windows\b",
+    r"\bon\s+linux\b",
     r"\bantivirus\b",
     r"\bmacos\s+installer\b",
+    r"\bdock\s+icon\b",
+    r"\bwindow\s+title\s+bar\b",
+    r"\bwindow\s+minimize,\s*maximize\b",
     r"\belectron\b",
     r"\bchrome\s+tab\s+groups?\s+on\s+linux\b",
     r"\bctrl\+d\s+on\s+windows\b",
@@ -170,7 +175,7 @@ def format_semver(tup: tuple[int, int, int]) -> str:
 class _MainContentHTMLStripper(HTMLParser):
     """Extracts clean readable Markdown-like text from HTML while dropping nav/script/style chrome."""
 
-    SKIP_TAGS = {"script", "style", "noscript", "nav", "header", "footer", "svg", "template"}
+    SKIP_TAGS = {"head", "title", "script", "style", "noscript", "nav", "header", "footer", "aside", "button", "svg", "template"}
     BLOCK_TAGS = {"h1", "h2", "h3", "h4", "p", "li", "tr", "section", "article", "div", "pre", "blockquote"}
 
     def __init__(self) -> None:
@@ -185,6 +190,8 @@ class _MainContentHTMLStripper(HTMLParser):
         t = tag.lower()
         self._tag_stack.append(t)
         if t == "main" or t == "article":
+            if not self._seen_main:
+                self._chunks.clear()
             self._in_main = True
             self._seen_main = True
         if t in self.SKIP_TAGS:
@@ -397,6 +404,7 @@ def compute_semantic_delta(
             or cleaned.startswith("https://")
             or "redirecting to:" in low_c
             or "redirecting from" in low_c
+            or low_c.startswith("section titled ")
             or set(cleaned) <= set("-_=*` ")
         ):
             continue

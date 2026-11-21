@@ -174,6 +174,7 @@ jobs:
 
           git add -A
           git commit -m "feat(sync): align iOSAntigravity with Google Antigravity ${NEW_VER}"
+          git fetch origin "${BRANCH}" || true
           git push -u origin "${BRANCH}" --force-with-lease
 
           PR_FLAG=""
@@ -183,18 +184,46 @@ jobs:
 
           EXISTING_PR="$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty')"
           if [ -z "${EXISTING_PR}" ]; then
-            gh pr create \
+            PR_ERR_FILE="/tmp/gh-pr-create.err"
+            if ! gh pr create \
               --base main \
               --head "${BRANCH}" \
               --title "feat(sync): Antigravity ${NEW_VER} official docs sync (${MAX_TIER})" \
               --body-file /tmp/ag-doc-sync/delta-summary.md \
-              ${PR_FLAG}
+              ${PR_FLAG} 2>"${PR_ERR_FILE}"; then
+              cat "${PR_ERR_FILE}" >&2
+              if grep -qi "not permitted to create or approve pull requests" "${PR_ERR_FILE}"; then
+                echo "::warning::GitHub Actions is not permitted to create Pull Requests in repository settings. Branch '${BRANCH}' was pushed cleanly; creating an actionable Sync Issue with a 1-click PR link."
+                COMPARE_URL="https://github.com/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1"
+                ISSUE_BODY="/tmp/ag-doc-sync/pr-fallback-issue.md"
+                {
+                  echo "> ⚠️ **Branch \`${BRANCH}\` has been synced, verified (Connect-RPC + v2.33 Capabilities + 4-Gate ESDD passed), and pushed to \`origin\`.**"
+                  echo ">"
+                  echo "> GitHub Actions does not yet have repository permission to open Pull Requests automatically:"
+                  echo "> 1. **One-click PR**: [Open Pull Request for \`${BRANCH}\`](${COMPARE_URL})"
+                  echo "> 2. **Enable auto-PR permanently**: **Settings → Actions → General → Workflow permissions → ✅ Allow GitHub Actions to create and approve pull requests**"
+                  echo ""
+                  cat /tmp/ag-doc-sync/delta-summary.md
+                } > "${ISSUE_BODY}"
+                ISSUE_TITLE="[Doc-Sync] Antigravity ${NEW_VER} upstream delta ready on ${BRANCH}"
+                EXISTING_ISSUE="$(gh issue list --state open --search "\"${ISSUE_TITLE}\" in:title" --json number --jq '.[0].number // empty')"
+                if [ -z "${EXISTING_ISSUE}" ]; then
+                  gh issue create --title "${ISSUE_TITLE}" --body-file "${ISSUE_BODY}"
+                else
+                  gh issue comment "${EXISTING_ISSUE}" --body-file "${ISSUE_BODY}"
+                fi
+              else
+                exit 1
+              fi
+            fi
           else
             gh pr comment "${EXISTING_PR}" --body-file /tmp/ag-doc-sync/delta-summary.md
           fi
 
           if [ "${MAX_TIER}" = "tier3" ]; then
-            gh issue create \
-              --title "[RFC] Antigravity ${NEW_VER} Tier 3 capabilities require architecture review" \
-              --body-file /tmp/ag-doc-sync/delta-summary.md || true
+            RFC_TITLE="[RFC] Antigravity ${NEW_VER} Tier 3 capabilities require architecture review"
+            EXISTING_RFC="$(gh issue list --state open --search "\"${RFC_TITLE}\" in:title" --json number --jq '.[0].number // empty')"
+            if [ -z "${EXISTING_RFC}" ]; then
+              gh issue create --title "${RFC_TITLE}" --body-file /tmp/ag-doc-sync/delta-summary.md || true
+            fi
           fi

@@ -106,6 +106,12 @@ def scaffold_dry_run_specs(delta_report: dict, delta_summary_md: str, output_roo
     ]
     (target_dir / "01-prd-gap-analysis.md").write_text("\n".join(prd), encoding="utf-8")
 
+    tier2_lines = [f"- [ ] Capture live `LanguageServerService` schema for: {it['summary']}" for it in tier2[:40]]
+    if len(tier2) > 40:
+        tier2_lines.append(f"- _...and {len(tier2) - 40} additional Tier 2 item(s) recorded in `delta-report.json`._")
+    if not tier2_lines:
+        tier2_lines = ["- None required for this release."]
+
     tech = [
         f"# Auto-Generated Technical Design — Antigravity {version}",
         "",
@@ -115,8 +121,7 @@ def scaffold_dry_run_specs(delta_report: dict, delta_summary_md: str, output_roo
         "- `verification/`: `mock_language_server.py`, `verify-v233-capabilities.py`, and `esdd-verify.py`.",
         "",
         "## Tier 2 Protocol Probe Checklist",
-        *[f"- [ ] Capture live `LanguageServerService` schema for: {it['summary']}" for it in tier2],
-        *(["- None required for this release."] if not tier2 else []),
+        *tier2_lines,
         "",
     ]
     (target_dir / "02-tech-design.md").write_text("\n".join(tech), encoding="utf-8")
