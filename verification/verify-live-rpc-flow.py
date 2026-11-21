@@ -162,7 +162,7 @@ def run_flow(base_url: str, csrf_token: str, live_external: bool = False, read_o
             {
                 "item": {
                     "file": {
-                        "absoluteUri": f"{ws_uri}/Packages/AntigravityData/Package.swift",
+                        "absoluteUri": f"{ws_uri}/apps/ios/Packages/AntigravityData/Package.swift",
                         "label": "@Package.swift",
                     }
                 }

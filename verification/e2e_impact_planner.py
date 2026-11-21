@@ -62,13 +62,13 @@ VERSION_BUMP_KEYS = (
 # Files with app-wide blast radius that automatically escalate to FULL verification.
 GLOBAL_FULL_ESCALATION_PATTERNS: list[tuple[str, str]] = [
     ("project.yml", "Xcode project/target/entitlements configuration changed"),
-    ("Packages/AntigravityData/Package.swift", "SwiftPM manifest changed"),
-    ("iOS/Application/AntigravityApp.swift", "App root entry point changed"),
-    ("iOS/Application/DebugSceneFactory.swift", "All 13 --ui-verify scene fixtures registry changed"),
-    ("iOS/Navigation/AntigravityShellController.swift", "Root navigation shell, tab capsule, FAB & sheet router changed"),
-    ("Shared/DesignSystem/*", "Shared Design System tokens/glass/icons affect all 13 screens"),
-    ("Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore.swift", "Central session store root state changed"),
-    ("Packages/AntigravityData/Sources/AntigravityData/Fixtures/ESDDVerificationFixtures.swift", "Shared ESDD fixtures changed"),
+    ("apps/ios/Packages/AntigravityData/Package.swift", "SwiftPM manifest changed"),
+    ("apps/ios/App/Application/AntigravityApp.swift", "App root entry point changed"),
+    ("apps/ios/App/Application/DebugSceneFactory.swift", "All 13 --ui-verify scene fixtures registry changed"),
+    ("apps/ios/App/Navigation/AntigravityShellController.swift", "Root navigation shell, tab capsule, FAB & sheet router changed"),
+    ("apps/ios/SharedUI/DesignSystem/*", "Shared Design System tokens/glass/icons affect all 13 screens"),
+    ("apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore.swift", "Central session store root state changed"),
+    ("apps/ios/Packages/AntigravityData/Sources/AntigravityData/Fixtures/ESDDVerificationFixtures.swift", "Shared ESDD fixtures changed"),
     (".github/workflows/macos-xcode-verify.yml", "macOS E2E CI workflow changed"),
     ("verification/ios-simulator-runner.py", "iOS Simulator E2E runner changed"),
     ("verification/e2e_impact_planner.py", "E2E impact planner changed"),
@@ -164,7 +164,7 @@ def classify_file(path: str) -> dict[str, Any]:
     if norm.startswith("verification/output/"):
         return _empty_impact("verification-output", "Verification output artifacts only")
 
-    if norm in {"scripts/install-on-iphone.sh", "scripts/mac-real-env-verify.sh", "scripts/render-brand-icons.py"} or norm.startswith("scripts/assets/"):
+    if norm in {"scripts/install-on-iphone.sh", "scripts/mac-real-env-verify.sh", "scripts/render-brand-icons.py", "scripts/verify.py"} or norm.startswith("scripts/assets/"):
         return _empty_impact("helper-scripts", "Developer/local helper script or source SVG asset changed")
 
     # 8. KMP shared modules & Gradle build (verified by kmp-verify.yml)
@@ -187,14 +187,18 @@ def classify_file(path: str) -> dict[str, Any]:
     ):
         return _empty_impact("kmp-shared", "KMP shared Kotlin/Gradle module (verified by kmp-verify.yml)")
 
+    # 8b. Android app modules (non-iOS; never requires macOS Xcode Simulator)
+    if norm.startswith("apps/android/"):
+        return _empty_impact("android-app", "Android client module changed (zero macOS/iOS impact)")
+
     # 9. Swift unit tests only (App target does not compile SPM test target)
-    if norm.startswith("Packages/AntigravityData/Tests/"):
+    if norm.startswith("apps/ios/Packages/AntigravityData/Tests/"):
         res = _empty_impact("swift-data-tests", "AntigravityData XCTest unit tests changed")
         res["gate1_swift_data_tests"] = True
         return res
 
-    # 10. Packages/AntigravityData/Sources (pure Swift 6 data/protocol/store layer)
-    data_prefix = "Packages/AntigravityData/Sources/AntigravityData/"
+    # 10. apps/ios/Packages/AntigravityData/Sources (pure Swift 6 data/protocol/store layer)
+    data_prefix = "apps/ios/Packages/AntigravityData/Sources/AntigravityData/"
     if norm.startswith(data_prefix):
         rel = norm[len(data_prefix):]
 
@@ -260,7 +264,13 @@ def classify_file(path: str) -> dict[str, Any]:
             res["esdd_tcs"] = ["TC-07", "TC-08", "TC-11", "TC-15"]
             return res
 
-        if rel in {"Models/ArtifactModels.swift", "Models/V233FeatureModels.swift", "Models/SemanticIcon.swift", "Models/ResilientCodable.swift", "Platform/PlatformPorts.swift"}:
+        if rel in {
+            "Models/ArtifactModels.swift",
+            "Models/ResilientCodable.swift",
+            "Models/V233FeatureModels.swift",
+            "Models/SemanticIcon.swift",
+            "Platform/PlatformPorts.swift",
+        }:
             res = _empty_impact("data-models-pure", "Data models/ports changed (verified via swift test + iOS compile)")
             res["gate1_swift_data_tests"] = True
             res["gate2_v233"] = True
@@ -377,7 +387,7 @@ def classify_file(path: str) -> dict[str, Any]:
         return res
 
     # 11. iOS UI ViewControllers, Views, Services & Bridge
-    if norm == "iOS/ViewControllers/Home/AgentsHomeViewController.swift":
+    if norm == "apps/ios/App/ViewControllers/Home/AgentsHomeViewController.swift":
         res = _empty_impact("ui-home", "Agents Home (UE01) changed")
         res["gate3_ios_build"] = True
         res["xcuitests"] = [
@@ -390,7 +400,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE01_AGENTS_HOME"]
         return res
 
-    if norm == "iOS/ViewControllers/Home/DisplayOptionsSheetView.swift":
+    if norm == "apps/ios/App/ViewControllers/Home/DisplayOptionsSheetView.swift":
         res = _empty_impact("ui-display-options", "Display Options sheet (UE02) changed")
         res["gate3_ios_build"] = True
         res["simulator_screens"] = ["UE02_DISPLAY_OPTIONS"]
@@ -399,7 +409,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE02_DISPLAY_OPTIONS"]
         return res
 
-    if norm == "iOS/ViewControllers/Home/ConversationContextPreviewMenu.swift":
+    if norm == "apps/ios/App/ViewControllers/Home/ConversationContextPreviewMenu.swift":
         res = _empty_impact("ui-context-menu", "Conversation Context Menu (UE03) changed")
         res["gate3_ios_build"] = True
         res["simulator_screens"] = ["UE03_CONTEXT_MENU_PIN"]
@@ -408,7 +418,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE03_CONTEXT_MENU_PIN"]
         return res
 
-    if norm == "iOS/ViewControllers/Projects/ProjectDetailViewController.swift":
+    if norm == "apps/ios/App/ViewControllers/Projects/ProjectDetailViewController.swift":
         res = _empty_impact("ui-project-detail", "Project Detail (UE04) changed")
         res["gate3_ios_build"] = True
         res["xcuitests"] = ["testProjectDetailNavigationAndEdgeSwipeBack"]
@@ -418,7 +428,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE04_PROJECT_DETAIL"]
         return res
 
-    if norm == "iOS/ViewControllers/Projects/CreateProjectSheetView.swift":
+    if norm == "apps/ios/App/ViewControllers/Projects/CreateProjectSheetView.swift":
         res = _empty_impact("ui-create-project", "Create Project sheet (UE05) changed")
         res["gate3_ios_build"] = True
         res["simulator_screens"] = ["UE05_CREATE_PROJECT"]
@@ -427,7 +437,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE05_CREATE_PROJECT"]
         return res
 
-    if norm == "iOS/ViewControllers/Automations/AutomationsViewController.swift":
+    if norm == "apps/ios/App/ViewControllers/Automations/AutomationsViewController.swift":
         res = _empty_impact("ui-automations", "Automations view (UE06) changed")
         res["gate3_ios_build"] = True
         res["xcuitests"] = ["testAutomationsCreateWithPromptDraftFlow"]
@@ -437,7 +447,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE06_AUTOMATIONS"]
         return res
 
-    if norm == "iOS/ViewControllers/Cascade/StructuredQuestionCardView.swift":
+    if norm == "apps/ios/App/ViewControllers/Cascade/StructuredQuestionCardView.swift":
         res = _empty_impact("ui-structured-question", "Structured Question card (UE10) changed")
         res["gate3_ios_build"] = True
         res["simulator_screens"] = ["UE10_STRUCTURED_QUESTION"]
@@ -448,15 +458,15 @@ def classify_file(path: str) -> dict[str, Any]:
 
     if (
         norm in {
-            "iOS/ViewControllers/Cascade/CascadeChatViewController.swift",
-            "iOS/ViewControllers/Cascade/InteractionGateSheetController.swift",
-            "iOS/ViewControllers/Cascade/ConversationOverviewSheetView.swift",
-            "iOS/ViewControllers/Cascade/SideQuestionSheetView.swift",
-            "iOS/ViewControllers/Cascade/SwarmBoardSheetView.swift",
-            "iOS/ViewControllers/Cascade/VoiceModeSheetView.swift",
-            "iOS/Services/VoiceInputManager.swift",
+            "apps/ios/App/ViewControllers/Cascade/CascadeChatViewController.swift",
+            "apps/ios/App/ViewControllers/Cascade/InteractionGateSheetController.swift",
+            "apps/ios/App/ViewControllers/Cascade/ConversationOverviewSheetView.swift",
+            "apps/ios/App/ViewControllers/Cascade/SideQuestionSheetView.swift",
+            "apps/ios/App/ViewControllers/Cascade/SwarmBoardSheetView.swift",
+            "apps/ios/App/ViewControllers/Cascade/VoiceModeSheetView.swift",
+            "apps/ios/App/Services/VoiceInputManager.swift",
         }
-        or norm.startswith("iOS/Views/Cascade/")
+        or norm.startswith("apps/ios/App/Views/Cascade/")
     ):
         res = _empty_impact("ui-cascade-chat", "Cascade Chat stream, step cards or interaction gate (UE07) changed")
         res["gate3_ios_build"] = True
@@ -470,7 +480,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE07_CHAT_AND_COMPOSER"]
         return res
 
-    if norm in {"iOS/Views/Composer/ChatComposerView.swift", "iOS/Views/Composer/PermissionsSheetView.swift"}:
+    if norm in {"apps/ios/App/Views/Composer/ChatComposerView.swift", "apps/ios/App/Views/Composer/PermissionsSheetView.swift"}:
         res = _empty_impact("ui-composer", "Chat Composer or Permissions sheet (UE07) changed")
         res["gate3_ios_build"] = True
         res["xcuitests"] = [
@@ -483,7 +493,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE07_CHAT_AND_COMPOSER"]
         return res
 
-    if norm == "iOS/Views/Composer/AddContextSheetView.swift":
+    if norm == "apps/ios/App/Views/Composer/AddContextSheetView.swift":
         res = _empty_impact("ui-add-context", "Add Context sheet (UE08) changed")
         res["gate3_ios_build"] = True
         res["xcuitests"] = ["testComposeFABStartCascadeAndStreamedReply"]
@@ -493,7 +503,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE08_ADD_CONTEXT"]
         return res
 
-    if norm == "iOS/Views/Composer/ModelAndModeSheetView.swift":
+    if norm == "apps/ios/App/Views/Composer/ModelAndModeSheetView.swift":
         res = _empty_impact("ui-model-mode", "Model & Mode sheet (UE09) changed")
         res["gate3_ios_build"] = True
         res["xcuitests"] = ["testComposeFABStartCascadeAndStreamedReply"]
@@ -504,8 +514,8 @@ def classify_file(path: str) -> dict[str, Any]:
         return res
 
     if norm in {
-        "iOS/ViewControllers/Inspector/ImplementationPlanReviewViewController.swift",
-        "iOS/ViewControllers/Inspector/RichArtifactViewerSheet.swift",
+        "apps/ios/App/ViewControllers/Inspector/ImplementationPlanReviewViewController.swift",
+        "apps/ios/App/ViewControllers/Inspector/RichArtifactViewerSheet.swift",
     }:
         res = _empty_impact("ui-plan-review", "Implementation Plan & Artifact Review (UE11) changed")
         res["gate3_ios_build"] = True
@@ -515,7 +525,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE11_PLAN_REVIEW"]
         return res
 
-    if norm == "iOS/ViewControllers/Inspector/TurnDiffReviewViewController.swift":
+    if norm == "apps/ios/App/ViewControllers/Inspector/TurnDiffReviewViewController.swift":
         res = _empty_impact("ui-diff-review", "Turn Diff Review (UE12) changed")
         res["gate3_ios_build"] = True
         res["simulator_screens"] = ["UE12_TURN_DIFF_REVIEW"]
@@ -524,14 +534,14 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE12_TURN_DIFF_REVIEW"]
         return res
 
-    if norm.startswith("iOS/ViewControllers/Pairing/"):
+    if norm.startswith("apps/ios/App/ViewControllers/Pairing/"):
         res = _empty_impact("ui-pairing-settings", "Pairing, Cloud Relay sign-in & Settings views changed")
         res["gate3_ios_build"] = True
         res["xcuitests"] = ["testOfflineHostRecoveryAndSettingsAttribution"]
         res["run_live_app_rpc"] = True
         return res
 
-    if norm.startswith("iOS/Bridge/"):
+    if norm.startswith("apps/ios/App/Bridge/"):
         res = _empty_impact("ios-kmp-bridge", "Native iOS <-> KMP shared core bridge changed")
         res["gate1_swift_data_tests"] = True
         res["gate2_live_rpc"] = True
@@ -545,7 +555,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_stages"] = [1, 2]
         return res
 
-    if norm.startswith("iOS/Resources/"):
+    if norm.startswith("apps/ios/App/Resources/"):
         res = _empty_impact("ios-resources", "App icons or Asset Catalog changed")
         res["gate3_ios_build"] = True
         res["xcuitests"] = ["testOfflineHostRecoveryAndSettingsAttribution"]
@@ -556,9 +566,9 @@ def classify_file(path: str) -> dict[str, Any]:
 
     # 12. Extensions & Live Activity
     if (
-        norm.startswith("Extensions/LiveActivity/")
-        or norm.startswith("Shared/LiveActivity/")
-        or norm in {"iOS/Services/LiveActivityCoordinator.swift", "iOS/Services/NotificationCoordinator.swift"}
+        norm.startswith("apps/ios/Extensions/LiveActivity/")
+        or norm.startswith("apps/ios/SharedUI/LiveActivity/")
+        or norm in {"apps/ios/App/Services/LiveActivityCoordinator.swift", "apps/ios/App/Services/NotificationCoordinator.swift"}
     ):
         res = _empty_impact("live-activity", "Live Activity / Dynamic Island / Notification (UE13) changed")
         res["gate3_ios_build"] = True
@@ -568,13 +578,13 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE13_LIVE_ACTIVITY_SPEC"]
         return res
 
-    if norm.startswith("Extensions/Share/"):
+    if norm.startswith("apps/ios/Extensions/Share/"):
         res = _empty_impact("share-extension", "Share Extension changed (verified via iOS scheme compile)")
         res["gate3_ios_build"] = True
         return res
 
     # 13. UI Tests harness itself -> run all 5 XCUITests (static 13-screen screenshots unaffected)
-    if norm.startswith("iOSUITests/"):
+    if norm.startswith("tests/ios-ui/"):
         res = _empty_impact("ios-uitests", "XCUITest suite changed (running all XCUITest cases)")
         res["gate3_ios_build"] = True
         res["xcuitests"] = list(ALL_XCUITESTS)
@@ -723,17 +733,23 @@ def build_verification_plan(
     esdd_full = False
 
     def _impacts_compat_guardrails(norm_path: str) -> bool:
-        return (
-            norm_path.startswith("Packages/AntigravityData/Sources/AntigravityData/Protocol/")
-            or norm_path.startswith("Packages/AntigravityData/Sources/AntigravityData/Models/")
-            or norm_path.startswith("Packages/AntigravityData/Sources/AntigravityData/Store/")
-            or norm_path in {
-                "scripts/mac-companion-bridge.py",
-                "verification/verify_compat_guardrails.py",
-                "verification/verify-compat-matrix.py",
-                "verification/esdd_inspector.py",
-            }
+        data_prefixes = (
+            "apps/ios/Packages/AntigravityData/Sources/AntigravityData/",
+            "Packages/AntigravityData/Sources/AntigravityData/",
         )
+        for prefix in data_prefixes:
+            if (
+                norm_path.startswith(f"{prefix}Protocol/")
+                or norm_path.startswith(f"{prefix}Models/")
+                or norm_path.startswith(f"{prefix}Store/")
+            ):
+                return True
+        return norm_path in {
+            "scripts/mac-companion-bridge.py",
+            "verification/verify_compat_guardrails.py",
+            "verification/verify-compat-matrix.py",
+            "verification/esdd_inspector.py",
+        }
 
     for fpath in clean_files:
         imp = classify_file(fpath)
@@ -861,7 +877,7 @@ def render_markdown_summary(plan: dict[str, Any]) -> str:
             "| :--- | :--- | :--- |",
             f"| `[Gate 0]` Script Syntax & Doc-Sync Self-Test | ✅ RUN | Always runs (~1s on Ubuntu) |",
             f"| `[Gate 0c]` Static Compatibility Guardrails | {'✅ RUN' if gates.get('gate0CompatGuardrails') else '⏭️ SKIP'} | {'Protocol/Models/Store/Bridge impacted or full' if gates.get('gate0CompatGuardrails') else 'Protocol/Models/Store/Bridge untouched'} |",
-            f"| `[Gate 1]` Swift 6 `AntigravityData` XCTests | {'✅ RUN' if gates['gate1SwiftDataTests'] else '⏭️ SKIP'} | {'Packages/AntigravityData impacted or full' if gates['gate1SwiftDataTests'] else 'Packages/AntigravityData untouched'} |",
+            f"| `[Gate 1]` Swift 6 `AntigravityData` XCTests | {'✅ RUN' if gates['gate1SwiftDataTests'] else '⏭️ SKIP'} | {'apps/ios/Packages/AntigravityData impacted or full' if gates['gate1SwiftDataTests'] else 'apps/ios/Packages/AntigravityData untouched'} |",
             f"| `[Gate 2]` Live Connect-RPC + v2.33 Capabilities + Compat Matrix | {'✅ RUN' if (gates['gate2LiveRPC'] or gates['gate2V233Capabilities']) else '⏭️ SKIP'} | LiveRPC/Matrix=`{gates['gate2LiveRPC']}`, v2.33=`{gates['gate2V233Capabilities']}` |",
             f"| `[Gate 3]` Xcode iOS Build (`Antigravity.app`) | {'✅ RUN' if gates['gate3IOSBuild'] else '⏭️ SKIP'} | Mode=`{gates['iosSimulatorMode']}` |",
             f"| `[Gate 3b]` Real Simulator XCUITests | {'✅ RUN (' + str(len(plan['xcuitests'])) + '/' + str(len(ALL_XCUITESTS)) + ')' if plan['xcuitests'] else '⏭️ SKIP (0/' + str(len(ALL_XCUITESTS)) + ')'} | {', '.join(f'`{t}`' for t in plan['xcuitests']) or 'None impacted'} |",
@@ -1043,7 +1059,7 @@ def run_self_tests() -> None:
     assert p2["gates"]["iosSimulatorMode"] == "skip"
 
     # 3. Swift XCTests only -> Gate 1 only, skip Xcode/Simulator and compat static guardrails
-    p3 = build_verification_plan(changed_files=["Packages/AntigravityData/Tests/AntigravityDataTests/AntigravityProtocolTests.swift"])
+    p3 = build_verification_plan(changed_files=["apps/ios/Packages/AntigravityData/Tests/AntigravityDataTests/AntigravityProtocolTests.swift"])
     assert p3["mode"] == "scoped"
     assert p3["gates"]["needsMacOS"] is True
     assert p3["gates"]["gate0CompatGuardrails"] is False
@@ -1052,21 +1068,21 @@ def run_self_tests() -> None:
     assert p3["gates"]["iosSimulatorMode"] == "skip"
 
     # 4. Pure Markdown parser / ResilientCodable -> Gate 0 compat guardrails + Gate 1 + build-only (zero simulator boot!)
-    p4 = build_verification_plan(changed_files=["Packages/AntigravityData/Sources/AntigravityData/Models/AntigravityMarkdownParser.swift"])
+    p4 = build_verification_plan(changed_files=["apps/ios/Packages/AntigravityData/Sources/AntigravityData/Models/AntigravityMarkdownParser.swift"])
     assert p4["mode"] == "scoped"
     assert p4["gates"]["gate0CompatGuardrails"] is True
     assert p4["gates"]["gate1SwiftDataTests"] is True
     assert p4["gates"]["iosSimulatorMode"] == "build-only"
     assert p4["xcuitests"] == [] and p4["simulatorScreens"] == []
 
-    p4b = build_verification_plan(changed_files=["Packages/AntigravityData/Sources/AntigravityData/Models/ResilientCodable.swift"])
+    p4b = build_verification_plan(changed_files=["apps/ios/Packages/AntigravityData/Sources/AntigravityData/Models/ResilientCodable.swift"])
     assert p4b["mode"] == "scoped"
     assert p4b["gates"]["gate0CompatGuardrails"] is True
     assert p4b["gates"]["gate1SwiftDataTests"] is True
     assert p4b["gates"]["iosSimulatorMode"] == "build-only"
 
     # 5. Single UI screen (Automations) -> ONLY Automations XCUITest + UE06 screen, compat guardrails skipped!
-    p5 = build_verification_plan(changed_files=["iOS/ViewControllers/Automations/AutomationsViewController.swift"])
+    p5 = build_verification_plan(changed_files=["apps/ios/App/ViewControllers/Automations/AutomationsViewController.swift"])
     assert p5["mode"] == "scoped"
     assert p5["gates"]["gate0CompatGuardrails"] is False
     assert p5["gates"]["gate1SwiftDataTests"] is False
@@ -1079,7 +1095,7 @@ def run_self_tests() -> None:
     assert p5["esdd"]["screens"] == ["UE06_AUTOMATIONS"]
 
     # 6. TurnDiffReview only -> build + UE12 screenshot only, zero XCUITests!
-    p6 = build_verification_plan(changed_files=["iOS/ViewControllers/Inspector/TurnDiffReviewViewController.swift"])
+    p6 = build_verification_plan(changed_files=["apps/ios/App/ViewControllers/Inspector/TurnDiffReviewViewController.swift"])
     assert p6["mode"] == "scoped"
     assert p6["gates"]["gate0CompatGuardrails"] is False
     assert p6["gates"]["iosSimulatorMode"] == "scoped"
@@ -1087,22 +1103,26 @@ def run_self_tests() -> None:
     assert p6["simulatorScreens"] == ["UE12_TURN_DIFF_REVIEW"]
 
     # 7. Live Activity widget only -> build + UE13 screenshot only
-    p7 = build_verification_plan(changed_files=["Extensions/LiveActivity/AntigravityLiveActivityWidget.swift"])
+    p7 = build_verification_plan(changed_files=["apps/ios/Extensions/LiveActivity/AntigravityLiveActivityWidget.swift"])
     assert p7["mode"] == "scoped"
     assert p7["gates"]["gate0CompatGuardrails"] is False
     assert p7["xcuitests"] == []
     assert p7["simulatorScreens"] == ["UE13_LIVE_ACTIVITY_SPEC"]
 
     # 8. Share extension only -> build-only, zero simulator boot
-    p8 = build_verification_plan(changed_files=["Extensions/Share/AntigravityShareViewController.swift"])
+    p8 = build_verification_plan(changed_files=["apps/ios/Extensions/Share/AntigravityShareViewController.swift"])
     assert p8["mode"] == "scoped"
     assert p8["gates"]["iosSimulatorMode"] == "build-only"
 
-    # 9. KMP shared only -> skipped by macOS workflow (verified by kmp-verify.yml); umbrella facade -> build-only
+    # 9. KMP shared / Android only -> skipped by macOS workflow; umbrella facade -> build-only
     p9 = build_verification_plan(changed_files=["shared/core-model/src/commonMain/kotlin/dev/antigravity/shared/model/CascadeModels.kt"])
     assert p9["mode"] == "scoped"
     assert p9["gates"]["needsMacOS"] is False
     assert p9["gates"]["gate0CompatGuardrails"] is False
+    p9a = build_verification_plan(changed_files=["apps/android/app/src/main/kotlin/MainActivity.kt"])
+    assert p9a["mode"] == "scoped"
+    assert p9a["gates"]["needsMacOS"] is False
+    assert p9a["gates"]["gate0CompatGuardrails"] is False
     p9b = build_verification_plan(changed_files=["shared/umbrella/src/commonMain/kotlin/dev/antigravity/shared/AntigravitySharedFacade.kt"])
     assert p9b["mode"] == "scoped"
     assert p9b["gates"]["iosSimulatorMode"] == "build-only"
@@ -1110,8 +1130,8 @@ def run_self_tests() -> None:
     # 10. Multi-file union (Automations + Project Detail)
     p10 = build_verification_plan(
         changed_files=[
-            "iOS/ViewControllers/Automations/AutomationsViewController.swift",
-            "iOS/ViewControllers/Projects/ProjectDetailViewController.swift",
+            "apps/ios/App/ViewControllers/Automations/AutomationsViewController.swift",
+            "apps/ios/App/ViewControllers/Projects/ProjectDetailViewController.swift",
         ]
     )
     assert p10["mode"] == "scoped"
@@ -1122,14 +1142,14 @@ def run_self_tests() -> None:
     assert p10["simulatorScreens"] == ["UE04_PROJECT_DETAIL", "UE06_AUTOMATIONS"]
 
     # 11. Core global file -> auto-escalated to full
-    p11 = build_verification_plan(changed_files=["Shared/DesignSystem/AntigravityTheme.swift"])
+    p11 = build_verification_plan(changed_files=["apps/ios/SharedUI/DesignSystem/AntigravityTheme.swift"])
     assert p11["mode"] == "full" and not p11["isRelease"]
     assert p11["gates"]["gate0CompatGuardrails"] is True
     assert p11["xcuitests"] == ALL_XCUITESTS
     assert p11["simulatorScreens"] == ALL_UE_STATES
 
     # 12. Unmapped new Swift file -> conservative escalation to full
-    p12 = build_verification_plan(changed_files=["iOS/NewExperimental/FutureFeature.swift"])
+    p12 = build_verification_plan(changed_files=["apps/ios/App/NewExperimental/FutureFeature.swift"])
     assert p12["mode"] == "full"
     assert p12["xcuitests"] == ALL_XCUITESTS
 
@@ -1163,7 +1183,7 @@ def run_self_tests() -> None:
 
     # 14. Verify ALL_XCUITESTS matches AntigravityInteractiveUITests.swift method names 1:1
     repo_root = Path(__file__).resolve().parents[1]
-    uitest_swift = repo_root / "iOSUITests" / "AntigravityInteractiveUITests.swift"
+    uitest_swift = repo_root / "tests" / "ios-ui" / "AntigravityInteractiveUITests.swift"
     if uitest_swift.exists():
         swift_methods = re.findall(r"func\s+(test\w+)\s*\(\)", uitest_swift.read_text(encoding="utf-8"))
         assert swift_methods == ALL_XCUITESTS, (

@@ -74,8 +74,8 @@ Allowed Implementation Ceiling: `{max_tier}`
 
 Execute the 4 stages strictly in order:
 1. Write `{target_rel}/01-prd-gap-analysis.md` (with Tier 1 / Tier 2 / Tier 3 classification).
-2. Write `{target_rel}/02-tech-design.md` (pure Swift 6 in `Packages/AntigravityData`, zero UIKit/WebKit/AVFoundation imports, preserving 13 states in `specs/esdd-ir.json`, registering new RPCs in `HostCapabilityRegistry.swift`, conforming new String Codable enums to `ResilientStringEnum`, and using `performLiveCapabilityWrite` without silent `try?`).
-3. Write `{target_rel}/03-test-plan.md` (XCTest + mock Connect-RPC + 3-version compatibility matrix + ESDD test cases).
+2. Write `{target_rel}/02-tech-design.md` (pure Swift 6 in `apps/ios/Packages/AntigravityData` + KMP in `shared/`, zero UIKit/WebKit/AVFoundation imports in data packages, preserving 13 states in `specs/esdd-ir.json`, registering new RPCs in `HostCapabilityRegistry.swift`, conforming new String Codable enums to `ResilientStringEnum`, and using `performLiveCapabilityWrite` without silent `try?`).
+3. Write `{target_rel}/03-test-plan.md` (XCTest + KMP tests + mock Connect-RPC + 3-version compatibility matrix + ESDD test cases).
 4. Implement all items at or below `{max_tier}` (leave Tier 3 items as RFC specs only), update unit & mock tests, and run:
    - `python3 verification/verify_compat_guardrails.py`
    - `python3 verification/verify-live-rpc-flow.py`
@@ -118,8 +118,9 @@ def scaffold_dry_run_specs(delta_report: dict, delta_summary_md: str, output_roo
         f"# Auto-Generated Technical Design — Antigravity {version}",
         "",
         "## Module Mapping",
-        "- `Packages/AntigravityData/`: Pure Swift 6 domain models (`ResilientStringEnum`), RPC payloads (`HostCapabilityRegistry`), Protobuf decoding (zero UIKit/WebKit/AVFoundation).",
-        "- `iOS/`: SwiftUI views & sheets bound to `AntigravitySessionStore` (dual-track live vs `--ui-verify`, using `performLiveCapabilityWrite`).",
+        "- `shared/`: Kotlin Multiplatform shared core (`core-model`, `core-protocol`, `core-markdown`, `core-domain`, `umbrella`).",
+        "- `apps/ios/Packages/AntigravityData/`: Pure Swift 6 domain models (`ResilientStringEnum`), RPC payloads (`HostCapabilityRegistry`), Protobuf decoding (zero UIKit/WebKit/AVFoundation).",
+        "- `apps/ios/App/`: SwiftUI views, KMP bridge & sheets bound to `AntigravitySessionStore` (dual-track live vs `--ui-verify`, using `performLiveCapabilityWrite`).",
         "- `verification/`: `mock_language_server.py`, `verify-v233-capabilities.py`, `verify-compat-matrix.py`, and `esdd-verify.py`.",
         "",
         "## Bidirectional Compatibility Checklist",
