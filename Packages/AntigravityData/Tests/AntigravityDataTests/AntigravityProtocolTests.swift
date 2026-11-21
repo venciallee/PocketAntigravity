@@ -3249,7 +3249,8 @@ final class AntigravityProtocolTests: XCTestCase {
         ]
         await projection1.saveProjectedSteps(cachedMiniSteps, for: "cid-b-cached")
 
-        let initialShardB = try XCTUnwrap(await projection1.loadHostProjection(hostKey: "host:\(hostBUuid)"))
+        let loadedInitialShardB = await projection1.loadHostProjection(hostKey: "host:\(hostBUuid)")
+        let initialShardB = try XCTUnwrap(loadedInitialShardB)
         XCTAssertEqual(Set(initialShardB.summaries.map(\.cascadeId)), ["cid-b-cached", "cid-b-uncached"])
 
         // 2. Refresh ONLY online Mac A while Mac B is offline -> Mac A's shard updates, Mac B's shard on disk stays untouched!
@@ -3296,8 +3297,10 @@ final class AntigravityProtocolTests: XCTestCase {
         let coldProjection = LocalProjectionStore(storageDirectory: tempDir)
         let coldShards = await coldProjection.loadAllHostProjections()
         XCTAssertEqual(Set(coldShards.map(\.hostKey)), ["host:\(hostAUuid)", "host:\(hostBUuid)", "cloud"])
-        let shardAOnDisk = try XCTUnwrap(await coldProjection.loadHostProjection(hostKey: "host:\(hostAUuid)"))
-        let shardBOnDisk = try XCTUnwrap(await coldProjection.loadHostProjection(hostKey: "host:\(hostBUuid)"))
+        let loadedShardAOnDisk = await coldProjection.loadHostProjection(hostKey: "host:\(hostAUuid)")
+        let loadedShardBOnDisk = await coldProjection.loadHostProjection(hostKey: "host:\(hostBUuid)")
+        let shardAOnDisk = try XCTUnwrap(loadedShardAOnDisk)
+        let shardBOnDisk = try XCTUnwrap(loadedShardBOnDisk)
         XCTAssertEqual(shardAOnDisk.summaries.map(\.cascadeId), ["cid-a-2"])
         XCTAssertEqual(Set(shardBOnDisk.summaries.map(\.cascadeId)), ["cid-b-cached", "cid-b-uncached"])
         XCTAssertEqual(
