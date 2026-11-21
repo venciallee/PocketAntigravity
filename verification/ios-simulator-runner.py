@@ -9,9 +9,9 @@ Supports both:
     entirely in `build-only` mode.
   - **Full / Release Mode (`--mode full|release`, or default when invoked without scope flags)**:
     Assembles KMP `AntigravityShared.xcframework` if absent, compiles `Antigravity.app`
-    (+ extensions + `AntigravityUITests`), runs ALL 5 modular XCUITests, verifies Live
+    (+ extensions + `AntigravityUITests`), runs ALL modular XCUITests, verifies Live
     Connect-RPC App Handshake, and captures ALL 13 native SwiftUI screens (`UE01`..`UE13`)
-    + composite overview board.
+    + composite overview board + Light/Dark appearance comparison sheet.
 
 Performance optimization:
   When the Simulator is needed, `xcrun simctl boot <udid>` starts asynchronously in the
@@ -44,6 +44,24 @@ PREFERRED_IPHONES = [
 ]
 
 UITEST_TARGET_CLASS = "AntigravityUITests/AntigravityInteractiveUITests"
+
+# Additional Light & Dark Mode visual verification captures run in full/release mode
+# Tuple format: (output_stem, --ui-verify argument, --ui-appearance argument)
+APPEARANCE_VARIANT_CAPTURES: list[tuple[str, str, str]] = [
+    ("UE01_AGENTS_HOME_LIGHT", "UE01_AGENTS_HOME", "light"),
+    ("UE07_CHAT_AND_COMPOSER_LIGHT", "UE07_CHAT_AND_COMPOSER", "light"),
+    ("UE12_TURN_DIFF_REVIEW_LIGHT", "UE12_TURN_DIFF_REVIEW", "light"),
+    ("SETTINGS_DARK", "settings", "dark"),
+    ("SETTINGS_LIGHT", "settings", "light"),
+]
+
+# Side-by-side Dark vs Light comparison pairs: (pair_title, dark_stem, light_stem)
+LIGHT_DARK_COMPARISON_PAIRS: list[tuple[str, str, str]] = [
+    ("Agents Home (UE01)", "UE01_AGENTS_HOME", "UE01_AGENTS_HOME_LIGHT"),
+    ("Cascade Chat (UE07)", "UE07_CHAT_AND_COMPOSER", "UE07_CHAT_AND_COMPOSER_LIGHT"),
+    ("Turn Diff Review (UE12)", "UE12_TURN_DIFF_REVIEW", "UE12_TURN_DIFF_REVIEW_LIGHT"),
+    ("Settings", "SETTINGS_DARK", "SETTINGS_LIGHT"),
+]
 
 
 def select_iphone_simulator() -> tuple[str, str, str]:
@@ -123,6 +141,86 @@ def build_overview_sheet(out_dir: Path, state_ids: list[str], device_label: str,
     overview_path = out_dir / filename
     board.save(overview_path, format="PNG")
     print(f"  [OVERVIEW] {overview_path}", flush=True)
+
+
+def build_light_dark_comparison_sheet(out_dir: Path, device_label: str) -> Path | None:
+    """Builds a side-by-side Dark vs Light Mode contact sheet across Home, Chat, Diff & Settings."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        print("[!] Pillow not installed; skipping Light/Dark comparison sheet generation.", flush=True)
+        return None
+
+    available_pairs = [
+        pair for pair in LIGHT_DARK_COMPARISON_PAIRS
+        if (out_dir / f"{pair[1]}.png").exists() or (out_dir / f"{pair[2]}.png").exists()
+    ]
+    if not available_pairs:
+        return None
+
+    thumb_w, thumb_h = 360, 780
+    inner_gap = 18
+    card_pad = 20
+    card_header_h = 56
+    card_w = card_pad * 2 + thumb_w * 2 + inner_gap
+    card_h = card_header_h + thumb_h + card_pad
+
+    outer_pad = 32
+    pair_gap = 28
+    header_h = 104
+    pair_cols = 2
+    pair_rows = (len(available_pairs) + pair_cols - 1) // pair_cols
+    canvas_w = outer_pad * 2 + pair_cols * card_w + (pair_cols - 1) * pair_gap
+    canvas_h = header_h + outer_pad + pair_rows * card_h + (pair_rows - 1) * pair_gap + outer_pad
+
+    board = Image.new("RGB", (canvas_w, canvas_h), (9, 10, 13))
+    draw = ImageDraw.Draw(board)
+    draw.text(
+        (outer_pad, 26),
+        f"iOSAntigravity — Real Simulator Dark vs Light Mode Comparison ({device_label})",
+        fill=(245, 247, 250),
+    )
+    draw.text(
+        (outer_pad, 58),
+        "Side-by-side Dark vs Light semantic surface, ink contrast & glass chrome verification (Home · Chat · Diff · Settings)",
+        fill=(142, 180, 255),
+    )
+
+    for idx, (pair_title, dark_stem, light_stem) in enumerate(available_pairs):
+        r = idx // pair_cols
+        c = idx % pair_cols
+        card_x = outer_pad + c * (card_w + pair_gap)
+        card_y = header_h + outer_pad + r * (card_h + pair_gap)
+
+        draw.rectangle(
+            [card_x, card_y, card_x + card_w, card_y + card_h],
+            fill=(19, 21, 28),
+            outline=(42, 46, 58),
+            width=2,
+        )
+        draw.text((card_x + card_pad, card_y + 12), pair_title, fill=(245, 247, 250))
+
+        left_x = card_x + card_pad
+        right_x = left_x + thumb_w + inner_gap
+        slot_y = card_y + card_header_h
+
+        draw.text((left_x, card_y + 34), f"Dark · {dark_stem}", fill=(142, 180, 255))
+        draw.text((right_x, card_y + 34), f"Light · {light_stem}", fill=(235, 179, 101))
+
+        for slot_x, stem in ((left_x, dark_stem), (right_x, light_stem)):
+            img_path = out_dir / f"{stem}.png"
+            if not img_path.exists():
+                continue
+            img = Image.open(img_path).convert("RGB")
+            img.thumbnail((thumb_w, thumb_h), Image.Resampling.LANCZOS)
+            ox = slot_x + (thumb_w - img.width) // 2
+            oy = slot_y + (thumb_h - img.height) // 2
+            board.paste(img, (ox, oy))
+
+    comparison_path = out_dir / "REAL_SIMULATOR_LIGHT_DARK_COMPARISON.png"
+    board.save(comparison_path, format="PNG")
+    print(f"  [COMPARISON] {comparison_path}", flush=True)
+    return comparison_path
 
 
 def _stream_command(cmd: list[str], cwd: Path, log_path: Path) -> None:
@@ -224,6 +322,7 @@ def _resolve_execution_config(args: argparse.Namespace, repo_root: Path, all_sta
         "simMode": sim_mode,
         "xcuitests": xcuitests,
         "skippedXcuitests": [t for t in planner.ALL_XCUITESTS if t not in xcuitests],
+        "totalXcuitests": len(planner.ALL_XCUITESTS),
         "allTestsSelected": all_tests_selected,
         "runLiveAppRPC": run_live_rpc,
         "screens": screens,
@@ -260,6 +359,8 @@ def main() -> None:
     ir = json.loads((repo_root / "specs" / "esdd-ir.json").read_text(encoding="utf-8"))
     all_state_ids = [s["id"] for s in ir["states"]]
     cfg = _resolve_execution_config(args, repo_root, all_state_ids)
+    total_xcuitests = cfg["totalXcuitests"]
+    total_screens = len(all_state_ids)
 
     if platform.system() != "Darwin":
         print("Note: macOS / xcrun not detected; delegating to cross-platform esdd-verify.py", flush=True)
@@ -278,8 +379,8 @@ def main() -> None:
 
     print(
         f"=== iOS Simulator Runner Plan: mode={cfg['mode']} | simMode={cfg['simMode']} | "
-        f"isRelease={cfg['isRelease']} | XCUITests={len(cfg['xcuitests'])}/5 | "
-        f"LiveAppRPC={cfg['runLiveAppRPC']} | Screens={len(cfg['screens'])}/13 ===",
+        f"isRelease={cfg['isRelease']} | XCUITests={len(cfg['xcuitests'])}/{total_xcuitests} | "
+        f"LiveAppRPC={cfg['runLiveAppRPC']} | Screens={len(cfg['screens'])}/{total_screens} ===",
         flush=True,
     )
 
@@ -293,6 +394,7 @@ def main() -> None:
             "skippedUITests": cfg["skippedXcuitests"],
             "ranLiveConnectRPC": False,
             "capturedStates": [],
+            "capturedAppearanceVariants": [],
             "skippedStates": cfg["skippedScreens"],
             "timingsSec": {"total": round(time.monotonic() - t_start, 2)},
         }
@@ -357,6 +459,7 @@ def main() -> None:
             "skippedUITests": cfg["skippedXcuitests"],
             "ranLiveConnectRPC": False,
             "capturedStates": [],
+            "capturedAppearanceVariants": [],
             "skippedStates": cfg["skippedScreens"],
             "timingsSec": timings,
         }
@@ -441,12 +544,12 @@ def main() -> None:
         shutil.rmtree(xcresult_path, ignore_errors=True)
         if cfg["allTestsSelected"]:
             only_testing_flags = ["-only-testing:AntigravityUITests"]
-            test_desc = f"ALL {len(cfg['xcuitests'])} XCUITest cases"
+            test_desc = f"ALL {len(cfg['xcuitests'])}/{total_xcuitests} XCUITest cases"
         else:
             only_testing_flags = [
                 f"-only-testing:{UITEST_TARGET_CLASS}/{method}" for method in cfg["xcuitests"]
             ]
-            test_desc = f"{len(cfg['xcuitests'])}/5 scoped XCUITest case(s): {', '.join(cfg['xcuitests'])}"
+            test_desc = f"{len(cfg['xcuitests'])}/{total_xcuitests} scoped XCUITest case(s): {', '.join(cfg['xcuitests'])}"
 
         print(f"=== [3c/5] Running Real XCUITest Suite ({test_desc}) on {sim_name} ===", flush=True)
         uitest_cmd = [
@@ -474,7 +577,7 @@ def main() -> None:
         print(f"  [PASS] Real XCUITest Suite ({test_desc}) succeeded in {timings['xcuitests']}s.", flush=True)
     else:
         timings["xcuitests"] = 0.0
-        print("=== [3c/5] Skipping XCUITests (0/5 impacted by change scope) ===", flush=True)
+        print(f"=== [3c/5] Skipping XCUITests (0/{total_xcuitests} impacted by change scope) ===", flush=True)
 
     app_installed = False
 
@@ -550,13 +653,14 @@ def main() -> None:
         timings["liveRpcHandshake"] = 0.0
         print("=== [4/5] Skipping Live Connect-RPC App Handshake (unaffected by change scope) ===", flush=True)
 
-    # Step 5: Capture impacted UE screens (or all 13 in full/release mode)
+    # Step 5: Capture impacted UE screens (or all 13 + Light/Dark visual verification in full/release mode)
     captured_state_ids: list[str] = []
+    captured_appearance_variants: list[str] = []
     if cfg["screens"]:
         t_shots = time.monotonic()
         ensure_app_installed()
         print(
-            f"=== [5/5] Capturing {len(cfg['screens'])}/13 Native SwiftUI UE Screen(s) on iOS Simulator ===",
+            f"=== [5/5] Capturing {len(cfg['screens'])}/{total_screens} Native SwiftUI UE Screen(s) on iOS Simulator ===",
             flush=True,
         )
         for state_id in cfg["screens"]:
@@ -593,10 +697,54 @@ def main() -> None:
             f"{sim_name} · {sim_runtime}",
             is_full=cfg["allScreensSelected"],
         )
+
+        # Light & Dark Mode Visual Verification (full/release mode)
+        if cfg["allScreensSelected"]:
+            t_appearance = time.monotonic()
+            print(
+                f"=== [5b/5] Capturing {len(APPEARANCE_VARIANT_CAPTURES)} Light & Dark Mode Visual Verification Screen(s) ===",
+                flush=True,
+            )
+            for variant_id, verify_target, appearance_mode in APPEARANCE_VARIANT_CAPTURES:
+                captured_appearance_variants.append(variant_id)
+                subprocess.run(
+                    ["xcrun", "simctl", "terminate", udid, "dev.antigravity.ios.app"],
+                    check=False,
+                )
+                clean_env = {k: v for k, v in os.environ.items() if not k.startswith("SIMCTL_CHILD_ANTIGRAVITY_")}
+                subprocess.run(
+                    [
+                        "xcrun",
+                        "simctl",
+                        "launch",
+                        udid,
+                        "dev.antigravity.ios.app",
+                        "--ui-verify",
+                        verify_target,
+                        "--ui-appearance",
+                        appearance_mode,
+                    ],
+                    env=clean_env,
+                    check=True,
+                )
+                time.sleep(1.8)
+                shot_path = out_dir / f"{variant_id}.png"
+                subprocess.run(
+                    ["xcrun", "simctl", "io", udid, "screenshot", str(shot_path)],
+                    check=True,
+                )
+                print(
+                    f"  [APPEARANCE] {variant_id} (--ui-verify {verify_target} --ui-appearance {appearance_mode}) -> {shot_path}",
+                    flush=True,
+                )
+
+            build_light_dark_comparison_sheet(out_dir, f"{sim_name} · {sim_runtime}")
+            timings["appearanceScreenshots"] = round(time.monotonic() - t_appearance, 2)
+
         timings["screenshots"] = round(time.monotonic() - t_shots, 2)
     else:
         timings["screenshots"] = 0.0
-        print("=== [5/5] Skipping UE Screen Captures (0/13 screens impacted by change scope) ===", flush=True)
+        print(f"=== [5/5] Skipping UE Screen Captures (0/{total_screens} screens impacted by change scope) ===", flush=True)
 
     timings["total"] = round(time.monotonic() - t_start, 2)
     manifest = {
@@ -612,13 +760,15 @@ def main() -> None:
         "ranLiveConnectRPC": cfg["runLiveAppRPC"],
         "liveConnectRPCHits": rpc_hits,
         "capturedStates": captured_state_ids,
+        "capturedAppearanceVariants": captured_appearance_variants,
         "skippedStates": cfg["skippedScreens"],
         "timingsSec": timings,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(
-        f"\n[PASS] iOS Simulator E2E Verified (mode={cfg['mode']}, XCUITests={len(cfg['xcuitests'])}/5, "
-        f"LiveRPC={cfg['runLiveAppRPC']}, Screens={len(captured_state_ids)}/13, total={timings['total']}s).",
+        f"\n[PASS] iOS Simulator E2E Verified (mode={cfg['mode']}, XCUITests={len(cfg['xcuitests'])}/{total_xcuitests}, "
+        f"LiveRPC={cfg['runLiveAppRPC']}, Screens={len(captured_state_ids)}/{total_screens}, "
+        f"AppearanceVariants={len(captured_appearance_variants)}, total={timings['total']}s).",
         flush=True,
     )
 

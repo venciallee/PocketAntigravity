@@ -92,7 +92,7 @@ public struct AntigravityMarkdownView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.emeraldDone)
+                        .foregroundStyle(AntigravityTheme.statusDone)
                     Text("Copied \(copiedRefLabel)")
                         .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.inkLabel)
@@ -103,13 +103,13 @@ public struct AntigravityMarkdownView: View {
                 .background(AntigravityTheme.surfaceElevated)
                 .overlay(
                     Capsule()
-                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                        .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
                 )
                 .clipShape(Capsule())
                 .transition(.opacity)
             }
         }
-        .tint(StepCardPalette.periwinkle)
+        .tint(AntigravityTheme.accentPeriwinkle)
         .environment(\.openURL, OpenURLAction { url in
             if url.scheme == "antigravity-ref" {
                 let targetRef = MarkdownLinkFormatting.extractCopiedReference(from: url)
@@ -175,7 +175,7 @@ internal struct AntigravityMarkdownBlocksView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("FRONTMATTER")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(StepCardPalette.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 ForEach(entries) { entry in
                     HStack(alignment: .top, spacing: 8) {
                         Text(entry.key)
@@ -189,7 +189,7 @@ internal struct AntigravityMarkdownBlocksView: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 10))
+            .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
 
         case .heading(_, let level, let inlines):
@@ -242,10 +242,10 @@ internal struct AntigravityMarkdownBlocksView: View {
                         Text("SVG Graphic")
                             .font(.system(size: 11, weight: .semibold))
                     }
-                    .foregroundStyle(StepCardPalette.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(StepCardPalette.periwinkle.opacity(0.14), in: Capsule())
+                    .background(AntigravityTheme.accentPeriwinkle.opacity(0.14), in: Capsule())
                 }
                 MarkdownCodeBlockCardView(language: language, code: code)
             }
@@ -258,7 +258,7 @@ internal struct AntigravityMarkdownBlocksView: View {
 
         case .thematicBreak:
             Rectangle()
-                .fill(Color.white.opacity(0.09))
+                .fill(AntigravityTheme.subtleDivider)
                 .frame(height: 1)
                 .padding(.vertical, 4)
 
@@ -323,19 +323,19 @@ internal struct AntigravityMarkdownBlocksView: View {
             let symbol = indentLevel == 0 ? "•" : (indentLevel == 1 ? "◦" : "▪")
             Text(symbol)
                 .font(.system(size: variant.baseFontSize, weight: .bold))
-                .foregroundStyle(indentLevel == 0 ? StepCardPalette.periwinkle : AntigravityTheme.inkSecondary)
+                .foregroundStyle(indentLevel == 0 ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary)
                 .frame(minWidth: 12, alignment: .center)
 
         case .ordered(let number):
             Text("\(number).")
                 .font(.system(size: max(12.5, variant.baseFontSize - 1.0), weight: .semibold, design: .monospaced))
-                .foregroundStyle(StepCardPalette.periwinkle)
+                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 .frame(minWidth: 20, alignment: .trailing)
 
         case .task(let checked):
             Image(systemName: checked ? "checkmark.square.fill" : "square")
                 .font(.system(size: max(13.0, variant.baseFontSize - 1.5), weight: .medium))
-                .foregroundStyle(checked ? StepCardPalette.emeraldDone : AntigravityTheme.inkSecondary)
+                .foregroundStyle(checked ? AntigravityTheme.statusDone : AntigravityTheme.inkSecondary)
                 .frame(minWidth: 16, alignment: .center)
         }
     }
@@ -377,10 +377,13 @@ internal enum MarkdownInlineBuilder {
 
         func resolvedForeground(defaultColor: Color) -> Color {
             if linkDestination != nil {
-                return StepCardPalette.periwinkle
+                return AntigravityTheme.accentPeriwinkle
             }
             if isCode || isMath || isKeyboardKey {
-                return StepCardPalette.inlineCodeInk
+                return AntigravityTheme.inkInlineCode
+            }
+            if isHighlight {
+                return AntigravityTheme.inkMarkHighlight
             }
             return defaultColor
         }
@@ -388,12 +391,12 @@ internal enum MarkdownInlineBuilder {
         var resolvedBackground: Color? {
             if isCode || isKeyboardKey {
                 if linkDestination != nil {
-                    return StepCardPalette.periwinkle.opacity(0.14)
+                    return AntigravityTheme.accentPeriwinkle.opacity(0.14)
                 }
-                return Color.white.opacity(0.09)
+                return isKeyboardKey ? AntigravityTheme.surfaceKbd : AntigravityTheme.surfaceInlineCode
             }
             if isHighlight {
-                return StepCardPalette.warmAmber.opacity(0.22)
+                return AntigravityTheme.surfaceMarkHighlight
             }
             return nil
         }
@@ -475,7 +478,7 @@ internal enum MarkdownInlineBuilder {
                 let label = alt.isEmpty ? MarkdownLinkFormatting.shortFileBadge(src) : alt
                 output.append(makeSegment("🖼 \(label)", style: imgStyle, baseSize: baseSize, defaultColor: defaultColor))
             case .footnoteRef(let label):
-                output.append(makeSegment("[\(label)]", style: style, baseSize: max(10, baseSize - 3), defaultColor: StepCardPalette.periwinkle))
+                output.append(makeSegment("[\(label)]", style: style, baseSize: max(10, baseSize - 3), defaultColor: AntigravityTheme.accentPeriwinkle))
             }
         }
     }

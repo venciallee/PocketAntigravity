@@ -42,19 +42,6 @@ public struct TurnDiffReviewViewController: View {
     @State private var line29CommentText: String = "Use l.clock.Now() — the plan says to inject the clock so tests can control time."
     @State private var isFileViewed: Bool = false
 
-    private static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
-    private static let emeraldDone = Color(red: 0x57 / 255.0, green: 0xC8 / 255.0, blue: 0x8A / 255.0) // #57C88A
-    private static let coralError = Color(red: 0xF0 / 255.0, green: 0x71 / 255.0, blue: 0x67 / 255.0) // #F07167
-    private static let inkOnCTA = Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0) // #0A0E17
-    private static let cardSurface = Color(red: 0x14 / 255.0, green: 0x15 / 255.0, blue: 0x19 / 255.0) // #141519
-    private static let pillBg = Color(red: 0x1A / 255.0, green: 0x1C / 255.0, blue: 0x23 / 255.0)
-    private static let commentCardBg = Color(red: 0x17 / 255.0, green: 0x18 / 255.0, blue: 0x1E / 255.0)
-    private static let greenLineBg = Color(red: 0x0E / 255.0, green: 0x24 / 255.0, blue: 0x18 / 255.0)
-    private static let greenWordBg = Color(red: 0x19 / 255.0, green: 0x45 / 255.0, blue: 0x2B / 255.0)
-    private static let redLineBg = Color(red: 0x2A / 255.0, green: 0x13 / 255.0, blue: 0x17 / 255.0)
-    private static let redWordBg = Color(red: 0x50 / 255.0, green: 0x1D / 255.0, blue: 0x24 / 255.0)
-    private static let selectedBlueBg = Color(red: 0x19 / 255.0, green: 0x26 / 255.0, blue: 0x42 / 255.0)
-
     private let files: [DiffFilePageSpec] = [
         DiffFilePageSpec(filePath: "middleware/ratelimit.go", additions: 96, deletions: 4),
         DiffFilePageSpec(filePath: "internal/router/transfers.go", additions: 18, deletions: 6),
@@ -149,12 +136,12 @@ public struct TurnDiffReviewViewController: View {
                             HStack(spacing: 8) {
                                 Text("29")
                                     .font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(Self.periwinkle)
+                                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                     .frame(width: 24, alignment: .trailing)
 
                                 Text("+")
                                     .font(.system(size: 12.5, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Self.emeraldDone)
+                                    .foregroundStyle(AntigravityTheme.statusDone)
                                     .frame(width: 12)
 
                                 Text("    now := time.Now()")
@@ -166,7 +153,7 @@ public struct TurnDiffReviewViewController: View {
                             }
                             .padding(.horizontal, 12)
                             .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                            .background(Self.selectedBlueBg)
+                            .background(AntigravityTheme.surfaceSelectionTint)
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("diff-line-29")
@@ -186,7 +173,7 @@ public struct TurnDiffReviewViewController: View {
             }
 
             Divider()
-                .overlay(Color.white.opacity(0.08))
+                .overlay(AntigravityTheme.subtleDivider)
 
             // Bottom Review Footer (`Viewed` + `Revert file` + `Accept file`)
             bottomReviewActionBar
@@ -211,10 +198,10 @@ public struct TurnDiffReviewViewController: View {
                     } label: {
                         Text(mode.rawValue)
                             .font(.system(size: 11.5, weight: isSelected ? .bold : .medium))
-                            .foregroundStyle(isSelected ? Self.inkOnCTA : AntigravityTheme.inkSecondary)
+                            .foregroundStyle(isSelected ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.inkSecondary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(isSelected ? Self.periwinkle : Self.pillBg, in: Capsule())
+                            .background(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.surfacePill, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("diff-compare-\(mode.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))")
@@ -227,10 +214,10 @@ public struct TurnDiffReviewViewController: View {
                     } label: {
                         Label(live.isStaged ? "Unstage" : "Stage", systemImage: live.isStaged ? "minus.circle" : "plus.circle")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(gitSupported ? (live.isStaged ? Self.emeraldDone : AntigravityTheme.inkReading) : AntigravityTheme.inkMuted)
+                            .foregroundStyle(gitSupported ? (live.isStaged ? AntigravityTheme.statusDone : AntigravityTheme.inkReading) : AntigravityTheme.inkMuted)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(Self.pillBg, in: Capsule())
+                            .background(AntigravityTheme.surfacePill, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(!gitSupported)
@@ -241,10 +228,10 @@ public struct TurnDiffReviewViewController: View {
                     } label: {
                         Label("Discard", systemImage: "arrow.uturn.backward")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(gitSupported ? Self.coralError : AntigravityTheme.inkMuted)
+                            .foregroundStyle(gitSupported ? AntigravityTheme.statusError : AntigravityTheme.inkMuted)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background((gitSupported ? Self.coralError : AntigravityTheme.inkMuted).opacity(0.14), in: Capsule())
+                            .background((gitSupported ? AntigravityTheme.statusError : AntigravityTheme.inkMuted).opacity(0.14), in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(!gitSupported)
@@ -261,11 +248,11 @@ public struct TurnDiffReviewViewController: View {
         return HStack(spacing: 8) {
             Text(lineNum)
                 .font(.system(size: 11.5, design: .monospaced))
-                .foregroundStyle(isDel ? Self.coralError : (isAdd ? Self.emeraldDone : AntigravityTheme.inkSecondary))
+                .foregroundStyle(isDel ? AntigravityTheme.statusError : (isAdd ? AntigravityTheme.statusDone : AntigravityTheme.inkSecondary))
                 .frame(width: 28, alignment: .trailing)
             Text(isAdd ? "+" : (isDel ? "-" : " "))
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(isAdd ? Self.emeraldDone : (isDel ? Self.coralError : .clear))
+                .foregroundStyle(isAdd ? AntigravityTheme.statusDone : (isDel ? AntigravityTheme.statusError : .clear))
                 .frame(width: 12)
             Text(line.text)
                 .font(.system(size: 12, design: .monospaced))
@@ -278,14 +265,14 @@ public struct TurnDiffReviewViewController: View {
                 } label: {
                     Image(systemName: "text.quote")
                         .font(.system(size: 11))
-                        .foregroundStyle(Self.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 24)
-        .background(isAdd ? Self.greenLineBg : (isDel ? Self.redLineBg : Color.clear))
+        .background(isAdd ? AntigravityTheme.surfaceDiffAdd : (isDel ? AntigravityTheme.surfaceDiffRemove : Color.clear))
     }
 
     private var liveGitCommitCard: some View {
@@ -299,7 +286,7 @@ public struct TurnDiffReviewViewController: View {
                 if let last = store.lastCommitResult {
                     Text("\(last.commitSha) · \(last.pushed ? "Pushed" : "Local")")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Self.emeraldDone)
+                        .foregroundStyle(AntigravityTheme.statusDone)
                 }
             }
             if !gitSupported {
@@ -311,7 +298,7 @@ public struct TurnDiffReviewViewController: View {
                 .font(.system(size: 14))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .padding(10)
-                .background(Self.pillBg, in: RoundedRectangle(cornerRadius: 10))
+                .background(AntigravityTheme.surfaceSubtleBox, in: RoundedRectangle(cornerRadius: 10))
                 .disabled(!gitSupported)
                 .accessibilityIdentifier("input-git-commit-message")
 
@@ -319,12 +306,12 @@ public struct TurnDiffReviewViewController: View {
                 Toggle("Include Unstaged", isOn: $store.gitCommitDraft.includeUnstaged)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
-                    .tint(Self.periwinkle)
+                    .tint(AntigravityTheme.accentPeriwinkle)
                     .disabled(!gitSupported)
                 Toggle("Amend", isOn: $store.gitCommitDraft.amend)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
-                    .tint(Self.periwinkle)
+                    .tint(AntigravityTheme.accentPeriwinkle)
                     .disabled(!gitSupported)
             }
 
@@ -333,9 +320,9 @@ public struct TurnDiffReviewViewController: View {
                     Task { _ = await store.commitDiffChanges() }
                 }
                 .font(.system(size: 13.5, weight: .bold))
-                .foregroundStyle(Self.inkOnCTA)
+                .foregroundStyle(gitSupported ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.inkMuted)
                 .frame(maxWidth: .infinity, minHeight: 40)
-                .background(gitSupported ? Self.periwinkle : Self.pillBg, in: RoundedRectangle(cornerRadius: 12))
+                .background(gitSupported ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.surfacePill, in: RoundedRectangle(cornerRadius: 12))
                 .disabled(!gitSupported || store.gitCommitDraft.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("btn-git-commit")
 
@@ -345,14 +332,14 @@ public struct TurnDiffReviewViewController: View {
                 .font(.system(size: 13.5, weight: .semibold))
                 .foregroundStyle(gitSupported ? AntigravityTheme.inkReading : AntigravityTheme.inkMuted)
                 .frame(maxWidth: .infinity, minHeight: 40)
-                .background(Self.pillBg, in: RoundedRectangle(cornerRadius: 12))
+                .background(AntigravityTheme.surfacePill, in: RoundedRectangle(cornerRadius: 12))
                 .disabled(!gitSupported)
                 .accessibilityIdentifier("btn-git-push")
             }
         }
         .padding(12)
-        .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
     }
 
     // MARK: - 1. Top Navigation Bar
@@ -364,7 +351,7 @@ public struct TurnDiffReviewViewController: View {
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Self.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
             }
             .buttonStyle(.plain)
@@ -394,10 +381,10 @@ public struct TurnDiffReviewViewController: View {
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(.horizontal, 14)
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                    .background(Self.pillBg)
+                    .background(AntigravityTheme.surfacePill)
                     .overlay(
                         Capsule()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
                     )
                     .clipShape(Capsule())
             }
@@ -438,12 +425,12 @@ public struct TurnDiffReviewViewController: View {
                         .font(.system(size: 13, weight: isSelected ? .bold : .medium))
                         .foregroundStyle(
                             isSelected
-                                ? Color(red: 0.04, green: 0.04, blue: 0.05)
+                                ? AntigravityTheme.pillActiveForeground
                                 : AntigravityTheme.inkSecondary
                         )
                         .padding(.horizontal, 12)
                         .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
-                        .background(isSelected ? Color.white : Self.pillBg)
+                        .background(isSelected ? AntigravityTheme.pillActiveBackground : AntigravityTheme.surfacePill)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -475,10 +462,10 @@ public struct TurnDiffReviewViewController: View {
                     if let live = activeLiveDiff {
                         Text(live.statusLetter.rawValue)
                             .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(live.statusLetter == .deleted ? Self.coralError : Self.periwinkle)
+                            .foregroundStyle(live.statusLetter == .deleted ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
-                            .background(Self.pillBg, in: RoundedRectangle(cornerRadius: 4))
+                            .background(AntigravityTheme.surfacePill, in: RoundedRectangle(cornerRadius: 4))
                     }
                     Text(activeFile.filePath)
                         .font(.system(size: 14, weight: .semibold, design: .monospaced))
@@ -490,9 +477,9 @@ public struct TurnDiffReviewViewController: View {
                     Text("File \(min(currentFileIndex + 1, totalCount)) of \(totalCount) ·")
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Text("+\(activeFile.additions)")
-                        .foregroundStyle(Self.emeraldDone)
+                        .foregroundStyle(AntigravityTheme.statusDone)
                     Text("-\(activeFile.deletions)")
-                        .foregroundStyle(Self.coralError)
+                        .foregroundStyle(AntigravityTheme.statusError)
                 }
                 .font(.system(size: 12))
             }
@@ -511,10 +498,10 @@ public struct TurnDiffReviewViewController: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
-        .background(Self.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityElement(children: .contain)
@@ -551,12 +538,12 @@ public struct TurnDiffReviewViewController: View {
         }
         .padding(.leading, 14)
         .padding(.trailing, 8)
-        .background(Color(red: 0x10 / 255.0, green: 0x12 / 255.0, blue: 0x17 / 255.0))
+        .background(AntigravityTheme.surfaceCodeBlock)
         .overlay(alignment: .top) {
-            Divider().overlay(Color.white.opacity(0.06))
+            Divider().overlay(AntigravityTheme.subtleDivider)
         }
         .overlay(alignment: .bottom) {
-            Divider().overlay(Color.white.opacity(0.06))
+            Divider().overlay(AntigravityTheme.subtleDivider)
         }
     }
 
@@ -568,8 +555,8 @@ public struct TurnDiffReviewViewController: View {
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(
                     row.kind == .deletion
-                        ? Self.coralError.opacity(0.85)
-                        : (row.kind == .addition ? Self.emeraldDone.opacity(0.85) : AntigravityTheme.inkSecondary)
+                        ? AntigravityTheme.statusError.opacity(0.85)
+                        : (row.kind == .addition ? AntigravityTheme.statusDone.opacity(0.85) : AntigravityTheme.inkSecondary)
                 )
                 .frame(width: 24, alignment: .trailing)
 
@@ -577,8 +564,8 @@ public struct TurnDiffReviewViewController: View {
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 .foregroundStyle(
                     row.kind == .deletion
-                        ? Self.coralError
-                        : (row.kind == .addition ? Self.emeraldDone : .clear)
+                        ? AntigravityTheme.statusError
+                        : (row.kind == .addition ? AntigravityTheme.statusDone : .clear)
                 )
                 .frame(width: 12)
 
@@ -593,7 +580,11 @@ public struct TurnDiffReviewViewController: View {
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 3)
-                        .background(row.kind == .deletion ? Self.redWordBg : Self.greenWordBg)
+                        .background(
+                            row.kind == .deletion
+                                ? AntigravityTheme.statusError.opacity(0.28)
+                                : AntigravityTheme.statusDone.opacity(0.28)
+                        )
                         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 }
 
@@ -610,8 +601,8 @@ public struct TurnDiffReviewViewController: View {
         .frame(height: 19)
         .background(
             row.kind == .addition
-                ? Self.greenLineBg
-                : (row.kind == .deletion ? Self.redLineBg : Color.clear)
+                ? AntigravityTheme.surfaceDiffAdd
+                : (row.kind == .deletion ? AntigravityTheme.surfaceDiffRemove : Color.clear)
         )
     }
 
@@ -648,7 +639,7 @@ public struct TurnDiffReviewViewController: View {
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 16)
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                        .background(Color.white.opacity(0.08))
+                        .background(AntigravityTheme.surfaceElevated)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -666,10 +657,10 @@ public struct TurnDiffReviewViewController: View {
                 } label: {
                     Text("Send to agent")
                         .font(.system(size: 13.5, weight: .bold))
-                        .foregroundStyle(Self.inkOnCTA)
+                        .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .padding(.horizontal, 16)
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                        .background(Self.periwinkle)
+                        .background(AntigravityTheme.accentPeriwinkle)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -677,10 +668,10 @@ public struct TurnDiffReviewViewController: View {
             }
         }
         .padding(12)
-        .background(Self.commentCardBg)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityElement(children: .contain)
@@ -697,12 +688,21 @@ public struct TurnDiffReviewViewController: View {
                 HStack(spacing: 8) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(isFileViewed ? Self.periwinkle : Color.white)
+                            .fill(isFileViewed ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.surfaceInput)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .stroke(
+                                        isFileViewed
+                                            ? AntigravityTheme.accentPeriwinkle
+                                            : AntigravityTheme.inkSecondary.opacity(0.55),
+                                        lineWidth: 1.2
+                                    )
+                            )
                             .frame(width: 20, height: 20)
                         if isFileViewed {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(Self.inkOnCTA)
+                                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         }
                     }
 
@@ -727,10 +727,10 @@ public struct TurnDiffReviewViewController: View {
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(.horizontal, 18)
                     .frame(minHeight: 48)
-                    .background(Self.pillBg)
+                    .background(AntigravityTheme.surfacePill)
                     .overlay(
                         Capsule()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
                     )
                     .clipShape(Capsule())
             }
@@ -743,10 +743,10 @@ public struct TurnDiffReviewViewController: View {
             } label: {
                 Text("Accept file")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Self.inkOnCTA)
+                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .padding(.horizontal, 20)
                     .frame(minHeight: 48)
-                    .background(Self.periwinkle)
+                    .background(AntigravityTheme.accentPeriwinkle)
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)

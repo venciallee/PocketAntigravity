@@ -20,6 +20,7 @@ public struct RichArtifactViewerSheet: View {
     @State private var selectedRegion: CGRect? = nil
     @State private var dragStart: CGPoint? = nil
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
 
     public init(store: AntigravitySessionStore, artifactPath: String) {
         self.store = store
@@ -68,7 +69,6 @@ public struct RichArtifactViewerSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .accessibilityIdentifier("sheet_rich_artifact_viewer")
     }
 
@@ -314,7 +314,7 @@ public struct RichArtifactViewerSheet: View {
 
     private func webArtifactView(_ art: ArtifactSnapshot) -> some View {
         #if canImport(WebKit) && canImport(UIKit)
-        SandboxedArtifactWebView(htmlOrUrl: art.content)
+        SandboxedArtifactWebView(htmlOrUrl: art.content, isDarkMode: colorScheme == .dark)
             .ignoresSafeArea(edges: .bottom)
         #else
         ScrollView {
@@ -395,7 +395,10 @@ private struct PDFKitDocumentContainer: UIViewRepresentable {
     func makeUIView(context: Context) -> PDFView {
         let view = PDFView()
         view.autoScales = true
-        view.backgroundColor = UIColor(red: 0x0F / 255.0, green: 0x10 / 255.0, blue: 0x14 / 255.0, alpha: 1.0)
+        view.backgroundColor = AntigravityTheme.dynamicUIColor(
+            dark: AntigravityTheme.RGB(0x0F1014),
+            light: AntigravityTheme.RGB(0xECEEF4)
+        )
         if let data = Data(base64Encoded: base64OrPath), let doc = PDFDocument(data: data) {
             view.document = doc
         } else if let url = URL(string: base64OrPath), url.isFileURL, let doc = PDFDocument(url: url) {
@@ -411,22 +414,43 @@ private struct PDFKitDocumentContainer: UIViewRepresentable {
 #if canImport(WebKit) && canImport(UIKit)
 private struct SandboxedArtifactWebView: UIViewRepresentable {
     let htmlOrUrl: String
+    let isDarkMode: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
-        webView.backgroundColor = UIColor(red: 0x09 / 255.0, green: 0x0A / 255.0, blue: 0x0D / 255.0, alpha: 1.0)
-        if htmlOrUrl.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("http"),
-           let url = URL(string: htmlOrUrl.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            webView.load(URLRequest(url: url))
-        } else {
-            webView.loadHTMLString(htmlOrUrl, baseURL: nil)
-        }
+        webView.backgroundColor = AntigravityTheme.canvasObsidianUIColor
+        webView.scrollView.backgroundColor = .clear
+        loadContent(into: webView, coordinator: context.coordinator)
         return webView
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        loadContent(into: uiView, coordinator: context.coordinator)
+    }
+
+    private func loadContent(into webView: WKWebView, coordinator: Coordinator) {
+        let signature = "\(isDarkMode)|\(htmlOrUrl)"
+        guard coordinator.lastLoadedSignature != signature else { return }
+        coordinator.lastLoadedSignature = signature
+        let trimmed = htmlOrUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("http"), let url = URL(string: trimmed) {
+            webView.load(URLRequest(url: url))
+        } else {
+            let wrapped = AntigravityEmbedHTMLWrapper.wrapHTML(htmlOrUrl, isDarkMode: isDarkMode)
+            webView.loadHTMLString(wrapped, baseURL: nil)
+        }
+    }
+
+    @MainActor
+    final class Coordinator {
+        var lastLoadedSignature: String = ""
+    }
 }
 #endif

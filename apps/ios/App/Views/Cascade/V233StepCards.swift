@@ -11,7 +11,7 @@ internal struct SubagentStepCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "person.2.wave.2.fill")
-                    .foregroundStyle(StepCardPalette.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(subagent.role)
                         .font(.system(size: 13.5, weight: .semibold))
@@ -25,8 +25,8 @@ internal struct SubagentStepCardView: View {
                     .font(.system(size: 10, weight: .bold))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(StepCardPalette.periwinkle.opacity(0.16), in: Capsule())
-                    .foregroundStyle(subagent.status == .done ? StepCardPalette.emeraldDone : StepCardPalette.periwinkle)
+                    .background(AntigravityTheme.accentPeriwinkle.opacity(0.16), in: Capsule())
+                    .foregroundStyle(subagent.status == .done ? AntigravityTheme.statusDone : AntigravityTheme.accentPeriwinkle)
             }
             if !subagent.summary.isEmpty {
                 Text(subagent.summary)
@@ -41,7 +41,7 @@ internal struct SubagentStepCardView: View {
             }
         }
         .padding(12)
-        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+        .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
     }
 }
@@ -55,7 +55,7 @@ internal struct DynamicWorkflowStepCardView: View {
             HStack {
                 Label("Dynamic Workflow · \(workflow.currentPhase)", systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 Spacer()
                 Text("\(workflow.completedAgents)/\(max(1, workflow.totalAgents))")
                     .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
@@ -68,7 +68,7 @@ internal struct DynamicWorkflowStepCardView: View {
                 HStack(spacing: 6) {
                     Image(systemName: phase.isCompleted ? "checkmark.circle.fill" : "circle.dashed")
                         .font(.system(size: 12))
-                        .foregroundStyle(phase.isCompleted ? StepCardPalette.emeraldDone : StepCardPalette.periwinkle)
+                        .foregroundStyle(phase.isCompleted ? AntigravityTheme.statusDone : AntigravityTheme.accentPeriwinkle)
                     Text(phase.name)
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkLabel)
@@ -79,19 +79,19 @@ internal struct DynamicWorkflowStepCardView: View {
                     showScript.toggle()
                 }
                 .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(StepCardPalette.periwinkle)
+                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 if showScript {
                     Text(workflow.pythonScript)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                         .padding(8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(StepCardPalette.codeBlockBg, in: RoundedRectangle(cornerRadius: 8))
+                        .background(AntigravityTheme.surfaceCodeBlock, in: RoundedRectangle(cornerRadius: 8))
                 }
             }
         }
         .padding(12)
-        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+        .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
     }
 }
@@ -106,7 +106,7 @@ internal struct SwarmStepCardView: View {
                 HStack {
                     Label("Agent Swarm · \(board.title)", systemImage: "hexagon.fill")
                         .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     Spacer()
                     Text("\(board.members.count) specialists")
                         .font(.system(size: 11.5, weight: .medium))
@@ -128,7 +128,7 @@ internal struct SwarmStepCardView: View {
                 }
             }
             .padding(12)
-            .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+            .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
         }
         .buttonStyle(.plain)
@@ -142,7 +142,7 @@ internal struct McpToolStepCardView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: "server.rack")
-                    .foregroundStyle(mcp.isError ? AntigravityTheme.statusError : StepCardPalette.periwinkle)
+                    .foregroundStyle(mcp.isError ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle)
                 Text("\(mcp.serverName) · \(mcp.toolName)")
                     .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(AntigravityTheme.inkReading)
@@ -150,10 +150,10 @@ internal struct McpToolStepCardView: View {
                 if let plugin = mcp.pluginName {
                     Text(plugin)
                         .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(StepCardPalette.periwinkle.opacity(0.14), in: Capsule())
+                        .background(AntigravityTheme.accentPeriwinkle.opacity(0.14), in: Capsule())
                 }
             }
             if !mcp.argumentsPreview.isEmpty {
@@ -169,11 +169,11 @@ internal struct McpToolStepCardView: View {
                     .lineLimit(3)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(StepCardPalette.codeBlockBg, in: RoundedRectangle(cornerRadius: 8))
+                    .background(AntigravityTheme.surfaceCodeBlock, in: RoundedRectangle(cornerRadius: 8))
             }
         }
         .padding(11)
-        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+        .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
     }
 }
 
@@ -188,7 +188,7 @@ internal struct VoiceCallSummaryCardView: View {
             } label: {
                 HStack {
                     Image(systemName: "waveform.circle.fill")
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     Text(summary.summaryText)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
@@ -209,8 +209,8 @@ internal struct VoiceCallSummaryCardView: View {
             }
         }
         .padding(11)
-        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(StepCardPalette.periwinkle.opacity(0.25), lineWidth: 1))
+        .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(AntigravityTheme.accentPeriwinkle.opacity(0.25), lineWidth: 1))
     }
 }
 
@@ -232,13 +232,13 @@ internal struct GitHubPRStatusPillsRow: View {
                                     .font(.system(size: 9.5, weight: .bold))
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
-                                    .background(StepCardPalette.emeraldDone.opacity(0.18), in: Capsule())
+                                    .background(AntigravityTheme.statusDone.opacity(0.18), in: Capsule())
                             }
-                            .foregroundStyle(StepCardPalette.emeraldDone)
+                            .foregroundStyle(AntigravityTheme.statusDone)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(StepCardPalette.cardSurface, in: Capsule())
-                            .overlay(Capsule().stroke(StepCardPalette.emeraldDone.opacity(0.32), lineWidth: 1))
+                            .background(AntigravityTheme.surfaceCard, in: Capsule())
+                            .overlay(Capsule().stroke(AntigravityTheme.statusDone.opacity(0.32), lineWidth: 1))
                         }
                     }
                 }
@@ -446,11 +446,11 @@ public struct StepInlineApprovalCardView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "list.bullet.rectangle.portrait.fill")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.warmAmber)
+                        .foregroundStyle(AntigravityTheme.statusWaiting)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Structured Question Pending")
                             .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(StepCardPalette.warmAmber)
+                            .foregroundStyle(AntigravityTheme.statusWaiting)
                         Text(requested.askQuestion?.question ?? requested.rawSummary ?? "Tap to answer agent question")
                             .font(.system(size: 13))
                             .foregroundStyle(AntigravityTheme.inkReading)
@@ -459,16 +459,23 @@ public struct StepInlineApprovalCardView: View {
                     Spacer(minLength: 6)
                     Text("Answer")
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(StepCardPalette.inkOnCTA)
+                        .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                         .padding(.horizontal, 12)
                         .frame(minHeight: 36)
-                        .background(StepCardPalette.warmAmber, in: Capsule())
+                        .background(AntigravityTheme.statusWaiting, in: Capsule())
                 }
                 .padding(14)
-                .background(StepCardPalette.amberCardSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(AntigravityTheme.surfaceCard)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(AntigravityTheme.surfaceAmberTint)
+                        )
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(StepCardPalette.warmAmber.opacity(0.35), lineWidth: 1)
+                        .stroke(AntigravityTheme.statusWaiting.opacity(0.35), lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
@@ -478,10 +485,10 @@ public struct StepInlineApprovalCardView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "desktopcomputer.and.arrow.down")
                         .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.warmAmber)
+                        .foregroundStyle(AntigravityTheme.statusWaiting)
                     Text("New Approval Type · Approve on Desktop")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(StepCardPalette.warmAmber)
+                        .foregroundStyle(AntigravityTheme.statusWaiting)
                         .lineLimit(2)
                     Spacer()
                     if let fieldNum = requested.rawWireFieldNumber {
@@ -499,7 +506,7 @@ public struct StepInlineApprovalCardView: View {
                         .lineLimit(4)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(StepCardPalette.codeBlockBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(AntigravityTheme.surfaceCodeBlock, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
                 Text("This Antigravity Desktop host requested an interaction schema newer than this iOS build. Approve or deny it directly in Antigravity Desktop, then refresh.")
@@ -513,16 +520,23 @@ public struct StepInlineApprovalCardView: View {
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
-                        .background(StepCardPalette.neutralButtonBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(AntigravityTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("btn-step-approval-refresh-\(step.stepIndex)")
             }
             .padding(14)
-            .background(StepCardPalette.amberCardSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(AntigravityTheme.surfaceCard)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(AntigravityTheme.surfaceAmberTint)
+                    )
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(StepCardPalette.warmAmber.opacity(0.35), lineWidth: 1)
+                    .stroke(AntigravityTheme.statusWaiting.opacity(0.35), lineWidth: 1)
             )
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("card-step-approval-desktop-required-\(step.stepIndex)")
@@ -532,10 +546,10 @@ public struct StepInlineApprovalCardView: View {
                 HStack(spacing: 8) {
                     Image(systemName: info.icon)
                         .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.warmAmber)
+                        .foregroundStyle(AntigravityTheme.statusWaiting)
                     Text(info.title)
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(StepCardPalette.warmAmber)
+                        .foregroundStyle(AntigravityTheme.statusWaiting)
                         .lineLimit(2)
                     Spacer()
                 }
@@ -547,10 +561,10 @@ public struct StepInlineApprovalCardView: View {
                     .lineLimit(4)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(StepCardPalette.codeBlockBg)
+                    .background(AntigravityTheme.surfaceCodeBlock)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                            .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
@@ -570,7 +584,7 @@ public struct StepInlineApprovalCardView: View {
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .padding(.horizontal, 16)
                             .frame(maxWidth: info.supportsScopedAllow ? nil : CGFloat.infinity, minHeight: AntigravityTheme.minTouchTargetPt)
-                            .background(StepCardPalette.neutralButtonBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(AntigravityTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("btn-step-deny-\(step.stepIndex)")
@@ -580,9 +594,9 @@ public struct StepInlineApprovalCardView: View {
                     } label: {
                         Text(info.primaryLabel)
                             .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(StepCardPalette.inkOnCTA)
+                            .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                             .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
-                            .background(StepCardPalette.warmAmber, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(AntigravityTheme.statusWaiting, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("btn-step-approve-\(step.stepIndex)")
@@ -606,9 +620,9 @@ public struct StepInlineApprovalCardView: View {
                         } label: {
                             Text("Always Allow")
                                 .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(StepCardPalette.periwinkle)
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                 .frame(maxWidth: .infinity, minHeight: 38)
-                                .background(StepCardPalette.periwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .background(AntigravityTheme.accentPeriwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                         .buttonStyle(.plain)
                     }
@@ -622,18 +636,25 @@ public struct StepInlineApprovalCardView: View {
                             Text("Review Plan & Comment")
                                 .font(.system(size: 13, weight: .semibold))
                         }
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .frame(maxWidth: .infinity, minHeight: 38)
-                        .background(StepCardPalette.periwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(AntigravityTheme.accentPeriwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
             }
             .padding(14)
-            .background(StepCardPalette.amberCardSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(AntigravityTheme.surfaceCard)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(AntigravityTheme.surfaceAmberTint)
+                    )
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(StepCardPalette.warmAmber.opacity(0.32), lineWidth: 1)
+                    .stroke(AntigravityTheme.statusWaiting.opacity(0.32), lineWidth: 1)
             )
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("card-step-approval-\(step.stepIndex)")
@@ -651,10 +672,10 @@ internal struct InlineGenericInteractionCardView: View {
             HStack(spacing: 8) {
                 Image(systemName: interaction.kind == .askQuestion ? "questionmark.bubble.fill" : "hand.raised.fill")
                     .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.warmAmber)
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
                 Text(interaction.kind == .askQuestion ? "Agent needs your input" : "Permission required")
                     .font(.system(size: 14.5, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.warmAmber)
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
                 Spacer()
             }
 
@@ -667,9 +688,9 @@ internal struct InlineGenericInteractionCardView: View {
                 } label: {
                     Text("Review & Answer")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(StepCardPalette.inkOnCTA)
+                        .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                         .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(StepCardPalette.warmAmber)
+                        .background(AntigravityTheme.statusWaiting)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -689,7 +710,7 @@ internal struct InlineGenericInteractionCardView: View {
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .frame(maxWidth: .infinity, minHeight: 44)
-                            .background(StepCardPalette.neutralButtonBg)
+                            .background(AntigravityTheme.surfaceElevated)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -699,9 +720,9 @@ internal struct InlineGenericInteractionCardView: View {
                     } label: {
                         Text("Allow Once")
                             .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(StepCardPalette.inkOnCTA)
+                            .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                             .frame(maxWidth: .infinity, minHeight: 44)
-                            .background(StepCardPalette.warmAmber)
+                            .background(AntigravityTheme.statusWaiting)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -709,10 +730,17 @@ internal struct InlineGenericInteractionCardView: View {
             }
         }
         .padding(14)
-        .background(StepCardPalette.amberCardSurface)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AntigravityTheme.surfaceCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(AntigravityTheme.surfaceAmberTint)
+                )
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(StepCardPalette.warmAmber.opacity(0.30), lineWidth: 1)
+                .stroke(AntigravityTheme.statusWaiting.opacity(0.30), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
@@ -738,13 +766,13 @@ internal struct ReferencedFilePillsRow: View {
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                                 .lineLimit(1)
                         }
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .background(StepCardPalette.periwinkle.opacity(0.12))
+                        .background(AntigravityTheme.accentPeriwinkle.opacity(0.12))
                         .overlay(
                             Capsule()
-                                .stroke(StepCardPalette.periwinkle.opacity(0.26), lineWidth: 1)
+                                .stroke(AntigravityTheme.accentPeriwinkle.opacity(0.26), lineWidth: 1)
                         )
                         .clipShape(Capsule())
                     }

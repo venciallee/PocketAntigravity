@@ -875,6 +875,211 @@ final class AntigravityInteractiveUITests: XCTestCase {
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
     }
 
+    /// Domain: Appearance Mode (`System` / `Dark` / `Light`) switching across 1st-level Settings,
+    /// 2nd-level `CustomizationsSettingsView` sheet, Agents Home (`UE01`), and Cascade Chat (`UE07`).
+    func testAppearanceModeSwitchingLightAndDarkInSettingsAndChat() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
+
+        let app = launchLiveApp(serverPort: server.port)
+
+        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 12),
+            "Agents Home must load live Desktop sessions before opening Settings"
+        )
+
+        // 1. Open Settings tab and verify 1st-level Appearance Mode controls exist
+        let settingsTab = app.buttons["tab-item-settings"]
+        XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
+        settingsTab.tap()
+
+        let appearanceCard = app.descendants(matching: .any)["card-appearance-mode"].firstMatch
+        scrollUntilHittable(appearanceCard, in: app, avoidBottomInset: 110)
+        XCTAssertTrue(
+            appearanceCard.waitForExistence(timeout: 6),
+            "1st-level Settings must render card-appearance-mode"
+        )
+
+        let systemButton = app.buttons["appearance-mode-system"]
+        let darkButton = app.buttons["appearance-mode-dark"]
+        let lightButton = app.buttons["appearance-mode-light"]
+        XCTAssertTrue(systemButton.waitForExistence(timeout: 5), "appearance-mode-system must exist in Settings")
+        XCTAssertTrue(darkButton.waitForExistence(timeout: 5), "appearance-mode-dark must exist in Settings")
+        XCTAssertTrue(lightButton.waitForExistence(timeout: 5), "appearance-mode-light must exist in Settings")
+
+        // 2. Switch to Light Mode in 1st-level Settings
+        scrollUntilHittable(lightButton, in: app, avoidBottomInset: 110)
+        lightButton.tap()
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(lightButton, timeout: 4),
+            "Tapping appearance-mode-light must select Light Mode in 1st-level Settings"
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        attachScreenshot(named: "06a_Settings_Light_Mode")
+
+        // 3. Open 2nd-level CustomizationsSettingsView sheet and verify Light Mode synced
+        let customizationsButton = app.buttons["btn-open-customizations-settings"]
+        scrollUntilHittable(customizationsButton, in: app, avoidBottomInset: 110)
+        XCTAssertTrue(
+            customizationsButton.waitForExistence(timeout: 5),
+            "Settings must render btn-open-customizations-settings"
+        )
+        customizationsButton.tap()
+
+        let doneButton = app.buttons["Done"].firstMatch
+        XCTAssertTrue(
+            doneButton.waitForExistence(timeout: 6),
+            "2nd-level CustomizationsSettingsView sheet must present with a Done toolbar button"
+        )
+
+        let sheetLightButton = app.buttons["appearance-mode-sheet-light"]
+        scrollUntilHittable(sheetLightButton, in: app, maxSwipes: 8, avoidBottomInset: 40, allowReverseSwipe: false)
+        XCTAssertTrue(
+            sheetLightButton.waitForExistence(timeout: 5),
+            "2nd-level CustomizationsSettingsView must render appearance-mode-sheet-light"
+        )
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(sheetLightButton, timeout: 4),
+            "Light Mode selected in 1st-level Settings must be reflected in CustomizationsSettingsView"
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        attachScreenshot(named: "06b_Customizations_Light_Mode")
+
+        // 4. Switch to Dark Mode inside 2nd-level sheet, dismiss via Done, and verify 1st-level sync
+        let sheetDarkButton = app.buttons["appearance-mode-sheet-dark"]
+        XCTAssertTrue(sheetDarkButton.waitForExistence(timeout: 5), "appearance-mode-sheet-dark must exist")
+        scrollUntilHittable(sheetDarkButton, in: app, maxSwipes: 4, avoidBottomInset: 40, allowReverseSwipe: false)
+        sheetDarkButton.tap()
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(sheetDarkButton, timeout: 4),
+            "Tapping appearance-mode-sheet-dark must select Dark Mode inside sheet"
+        )
+
+        let navDoneButton = app.navigationBars.buttons["Done"].firstMatch
+        if navDoneButton.exists && navDoneButton.isHittable {
+            navDoneButton.tap()
+        } else {
+            doneButton.tap()
+        }
+
+        scrollUntilHittable(darkButton, in: app, avoidBottomInset: 110)
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(darkButton, timeout: 5),
+            "Dismissing CustomizationsSettingsView after selecting Dark must sync 1st-level appearance-mode-dark"
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        attachScreenshot(named: "06c_Settings_Dark_Mode")
+
+        // 5. Switch to Light Mode and verify Agents Home + Cascade Chat rendering in Light Mode
+        scrollUntilHittable(lightButton, in: app, avoidBottomInset: 110)
+        lightButton.tap()
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(lightButton, timeout: 4),
+            "Tapping appearance-mode-light must switch back to Light Mode"
+        )
+
+        let agentsTab = app.buttons["tab-item-agents"]
+        XCTAssertTrue(agentsTab.waitForExistence(timeout: 5))
+        agentsTab.tap()
+
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 6),
+            "Agents Home must render conversation rows cleanly in Light Mode"
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        attachScreenshot(named: "06d_AgentsHome_Light_Mode")
+
+        reviewRow.tap()
+        let backToSessionsButton = app.buttons["btn-back-sessions"]
+        XCTAssertTrue(
+            backToSessionsButton.waitForExistence(timeout: 6),
+            "Tapping conversation row in Light Mode must open CascadeChatViewController"
+        )
+        XCTAssertTrue(
+            waitForTextContaining("已完成 Slardar Tag 模块审查", in: app, timeout: 6),
+            "Cascade Chat messages must render cleanly in Light Mode"
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        attachScreenshot(named: "06e_CascadeChat_Light_Mode")
+
+        // 6. Navigate back to Agents Home -> Settings and restore System appearance mode
+        backToSessionsButton.tap()
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 6))
+
+        XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
+        settingsTab.tap()
+        scrollUntilHittable(systemButton, in: app, avoidBottomInset: 110)
+        XCTAssertTrue(systemButton.waitForExistence(timeout: 5))
+        systemButton.tap()
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(systemButton, timeout: 4),
+            "Restoring System appearance mode must mark appearance-mode-system as selected"
+        )
+    }
+
+    private func isAppearanceOptionSelected(_ element: XCUIElement) -> Bool {
+        if element.isSelected {
+            return true
+        }
+        if let rawValue = element.value as? String, rawValue.lowercased() == "selected" {
+            return true
+        }
+        return false
+    }
+
+    private func waitForAppearanceOptionSelected(_ element: XCUIElement, timeout: TimeInterval = 4) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists && isAppearanceOptionSelected(element) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return element.exists && isAppearanceOptionSelected(element)
+    }
+
+    private func scrollUntilHittable(
+        _ element: XCUIElement,
+        in app: XCUIApplication,
+        maxSwipes: Int = 6,
+        avoidBottomInset: CGFloat = 0,
+        allowReverseSwipe: Bool = true
+    ) {
+        let appFrame = app.frame
+        func isComfortablyVisible() -> Bool {
+            guard element.exists && element.isHittable else { return false }
+            let frame = element.frame
+            guard !frame.isEmpty else { return false }
+            return frame.minY >= appFrame.minY + 72 && frame.maxY <= appFrame.maxY - avoidBottomInset
+        }
+        if isComfortablyVisible() { return }
+
+        let dragUpStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+        let dragUpEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.28))
+        let dragDownStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.30))
+        let dragDownEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.74))
+
+        for _ in 0..<maxSwipes {
+            if isComfortablyVisible() { return }
+            let frame = element.exists ? element.frame : .zero
+            if allowReverseSwipe && !frame.isEmpty && frame.minY < appFrame.minY + 72 {
+                dragDownStart.press(forDuration: 0.02, thenDragTo: dragDownEnd)
+            } else {
+                dragUpStart.press(forDuration: 0.02, thenDragTo: dragUpEnd)
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+
+        if allowReverseSwipe && !isComfortablyVisible() {
+            for _ in 0..<maxSwipes {
+                if isComfortablyVisible() { return }
+                dragDownStart.press(forDuration: 0.02, thenDragTo: dragDownEnd)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            }
+        }
+    }
+
     private func performEdgeSwipeBack(in app: XCUIApplication) {
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))

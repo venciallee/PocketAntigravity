@@ -5,7 +5,7 @@ Evaluates the exact change set (git diff / PR / push / local working tree) and o
 deterministic verification plan:
   - Normal PRs / commits: runs ONLY the gates, Swift tests, XCUITest cases, Simulator UE screens,
     and ESDD interactive test cases impacted by the changed files (skipping unaffected cases).
-  - Releases (发版): ALWAYS enforces 100% FULL E2E across all gates (Gate 0..5, all 5 XCUITests,
+  - Releases (发版): ALWAYS enforces 100% FULL E2E across all gates (Gate 0..5, all 6 XCUITests,
     Live App Connect-RPC handshake, all 13 Simulator screens, full 16-case / 13-screen ESDD, and
     full KMP verification).
   - Conservative safety fallback: core shared/architecture files, build config, CI runner scripts,
@@ -31,6 +31,7 @@ ALL_XCUITESTS: list[str] = [
     "testOfflineHostRecoveryAndSettingsAttribution",
     "testAutomationsCreateWithPromptDraftFlow",
     "testComposeFABStartCascadeAndStreamedReply",
+    "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat",
 ]
 
 ALL_UE_STATES: list[str] = [
@@ -400,7 +401,10 @@ def classify_file(path: str) -> dict[str, Any]:
             res = _empty_impact("store-review-settings", "Plan/Diff review & Settings store changed")
             res["gate1_swift_data_tests"] = True
             res["gate3_ios_build"] = True
-            res["xcuitests"] = ["testOfflineHostRecoveryAndSettingsAttribution"]
+            res["xcuitests"] = [
+                "testOfflineHostRecoveryAndSettingsAttribution",
+                "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat",
+            ]
             res["simulator_screens"] = ["UE11_PLAN_REVIEW", "UE12_TURN_DIFF_REVIEW"]
             res["esdd_stages"] = [1, 3, 4]
             res["esdd_tcs"] = ["TC-12", "TC-13"]
@@ -573,7 +577,10 @@ def classify_file(path: str) -> dict[str, Any]:
     if norm.startswith("apps/ios/App/ViewControllers/Pairing/"):
         res = _empty_impact("ui-pairing-settings", "Pairing, Cloud Relay sign-in & Settings views changed")
         res["gate3_ios_build"] = True
-        res["xcuitests"] = ["testOfflineHostRecoveryAndSettingsAttribution"]
+        res["xcuitests"] = [
+            "testOfflineHostRecoveryAndSettingsAttribution",
+            "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat",
+        ]
         res["run_live_app_rpc"] = True
         return res
 
@@ -619,7 +626,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["gate3_ios_build"] = True
         return res
 
-    # 13. UI Tests harness itself -> run all 5 XCUITests (static 13-screen screenshots unaffected)
+    # 13. UI Tests harness itself -> run all XCUITests (static 13-screen screenshots unaffected)
     if norm.startswith("tests/ios-ui/"):
         res = _empty_impact("ios-uitests", "XCUITest suite changed (running all XCUITest cases)")
         res["gate3_ios_build"] = True
@@ -1243,7 +1250,29 @@ def run_self_tests() -> None:
     assert p15["esdd"]["stages"] == [1]
     assert p15["esdd"]["testCases"] == [] and p15["esdd"]["screens"] == []
 
-    print("✓ e2e_impact_planner self-test PASSED (15/15 scenarios + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
+    # 16. Settings / Customizations UI & ReviewAndSettings store -> include Appearance Mode XCUITest
+    p16 = build_verification_plan(
+        changed_files=[
+            "apps/ios/App/ViewControllers/Pairing/RemotePairingViewController.swift",
+            "apps/ios/App/ViewControllers/Pairing/CustomizationsSettingsView.swift",
+        ]
+    )
+    assert p16["mode"] == "scoped" and not p16["isRelease"]
+    assert p16["gates"]["iosSimulatorMode"] == "scoped"
+    assert p16["xcuitests"] == [
+        "testOfflineHostRecoveryAndSettingsAttribution",
+        "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat",
+    ]
+
+    p16b = build_verification_plan(
+        changed_files=[
+            "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore+ReviewAndSettings.swift",
+        ]
+    )
+    assert p16b["mode"] == "scoped"
+    assert "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat" in p16b["xcuitests"]
+
+    print("✓ e2e_impact_planner self-test PASSED (16/16 scenarios + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
 
 
 def main() -> int:

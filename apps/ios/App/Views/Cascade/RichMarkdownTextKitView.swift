@@ -17,6 +17,8 @@ internal struct RichMarkdownInlineBlockView: View {
     let textAlignment: TextAlignment
     let expandsToProposedWidth: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
+
     init(
         inlines: [MarkdownInline],
         baseSize: CGFloat,
@@ -44,7 +46,8 @@ internal struct RichMarkdownInlineBlockView: View {
             defaultColor: defaultColor,
             lineSpacing: lineSpacing,
             textAlignment: textAlignment,
-            expandsToProposedWidth: expandsToProposedWidth
+            expandsToProposedWidth: expandsToProposedWidth,
+            colorScheme: colorScheme
         )
         #else
         Text(
@@ -181,7 +184,7 @@ internal final class RichMarkdownUITextView: UITextView {
         dataDetectorTypes = []
         adjustsFontForContentSizeCategory = false
         linkTextAttributes = [
-            .foregroundColor: UIColor(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0, alpha: 1.0)
+            .foregroundColor: AntigravityTheme.accentPeriwinkleUIColor
         ]
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         setContentHuggingPriority(.required, for: .vertical)
@@ -237,6 +240,7 @@ internal struct RichMarkdownTextViewRepresentable: UIViewRepresentable {
     let lineSpacing: CGFloat
     let textAlignment: TextAlignment
     let expandsToProposedWidth: Bool
+    let colorScheme: ColorScheme
 
     @Environment(\.openURL) private var openURL
 
@@ -247,16 +251,23 @@ internal struct RichMarkdownTextViewRepresentable: UIViewRepresentable {
         let colorHex: UInt32
         let lineSpacing: CGFloat
         let alignmentTag: Int
+        let isDarkMode: Bool
+    }
+
+    private var resolvedTraitCollection: UITraitCollection {
+        UITraitCollection(userInterfaceStyle: colorScheme == .dark ? .dark : .light)
     }
 
     private var currentRenderKey: RenderKey {
-        RenderKey(
+        let traits = resolvedTraitCollection
+        return RenderKey(
             inlines: inlines,
             baseSize: baseSize,
             weightTag: UIKitInlineAttributedBuilder.weightTag(baseWeight),
-            colorHex: UIKitInlineAttributedBuilder.colorSignature(defaultColor),
+            colorHex: UIKitInlineAttributedBuilder.colorSignature(defaultColor, traitCollection: traits),
             lineSpacing: lineSpacing,
-            alignmentTag: UIKitInlineAttributedBuilder.alignmentTag(textAlignment)
+            alignmentTag: UIKitInlineAttributedBuilder.alignmentTag(textAlignment),
+            isDarkMode: colorScheme == .dark
         )
     }
 
@@ -269,13 +280,19 @@ internal struct RichMarkdownTextViewRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> RichMarkdownUITextView {
         let textView = RichMarkdownUITextView()
         textView.delegate = context.coordinator
+        let traits = resolvedTraitCollection
+        textView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+        textView.linkTextAttributes = [
+            .foregroundColor: AntigravityTheme.accentPeriwinkleUIColor.resolvedColor(with: traits)
+        ]
         let attributed = UIKitInlineAttributedBuilder.build(
             inlines,
             baseSize: baseSize,
             baseWeight: baseWeight,
             defaultColor: defaultColor,
             lineSpacing: lineSpacing,
-            textAlignment: textAlignment
+            textAlignment: textAlignment,
+            traitCollection: traits
         )
         textView.attributedText = attributed
         context.coordinator.lastRenderKey = currentRenderKey
@@ -288,13 +305,19 @@ internal struct RichMarkdownTextViewRepresentable: UIViewRepresentable {
         }
         let key = currentRenderKey
         if context.coordinator.lastRenderKey != key {
+            let traits = resolvedTraitCollection
+            uiView.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+            uiView.linkTextAttributes = [
+                .foregroundColor: AntigravityTheme.accentPeriwinkleUIColor.resolvedColor(with: traits)
+            ]
             uiView.attributedText = UIKitInlineAttributedBuilder.build(
                 inlines,
                 baseSize: baseSize,
                 baseWeight: baseWeight,
                 defaultColor: defaultColor,
                 lineSpacing: lineSpacing,
-                textAlignment: textAlignment
+                textAlignment: textAlignment,
+                traitCollection: traits
             )
             context.coordinator.lastRenderKey = key
             uiView.invalidateIntrinsicContentSize()
@@ -342,10 +365,6 @@ internal struct RichMarkdownTextViewRepresentable: UIViewRepresentable {
 }
 
 internal enum UIKitInlineAttributedBuilder {
-    private static let periwinkleUI = UIColor(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0, alpha: 1.0)
-    private static let inlineCodeInkUI = UIColor(red: 0xDC / 255.0, green: 0xE6 / 255.0, blue: 0xFF / 255.0, alpha: 1.0)
-    private static let warmAmberUI = UIColor(red: 0xEB / 255.0, green: 0xB3 / 255.0, blue: 0x65 / 255.0, alpha: 1.0)
-
     private struct StyleState {
         var isBold: Bool = false
         var isItalic: Bool = false
@@ -394,27 +413,27 @@ internal enum UIKitInlineAttributedBuilder {
             return base
         }
 
-        func resolvedForeground(defaultUI: UIColor) -> UIColor {
+        func resolvedForeground(defaultUI: UIColor, traits: UITraitCollection) -> UIColor {
             if linkDestination != nil {
-                return UIKitInlineAttributedBuilder.periwinkleUI
+                return AntigravityTheme.accentPeriwinkleUIColor.resolvedColor(with: traits)
             }
             if isKeyboardKey {
-                return UIColor(white: 0.94, alpha: 1.0)
+                return AntigravityTheme.inkKbdUIColor.resolvedColor(with: traits)
             }
             if isCode || isMath {
-                return UIKitInlineAttributedBuilder.inlineCodeInkUI
+                return AntigravityTheme.inkInlineCodeUIColor.resolvedColor(with: traits)
             }
             if isHighlight {
-                return UIColor(red: 0xFF / 255.0, green: 0xF3 / 255.0, blue: 0xD6 / 255.0, alpha: 1.0)
+                return AntigravityTheme.inkMarkHighlightUIColor.resolvedColor(with: traits)
             }
             return defaultUI
         }
 
-        func resolvedPillStyle(tightLeading: Bool, tightTrailing: Bool) -> InlinePillVisualStyle? {
+        func resolvedPillStyle(tightLeading: Bool, tightTrailing: Bool, traits: UITraitCollection) -> InlinePillVisualStyle? {
             if isKeyboardKey {
                 return InlinePillVisualStyle(
-                    fillColor: UIColor(red: 0x1D / 255.0, green: 0x1F / 255.0, blue: 0x26 / 255.0, alpha: 1.0),
-                    borderColor: UIColor.white.withAlphaComponent(0.22),
+                    fillColor: AntigravityTheme.surfaceKbdUIColor.resolvedColor(with: traits),
+                    borderColor: AntigravityTheme.subtleBorderUIColor.resolvedColor(with: traits),
                     cornerRadius: 5.0,
                     leftOutset: tightLeading ? 2.0 : 3.2,
                     rightOutset: tightTrailing ? 2.0 : 3.2,
@@ -424,9 +443,10 @@ internal enum UIKitInlineAttributedBuilder {
             }
             if isCode {
                 if linkDestination != nil {
+                    let accent = AntigravityTheme.accentPeriwinkleUIColor.resolvedColor(with: traits)
                     return InlinePillVisualStyle(
-                        fillColor: UIKitInlineAttributedBuilder.periwinkleUI.withAlphaComponent(0.14),
-                        borderColor: UIKitInlineAttributedBuilder.periwinkleUI.withAlphaComponent(0.26),
+                        fillColor: accent.withAlphaComponent(0.14),
+                        borderColor: accent.withAlphaComponent(0.26),
                         cornerRadius: 5.0,
                         leftOutset: tightLeading ? 1.8 : 2.6,
                         rightOutset: tightTrailing ? 1.8 : 2.6,
@@ -435,8 +455,8 @@ internal enum UIKitInlineAttributedBuilder {
                     )
                 }
                 return InlinePillVisualStyle(
-                    fillColor: UIColor.white.withAlphaComponent(0.085),
-                    borderColor: UIColor.white.withAlphaComponent(0.09),
+                    fillColor: AntigravityTheme.surfaceInlineCodeUIColor.resolvedColor(with: traits),
+                    borderColor: AntigravityTheme.subtleBorderUIColor.resolvedColor(with: traits),
                     cornerRadius: 5.0,
                     leftOutset: tightLeading ? 1.8 : 2.6,
                     rightOutset: tightTrailing ? 1.8 : 2.6,
@@ -446,8 +466,8 @@ internal enum UIKitInlineAttributedBuilder {
             }
             if isHighlight {
                 return InlinePillVisualStyle(
-                    fillColor: UIKitInlineAttributedBuilder.warmAmberUI.withAlphaComponent(0.22),
-                    borderColor: UIKitInlineAttributedBuilder.warmAmberUI.withAlphaComponent(0.32),
+                    fillColor: AntigravityTheme.surfaceMarkHighlightUIColor.resolvedColor(with: traits),
+                    borderColor: AntigravityTheme.statusWaitingUIColor.resolvedColor(with: traits).withAlphaComponent(0.32),
                     cornerRadius: 4.0,
                     leftOutset: 1.6,
                     rightOutset: 1.6,
@@ -465,12 +485,20 @@ internal enum UIKitInlineAttributedBuilder {
         baseWeight: Font.Weight,
         defaultColor: Color,
         lineSpacing: CGFloat,
-        textAlignment: TextAlignment
+        textAlignment: TextAlignment,
+        traitCollection: UITraitCollection
     ) -> NSAttributedString {
         let output = NSMutableAttributedString()
-        let defaultUI = UIColor(defaultColor)
+        let defaultUI = UIColor(defaultColor).resolvedColor(with: traitCollection)
         let initial = StyleState(baseWeight: uiFontWeight(baseWeight))
-        appendNodes(nodes, style: initial, baseSize: baseSize, defaultUI: defaultUI, into: output)
+        appendNodes(
+            nodes,
+            style: initial,
+            baseSize: baseSize,
+            defaultUI: defaultUI,
+            traits: traitCollection,
+            into: output
+        )
 
         // Apply subtle kerning before tight inline code/kbd pills so adjacent CJK/Latin never collides with pill outset
         applyTightPillSpacingKerns(on: output)
@@ -490,15 +518,16 @@ internal enum UIKitInlineAttributedBuilder {
         style: StyleState,
         baseSize: CGFloat,
         defaultUI: UIColor,
+        traits: UITraitCollection,
         into output: NSMutableAttributedString
     ) {
         for (idx, node) in nodes.enumerated() {
             switch node {
             case .text(let s):
-                output.append(makeSegment(s, style: style, baseSize: baseSize, defaultUI: defaultUI, tightLeading: false, tightTrailing: false))
+                output.append(makeSegment(s, style: style, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: false, tightTrailing: false))
 
             case .softBreak:
-                output.append(makeSegment("\n", style: style, baseSize: baseSize, defaultUI: defaultUI, tightLeading: false, tightTrailing: false))
+                output.append(makeSegment("\n", style: style, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: false, tightTrailing: false))
 
             case .code(let codeText):
                 guard !codeText.isEmpty else { continue }
@@ -509,7 +538,7 @@ internal enum UIKitInlineAttributedBuilder {
                 let tightLead = prevChar.map { !$0.isWhitespace } ?? false
                 let tightTrail = nextChar.map { !$0.isWhitespace } ?? false
                 // Pure code text — ZERO injected U+200A padding spaces!
-                output.append(makeSegment(codeText, style: codeStyle, baseSize: baseSize, defaultUI: defaultUI, tightLeading: tightLead, tightTrailing: tightTrail))
+                output.append(makeSegment(codeText, style: codeStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: tightLead, tightTrailing: tightTrail))
 
             case .keyboardKey(let keyText):
                 guard !keyText.isEmpty else { continue }
@@ -519,53 +548,53 @@ internal enum UIKitInlineAttributedBuilder {
                 let nextChar = firstCharacter(of: idx + 1 < nodes.count ? nodes[idx + 1] : nil)
                 let tightLead = prevChar.map { !$0.isWhitespace } ?? false
                 let tightTrail = nextChar.map { !$0.isWhitespace } ?? false
-                output.append(makeSegment(keyText, style: kbdStyle, baseSize: baseSize, defaultUI: defaultUI, tightLeading: tightLead, tightTrailing: tightTrail))
+                output.append(makeSegment(keyText, style: kbdStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: tightLead, tightTrailing: tightTrail))
 
             case .strong(let children):
                 var boldStyle = style
                 boldStyle.isBold = true
-                appendNodes(children, style: boldStyle, baseSize: baseSize, defaultUI: defaultUI, into: output)
+                appendNodes(children, style: boldStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, into: output)
 
             case .emphasis(let children):
                 var italicStyle = style
                 italicStyle.isItalic = true
-                appendNodes(children, style: italicStyle, baseSize: baseSize, defaultUI: defaultUI, into: output)
+                appendNodes(children, style: italicStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, into: output)
 
             case .strikethrough(let children):
                 var strikeStyle = style
                 strikeStyle.isStrikethrough = true
-                appendNodes(children, style: strikeStyle, baseSize: baseSize, defaultUI: defaultUI, into: output)
+                appendNodes(children, style: strikeStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, into: output)
 
             case .underline(let children):
                 var underStyle = style
                 underStyle.isUnderline = true
-                appendNodes(children, style: underStyle, baseSize: baseSize, defaultUI: defaultUI, into: output)
+                appendNodes(children, style: underStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, into: output)
 
             case .highlight(let children):
                 var hiStyle = style
                 hiStyle.isHighlight = true
-                appendNodes(children, style: hiStyle, baseSize: baseSize, defaultUI: defaultUI, into: output)
+                appendNodes(children, style: hiStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, into: output)
 
             case .superscript(let text):
                 var supStyle = style
                 supStyle.isSuperscript = true
-                output.append(makeSegment(text, style: supStyle, baseSize: baseSize, defaultUI: defaultUI, tightLeading: false, tightTrailing: false))
+                output.append(makeSegment(text, style: supStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: false, tightTrailing: false))
 
             case .subscriptText(let text):
                 var subStyle = style
                 subStyle.isSubscript = true
-                output.append(makeSegment(text, style: subStyle, baseSize: baseSize, defaultUI: defaultUI, tightLeading: false, tightTrailing: false))
+                output.append(makeSegment(text, style: subStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: false, tightTrailing: false))
 
             case .link(let labelNodes, let destination):
                 var linkStyle = style
                 linkStyle.linkDestination = destination
-                appendNodes(labelNodes, style: linkStyle, baseSize: baseSize, defaultUI: defaultUI, into: output)
+                appendNodes(labelNodes, style: linkStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, into: output)
 
             case .inlineMath(let latex):
                 var mathStyle = style
                 mathStyle.isMath = true
                 let rendered = MarkdownMathNormalizer.prettify(latex)
-                output.append(makeSegment(rendered, style: mathStyle, baseSize: baseSize, defaultUI: defaultUI, tightLeading: false, tightTrailing: false))
+                output.append(makeSegment(rendered, style: mathStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: false, tightTrailing: false))
 
             case .inlineImage(let alt, let src):
                 var linkStyle = style
@@ -574,13 +603,13 @@ internal enum UIKitInlineAttributedBuilder {
                 let label = alt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? MarkdownLinkFormatting.shortFileBadge(src)
                     : alt
-                output.append(makeSegment("🖼 \(label)", style: linkStyle, baseSize: baseSize, defaultUI: defaultUI, tightLeading: false, tightTrailing: false))
+                output.append(makeSegment("🖼 \(label)", style: linkStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: false, tightTrailing: false))
 
             case .footnoteRef(let label):
                 var fnStyle = style
                 fnStyle.isSuperscript = true
-                var attrs = makeAttributes(style: fnStyle, baseSize: baseSize, defaultUI: defaultUI, tightLeading: false, tightTrailing: false)
-                attrs[.foregroundColor] = periwinkleUI
+                var attrs = makeAttributes(style: fnStyle, baseSize: baseSize, defaultUI: defaultUI, traits: traits, tightLeading: false, tightTrailing: false)
+                attrs[.foregroundColor] = AntigravityTheme.accentPeriwinkleUIColor.resolvedColor(with: traits)
                 output.append(NSAttributedString(string: "[\(label)]", attributes: attrs))
             }
         }
@@ -591,6 +620,7 @@ internal enum UIKitInlineAttributedBuilder {
         style: StyleState,
         baseSize: CGFloat,
         defaultUI: UIColor,
+        traits: UITraitCollection,
         tightLeading: Bool,
         tightTrailing: Bool
     ) -> NSAttributedString {
@@ -598,6 +628,7 @@ internal enum UIKitInlineAttributedBuilder {
             style: style,
             baseSize: baseSize,
             defaultUI: defaultUI,
+            traits: traits,
             tightLeading: tightLeading,
             tightTrailing: tightTrailing
         )
@@ -608,12 +639,13 @@ internal enum UIKitInlineAttributedBuilder {
         style: StyleState,
         baseSize: CGFloat,
         defaultUI: UIColor,
+        traits: UITraitCollection,
         tightLeading: Bool,
         tightTrailing: Bool
     ) -> [NSAttributedString.Key: Any] {
         var attrs: [NSAttributedString.Key: Any] = [
             .font: style.resolvedFont(baseSize: baseSize),
-            .foregroundColor: style.resolvedForeground(defaultUI: defaultUI)
+            .foregroundColor: style.resolvedForeground(defaultUI: defaultUI, traits: traits)
         ]
         if style.isStrikethrough {
             attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
@@ -626,7 +658,7 @@ internal enum UIKitInlineAttributedBuilder {
         } else if style.isSubscript {
             attrs[.baselineOffset] = -(baseSize * 0.16)
         }
-        if let pill = style.resolvedPillStyle(tightLeading: tightLeading, tightTrailing: tightTrailing) {
+        if let pill = style.resolvedPillStyle(tightLeading: tightLeading, tightTrailing: tightTrailing, traits: traits) {
             attrs[.agyInlinePillStyle] = pill
         }
         if let dest = style.linkDestination,
@@ -712,12 +744,12 @@ internal enum UIKitInlineAttributedBuilder {
         }
     }
 
-    static func colorSignature(_ color: Color) -> UInt32 {
+    static func colorSignature(_ color: Color, traitCollection: UITraitCollection) -> UInt32 {
         var r: CGFloat = 0
         var g: CGFloat = 0
         var b: CGFloat = 0
         var a: CGFloat = 0
-        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        UIColor(color).resolvedColor(with: traitCollection).getRed(&r, green: &g, blue: &b, alpha: &a)
         let ri = UInt32(max(0, min(255, Int(r * 255))))
         let gi = UInt32(max(0, min(255, Int(g * 255))))
         let bi = UInt32(max(0, min(255, Int(b * 255))))

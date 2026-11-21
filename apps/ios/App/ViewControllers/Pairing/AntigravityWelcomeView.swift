@@ -40,7 +40,7 @@ public struct AntigravityWelcomeView: View {
                     Text("AG Orbit")
                         .font(.system(size: 32, weight: .bold))
                         .tracking(-0.6)
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.inkReading)
 
                     Text("Companion for Antigravity")
                         .font(.system(size: 13, weight: .semibold))

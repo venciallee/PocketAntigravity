@@ -172,7 +172,7 @@ public struct ProjectDetailViewController: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                     .background(
                         Circle()
@@ -377,7 +377,7 @@ public struct ProjectDetailViewController: View {
                 Text(displayTitle)
                     .font(.system(size: 28, weight: .bold))
                     .tracking(-0.4)
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .accessibilityIdentifier("project-hero-title")
 
                 Text(effectivePathDisplay)
@@ -521,7 +521,7 @@ public struct ProjectDetailViewController: View {
                 HStack(spacing: 5) {
                     Text(title)
                         .font(.system(size: 15, weight: isSelected ? .semibold : .medium))
-                        .foregroundStyle(isSelected ? Color.white : AntigravityTheme.textMuted)
+                        .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textMuted)
                         .lineLimit(1)
                     Text(count)
                         .font(.system(size: 14.5, weight: .medium))
@@ -532,7 +532,7 @@ public struct ProjectDetailViewController: View {
                 .padding(.top, 8)
 
                 Rectangle()
-                    .fill(isSelected ? Color.white : Color.clear)
+                    .fill(isSelected ? AntigravityTheme.textPrimary : Color.clear)
                     .frame(height: 2)
             }
             .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -561,7 +561,7 @@ public struct ProjectDetailViewController: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(auto.title)
                                     .font(.system(size: 15.5, weight: .semibold))
-                                    .foregroundStyle(Color.white)
+                                    .foregroundStyle(AntigravityTheme.textPrimary)
                                 Text("\(auto.scheduleSummary) · \(auto.lastRunText)")
                                     .font(.system(size: 13, weight: .regular))
                                     .foregroundStyle(auto.needsReview ? AntigravityTheme.statusWaiting : AntigravityTheme.textSecondary)
@@ -584,7 +584,7 @@ public struct ProjectDetailViewController: View {
                                         .frame(width: 36, height: 36)
                                         .background(
                                             Circle()
-                                                .fill(Color(red: 0x1E / 255.0, green: 0x24 / 255.0, blue: 0x33 / 255.0))
+                                                .fill(AntigravityTheme.surfaceSelectionTint)
                                         )
                                 }
                                 .buttonStyle(.plain)
@@ -649,7 +649,7 @@ public struct ProjectDetailViewController: View {
                                     HStack(alignment: .firstTextBaseline) {
                                         Text(row.title)
                                             .font(.system(size: 15.5, weight: .semibold))
-                                            .foregroundStyle(Color.white)
+                                            .foregroundStyle(AntigravityTheme.textPrimary)
                                             .lineLimit(1)
                                         Spacer()
                                         if row.indicator == .runningArc {

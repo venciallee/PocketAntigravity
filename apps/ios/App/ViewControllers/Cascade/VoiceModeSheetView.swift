@@ -40,7 +40,6 @@ public struct VoiceModeSheetView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .accessibilityIdentifier("sheet_voice_mode")
         .onDisappear {
             voiceManager.stopRecording()
@@ -117,7 +116,7 @@ public struct VoiceModeSheetView: View {
                     store.approveWaitingCommandWithFaceID(stepIndex: step.stepIndex)
                 }
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                 .frame(maxWidth: .infinity, minHeight: 38)
                 .background(AntigravityTheme.statusWaiting, in: RoundedRectangle(cornerRadius: 10))
                 Button("Deny") {
@@ -169,7 +168,8 @@ public struct VoiceModeSheetView: View {
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 12))
+                    .background(AntigravityTheme.surfaceInput, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(AntigravityTheme.cardBorder, lineWidth: 1))
                 Button("Send") {
                     let text = manualPromptText
                     manualPromptText = ""

@@ -1,5 +1,6 @@
 package dev.antigravity.shared.model
 
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -105,5 +106,34 @@ class CoreModelParityTest {
         assertNotNull(resolved)
         assertTrue(resolved.isSvg)
         assertEquals("<svg><circle/></svg>", resolved.textContent)
+    }
+
+    @Test
+    fun testAppAppearanceModeDefaultsAndJsonRoundTrip() {
+        val defaultPrefs = AppAppearancePreferences()
+        assertEquals(AppAppearanceMode.SYSTEM, defaultPrefs.appearanceMode)
+        assertEquals("System", AppAppearanceMode.SYSTEM.displayTitle)
+        assertEquals("Dark", AppAppearanceMode.DARK.displayTitle)
+        assertEquals("Light", AppAppearanceMode.LIGHT.displayTitle)
+
+        val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
+        for (mode in listOf(AppAppearanceMode.SYSTEM, AppAppearanceMode.DARK, AppAppearanceMode.LIGHT)) {
+            val prefs = AppAppearancePreferences(
+                layoutMode = InterfaceLayoutMode.COMPACT,
+                appearanceMode = mode,
+                theme = AppThemePreset.OBSIDIAN,
+            )
+            val encoded = json.encodeToString(AppAppearancePreferences.serializer(), prefs)
+            val decoded = json.decodeFromString(AppAppearancePreferences.serializer(), encoded)
+            assertEquals(prefs, decoded)
+            assertEquals(mode, decoded.appearanceMode)
+        }
+
+        // Decoding legacy payload without `appearanceMode` defaults cleanly to SYSTEM
+        val legacyDecoded = json.decodeFromString(
+            AppAppearancePreferences.serializer(),
+            """{"layoutMode":"COMFORTABLE","theme":"OBSIDIAN"}""",
+        )
+        assertEquals(AppAppearanceMode.SYSTEM, legacyDecoded.appearanceMode)
     }
 }

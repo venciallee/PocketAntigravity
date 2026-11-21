@@ -16,6 +16,7 @@ internal struct MarkdownAgentEmbedCardView: View {
     let isStreamingIncomplete: Bool
     let store: AntigravitySessionStore?
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var resolved: ResolvedEmbedResource? = nil
     @State private var isLoading: Bool = false
     @State private var webViewHeight: CGFloat = 260
@@ -31,17 +32,21 @@ internal struct MarkdownAgentEmbedCardView: View {
         MarkdownLinkFormatting.shortFileBadge(src)
     }
 
+    private var isDarkMode: Bool {
+        colorScheme == .dark
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Card Header
             HStack(spacing: 9) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(StepCardPalette.periwinkle.opacity(0.14))
+                        .fill(AntigravityTheme.accentPeriwinkle.opacity(0.14))
                         .frame(width: 30, height: 30)
                     Image(systemName: kind.semanticIcon.sfSymbolName)
                         .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 }
 
                 VStack(alignment: .leading, spacing: 1.5) {
@@ -52,7 +57,7 @@ internal struct MarkdownAgentEmbedCardView: View {
                     HStack(spacing: 5) {
                         Text(kind.displayBadge)
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(StepCardPalette.periwinkle)
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         if !shortFilename.isEmpty {
                             Text("· \(shortFilename)")
                                 .font(.system(size: 11, design: .monospaced))
@@ -74,7 +79,7 @@ internal struct MarkdownAgentEmbedCardView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkLabel)
                             .frame(width: 30, height: 30)
-                            .background(Color.white.opacity(0.06))
+                            .background(AntigravityTheme.surfaceElevated)
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -86,9 +91,9 @@ internal struct MarkdownAgentEmbedCardView: View {
                     } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(StepCardPalette.periwinkle)
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             .frame(width: 30, height: 30)
-                            .background(StepCardPalette.periwinkle.opacity(0.14))
+                            .background(AntigravityTheme.accentPeriwinkle.opacity(0.14))
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -96,16 +101,16 @@ internal struct MarkdownAgentEmbedCardView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .background(Color.white.opacity(0.03))
+            .background(AntigravityTheme.surfaceSubtleBox)
 
             Rectangle()
-                .fill(Color.white.opacity(0.07))
+                .fill(AntigravityTheme.subtleDivider)
                 .frame(height: 1)
 
             // Body Content
             if isStreamingIncomplete {
                 HStack(spacing: 10) {
-                    AntigravityFourDotLoadingView(isAnimated: true, dotSize: 4.0, spacing: 3.0, tint: StepCardPalette.periwinkle)
+                    AntigravityFourDotLoadingView(isAnimated: true, dotSize: 4.0, spacing: 3.0, tint: AntigravityTheme.accentPeriwinkle)
                     Text("Streaming interactive embed…")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -115,7 +120,7 @@ internal struct MarkdownAgentEmbedCardView: View {
             } else if isLoading {
                 HStack(spacing: 10) {
                     ProgressView()
-                        .tint(StepCardPalette.periwinkle)
+                        .tint(AntigravityTheme.accentPeriwinkle)
                         .scaleEffect(0.85)
                     Text("Loading \(shortFilename.isEmpty ? "artifact" : shortFilename)…")
                         .font(.system(size: 13))
@@ -131,16 +136,17 @@ internal struct MarkdownAgentEmbedCardView: View {
                         .padding(12)
                 }
                 .frame(maxHeight: 280)
-                .background(StepCardPalette.codeBlockBg)
+                .background(AntigravityTheme.surfaceCodeBlock)
             } else if let res = resolved, res.isHTML || res.isSVG, let htmlText = res.textContent {
                 #if canImport(WebKit) && canImport(UIKit)
                 let documentHTML = res.isSVG
-                    ? AntigravityEmbedHTMLWrapper.wrapSVG(htmlText)
-                    : AntigravityEmbedHTMLWrapper.wrapHTML(htmlText)
+                    ? AntigravityEmbedHTMLWrapper.wrapSVG(htmlText, isDarkMode: isDarkMode)
+                    : AntigravityEmbedHTMLWrapper.wrapHTML(htmlText, isDarkMode: isDarkMode)
                 SandboxedHTMLWidgetWebView(
                     htmlContent: documentHTML,
                     remoteURL: nil,
                     allowInternalScroll: false,
+                    isDarkMode: isDarkMode,
                     measuredHeight: $webViewHeight
                 )
                 .frame(height: min(500, max(160, webViewHeight)))
@@ -154,6 +160,7 @@ internal struct MarkdownAgentEmbedCardView: View {
                     htmlContent: nil,
                     remoteURL: url,
                     allowInternalScroll: false,
+                    isDarkMode: isDarkMode,
                     measuredHeight: $webViewHeight
                 )
                 .frame(height: min(460, max(200, webViewHeight)))
@@ -168,7 +175,7 @@ internal struct MarkdownAgentEmbedCardView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: .infinity, maxHeight: 360)
-                        .background(StepCardPalette.codeBlockBg)
+                        .background(AntigravityTheme.surfaceCodeBlock)
                         .onTapGesture { showFullScreenSheet = true }
                 } else {
                     unavailableEmbedFooter(reason: "Could not decode image data.")
@@ -184,10 +191,10 @@ internal struct MarkdownAgentEmbedCardView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(StepCardPalette.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(StepCardPalette.periwinkle.opacity(0.22), lineWidth: 1)
+                .stroke(AntigravityTheme.accentPeriwinkle.opacity(0.22), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .task(id: src) {
@@ -257,10 +264,10 @@ internal struct MarkdownAgentEmbedCardView: View {
                             Text("Retry")
                                 .font(.system(size: 12, weight: .semibold))
                         }
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .padding(.horizontal, 11)
                         .padding(.vertical, 6)
-                        .background(StepCardPalette.periwinkle.opacity(0.14))
+                        .background(AntigravityTheme.accentPeriwinkle.opacity(0.14))
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -284,10 +291,10 @@ internal struct MarkdownAgentEmbedCardView: View {
                         Text(didCopyPath ? "Path Copied" : "Copy Path")
                             .font(.system(size: 12, weight: .semibold))
                     }
-                    .foregroundStyle(didCopyPath ? StepCardPalette.emeraldDone : AntigravityTheme.inkLabel)
+                    .foregroundStyle(didCopyPath ? AntigravityTheme.statusDone : AntigravityTheme.inkLabel)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.07))
+                    .background(AntigravityTheme.surfaceElevated)
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -304,7 +311,12 @@ internal struct EmbedFullScreenModalView: View {
     let src: String
     let resolved: ResolvedEmbedResource?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var dummyHeight: CGFloat = 600
+
+    private var isDarkMode: Bool {
+        colorScheme == .dark
+    }
 
     var body: some View {
         NavigationStack {
@@ -312,12 +324,13 @@ internal struct EmbedFullScreenModalView: View {
                 if let res = resolved, (res.isHTML || res.isSVG), let htmlText = res.textContent {
                     #if canImport(WebKit) && canImport(UIKit)
                     let doc = res.isSVG
-                        ? AntigravityEmbedHTMLWrapper.wrapSVG(htmlText)
-                        : AntigravityEmbedHTMLWrapper.wrapHTML(htmlText)
+                        ? AntigravityEmbedHTMLWrapper.wrapSVG(htmlText, isDarkMode: isDarkMode)
+                        : AntigravityEmbedHTMLWrapper.wrapHTML(htmlText, isDarkMode: isDarkMode)
                     SandboxedHTMLWidgetWebView(
                         htmlContent: doc,
                         remoteURL: nil,
                         allowInternalScroll: true,
+                        isDarkMode: isDarkMode,
                         measuredHeight: $dummyHeight
                     )
                     #else
@@ -329,6 +342,7 @@ internal struct EmbedFullScreenModalView: View {
                         htmlContent: nil,
                         remoteURL: url,
                         allowInternalScroll: true,
+                        isDarkMode: isDarkMode,
                         measuredHeight: $dummyHeight
                     )
                     #else
@@ -361,11 +375,10 @@ internal struct EmbedFullScreenModalView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -394,104 +407,130 @@ internal struct RemoteArtifactPreviewSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
-/// Injects Antigravity Matte Obsidian theme CSS variables, responsive mobile viewport meta,
+/// Injects adaptive Light/Dark Antigravity theme CSS variables, responsive mobile viewport meta,
 /// and `ResizeObserver` height bridge into agent-generated HTML/SVG widgets.
 internal enum AntigravityEmbedHTMLWrapper {
-    private static let themeBridgeInjection = """
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0">
-    <style>
-      :root {
-        --background: #090A0D;
-        --card: #141519;
-        --card-foreground: #F5F7FA;
-        --popover: #1D1F26;
-        --popover-foreground: #F5F7FA;
-        --foreground: #F5F7FA;
-        --primary: #8EB4FF;
-        --primary-foreground: #0A0E17;
-        --secondary: #1D1F26;
-        --secondary-foreground: #DCE6FF;
-        --muted: #1D1F26;
-        --muted-foreground: #8E93A2;
-        --accent: #1D1F26;
-        --accent-foreground: #F5F7FA;
-        --destructive: #F07167;
-        --border: rgba(255,255,255,0.10);
-        --input: rgba(255,255,255,0.12);
-        --ring: #8EB4FF;
-        color-scheme: dark;
-      }
-      html, body {
-        margin: 0;
-        padding: 0;
-        background: var(--background);
-        color: var(--foreground);
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-        max-width: 100%;
-        overflow-x: auto;
-        -webkit-text-size-adjust: 100%;
-      }
-      svg, img, canvas { max-width: 100%; height: auto; }
-    </style>
-    <script>
-      (function() {
-        function postHeight() {
-          try {
-            var h = Math.max(
-              document.documentElement ? document.documentElement.scrollHeight : 0,
-              document.body ? document.body.scrollHeight : 0
-            );
-            if (h > 0 && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.embedHeight) {
-              window.webkit.messageHandlers.embedHeight.postMessage(h);
-            }
-          } catch (e) {}
-        }
-        window.addEventListener('load', postHeight);
-        window.addEventListener('resize', postHeight);
-        if (typeof ResizeObserver !== 'undefined') {
-          var ro = new ResizeObserver(postHeight);
-          document.addEventListener('DOMContentLoaded', function() {
-            if (document.body) ro.observe(document.body);
-            postHeight();
-          });
-        }
-        setTimeout(postHeight, 120);
-        setTimeout(postHeight, 450);
-      })();
-    </script>
-    """
+    private static let bridgeMarker = "data-agy-theme-bridge"
 
-    static func wrapHTML(_ rawHTML: String) -> String {
+    private static func themeBridgeInjection(isDarkMode: Bool) -> String {
+        let background = isDarkMode ? "#090A0D" : "#F4F5F8"
+        let card = isDarkMode ? "#141519" : "#FFFFFF"
+        let popover = isDarkMode ? "#1D1F26" : "#FFFFFF"
+        let foreground = isDarkMode ? "#F5F6F8" : "#111318"
+        let primary = isDarkMode ? "#8EB4FF" : "#2F66E8"
+        let primaryForeground = isDarkMode ? "#0A0E17" : "#FFFFFF"
+        let secondary = isDarkMode ? "#1D1F26" : "#E6E9F2"
+        let secondaryForeground = isDarkMode ? "#DCE6FF" : "#1E46A8"
+        let muted = isDarkMode ? "#1D1F26" : "#EEF0F6"
+        let mutedForeground = isDarkMode ? "#8A909E" : "#5B6170"
+        let destructive = isDarkMode ? "#F07167" : "#CF372E"
+        let border = isDarkMode ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"
+        let input = isDarkMode ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)"
+        let colorSchemeCSS = isDarkMode ? "dark" : "light"
+        let mermaidTheme = isDarkMode ? "dark" : "default"
+
+        return """
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0">
+        <style \(bridgeMarker)="\(colorSchemeCSS)">
+          :root {
+            --background: \(background);
+            --card: \(card);
+            --card-foreground: \(foreground);
+            --popover: \(popover);
+            --popover-foreground: \(foreground);
+            --foreground: \(foreground);
+            --primary: \(primary);
+            --primary-foreground: \(primaryForeground);
+            --secondary: \(secondary);
+            --secondary-foreground: \(secondaryForeground);
+            --muted: \(muted);
+            --muted-foreground: \(mutedForeground);
+            --accent: \(secondary);
+            --accent-foreground: \(foreground);
+            --destructive: \(destructive);
+            --border: \(border);
+            --input: \(input);
+            --ring: \(primary);
+            color-scheme: \(colorSchemeCSS);
+          }
+          html, body {
+            margin: 0;
+            padding: 0;
+            background: var(--background);
+            color: var(--foreground);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+            max-width: 100%;
+            overflow-x: auto;
+            -webkit-text-size-adjust: 100%;
+          }
+          svg, img, canvas { max-width: 100%; height: auto; }
+        </style>
+        <script>
+          window.__antigravityColorScheme = '\(colorSchemeCSS)';
+          window.__antigravityMermaidTheme = '\(mermaidTheme)';
+          (function() {
+            function postHeight() {
+              try {
+                var h = Math.max(
+                  document.documentElement ? document.documentElement.scrollHeight : 0,
+                  document.body ? document.body.scrollHeight : 0
+                );
+                if (h > 0 && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.embedHeight) {
+                  window.webkit.messageHandlers.embedHeight.postMessage(h);
+                }
+              } catch (e) {}
+            }
+            window.addEventListener('load', postHeight);
+            window.addEventListener('resize', postHeight);
+            if (typeof ResizeObserver !== 'undefined') {
+              var ro = new ResizeObserver(postHeight);
+              document.addEventListener('DOMContentLoaded', function() {
+                if (document.body) ro.observe(document.body);
+                postHeight();
+              });
+            }
+            setTimeout(postHeight, 120);
+            setTimeout(postHeight, 450);
+          })();
+        </script>
+        """
+    }
+
+    static func wrapHTML(_ rawHTML: String, isDarkMode: Bool = true) -> String {
+        if rawHTML.contains(bridgeMarker) {
+            return rawHTML
+        }
+        let injection = themeBridgeInjection(isDarkMode: isDarkMode)
         if let headRange = rawHTML.range(of: "<head>", options: .caseInsensitive) {
             var out = rawHTML
-            out.insert(contentsOf: "\n" + themeBridgeInjection + "\n", at: headRange.upperBound)
+            out.insert(contentsOf: "\n" + injection + "\n", at: headRange.upperBound)
             return out
         }
         if rawHTML.lowercased().contains("<html") {
-            return themeBridgeInjection + "\n" + rawHTML
+            return injection + "\n" + rawHTML
         }
         return """
         <!doctype html>
         <html>
-        <head><meta charset="utf-8">\(themeBridgeInjection)</head>
+        <head><meta charset="utf-8">\(injection)</head>
         <body>\(rawHTML)</body>
         </html>
         """
     }
 
-    static func wrapSVG(_ rawSVG: String) -> String {
+    static func wrapSVG(_ rawSVG: String, isDarkMode: Bool = true) -> String {
+        let injection = themeBridgeInjection(isDarkMode: isDarkMode)
         return """
         <!doctype html>
         <html>
-        <head><meta charset="utf-8">\(themeBridgeInjection)</head>
+        <head><meta charset="utf-8">\(injection)</head>
         <body style="display:flex;justify-content:center;align-items:center;padding:12px;box-sizing:border-box;">
           \(rawSVG)
         </body>
@@ -505,6 +544,7 @@ internal struct SandboxedHTMLWidgetWebView: UIViewRepresentable {
     let htmlContent: String?
     let remoteURL: URL?
     let allowInternalScroll: Bool
+    let isDarkMode: Bool
     @Binding var measuredHeight: CGFloat
     @Environment(\.openURL) private var openURL
 
@@ -530,7 +570,7 @@ internal struct SandboxedHTMLWidgetWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
-        webView.backgroundColor = UIColor(red: 0x09 / 255.0, green: 0x0A / 255.0, blue: 0x0D / 255.0, alpha: 1.0)
+        webView.backgroundColor = AntigravityTheme.canvasObsidianUIColor
         webView.scrollView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = allowInternalScroll
         webView.scrollView.bounces = allowInternalScroll
@@ -547,6 +587,7 @@ internal struct SandboxedHTMLWidgetWebView: UIViewRepresentable {
         context.coordinator.onExternalLink = { url in
             openURL(url)
         }
+        uiView.backgroundColor = AntigravityTheme.canvasObsidianUIColor
         uiView.scrollView.isScrollEnabled = allowInternalScroll
         loadContent(into: uiView, coordinator: context.coordinator)
     }
@@ -557,7 +598,7 @@ internal struct SandboxedHTMLWidgetWebView: UIViewRepresentable {
     }
 
     private func loadContent(into webView: WKWebView, coordinator: Coordinator) {
-        let signature = "\(htmlContent ?? "")|\(remoteURL?.absoluteString ?? "")"
+        let signature = "\(isDarkMode)|\(htmlContent ?? "")|\(remoteURL?.absoluteString ?? "")"
         guard coordinator.lastLoadedSignature != signature else { return }
         coordinator.lastLoadedSignature = signature
         if let htmlContent {
@@ -615,13 +656,18 @@ internal struct SandboxedHTMLWidgetWebView: UIViewRepresentable {
 
 internal struct MarkdownMermaidCardView: View {
     let source: String
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showCode: Bool = false
     @State private var didCopy: Bool = false
     @State private var diagramHeight: CGFloat = 240
     @State private var showFullScreen: Bool = false
 
+    private var isDarkMode: Bool {
+        colorScheme == .dark
+    }
+
     private var offlineDiagramHTML: String? {
-        OfflineMermaidSVGRenderer.renderHTML(from: source)
+        OfflineMermaidSVGRenderer.renderHTML(from: source, isDarkMode: isDarkMode)
     }
 
     var body: some View {
@@ -633,7 +679,7 @@ internal struct MarkdownMermaidCardView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     Text("mermaid")
                         .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -652,7 +698,7 @@ internal struct MarkdownMermaidCardView: View {
                             .foregroundStyle(AntigravityTheme.inkLabel)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Color.white.opacity(0.06))
+                            .background(AntigravityTheme.surfaceElevated)
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -662,9 +708,9 @@ internal struct MarkdownMermaidCardView: View {
                     } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(StepCardPalette.periwinkle)
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             .padding(6)
-                            .background(StepCardPalette.periwinkle.opacity(0.12))
+                            .background(AntigravityTheme.accentPeriwinkle.opacity(0.12))
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -684,20 +730,20 @@ internal struct MarkdownMermaidCardView: View {
                         Text(didCopy ? "Copied" : "Copy")
                             .font(.system(size: 11.5, weight: .semibold))
                     }
-                    .foregroundStyle(didCopy ? StepCardPalette.emeraldDone : StepCardPalette.periwinkle)
+                    .foregroundStyle(didCopy ? AntigravityTheme.statusDone : AntigravityTheme.accentPeriwinkle)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.05))
+                    .background(AntigravityTheme.surfaceElevated)
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Color.white.opacity(0.03))
+            .background(AntigravityTheme.surfaceSubtleBox)
 
             Rectangle()
-                .fill(Color.white.opacity(0.06))
+                .fill(AntigravityTheme.subtleDivider)
                 .frame(height: 1)
 
             if displayingCode {
@@ -715,6 +761,7 @@ internal struct MarkdownMermaidCardView: View {
                     htmlContent: html,
                     remoteURL: nil,
                     allowInternalScroll: false,
+                    isDarkMode: isDarkMode,
                     measuredHeight: $diagramHeight
                 )
                 .frame(height: min(460, max(160, diagramHeight)))
@@ -726,10 +773,10 @@ internal struct MarkdownMermaidCardView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(StepCardPalette.codeBlockBg)
+        .background(AntigravityTheme.surfaceCodeBlock)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .sheet(isPresented: $showFullScreen) {
@@ -751,7 +798,7 @@ internal struct MarkdownMermaidCardView: View {
 
 /// Zero-CDN offline SVG diagram generator for Mermaid `flowchart` / `graph` / `stateDiagram` / `sequenceDiagram`.
 internal enum OfflineMermaidSVGRenderer {
-    static func renderHTML(from rawSource: String) -> String? {
+    static func renderHTML(from rawSource: String, isDarkMode: Bool = true) -> String? {
         let lines = rawSource
             .replacingOccurrences(of: "\r\n", with: "\n")
             .components(separatedBy: "\n")
@@ -761,13 +808,13 @@ internal enum OfflineMermaidSVGRenderer {
         guard let header = lines.first?.lowercased() else { return nil }
         if header.hasPrefix("flowchart") || header.hasPrefix("graph") {
             let isHorizontal = header.contains("lr") || header.contains("rl")
-            return renderFlowchartSVG(lines: Array(lines.dropFirst()), isHorizontal: isHorizontal)
+            return renderFlowchartSVG(lines: Array(lines.dropFirst()), isHorizontal: isHorizontal, isDarkMode: isDarkMode)
         }
         if header.hasPrefix("statediagram") {
-            return renderFlowchartSVG(lines: Array(lines.dropFirst()), isHorizontal: false)
+            return renderFlowchartSVG(lines: Array(lines.dropFirst()), isHorizontal: false, isDarkMode: isDarkMode)
         }
         if header.hasPrefix("sequencediagram") {
-            return renderSequenceSVG(lines: Array(lines.dropFirst()))
+            return renderSequenceSVG(lines: Array(lines.dropFirst()), isDarkMode: isDarkMode)
         }
         return nil
     }
@@ -804,7 +851,7 @@ internal enum OfflineMermaidSVGRenderer {
         return (t, t, "rect")
     }
 
-    private static func renderFlowchartSVG(lines: [String], isHorizontal: Bool) -> String? {
+    private static func renderFlowchartSVG(lines: [String], isHorizontal: Bool, isDarkMode: Bool) -> String? {
         var nodeOrder: [String] = []
         var nodeLabels: [String: String] = [:]
         var nodeShapes: [String: String] = [:]
@@ -902,11 +949,19 @@ internal enum OfflineMermaidSVGRenderer {
             }
         }
 
+        let mermaidTheme = isDarkMode ? "dark" : "default"
+        let accentHex = isDarkMode ? "#8EB4FF" : "#2F66E8"
+        let edgeStroke = isDarkMode ? "rgba(142,180,255,0.65)" : "rgba(47,102,232,0.70)"
+        let amberHex = isDarkMode ? "#EBB365" : "#B86E00"
+        let nodeFillHex = isDarkMode ? "#141519" : "#FFFFFF"
+        let nodeStrokeDefault = isDarkMode ? "rgba(142,180,255,0.45)" : "rgba(47,102,232,0.45)"
+        let textHex = isDarkMode ? "#F5F6F8" : "#111318"
+
         var svg = """
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 \(Int(maxX)) \(Int(maxY))" width="\(Int(maxX))" height="\(Int(maxY))">
+        <svg xmlns="http://www.w3.org/2000/svg" data-mermaid-theme="\(mermaidTheme)" viewBox="0 0 \(Int(maxX)) \(Int(maxY))" width="\(Int(maxX))" height="\(Int(maxY))">
         <defs>
           <marker id="agy-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1 L 10 5 L 0 9 z" fill="#8EB4FF" />
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="\(accentHex)" />
           </marker>
         </defs>
         """
@@ -921,11 +976,11 @@ internal enum OfflineMermaidSVGRenderer {
             let cy1 = isHorizontal ? y1 : (y1 + y2) / 2
             let cx2 = isHorizontal ? (x1 + x2) / 2 : x2
             let cy2 = isHorizontal ? y2 : (y1 + y2) / 2
-            svg += "<path d=\"M \(Int(x1)) \(Int(y1)) C \(Int(cx1)) \(Int(cy1)), \(Int(cx2)) \(Int(cy2)), \(Int(x2)) \(Int(y2))\" fill=\"none\" stroke=\"rgba(142,180,255,0.65)\" stroke-width=\"1.6\" marker-end=\"url(#agy-arrow)\" />"
+            svg += "<path d=\"M \(Int(x1)) \(Int(y1)) C \(Int(cx1)) \(Int(cy1)), \(Int(cx2)) \(Int(cy2)), \(Int(x2)) \(Int(y2))\" fill=\"none\" stroke=\"\(edgeStroke)\" stroke-width=\"1.6\" marker-end=\"url(#agy-arrow)\" />"
             if !e.label.isEmpty {
                 let lx = Int((x1 + x2) / 2)
                 let ly = Int((y1 + y2) / 2) - 4
-                svg += "<text x=\"\(lx)\" y=\"\(ly)\" text-anchor=\"middle\" fill=\"#EBB365\" font-size=\"10.5\" font-family=\"-apple-system,sans-serif\">\(escapeXML(String(e.label.prefix(24))))</text>"
+                svg += "<text x=\"\(lx)\" y=\"\(ly)\" text-anchor=\"middle\" fill=\"\(amberHex)\" font-size=\"10.5\" font-family=\"-apple-system,sans-serif\">\(escapeXML(String(e.label.prefix(24))))</text>"
             }
         }
 
@@ -934,16 +989,16 @@ internal enum OfflineMermaidSVGRenderer {
             let label = String((nodeLabels[id] ?? id).prefix(22))
             let shape = nodeShapes[id] ?? "rect"
             let rx = (shape == "pill" || shape == "circle") ? 22 : (shape == "diamond" ? 6 : 10)
-            let stroke = shape == "diamond" ? "#EBB365" : "rgba(142,180,255,0.45)"
-            svg += "<rect x=\"\(Int(r.minX))\" y=\"\(Int(r.minY))\" width=\"\(Int(r.width))\" height=\"\(Int(r.height))\" rx=\"\(rx)\" fill=\"#141519\" stroke=\"\(stroke)\" stroke-width=\"1.25\" />"
-            svg += "<text x=\"\(Int(r.midX))\" y=\"\(Int(r.midY + 4))\" text-anchor=\"middle\" fill=\"#F5F7FA\" font-size=\"12\" font-weight=\"600\" font-family=\"-apple-system,sans-serif\">\(escapeXML(label))</text>"
+            let stroke = shape == "diamond" ? amberHex : nodeStrokeDefault
+            svg += "<rect x=\"\(Int(r.minX))\" y=\"\(Int(r.minY))\" width=\"\(Int(r.width))\" height=\"\(Int(r.height))\" rx=\"\(rx)\" fill=\"\(nodeFillHex)\" stroke=\"\(stroke)\" stroke-width=\"1.25\" />"
+            svg += "<text x=\"\(Int(r.midX))\" y=\"\(Int(r.midY + 4))\" text-anchor=\"middle\" fill=\"\(textHex)\" font-size=\"12\" font-weight=\"600\" font-family=\"-apple-system,sans-serif\">\(escapeXML(label))</text>"
         }
 
         svg += "</svg>"
-        return AntigravityEmbedHTMLWrapper.wrapSVG(svg)
+        return AntigravityEmbedHTMLWrapper.wrapSVG(svg, isDarkMode: isDarkMode)
     }
 
-    private static func renderSequenceSVG(lines: [String]) -> String? {
+    private static func renderSequenceSVG(lines: [String], isDarkMode: Bool) -> String? {
         var participants: [String] = []
         var messages: [(from: String, to: String, text: String, dashed: Bool)] = []
 
@@ -991,34 +1046,42 @@ internal enum OfflineMermaidSVGRenderer {
             colCenterX[p] = pad + CGFloat(idx) * colW + colW / 2
         }
 
+        let mermaidTheme = isDarkMode ? "dark" : "default"
+        let accentHex = isDarkMode ? "#8EB4FF" : "#2F66E8"
+        let lifelineStroke = isDarkMode ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.18)"
+        let boxFillHex = isDarkMode ? "#141519" : "#FFFFFF"
+        let boxStroke = isDarkMode ? "rgba(142,180,255,0.45)" : "rgba(47,102,232,0.45)"
+        let participantTextHex = isDarkMode ? "#F5F6F8" : "#111318"
+        let messageTextHex = isDarkMode ? "#DCE6FF" : "#1E46A8"
+
         var svg = """
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 \(Int(totalW)) \(Int(totalH))" width="\(Int(totalW))" height="\(Int(totalH))">
+        <svg xmlns="http://www.w3.org/2000/svg" data-mermaid-theme="\(mermaidTheme)" viewBox="0 0 \(Int(totalW)) \(Int(totalH))" width="\(Int(totalW))" height="\(Int(totalH))">
         <defs>
           <marker id="seq-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1 L 10 5 L 0 9 z" fill="#8EB4FF" />
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="\(accentHex)" />
           </marker>
         </defs>
         """
 
         for p in participants {
             let cx = colCenterX[p] ?? 0
-            svg += "<line x1=\"\(Int(cx))\" y1=\"\(Int(pad + topBoxH))\" x2=\"\(Int(cx))\" y2=\"\(Int(totalH - pad))\" stroke=\"rgba(255,255,255,0.14)\" stroke-dasharray=\"4 4\" />"
-            svg += "<rect x=\"\(Int(cx - 48))\" y=\"\(Int(pad))\" width=\"96\" height=\"\(Int(topBoxH))\" rx=\"8\" fill=\"#141519\" stroke=\"rgba(142,180,255,0.45)\" stroke-width=\"1.2\" />"
-            svg += "<text x=\"\(Int(cx))\" y=\"\(Int(pad + 20))\" text-anchor=\"middle\" fill=\"#F5F7FA\" font-size=\"11.5\" font-weight=\"600\" font-family=\"-apple-system,sans-serif\">\(escapeXML(String(p.prefix(14))))</text>"
+            svg += "<line x1=\"\(Int(cx))\" y1=\"\(Int(pad + topBoxH))\" x2=\"\(Int(cx))\" y2=\"\(Int(totalH - pad))\" stroke=\"\(lifelineStroke)\" stroke-dasharray=\"4 4\" />"
+            svg += "<rect x=\"\(Int(cx - 48))\" y=\"\(Int(pad))\" width=\"96\" height=\"\(Int(topBoxH))\" rx=\"8\" fill=\"\(boxFillHex)\" stroke=\"\(boxStroke)\" stroke-width=\"1.2\" />"
+            svg += "<text x=\"\(Int(cx))\" y=\"\(Int(pad + 20))\" text-anchor=\"middle\" fill=\"\(participantTextHex)\" font-size=\"11.5\" font-weight=\"600\" font-family=\"-apple-system,sans-serif\">\(escapeXML(String(p.prefix(14))))</text>"
         }
 
         for (idx, m) in messages.enumerated() {
             guard let x1 = colCenterX[m.from], let x2 = colCenterX[m.to] else { continue }
             let y = pad + topBoxH + CGFloat(idx + 1) * rowH
             let dashAttr = m.dashed ? " stroke-dasharray=\"5 3\"" : ""
-            svg += "<line x1=\"\(Int(x1))\" y1=\"\(Int(y))\" x2=\"\(Int(x2))\" y2=\"\(Int(y))\" stroke=\"#8EB4FF\" stroke-width=\"1.5\"\(dashAttr) marker-end=\"url(#seq-arrow)\" />"
+            svg += "<line x1=\"\(Int(x1))\" y1=\"\(Int(y))\" x2=\"\(Int(x2))\" y2=\"\(Int(y))\" stroke=\"\(accentHex)\" stroke-width=\"1.5\"\(dashAttr) marker-end=\"url(#seq-arrow)\" />"
             if !m.text.isEmpty {
                 let lx = Int((x1 + x2) / 2)
-                svg += "<text x=\"\(lx)\" y=\"\(Int(y - 6))\" text-anchor=\"middle\" fill=\"#DCE6FF\" font-size=\"10.5\" font-family=\"-apple-system,sans-serif\">\(escapeXML(String(m.text.prefix(26))))</text>"
+                svg += "<text x=\"\(lx)\" y=\"\(Int(y - 6))\" text-anchor=\"middle\" fill=\"\(messageTextHex)\" font-size=\"10.5\" font-family=\"-apple-system,sans-serif\">\(escapeXML(String(m.text.prefix(26))))</text>"
             }
         }
 
         svg += "</svg>"
-        return AntigravityEmbedHTMLWrapper.wrapSVG(svg)
+        return AntigravityEmbedHTMLWrapper.wrapSVG(svg, isDarkMode: isDarkMode)
     }
 }

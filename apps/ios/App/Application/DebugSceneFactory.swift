@@ -96,4 +96,71 @@ public enum DebugSceneFactory {
             return nil
         }
     }
+
+    /// Detects `--ui-verify settings` (offline Settings tab capture for Light/Dark visual verification).
+    public static func isVerifySettingsLaunch(
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) -> Bool {
+        for (index, arg) in arguments.enumerated() {
+            if arg == "--ui-verify", index + 1 < arguments.count {
+                let val = arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if val == "settings" || val == "pairing-settings" {
+                    return true
+                }
+            } else if arg.hasPrefix("--ui-verify=") {
+                let val = String(arg.dropFirst("--ui-verify=".count)).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if val == "settings" || val == "pairing-settings" {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Resolves optional `--ui-appearance dark|light|system` CLI argument or `ANTIGRAVITY_UI_APPEARANCE` env var.
+    public static func launchAppearanceOverride(
+        arguments: [String] = ProcessInfo.processInfo.arguments,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> AppAppearanceMode? {
+        for (index, arg) in arguments.enumerated() {
+            if arg == "--ui-appearance", index + 1 < arguments.count {
+                if let parsed = parseAppearanceMode(arguments[index + 1]) {
+                    return parsed
+                }
+            } else if arg.hasPrefix("--ui-appearance=") {
+                let value = String(arg.dropFirst("--ui-appearance=".count))
+                if let parsed = parseAppearanceMode(value) {
+                    return parsed
+                }
+            }
+        }
+        if let envVal = environment["ANTIGRAVITY_UI_APPEARANCE"],
+           let parsed = parseAppearanceMode(envVal) {
+            return parsed
+        }
+        return nil
+    }
+
+    /// Resolves optional `?appearance=light|dark|system` query item on `antigravity://verify/<case>` deep links.
+    public static func resolveDeepLinkAppearance(_ url: URL) -> AppAppearanceMode? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let item = components.queryItems?.first(where: { $0.name.lowercased() == "appearance" }),
+              let raw = item.value else {
+            return nil
+        }
+        return parseAppearanceMode(raw)
+    }
+
+    public static func parseAppearanceMode(_ raw: String) -> AppAppearanceMode? {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "system", "auto":
+            return .system
+        case "dark":
+            return .dark
+        case "light":
+            return .light
+        default:
+            return nil
+        }
+    }
 }

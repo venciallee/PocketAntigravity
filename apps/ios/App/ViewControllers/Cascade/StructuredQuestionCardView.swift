@@ -38,14 +38,6 @@ public struct StructuredQuestionCardView: View {
     @State private var somethingElseText: String = ""
     @State private var freeformReplyText: String = ""
 
-    private static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
-    private static let emeraldDone = Color(red: 0x57 / 255.0, green: 0xC8 / 255.0, blue: 0x8A / 255.0) // #57C88A
-    private static let inkOnCTA = Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0) // #0A0E17
-    private static let cardSurface = Color(red: 0x14 / 255.0, green: 0x15 / 255.0, blue: 0x19 / 255.0) // #141519
-    private static let optionUnselectedBg = Color(red: 0x1B / 255.0, green: 0x1C / 255.0, blue: 0x22 / 255.0)
-    private static let optionSelectedBg = Color(red: 0x19 / 255.0, green: 0x20 / 255.0, blue: 0x2F / 255.0)
-    private static let pillBg = Color(red: 0x20 / 255.0, green: 0x22 / 255.0, blue: 0x2A / 255.0)
-
     private let steps: [QuestionStepModel] = [
         QuestionStepModel(
             index: 0,
@@ -112,7 +104,7 @@ public struct StructuredQuestionCardView: View {
             topNavigationBar
 
             Divider()
-                .overlay(Color.white.opacity(0.06))
+                .overlay(AntigravityTheme.subtleDivider)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -172,7 +164,7 @@ public struct StructuredQuestionCardView: View {
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Self.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
             }
             .buttonStyle(.plain)
@@ -223,19 +215,19 @@ public struct StructuredQuestionCardView: View {
                             if isDone {
                                 Image(systemName: "checkmark")
                                     .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(Self.emeraldDone)
+                                    .foregroundStyle(AntigravityTheme.statusDone)
                             }
                             Text(step.pillLabel)
                                 .font(.system(size: 12.5, weight: isActive ? .bold : .medium))
                                 .foregroundStyle(
                                     isActive
-                                        ? Color(red: 0.04, green: 0.04, blue: 0.05)
+                                        ? AntigravityTheme.pillActiveForeground
                                         : AntigravityTheme.inkSecondary
                                 )
                                 .lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
-                        .background(isActive ? Color.white : Self.pillBg)
+                        .background(isActive ? AntigravityTheme.pillActiveBackground : AntigravityTheme.surfaceBadge)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -277,7 +269,7 @@ public struct StructuredQuestionCardView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(
-                        Color.white.opacity(0.18),
+                        AntigravityTheme.inkSecondary.opacity(0.35),
                         style: StrokeStyle(lineWidth: 1, dash: [5, 4])
                     )
             )
@@ -295,7 +287,7 @@ public struct StructuredQuestionCardView: View {
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 22)
                         .frame(minWidth: 88, minHeight: 48)
-                        .background(Self.pillBg)
+                        .background(AntigravityTheme.surfaceBadge)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -311,9 +303,9 @@ public struct StructuredQuestionCardView: View {
                 } label: {
                     Text(currentStepIndex < activeList.count - 1 ? "Next" : "Submit")
                         .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Self.inkOnCTA)
+                        .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(maxWidth: .infinity, minHeight: 48)
-                        .background(Self.periwinkle)
+                        .background(AntigravityTheme.accentPeriwinkle)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -322,10 +314,10 @@ public struct StructuredQuestionCardView: View {
             .padding(.top, 2)
         }
         .padding(16)
-        .background(Self.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
@@ -347,15 +339,15 @@ public struct StructuredQuestionCardView: View {
                 if isSelected {
                     ZStack {
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Self.periwinkle)
+                            .fill(AntigravityTheme.accentPeriwinkle)
                             .frame(width: 22, height: 22)
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(Self.inkOnCTA)
+                            .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     }
                 } else {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.white.opacity(0.24), lineWidth: 1.5)
+                        .stroke(AntigravityTheme.inkSecondary.opacity(0.45), lineWidth: 1.5)
                         .frame(width: 22, height: 22)
                 }
 
@@ -368,11 +360,11 @@ public struct StructuredQuestionCardView: View {
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 50)
-            .background(isSelected ? Self.optionSelectedBg : Self.optionUnselectedBg)
+            .background(isSelected ? AntigravityTheme.surfaceSelectionTint : AntigravityTheme.surfaceSubtleBox)
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(
-                        isSelected ? Self.periwinkle : Color.white.opacity(0.06),
+                        isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.cardBorder,
                         lineWidth: isSelected ? 1.5 : 1
                     )
             )
@@ -398,7 +390,7 @@ public struct StructuredQuestionCardView: View {
             } label: {
                 ZStack {
                     Circle()
-                        .fill(Self.pillBg)
+                        .fill(AntigravityTheme.surfaceBadge)
                         .frame(width: 36, height: 36)
                     Image(systemName: "mic")
                         .font(.system(size: 15, weight: .medium))
@@ -411,10 +403,10 @@ public struct StructuredQuestionCardView: View {
         .padding(.leading, 16)
         .padding(.trailing, 6)
         .frame(minHeight: 50)
-        .background(Self.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             Capsule()
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
         )
         .clipShape(Capsule())
         .accessibilityIdentifier("composer-freeform-reply")

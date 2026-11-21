@@ -9,28 +9,46 @@ public struct AntigravityApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var store: AntigravitySessionStore
     @State private var activeVerifyCase: ESDDVerifySceneCase?
+    @State private var launchAppearanceOverride: AppAppearanceMode?
 
     public init() {
         let launchCase = DebugSceneFactory.launchVerifyCase()
+        let isSettingsVerify = DebugSceneFactory.isVerifySettingsLaunch()
+        let appearanceOverride = DebugSceneFactory.launchAppearanceOverride()
         let initialStore: AntigravitySessionStore
         if let launchCase {
             initialStore = AntigravitySessionStore.makeESDDVerificationStore()
             initialStore.configureForVerifyScene(launchCase)
+        } else if isSettingsVerify {
+            initialStore = AntigravitySessionStore.makeESDDVerificationStore()
+            initialStore.selectedTab = .settings
+            initialStore.activeRoute = .pairingSettings
+            initialStore.isInitialSessionCheckComplete = true
         } else {
             initialStore = AntigravitySessionStore.makeLiveStore(
                 kmpEngine: KmpCoreEngineAdapter.makeDefault()
             )
         }
+        if let appearanceOverride {
+            initialStore.appearancePreferences.appearanceMode = appearanceOverride
+        }
         self._store = State(initialValue: initialStore)
         self._activeVerifyCase = State(initialValue: launchCase)
+        self._launchAppearanceOverride = State(initialValue: appearanceOverride)
     }
 
     public var body: some Scene {
         WindowGroup {
             AntigravityRootContainerView(store: store, activeVerifyCase: $activeVerifyCase)
                 .preferredColorScheme(resolvedColorScheme)
+                .onAppear {
+                    applyUIKitWindowInterfaceStyle(resolvedColorScheme)
+                }
+                .onChange(of: resolvedColorScheme) { _, newScheme in
+                    applyUIKitWindowInterfaceStyle(newScheme)
+                }
                 .task {
-                    guard activeVerifyCase == nil else {
+                    guard activeVerifyCase == nil && !store.isVerificationMode else {
                         store.isInitialSessionCheckComplete = true
                         return
                     }
@@ -38,6 +56,9 @@ public struct AntigravityApp: App {
                         store.isInitialSessionCheckComplete = true
                     }
                     await store.loadPersistedV233Preferences()
+                    if let launchAppearanceOverride {
+                        store.appearancePreferences.appearanceMode = launchAppearanceOverride
+                    }
                     await store.consumePendingLiveActivityActions()
                     let env = ProcessInfo.processInfo.environment
                     if let relayURL = env["ANTIGRAVITY_RELAY_URL"], !relayURL.isEmpty {
@@ -80,6 +101,7 @@ public struct AntigravityApp: App {
                         LiveActivityCoordinator.shared.sync(with: store)
                         store.suspendNetworkingForBackground()
                     case .active:
+                        applyUIKitWindowInterfaceStyle(resolvedColorScheme)
                         guard store.isInitialSessionCheckComplete || store.isNetworkingSuspended else { return }
                         Task {
                             await store.consumePendingLiveActivityActions()
@@ -100,13 +122,21 @@ public struct AntigravityApp: App {
                 #endif
                 .onOpenURL { url in
                     if let sceneCase = DebugSceneFactory.resolveDeepLink(url) {
+                        let deepLinkAppearance = DebugSceneFactory.resolveDeepLinkAppearance(url)
                         if !store.isVerificationMode {
                             let verifyStore = AntigravitySessionStore.makeESDDVerificationStore()
                             verifyStore.configureForVerifyScene(sceneCase)
+                            if let deepLinkAppearance {
+                                verifyStore.appearancePreferences.appearanceMode = deepLinkAppearance
+                            }
                             store = verifyStore
                         } else {
                             store.configureForVerifyScene(sceneCase)
+                            if let deepLinkAppearance {
+                                store.appearancePreferences.appearanceMode = deepLinkAppearance
+                            }
                         }
+                        launchAppearanceOverride = deepLinkAppearance
                         activeVerifyCase = sceneCase
                         return
                     }
@@ -122,6 +152,7 @@ public struct AntigravityApp: App {
                     if RemoteHostInstance.isDirectLANPairingURI(rawURL)
                         || RemoteHostInstance.parseRemoteControlTarget(rawURL) != nil {
                         activeVerifyCase = nil
+                        launchAppearanceOverride = nil
                         if store.isVerificationMode {
                             let liveStore = AntigravitySessionStore.makeLiveStore(
                                 kmpEngine: KmpCoreEngineAdapter.makeDefault()
@@ -149,13 +180,44 @@ public struct AntigravityApp: App {
 
     private var resolvedColorScheme: ColorScheme? {
         if let activeVerifyCase {
+            if let overrideMode = launchAppearanceOverride {
+                return colorScheme(for: overrideMode)
+            }
             return activeVerifyCase == .liveActivitySpec ? .light : .dark
         }
-        switch store.appearancePreferences.theme {
-        case .everforestLight:
-            return .light
-        case .obsidian, .nord, .everforestDark:
+        return colorScheme(for: store.appearancePreferences.appearanceMode)
+    }
+
+    private func colorScheme(for mode: AppAppearanceMode) -> ColorScheme? {
+        switch mode {
+        case .system:
+            return nil
+        case .dark:
             return .dark
+        case .light:
+            return .light
         }
+    }
+
+    private func applyUIKitWindowInterfaceStyle(_ scheme: ColorScheme?) {
+        #if canImport(UIKit)
+        let style: UIUserInterfaceStyle
+        switch scheme {
+        case .dark:
+            style = .dark
+        case .light:
+            style = .light
+        case nil:
+            style = .unspecified
+        @unknown default:
+            style = .unspecified
+        }
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows where window.overrideUserInterfaceStyle != style {
+                window.overrideUserInterfaceStyle = style
+            }
+        }
+        #endif
     }
 }
