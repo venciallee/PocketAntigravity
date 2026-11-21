@@ -93,6 +93,7 @@ public object InteractionBuilder {
                     kind = requested.kind,
                     workspaceUri = workspaceUri,
                     genericConfirm = false,
+                    rawMemberKey = requested.rawMemberKey ?: requested.kind.wireKey,
                 )
             }
         }
@@ -127,6 +128,7 @@ public object InteractionBuilder {
                         scope = resolvedScope,
                     ),
                     approvalScope = resolvedScope,
+                    rawMemberKey = requested.rawMemberKey ?: requested.kind.wireKey,
                 )
             }
             RequestedInteraction.MemberKind.FILE_PERMISSION -> CascadeUserInteractionPayload(
@@ -140,6 +142,7 @@ public object InteractionBuilder {
                     absolutePathUri = requested.filePermission?.absolutePathUri,
                 ),
                 approvalScope = resolvedScope,
+                rawMemberKey = requested.rawMemberKey ?: requested.kind.wireKey,
             )
             RequestedInteraction.MemberKind.RUN_COMMAND -> {
                 val proposed = requested.runCommand?.proposedCommandLine
@@ -159,6 +162,7 @@ public object InteractionBuilder {
                         biometricVerified = decision == InteractionDecision.AllowWithBiometric,
                     ),
                     approvalScope = resolvedScope,
+                    rawMemberKey = requested.rawMemberKey ?: requested.kind.wireKey,
                 )
             }
             RequestedInteraction.MemberKind.ASK_QUESTION,
@@ -173,6 +177,7 @@ public object InteractionBuilder {
                         selectedOptions = answer.selectedOptions,
                         customResponse = answer.customWriteIn?.takeIf { it.isNotEmpty() },
                     ),
+                    rawMemberKey = requested.rawMemberKey ?: requested.kind.wireKey,
                 )
             }
             RequestedInteraction.MemberKind.BROWSER_UPLOAD,
@@ -183,6 +188,7 @@ public object InteractionBuilder {
                 workspaceUri = workspaceUri,
                 genericConfirm = true,
                 approvalScope = "PERMISSION_SCOPE_ONCE",
+                rawMemberKey = requested.rawMemberKey ?: requested.kind.wireKey,
             )
             else -> CascadeUserInteractionPayload(
                 cascadeId = step.cascadeId,
@@ -191,6 +197,7 @@ public object InteractionBuilder {
                 workspaceUri = workspaceUri,
                 genericConfirm = true,
                 approvalScope = resolvedScope,
+                rawMemberKey = requested.rawMemberKey ?: requested.kind.wireKey,
             )
         }
     }

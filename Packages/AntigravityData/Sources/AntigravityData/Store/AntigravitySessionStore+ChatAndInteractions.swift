@@ -284,6 +284,7 @@ extension AntigravitySessionStore {
         }()
         let storeRef = projectionStore
         let clientRef = rpcClient
+        let engineRef = kmpEngine
         let shouldSendLive = (hasPairedBackend || isLiveBackendConnected)
         let isUnassignedSession = (currentProj?.isNoProject == true)
             || (currentSummary.map {
@@ -314,7 +315,7 @@ extension AntigravitySessionStore {
             await storeRef.enqueueOutbox(outboxEntry)
             await storeRef.saveProjectedSteps(currentSteps, for: cid)
 
-            guard shouldSendLive, let clientRef else {
+            guard shouldSendLive, (engineRef != nil || clientRef != nil) else {
                 await storeRef.removeOutboxEntry(id: outboxEntry.id)
                 return
             }
@@ -341,56 +342,108 @@ extension AntigravitySessionStore {
             }
 
             do {
-                if targetCascadeId.isEmpty || targetCascadeId.hasPrefix("cas-") {
-                    let createdId = try await clientRef.startCascade(
+                if let engineRef {
+                    let isOptimistic = targetCascadeId.isEmpty
+                        || (targetCascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(targetCascadeId))
+                    let outcome = try await engineRef.sendMessage(
+                        cascadeId: targetCascadeId,
+                        message: messageBody,
                         workspaceUri: workspaceUri,
-                        initialPrompt: "",
+                        attachments: attachmentsSnapshot,
                         modelId: cfg.modelId,
-                        cloudProjectId: summaryCloudProjId,
+                        effort: cfg.effort,
+                        mode: cfg.mode,
+                        agentPersona: cfg.agentPersona,
                         isCloud: summaryIsCloud,
-                        instanceUuidOverride: summaryOriginUuid
+                        cloudProjectId: summaryCloudProjId,
+                        permissionPreset: effectivePreset,
+                        instanceUuidOverride: summaryOriginUuid,
+                        isOptimisticDraft: isOptimistic
                     )
-                    if let self, !createdId.isEmpty {
+                    let resolvedId = outcome.resolvedCascadeId
+                    if let self, !resolvedId.isEmpty && resolvedId != targetCascadeId && isOptimistic {
                         self.locallyCreatedEmptyCascadeIds.remove(targetCascadeId)
-                        self.locallyCreatedEmptyCascadeIds.remove(createdId)
+                        self.locallyCreatedEmptyCascadeIds.remove(resolvedId)
                         let existing = self.stepsByCascadeId.removeValue(forKey: targetCascadeId) ?? currentSteps
-                        self.stepsByCascadeId[createdId] = existing.map { step in
+                        self.stepsByCascadeId[resolvedId] = existing.map { step in
                             var copy = step
-                            copy.cascadeId = createdId
+                            copy.cascadeId = resolvedId
                             return copy
                         }
-                        self.syncedConfigCascadeIds.insert(createdId)
+                        self.syncedConfigCascadeIds.insert(resolvedId)
                         if let idx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
-                            self.summaries[idx].cascadeId = createdId
+                            self.summaries[idx].cascadeId = resolvedId
                         }
                         if self.activeCascadeId == targetCascadeId || self.activeCascadeId.isEmpty {
-                            self.activeCascadeId = createdId
+                            self.activeCascadeId = resolvedId
                             if case .cascadeChat = self.activeRoute {
-                                self.activeRoute = .cascadeChat(createdId)
+                                self.activeRoute = .cascadeChat(resolvedId)
                             }
                         }
-                        targetCascadeId = createdId
+                        targetCascadeId = resolvedId
                     }
-                }
+                    if let self, !targetCascadeId.isEmpty {
+                        self.optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
+                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                    }
+                    if !outcome.dispatchedLive {
+                        if outcome.queuedInOutbox {
+                            throw AntigravityRPCError.httpError(statusCode: 503, body: outcome.errorMessage ?? "Queued in KMP Durable Outbox")
+                        }
+                        throw AntigravityRPCError.httpError(statusCode: 500, body: outcome.errorMessage ?? "KMP sendMessage failed")
+                    }
+                } else if let clientRef {
+                    if targetCascadeId.isEmpty || targetCascadeId.hasPrefix("cas-") {
+                        let createdId = try await clientRef.startCascade(
+                            workspaceUri: workspaceUri,
+                            initialPrompt: "",
+                            modelId: cfg.modelId,
+                            cloudProjectId: summaryCloudProjId,
+                            isCloud: summaryIsCloud,
+                            instanceUuidOverride: summaryOriginUuid
+                        )
+                        if let self, !createdId.isEmpty {
+                            self.locallyCreatedEmptyCascadeIds.remove(targetCascadeId)
+                            self.locallyCreatedEmptyCascadeIds.remove(createdId)
+                            let existing = self.stepsByCascadeId.removeValue(forKey: targetCascadeId) ?? currentSteps
+                            self.stepsByCascadeId[createdId] = existing.map { step in
+                                var copy = step
+                                copy.cascadeId = createdId
+                                return copy
+                            }
+                            self.syncedConfigCascadeIds.insert(createdId)
+                            if let idx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
+                                self.summaries[idx].cascadeId = createdId
+                            }
+                            if self.activeCascadeId == targetCascadeId || self.activeCascadeId.isEmpty {
+                                self.activeCascadeId = createdId
+                                if case .cascadeChat = self.activeRoute {
+                                    self.activeRoute = .cascadeChat(createdId)
+                                }
+                            }
+                            targetCascadeId = createdId
+                        }
+                    }
 
-                if let self, !targetCascadeId.isEmpty {
-                    self.optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
-                    self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
-                }
+                    if let self, !targetCascadeId.isEmpty {
+                        self.optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
+                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                    }
 
-                try await clientRef.sendUserCascadeMessage(
-                    cascadeId: targetCascadeId,
-                    message: messageBody,
-                    attachments: attachmentsSnapshot,
-                    modelId: cfg.modelId,
-                    effort: cfg.effort,
-                    mode: cfg.mode,
-                    agentPersona: cfg.agentPersona,
-                    isModelAlias: cfg.isModelAlias,
-                    isCloud: summaryIsCloud,
-                    permissionPreset: effectivePreset,
-                    instanceUuidOverride: summaryOriginUuid
-                )
+                    try await clientRef.sendUserCascadeMessage(
+                        cascadeId: targetCascadeId,
+                        message: messageBody,
+                        attachments: attachmentsSnapshot,
+                        modelId: cfg.modelId,
+                        effort: cfg.effort,
+                        mode: cfg.mode,
+                        agentPersona: cfg.agentPersona,
+                        isModelAlias: cfg.isModelAlias,
+                        isCloud: summaryIsCloud,
+                        permissionPreset: effectivePreset,
+                        instanceUuidOverride: summaryOriginUuid
+                    )
+                }
                 await storeRef.removeOutboxEntry(id: outboxEntry.id)
 
                 if let self {
@@ -458,18 +511,26 @@ extension AntigravitySessionStore {
               isDeviceNetworkReachable,
               isLiveBackendConnected,
               activeHost.isOnline,
-              let clientRef = rpcClient else {
+              (kmpEngine != nil || rpcClient != nil) else {
             return
         }
 
         isReplayingOutbox = true
         defer { isReplayingOutbox = false }
 
+        let cfg = selectedModelConfig
+        if let engine = kmpEngine {
+            _ = await engine.replayPendingOutbox(
+                modelId: cfg.modelId,
+                effort: cfg.effort,
+                mode: cfg.mode
+            )
+        }
+
         let pending = await projectionStore.loadPendingOutbox()
         pendingOutboxCount = pending.count
         guard !pending.isEmpty else { return }
 
-        let cfg = selectedModelConfig
         for entry in pending {
             guard !isNetworkingSuspended, isDeviceNetworkReachable, isLiveBackendConnected else { break }
             guard entry.kind == .userMessage,
@@ -488,51 +549,99 @@ extension AntigravitySessionStore {
             let workspaceUri = currentSummary?.workspaceUri ?? currentProj?.workspaceUri ?? selectedWorkspaceUri
 
             do {
-                if targetCascadeId.isEmpty || targetCascadeId.hasPrefix("cas-") {
-                    let createdId = try await clientRef.startCascade(
+                if let engine = kmpEngine {
+                    let isOptimistic = targetCascadeId.isEmpty
+                        || (targetCascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(targetCascadeId))
+                    let outcome = try await engine.sendMessage(
+                        cascadeId: targetCascadeId,
+                        message: messageBody,
                         workspaceUri: workspaceUri,
-                        initialPrompt: "",
+                        attachments: [],
                         modelId: cfg.modelId,
-                        cloudProjectId: summaryCloudProjId,
+                        effort: cfg.effort,
+                        mode: cfg.mode,
+                        agentPersona: cfg.agentPersona,
                         isCloud: summaryIsCloud,
-                        instanceUuidOverride: summaryOriginUuid
+                        cloudProjectId: summaryCloudProjId,
+                        permissionPreset: summaryIsCloud ? remotePermissionPreset : localPermissionPreset,
+                        instanceUuidOverride: summaryOriginUuid,
+                        isOptimisticDraft: isOptimistic
                     )
-                    if !createdId.isEmpty {
+                    let resolvedId = outcome.resolvedCascadeId
+                    if !resolvedId.isEmpty && resolvedId != targetCascadeId && isOptimistic {
                         locallyCreatedEmptyCascadeIds.remove(targetCascadeId)
-                        locallyCreatedEmptyCascadeIds.remove(createdId)
+                        locallyCreatedEmptyCascadeIds.remove(resolvedId)
                         if let existing = stepsByCascadeId.removeValue(forKey: targetCascadeId) {
-                            stepsByCascadeId[createdId] = existing.map { step in
+                            stepsByCascadeId[resolvedId] = existing.map { step in
                                 var copy = step
-                                copy.cascadeId = createdId
+                                copy.cascadeId = resolvedId
                                 return copy
                             }
                         }
                         if let idx = summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
-                            summaries[idx].cascadeId = createdId
+                            summaries[idx].cascadeId = resolvedId
                         }
                         if activeCascadeId == targetCascadeId || activeCascadeId.isEmpty {
-                            activeCascadeId = createdId
+                            activeCascadeId = resolvedId
                             if case .cascadeChat = activeRoute {
-                                activeRoute = .cascadeChat(createdId)
+                                activeRoute = .cascadeChat(resolvedId)
                             }
                         }
-                        targetCascadeId = createdId
+                        targetCascadeId = resolvedId
                     }
-                }
+                    if !outcome.dispatchedLive {
+                        throw AntigravityRPCError.httpError(
+                            statusCode: outcome.queuedInOutbox ? 503 : 500,
+                            body: outcome.errorMessage ?? "KMP outbox replay failed"
+                        )
+                    }
+                } else if let clientRef = rpcClient {
+                    if targetCascadeId.isEmpty || targetCascadeId.hasPrefix("cas-") {
+                        let createdId = try await clientRef.startCascade(
+                            workspaceUri: workspaceUri,
+                            initialPrompt: "",
+                            modelId: cfg.modelId,
+                            cloudProjectId: summaryCloudProjId,
+                            isCloud: summaryIsCloud,
+                            instanceUuidOverride: summaryOriginUuid
+                        )
+                        if !createdId.isEmpty {
+                            locallyCreatedEmptyCascadeIds.remove(targetCascadeId)
+                            locallyCreatedEmptyCascadeIds.remove(createdId)
+                            if let existing = stepsByCascadeId.removeValue(forKey: targetCascadeId) {
+                                stepsByCascadeId[createdId] = existing.map { step in
+                                    var copy = step
+                                    copy.cascadeId = createdId
+                                    return copy
+                                }
+                            }
+                            if let idx = summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
+                                summaries[idx].cascadeId = createdId
+                            }
+                            if activeCascadeId == targetCascadeId || activeCascadeId.isEmpty {
+                                activeCascadeId = createdId
+                                if case .cascadeChat = activeRoute {
+                                    activeRoute = .cascadeChat(createdId)
+                                }
+                            }
+                            targetCascadeId = createdId
+                        }
+                    }
 
-                try await clientRef.sendUserCascadeMessage(
-                    cascadeId: targetCascadeId,
-                    message: messageBody,
-                    attachments: [],
-                    modelId: cfg.modelId,
-                    effort: cfg.effort,
-                    mode: cfg.mode,
-                    agentPersona: cfg.agentPersona,
-                    isModelAlias: cfg.isModelAlias,
-                    isCloud: summaryIsCloud,
-                    permissionPreset: summaryIsCloud ? remotePermissionPreset : localPermissionPreset,
-                    instanceUuidOverride: summaryOriginUuid
-                )
+                    try await clientRef.sendUserCascadeMessage(
+                        cascadeId: targetCascadeId,
+                        message: messageBody,
+                        attachments: [],
+                        modelId: cfg.modelId,
+                        effort: cfg.effort,
+                        mode: cfg.mode,
+                        agentPersona: cfg.agentPersona,
+                        isModelAlias: cfg.isModelAlias,
+                        isCloud: summaryIsCloud,
+                        permissionPreset: summaryIsCloud ? remotePermissionPreset : localPermissionPreset,
+                        instanceUuidOverride: summaryOriginUuid
+                    )
+                }
 
                 await projectionStore.removeOutboxEntry(id: entry.id)
                 lastBackendActivityAt = Date()
@@ -580,8 +689,13 @@ extension AntigravitySessionStore {
         }
         let cid = activeCascadeId
         let clientRef = rpcClient
+        let engineRef = kmpEngine
         Task {
-            try? await clientRef?.cancelCascadeInvocation(cascadeId: cid, instanceUuidOverride: originUuid)
+            if let engineRef {
+                try? await engineRef.cancelActiveTurn(cascadeId: cid, instanceUuidOverride: originUuid)
+            } else {
+                try? await clientRef?.cancelCascadeInvocation(cascadeId: cid, instanceUuidOverride: originUuid)
+            }
         }
     }
 
@@ -704,8 +818,11 @@ extension AntigravitySessionStore {
         stepsByCascadeId[activeCascadeId] = steps
         presentedSheet = nil
 
-        if let payload, let clientRef = rpcClient {
+        if let payload, (kmpEngine != nil || rpcClient != nil) {
             let storeRef = projectionStore
+            let clientRef = rpcClient
+            let engineRef = kmpEngine
+            let workspaceUriRef = selectedWorkspaceUri
             let cid = activeCascadeId
             let originUuid = summaries.first(where: { $0.cascadeId == cid })?.originInstanceUuid
             let shouldSyncLive = (hasPairedBackend || isLiveBackendConnected)
@@ -715,7 +832,16 @@ extension AntigravitySessionStore {
                 await storeRef.enqueueOutbox(entry)
                 var interactionError: String? = nil
                 do {
-                    try await clientRef.handleCascadeUserInteraction(payload, instanceUuidOverride: originUuid)
+                    if let engineRef {
+                        _ = try await engineRef.resolveWaitingInteraction(
+                            step: targetStep,
+                            decision: decision,
+                            workspaceUri: workspaceUriRef,
+                            instanceUuidOverride: originUuid
+                        )
+                    } else if let clientRef {
+                        try await clientRef.handleCascadeUserInteraction(payload, instanceUuidOverride: originUuid)
+                    }
                 } catch {
                     if shouldSyncLive {
                         interactionError = error.localizedDescription

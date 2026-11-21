@@ -983,6 +983,16 @@ extension AntigravitySessionStore {
         if host.channel == .cloudRelay {
             if let client = existingRelayClient {
                 await client.setTargetRelayInstance(uuid: host.instanceId, name: host.hostname)
+                if let engine = kmpEngine {
+                    let targetInst = availableRelayInstances.first(where: { $0.uuid == host.instanceId })
+                        ?? RelayInstanceInfo(
+                            uuid: host.instanceId,
+                            name: host.hostname,
+                            version: host.version,
+                            status: host.isOnline ? .connected : .disconnected
+                        )
+                    await engine.switchToRelayInstance(targetInst)
+                }
                 if let cached = await loadSavedSessionCookie() {
                     let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(host.endpointURL.absoluteString)
                     let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
@@ -1068,6 +1078,7 @@ extension AntigravitySessionStore {
     /// Convenience wrapper for Settings / Remote Pairing host selection.
     @discardableResult
     public func switchToRelayInstance(_ inst: RelayInstanceInfo) async -> Bool {
+        await kmpEngine?.switchToRelayInstance(inst)
         let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
         let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
         let relayURL = URL(string: "\(originPrefix)/r/\(inst.uuid)")

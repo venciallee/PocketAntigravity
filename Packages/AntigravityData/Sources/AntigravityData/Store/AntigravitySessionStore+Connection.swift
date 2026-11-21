@@ -451,12 +451,24 @@ extension AntigravitySessionStore {
         )
 
         do {
-            let handshake = try await candidateClient.verifyConnection()
+            let handshake: BackendHandshakeResult
+            if let kmpEngine {
+                handshake = try await kmpEngine.connectDirectLan(
+                    endpointURLString: url.absoluteString,
+                    csrfToken: csrfToken,
+                    certSHA256: certSHA256,
+                    hostName: hostName,
+                    isRestoringSavedSession: isRestoringSavedSession
+                )
+            } else {
+                handshake = try await candidateClient.verifyConnection()
+            }
             applyVerifiedLiveConnection(
                 host: hostInstance,
                 client: candidateClient,
                 handshake: handshake
             )
+            startKmpSummarySubscriptionIfNeeded()
             await secretStore.saveCredentials(
                 SavedBackendCredentials(
                     endpointURLString: url.absoluteString,
@@ -637,9 +649,23 @@ extension AntigravitySessionStore {
         )
 
         do {
-            let handshake = try await candidateClient.verifyConnection(
-                allowCrossHostFallback: !strictTargetMatch
-            )
+            let handshake: BackendHandshakeResult
+            if let kmpEngine {
+                handshake = try await kmpEngine.connectCloudRelay(
+                    relayURLString: canonicalURLString,
+                    sessionCookie: trimmedCookie,
+                    authUser: effectiveAuthUser,
+                    resolvedInstanceUuid: resolvedInstanceUuid,
+                    relayApiKey: effectiveRelayApiKey,
+                    hostName: hostName,
+                    isRestoringSavedSession: isRestoringSavedSession,
+                    strictTargetMatch: strictTargetMatch
+                )
+            } else {
+                handshake = try await candidateClient.verifyConnection(
+                    allowCrossHostFallback: !strictTargetMatch
+                )
+            }
             guard self.hostSwitchGeneration == generation else { return false }
 
             let finalHostName = handshake.resolvedHostname ?? hostName
@@ -666,6 +692,7 @@ extension AntigravitySessionStore {
                 client: candidateClient,
                 handshake: handshake
             )
+            startKmpSummarySubscriptionIfNeeded()
 
             // Sync all Cloud Relay instances (online & offline) into `hosts` so Home reflects per-device reachability
             let activeRelayInst = handshake.availableRelayInstances.first(where: { $0.uuid == finalUuid })
@@ -855,6 +882,7 @@ extension AntigravitySessionStore {
         _ = await projectionStore.drainOutbox()
         await projectionStore.clearCachedProjections()
         await secretStore.clearCredentials()
+        await kmpEngine?.disconnectAndClearCredentials()
     }
 
     // MARK: - Foreground / Screen-Off Lifecycle & Network Path Control
@@ -878,6 +906,7 @@ extension AntigravitySessionStore {
         stepPollingTask?.cancel()
         stepPollingTask = nil
         networkMonitor.stop()
+        kmpEngine?.onBackground()
         if hasPairedBackend || isLiveBackendConnected {
             connectionLifecyclePhase = .suspended
         }
@@ -890,6 +919,10 @@ extension AntigravitySessionStore {
         let wasSuspended = isNetworkingSuspended
         isNetworkingSuspended = false
         startNetworkPathMonitoringIfNeeded()
+        await kmpEngine?.onForeground()
+        if kmpEngine != nil && (hasPairedBackend || isLiveBackendConnected) {
+            startKmpSummarySubscriptionIfNeeded()
+        }
 
         guard hasPairedBackend else { return }
 

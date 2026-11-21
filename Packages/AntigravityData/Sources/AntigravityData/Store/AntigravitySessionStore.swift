@@ -268,6 +268,9 @@ public final class AntigravitySessionStore {
     internal let networkMonitor: any NetworkReachabilityMonitoring
     internal let powerStateProvider: any PowerStateProviding
     internal let preferencesStore: any KeyValuePreferencesStore
+    public var kmpEngine: (any AntigravityKmpEnginePort)?
+    public var isUsingKmpEngine: Bool { kmpEngine != nil }
+    internal var kmpSummaryStreamTask: Task<Void, Never>? = nil
     internal var rpcClient: AntigravityRPCClient?
     internal var localSummaryStreamTasks: [String: Task<Void, Never>] = [:]
     internal var cloudSummaryStreamTask: Task<Void, Never>? = nil
@@ -299,6 +302,9 @@ public final class AntigravitySessionStore {
     internal var summaryStreamGeneration: UInt64 = 0
 
     internal var isSummaryStreamHealthy: Bool {
+        if kmpSummaryStreamTask != nil && hasReceivedLocalStreamEvent {
+            return true
+        }
         if activeHost.channel == .cloudRelay {
             return (!localSummaryStreamTasks.isEmpty && hasReceivedLocalStreamEvent)
                 || (cloudSummaryStreamTask != nil && hasReceivedCloudStreamEvent)
@@ -308,6 +314,8 @@ public final class AntigravitySessionStore {
 
     internal func cancelAllSummaryStreams() {
         summaryStreamGeneration &+= 1
+        kmpSummaryStreamTask?.cancel()
+        kmpSummaryStreamTask = nil
         for task in localSummaryStreamTasks.values {
             task.cancel()
         }
@@ -316,6 +324,31 @@ public final class AntigravitySessionStore {
         cloudSummaryStreamTask = nil
         hasReceivedLocalStreamEvent = false
         hasReceivedCloudStreamEvent = false
+    }
+
+    internal func startKmpSummarySubscriptionIfNeeded() {
+        guard let engine = kmpEngine, !isVerificationMode, !isNetworkingSuspended else { return }
+        kmpSummaryStreamTask?.cancel()
+        let generation = summaryStreamGeneration
+        let stream = engine.summaryUpdatesStream()
+        kmpSummaryStreamTask = Task { [weak self] in
+            for await updatedSummaries in stream {
+                guard let self, !Task.isCancelled, self.summaryStreamGeneration == generation else { break }
+                guard !updatedSummaries.isEmpty else { continue }
+                self.hasReceivedLocalStreamEvent = true
+                self.lastBackendActivityAt = Date()
+                var byId = Dictionary(uniqueKeysWithValues: self.summaries.map { ($0.cascadeId, $0) })
+                for item in updatedSummaries {
+                    byId[item.cascadeId] = item
+                }
+                self.summaries = byId.values.sorted { lhs, rhs in
+                    if lhs.updatedAt != rhs.updatedAt {
+                        return lhs.updatedAt > rhs.updatedAt
+                    }
+                    return lhs.cascadeId < rhs.cascadeId
+                }
+            }
+        }
     }
 
     public var isLowPowerModeEnabled: Bool {
@@ -354,7 +387,8 @@ public final class AntigravitySessionStore {
         secretStore: any SecretStore = KeychainStore.shared,
         networkMonitor: any NetworkReachabilityMonitoring = NetworkPathObserver(),
         powerStateProvider: any PowerStateProviding = SystemPowerStateProvider(),
-        preferencesStore: any KeyValuePreferencesStore = UserDefaultsPreferencesStore()
+        preferencesStore: any KeyValuePreferencesStore = UserDefaultsPreferencesStore(),
+        kmpEngine: (any AntigravityKmpEnginePort)? = nil
     ) {
         self.hosts = hosts.isEmpty ? [activeHost] : hosts
         self.activeHost = activeHost
@@ -388,6 +422,7 @@ public final class AntigravitySessionStore {
         self.networkMonitor = networkMonitor
         self.powerStateProvider = powerStateProvider
         self.preferencesStore = preferencesStore
+        self.kmpEngine = kmpEngine
         self.rpcClient = AntigravityRPCClient(
             host: activeHost,
             csrfToken: "csrf-antigravity-ios-session-token"
@@ -406,7 +441,8 @@ public final class AntigravitySessionStore {
         secretStore: any SecretStore = KeychainStore.shared,
         networkMonitor: any NetworkReachabilityMonitoring = NetworkPathObserver(),
         powerStateProvider: any PowerStateProviding = SystemPowerStateProvider(),
-        preferencesStore: any KeyValuePreferencesStore = UserDefaultsPreferencesStore()
+        preferencesStore: any KeyValuePreferencesStore = UserDefaultsPreferencesStore(),
+        kmpEngine: (any AntigravityKmpEnginePort)? = nil
     ) -> AntigravitySessionStore {
         let placeholderHost = RemoteHostInstance(
             instanceId: "unpaired",
@@ -444,7 +480,8 @@ public final class AntigravitySessionStore {
             secretStore: secretStore,
             networkMonitor: networkMonitor,
             powerStateProvider: powerStateProvider,
-            preferencesStore: preferencesStore
+            preferencesStore: preferencesStore,
+            kmpEngine: kmpEngine
         )
         store.isVerificationMode = false
         store.isInitialSessionCheckComplete = false
