@@ -12,6 +12,12 @@ build/
 **/build/
 local.properties
 *.xcframework/
+.project.*.tmp.yml
+
+# XcodeGen-generated Info.plist manifests (rebuilt from project.yml)
+apps/ios/App/Support/Info.plist
+apps/ios/Extensions/LiveActivity/Info.plist
+apps/ios/Extensions/Share/Info.plist
 
 # Gemini CLI runtime artifacts (keep .gemini/commands/ tracked)
 .gemini/telemetry.log

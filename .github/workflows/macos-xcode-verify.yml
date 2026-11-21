@@ -91,6 +91,8 @@ jobs:
           fi
           python3 scripts/prepare-cr-context.py --validate-config --self-test
           python3 verification/e2e_impact_planner.py --self-test
+          bash -n scripts/sync-xcode.sh scripts/install-on-iphone.sh scripts/mac-real-env-verify.sh .githooks/post-merge .githooks/post-checkout
+          bash scripts/sync-xcode.sh --self-test
 
       - name: "[Gate 2] Live Connect-RPC Flow, v2.33 Capabilities & 3-Version Compat Matrix (Legacy/Current/Future)"
         if: steps.plan.outputs.run_gate2_live_rpc == 'true' || steps.plan.outputs.run_gate2_v233 == 'true' || steps.plan.outputs.is_release == 'true'
