@@ -17,6 +17,7 @@ Executes all 4 automated ESDD gates:
 """
 import base64
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -571,6 +572,17 @@ def run_connect_rpc_e2e_tests(port: int) -> dict:
     # 6. Official Antigravity Remote Control Cloud Relay (`ApiService/ListInstances` + `ProxyCommand` + `SAPISIDHASH`)
     import hashlib
 
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as bootstrap_resp:
+        bootstrap_html = bootstrap_resp.read().decode("utf-8")
+        discovered_relay_api_key = bootstrap_resp.headers.get("X-Goog-Api-Key") or ""
+        if not discovered_relay_api_key:
+            meta_match = re.search(
+                r'name="antigravity-relay-api-key"\s+content="([^"]+)"',
+                bootstrap_html,
+            )
+            discovered_relay_api_key = meta_match.group(1) if meta_match else ""
+    assert discovered_relay_api_key == "mock-relay-web-api-key"
+
     relay_base = f"http://127.0.0.1:{port}/$rpc/devtools_jetski_boq_api_proto.ApiService"
     synth_sapisid = "synthRelaySid/synthSecretKey"
     origin = "https://antigravity.google.com"
@@ -580,7 +592,7 @@ def run_connect_rpc_e2e_tests(port: int) -> dict:
         "Content-Type": "application/json+protobuf",
         "Cookie": f"SID=synth_sid; SAPISID={synth_sapisid}",
         "Origin": origin,
-        "X-Goog-Api-Key": "AIzaSyCUicsvglkMf8CM2MPlGjopIcIxu3VJEDU",
+        "X-Goog-Api-Key": discovered_relay_api_key,
         "x-antigravity-test-72e4dd1c-e8ae-4e97-873b-c3d3a01b735d": "true",
     }
 

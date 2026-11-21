@@ -1240,6 +1240,7 @@ public final class AntigravitySessionStore {
                 sessionCookie: saved.sessionCookie ?? "",
                 authUser: saved.authUser,
                 resolvedInstanceUuid: saved.resolvedInstanceUuid,
+                relayApiKey: saved.relayApiKey,
                 hostName: saved.hostname,
                 isRestoringSavedSession: true,
                 strictTargetMatch: hasExplicitLocalScope
@@ -1425,6 +1426,7 @@ public final class AntigravitySessionStore {
         sessionCookie: String,
         authUser: String? = nil,
         resolvedInstanceUuid: String? = nil,
+        relayApiKey: String? = nil,
         deepLinkedConversationId: String? = nil,
         hostName: String = "Antigravity Desktop",
         isRestoringSavedSession: Bool = false,
@@ -1493,6 +1495,18 @@ public final class AntigravitySessionStore {
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         let initialInstanceId = parsedTarget?.instanceId.isEmpty == false ? parsedTarget!.instanceId : "auto"
         let deepLinkConv = deepLinkedConversationId ?? parsedTarget?.conversationId
+        let initialOriginPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
+        let trimmedExplicitKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var effectiveRelayApiKey: String? = (trimmedExplicitKey?.isEmpty == false ? trimmedExplicitKey : nil)
+        if effectiveRelayApiKey == nil && !SAPISIDHashGenerator.isLoopbackOrigin(initialOriginPrefix) {
+            if let originCachedKey = await KeychainStore.shared.loadRelayWebApiKey(forOrigin: initialOriginPrefix) {
+                effectiveRelayApiKey = originCachedKey
+            } else if let savedCredsKey = await KeychainStore.shared.loadCredentials()?.relayApiKey?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !savedCredsKey.isEmpty {
+                effectiveRelayApiKey = savedCredsKey
+            }
+        }
 
         let hostInstance = RemoteHostInstance(
             instanceId: resolvedInstanceUuid ?? initialInstanceId,
@@ -1505,7 +1519,8 @@ public final class AntigravitySessionStore {
             host: hostInstance,
             sessionCookie: trimmedCookie,
             authUser: effectiveAuthUser,
-            resolvedInstanceUuid: resolvedInstanceUuid
+            resolvedInstanceUuid: resolvedInstanceUuid,
+            relayApiKey: effectiveRelayApiKey
         )
 
         do {
@@ -1519,6 +1534,7 @@ public final class AntigravitySessionStore {
             let finalAuthUser = handshake.resolvedAuthUser ?? effectiveAuthUser ?? "0"
             let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
             let finalRelayURL = URL(string: "\(originPrefix)/r/\(finalUuid)") ?? url
+            let finalRelayApiKey = await candidateClient.currentRelayApiKey() ?? effectiveRelayApiKey
 
             let verifiedHost = RemoteHostInstance(
                 instanceId: finalUuid,
@@ -1546,6 +1562,12 @@ public final class AntigravitySessionStore {
                 preferredActiveInstance: activeRelayInst,
                 persistKeychainIfChanged: false
             )
+
+            if let finalRelayApiKey,
+               !finalRelayApiKey.isEmpty,
+               !SAPISIDHashGenerator.isLoopbackOrigin(originPrefix) {
+                await KeychainStore.shared.saveRelayWebApiKey(finalRelayApiKey, forOrigin: originPrefix)
+            }
 
             let hasMultipleLocalHosts = pairedLocalHosts.count > 1
             if strictTargetMatch {
@@ -1592,7 +1614,8 @@ public final class AntigravitySessionStore {
                     hostname: finalHostName,
                     sessionCookie: trimmedCookie,
                     authUser: finalAuthUser,
-                    resolvedInstanceUuid: finalUuid
+                    resolvedInstanceUuid: finalUuid,
+                    relayApiKey: finalRelayApiKey
                 )
             )
 

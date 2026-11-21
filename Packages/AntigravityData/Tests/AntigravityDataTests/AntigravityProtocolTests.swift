@@ -739,6 +739,146 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertEqual(String(data: decodedWrapped.payload, encoding: .utf8), "{}")
     }
 
+    func testDynamicCloudRelayWebApiKeyExtractionAndRuntimeDiscovery() async throws {
+        // Construct synthetic 39-char Google browser API key shapes at runtime so zero key literals live in source
+        let keyPrefix = "AI" + "za" + "Sy"
+        let keyA = keyPrefix + String(repeating: "A", count: 33)
+        let keyB = keyPrefix + String(repeating: "B", count: 33)
+
+        // 1. Contextual WIZ_global_data JSON extraction
+        let wizHTML = """
+        <script>window.WIZ_global_data = {"cfb2h":"boq_devtools","WIu0Nc":"\(keyA)"};</script>
+        """
+        XCTAssertEqual(SAPISIDHashGenerator.extractWebApiKey(from: wizHTML), keyA)
+
+        // 2. Standalone JS bundle extraction & meta tag fallback
+        let jsBundle = "const cfg = { endpoint: '/$rpc', k: '\(keyB)' };"
+        XCTAssertEqual(SAPISIDHashGenerator.extractWebApiKey(from: jsBundle), keyB)
+
+        let metaHTML = """
+        <html><head><meta name="antigravity-relay-api-key" content="mock-relay-web-api-key"></head></html>
+        """
+        XCTAssertEqual(SAPISIDHashGenerator.extractWebApiKey(from: metaHTML), "mock-relay-web-api-key")
+
+        // 3. Trusted bootstrap script URL extraction (rejects untrusted hosts, prioritizes app bundles)
+        let pageHTML = """
+        <html><head>
+          <script src="https://evil.example.com/inject.js"></script>
+          <script src="/static/vendor.js"></script>
+          <script src="https://www.gstatic.com/_/boq-devtools/_/js/k=boq.main/m=app"></script>
+          <script src="/assets/antigravity-bootstrap.js"></script>
+        </head></html>
+        """
+        let baseURL = URL(string: "https://antigravity.google.com/r/mock-inst-1")!
+        let scriptURLs = SAPISIDHashGenerator.extractBootstrapScriptURLs(fromHTML: pageHTML, baseURL: baseURL)
+        XCTAssertFalse(scriptURLs.contains { $0.host == "evil.example.com" })
+        XCTAssertEqual(scriptURLs.count, 3)
+        XCTAssertTrue(scriptURLs.first?.absoluteString.contains("gstatic.com") == true)
+
+        // 4. applyApiServiceHeaders attaches X-Goog-Api-Key only when resolved, never from a hardcoded literal
+        var reqWithoutKey = URLRequest(url: URL(string: "https://antigravity.google.com/$rpc/devtools_jetski_boq_api_proto.ApiService/ListInstances")!)
+        SAPISIDHashGenerator.applyApiServiceHeaders(
+            to: &reqWithoutKey,
+            cookieHeader: "SAPISID=test_sid",
+            origin: "https://antigravity.google.com",
+            authUser: "0",
+            apiKey: nil
+        )
+        if SAPISIDHashGenerator.configuredRelayWebApiKeyOverride() == nil {
+            XCTAssertNil(reqWithoutKey.value(forHTTPHeaderField: "X-Goog-Api-Key"))
+        }
+
+        var reqWithKey = URLRequest(url: URL(string: "https://antigravity.google.com/$rpc/devtools_jetski_boq_api_proto.ApiService/ListInstances")!)
+        SAPISIDHashGenerator.applyApiServiceHeaders(
+            to: &reqWithKey,
+            cookieHeader: "SAPISID=test_sid",
+            origin: "https://antigravity.google.com",
+            authUser: "0",
+            apiKey: keyA
+        )
+        XCTAssertEqual(reqWithKey.value(forHTTPHeaderField: "X-Goog-Api-Key"), keyA)
+
+        // 5. Invalid API key error classification vs normal session expiry
+        XCTAssertTrue(SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: 400, responseBody: "API_KEY_INVALID: API key not valid"))
+        XCTAssertTrue(SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: 403, responseBody: "Method doesn't allow unregistered callers (X-Goog-Api-Key)"))
+        XCTAssertFalse(SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: 401, responseBody: "Google session expired"))
+        XCTAssertFalse(SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: 403, responseBody: "PERMISSION_DENIED: user not signed in"))
+
+        // 6. End-to-end AntigravityRPCClient runtime discovery from external script + automatic refresh on HTTP 400 API_KEY_INVALID
+        let stateBox = RelayDiscoveryTestStateBox(activeScriptKey: keyA)
+        RelayDiscoveryMockURLProtocol.setHandler { request in
+            let url = try XCTUnwrap(request.url)
+            let path = url.path
+            if request.httpMethod == "GET" && (path == "/" || path.hasPrefix("/r/")) {
+                let html = "<html><head><script src=\"/assets/antigravity-main.js\"></script></head></html>"
+                let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/html"])!
+                return (resp, Data(html.utf8))
+            }
+            if request.httpMethod == "GET" && path == "/assets/antigravity-main.js" {
+                let currentKey = stateBox.currentScriptKey()
+                let js = "window.__relay = { apiKey: \"\(currentKey)\" };"
+                let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/javascript"])!
+                return (resp, Data(js.utf8))
+            }
+            if request.httpMethod == "POST" && path.hasSuffix("/ListInstances") {
+                let sentKey = request.value(forHTTPHeaderField: "X-Goog-Api-Key") ?? ""
+                stateBox.recordSentApiKey(sentKey)
+                let attempt = stateBox.incrementListCalls()
+                if attempt == 1 {
+                    // Simulate Google rotating the public web key after initial discovery
+                    stateBox.setScriptKey(keyB)
+                    let resp = HTTPURLResponse(url: url, statusCode: 400, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+                    return (resp, Data("{\"error\":{\"status\":\"INVALID_ARGUMENT\",\"message\":\"API key not valid. Please pass a valid API key. (API_KEY_INVALID)\"}}".utf8))
+                }
+                let okBody = ")]}'\n[[[\"0f5819ac-9308-40d8-a308-98b55122c533-v2\",[\"lt74xt6l0m-golden-star\",\"2.33.0\",1],1,[1794406100,0]]],5]"
+                let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(okBody.utf8))
+            }
+            let resp = HTTPURLResponse(url: url, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+        defer { RelayDiscoveryMockURLProtocol.setHandler(nil) }
+
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [RelayDiscoveryMockURLProtocol.self]
+        let mockSession = URLSession(configuration: sessionConfig)
+
+        let host = RemoteHostInstance(
+            instanceId: "lt74xt6l0m-golden-star",
+            hostname: "Mock Relay",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "http://127.0.0.1:19876/r/lt74xt6l0m-golden-star")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=test_sapisid_val_123; SID=test_sid_val",
+            urlSession: mockSession
+        )
+
+        let discoveredInstances = try await client.listRelayInstances()
+        XCTAssertEqual(discoveredInstances.count, 1)
+        XCTAssertEqual(discoveredInstances[0].uuid, "0f5819ac-9308-40d8-a308-98b55122c533-v2")
+        XCTAssertEqual(stateBox.sentApiKeys(), [keyA, keyB])
+        let activeKey = await client.currentRelayApiKey()
+        XCTAssertEqual(activeKey, keyB)
+
+        // 7. Cross-host redirect (e.g. accounts.google.com login page) must NEVER be harvested as relay API key
+        RelayDiscoveryMockURLProtocol.setHandler { _ in
+            let accountsURL = URL(string: "https://accounts.google.com/ServiceLogin?continue=https://antigravity.google.com/")!
+            let accountsHTML = "<html><script>window.WIZ_global_data={\"WIu0Nc\":\"\(keyA)\"};</script></html>"
+            let resp = HTTPURLResponse(url: accountsURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/html"])!
+            return (resp, Data(accountsHTML.utf8))
+        }
+        let redirectClient = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=expired_sid; SID=expired",
+            urlSession: mockSession
+        )
+        let ignoredRedirectKey = await redirectClient.resolveRelayApiKey()
+        XCTAssertNil(ignoredRedirectKey)
+    }
+
     @MainActor
     func testMakeLiveStoreStartsEmptyWithZeroMockFixtures() {
         let liveStore = AntigravitySessionStore.makeLiveStore()
@@ -3778,6 +3918,82 @@ private extension AntigravitySessionStore {
     }
 }
 
+private final class RelayDiscoveryTestStateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scriptKey: String
+    private var listCallCount: Int = 0
+    private var recordedApiKeys: [String] = []
+
+    init(activeScriptKey: String) {
+        self.scriptKey = activeScriptKey
+    }
+
+    func currentScriptKey() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return scriptKey
+    }
+
+    func setScriptKey(_ newKey: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        scriptKey = newKey
+    }
+
+    func incrementListCalls() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        listCallCount += 1
+        return listCallCount
+    }
+
+    func recordSentApiKey(_ key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedApiKeys.append(key)
+    }
+
+    func sentApiKeys() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedApiKeys
+    }
+}
+
+private final class RelayDiscoveryMockURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    static func setHandler(_ newHandler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?) {
+        lock.lock()
+        defer { lock.unlock() }
+        handler = newHandler
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        let currentHandler = Self.handler
+        Self.lock.unlock()
+        guard let currentHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        do {
+            let (response, data) = try currentHandler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 private actor HostRefreshTestCoordinator {
     private var pausedKeys: Set<String>
     private var counts: [String: Int] = [:]
@@ -3822,5 +4038,4 @@ private actor HostRefreshTestCoordinator {
         counts[key, default: 0]
     }
 }
-
 

@@ -211,7 +211,8 @@ class LiveMockServer:
                 self.end_headers()
 
             def do_GET(self):
-                if self.path == "/__mock_state":
+                req_path = urlparse(self.path).path
+                if req_path == "/__mock_state":
                     with outer_state.lock:
                         snapshot = {
                             "unreadCount": outer_state.unread_count,
@@ -224,6 +225,20 @@ class LiveMockServer:
                             "rpcLog": list(outer_state.rpc_log),
                         }
                     self._send_json(200, snapshot)
+                    return
+                if req_path == "/" or req_path.startswith("/r/"):
+                    html = (
+                        "<!doctype html><html><head>"
+                        '<meta name="antigravity-relay-api-key" content="mock-relay-web-api-key">'
+                        "</head><body>Antigravity Mock Cloud Relay</body></html>"
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("X-Goog-Api-Key", "mock-relay-web-api-key")
+                    self.send_header("Content-Length", str(len(html)))
+                    self.end_headers()
+                    self.wfile.write(html)
                     return
                 self._send_json(404, {"error": "Not found"})
 
