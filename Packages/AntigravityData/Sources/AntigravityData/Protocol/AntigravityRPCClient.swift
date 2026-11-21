@@ -2805,7 +2805,8 @@ public actor AntigravityRPCClient {
     public func loadTrajectory(
         cascadeId: String,
         isCloud: Bool = false,
-        instanceUuidOverride: String? = nil
+        instanceUuidOverride: String? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) async throws {
         let isRemoteCloud = isCloud || cascadeId.hasPrefix("v1/")
         var body: [String: JSONValue] = ["cascadeId": .string(cascadeId)]
@@ -2816,7 +2817,8 @@ public actor AntigravityRPCClient {
             method: "LoadTrajectory",
             body: body,
             instanceUuidOverride: instanceUuidOverride,
-            timeoutInterval: 8.0
+            timeoutInterval: 8.0,
+            allowCrossInstanceFailover: allowCrossInstanceFailover
         )
     }
 
@@ -2845,16 +2847,20 @@ public actor AntigravityRPCClient {
 
     /// Fetches the complete trajectory for a live or historical session using upstream `GetCascadeTrajectorySteps`,
     /// waking dormant trajectories via `LoadTrajectory`, falling back to `GetCascadeTrajectory` / Binary Protobuf,
-    /// and failing over across reachable Cloud Relay instances when a conversation lives in a peer window.
+    /// and failing over across reachable Cloud Relay instances when `allowCrossInstanceFailover` is enabled.
     public func fetchAllTrajectorySteps(
         cascadeId: String,
         knownStepCount: Int = 0,
         isCloud: Bool = false,
-        instanceUuidOverride: String? = nil
+        instanceUuidOverride: String? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) async throws -> [CascadeStep] {
         let primaryTarget: String? = {
             if channel == .cloudRelay {
-                return selectReachableRelayUuid(preferred: instanceUuidOverride)
+                return selectReachableRelayUuid(
+                    preferred: instanceUuidOverride,
+                    allowCrossInstanceFailover: allowCrossInstanceFailover
+                )
             }
             return instanceUuidOverride
         }()
@@ -2865,7 +2871,8 @@ public actor AntigravityRPCClient {
                 cascadeId: cascadeId,
                 knownStepCount: knownStepCount,
                 isCloud: isCloud,
-                targetUuid: primaryTarget
+                targetUuid: primaryTarget,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             )
             if !steps.isEmpty {
                 return steps
@@ -2878,7 +2885,7 @@ public actor AntigravityRPCClient {
 
         // Multi-window Cloud Relay failover: if the trajectory was opened or stored in another live Desktop window,
         // probe reachable peer instances (`sameHostFamily` windows on the same Mac first).
-        if channel == .cloudRelay {
+        if channel == .cloudRelay && allowCrossInstanceFailover {
             if cachedRelayInstances.isEmpty,
                let refreshed = try? await listRelayInstances(timeoutInterval: 6.0),
                !refreshed.isEmpty {
@@ -2900,7 +2907,8 @@ public actor AntigravityRPCClient {
                         cascadeId: cascadeId,
                         knownStepCount: knownStepCount,
                         isCloud: isCloud,
-                        targetUuid: peer.uuid
+                        targetUuid: peer.uuid,
+                        allowCrossInstanceFailover: false
                     )
                     if !peerSteps.isEmpty {
                         self.resolvedInstanceUuid = peer.uuid
@@ -2926,7 +2934,8 @@ public actor AntigravityRPCClient {
         cascadeId: String,
         knownStepCount: Int,
         isCloud: Bool,
-        targetUuid: String?
+        targetUuid: String?,
+        allowCrossInstanceFailover: Bool = true
     ) async throws -> [CascadeStep] {
         let isRemoteCloud = isCloud || cascadeId.hasPrefix("v1/")
         let wakeKey = "\(targetUuid ?? "direct")|\(cascadeId)"
@@ -2938,7 +2947,8 @@ public actor AntigravityRPCClient {
                     cascadeId: cascadeId,
                     startIndex: 0,
                     endIndex: knownStepCount,
-                    instanceUuidOverride: targetUuid
+                    instanceUuidOverride: targetUuid,
+                    allowCrossInstanceFailover: allowCrossInstanceFailover
                 )
                 if !protoSteps.isEmpty {
                     wokenInstanceCascadeKeys.insert(wakeKey)
@@ -2949,12 +2959,18 @@ public actor AntigravityRPCClient {
             } catch {
                 lastError = error
             }
-            try? await loadTrajectory(cascadeId: cascadeId, isCloud: isRemoteCloud, instanceUuidOverride: targetUuid)
+            try? await loadTrajectory(
+                cascadeId: cascadeId,
+                isCloud: isRemoteCloud,
+                instanceUuidOverride: targetUuid,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
+            )
             let retryProtoSteps = try await fetchTrajectoryStepsProtobuf(
                 cascadeId: cascadeId,
                 startIndex: 0,
                 endIndex: knownStepCount,
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             )
             if !retryProtoSteps.isEmpty {
                 wokenInstanceCascadeKeys.insert(wakeKey)
@@ -2973,7 +2989,8 @@ public actor AntigravityRPCClient {
                 method: "GetCascadeTrajectorySteps",
                 body: stepReqBody,
                 instanceUuidOverride: targetUuid,
-                timeoutInterval: 10.0
+                timeoutInterval: 10.0,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             )
             lastError = nil
         } catch let AntigravityRPCError.unauthorized(msg) {
@@ -2988,7 +3005,8 @@ public actor AntigravityRPCClient {
                 cascadeId: cascadeId,
                 startIndex: 0,
                 endIndex: max(knownStepCount, Self.protobufStepThreshold),
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             )
             if !protoSteps.isEmpty {
                 wokenInstanceCascadeKeys.insert(wakeKey)
@@ -3000,13 +3018,19 @@ public actor AntigravityRPCClient {
         if !rawSteps.isEmpty {
             wokenInstanceCascadeKeys.insert(wakeKey)
         } else if firstResp == nil || knownStepCount > 0 || !wokenInstanceCascadeKeys.contains(wakeKey) {
-            try? await loadTrajectory(cascadeId: cascadeId, isCloud: isRemoteCloud, instanceUuidOverride: targetUuid)
+            try? await loadTrajectory(
+                cascadeId: cascadeId,
+                isCloud: isRemoteCloud,
+                instanceUuidOverride: targetUuid,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
+            )
             do {
                 let retryResp = try await callUnaryJSON(
                     method: "GetCascadeTrajectorySteps",
                     body: stepReqBody,
                     instanceUuidOverride: targetUuid,
-                    timeoutInterval: 10.0
+                    timeoutInterval: 10.0,
+                    allowCrossInstanceFailover: allowCrossInstanceFailover
                 )
                 lastError = nil
                 if retryResp["truncatedAt"] != nil {
@@ -3014,7 +3038,8 @@ public actor AntigravityRPCClient {
                         cascadeId: cascadeId,
                         startIndex: 0,
                         endIndex: max(knownStepCount, Self.protobufStepThreshold),
-                        instanceUuidOverride: targetUuid
+                        instanceUuidOverride: targetUuid,
+                        allowCrossInstanceFailover: allowCrossInstanceFailover
                     )
                     if !protoSteps.isEmpty {
                         wokenInstanceCascadeKeys.insert(wakeKey)
@@ -3039,7 +3064,8 @@ public actor AntigravityRPCClient {
                     method: "GetCascadeTrajectory",
                     body: stepReqBody,
                     instanceUuidOverride: targetUuid,
-                    timeoutInterval: 10.0
+                    timeoutInterval: 10.0,
+                    allowCrossInstanceFailover: allowCrossInstanceFailover
                 )
                 let fallbackArr = trajResp["trajectory"]?.objectValue?["steps"]?.arrayValue
                     ?? trajResp["steps"]?.arrayValue
@@ -3062,7 +3088,8 @@ public actor AntigravityRPCClient {
                 cascadeId: cascadeId,
                 startIndex: 0,
                 endIndex: max(knownStepCount, Self.protobufStepThreshold),
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             ), !protoFallback.isEmpty {
                 wokenInstanceCascadeKeys.insert(wakeKey)
                 return protoFallback
@@ -3078,7 +3105,8 @@ public actor AntigravityRPCClient {
                 cascadeId: cascadeId,
                 startIndex: 0,
                 endIndex: max(knownStepCount, rawSteps.count),
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             ), protoSteps.count >= rawSteps.count {
                 wokenInstanceCascadeKeys.insert(wakeKey)
                 return protoSteps
@@ -3161,7 +3189,8 @@ public actor AntigravityRPCClient {
         cascadeId: String,
         startIndex: Int,
         endIndex: Int,
-        instanceUuidOverride: String? = nil
+        instanceUuidOverride: String? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) async throws -> [CascadeStep] {
         let protoReqBytes = ProtobufStepCodec.encodeGetStepsRequest(
             cascadeId: cascadeId,
@@ -3173,7 +3202,8 @@ public actor AntigravityRPCClient {
                 method: "GetCascadeTrajectorySteps",
                 payload: protoReqBytes,
                 contentType: "application/proto",
-                instanceUuidOverride: instanceUuidOverride
+                instanceUuidOverride: instanceUuidOverride,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             )
             let unwrapped = Self.unwrapConnectFramedPayloadIfNeeded(rawBytes)
             return ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)

@@ -3128,6 +3128,271 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertEqual(store.projects[1].originInstanceUuid, "uuid-macmini")
         XCTAssertEqual(store.projects[1].hostName, "huangjiafandemac-mini-local-swift-vapor")
     }
+
+    @MainActor
+    func testPerHostShardedDiskCacheColdStartHydrationAndOfflineStepReading() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AntigravityHostShards-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let hostAUuid = "uuid-golden-star-v2"
+        let hostAName = "lt74xt6l0m-golden-star"
+        let hostBUuid = "uuid-mac-mini-v2"
+        let hostBName = "huangjiafandemac-mini-local-swift-vapor"
+
+        let hostA = RemoteHostInstance(
+            instanceId: hostAUuid,
+            hostname: hostAName,
+            version: "2.34.0-v2",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(hostAUuid)")!,
+            isOnline: true
+        )
+        let hostB = RemoteHostInstance(
+            instanceId: hostBUuid,
+            hostname: hostBName,
+            version: "2.29.0-v2",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(hostBUuid)")!,
+            isOnline: true
+        )
+
+        // 1. Session 1: persist per-host shards + paired hosts + cached steps for Mac B
+        let projection1 = LocalProjectionStore(storageDirectory: tempDir)
+        let store1 = AntigravitySessionStore(
+            hosts: [hostA, hostB],
+            activeHost: hostA,
+            projectionStore: projection1
+        )
+        store1.isVerificationMode = false
+        store1.hasPairedBackend = true
+        store1.isLiveBackendConnected = true
+        store1.syncRelayInstancesState(
+            [
+                RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
+                RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .connected)
+            ],
+            latencyMs: 25
+        )
+
+        var seedSummaries: [CascadeSummary] = [
+            CascadeSummary(
+                cascadeId: "cid-a-1",
+                title: "Workstation Old Chat",
+                projectSlug: "dsh-superagent-prototype",
+                workspaceUri: "file:///Users/work/dsh-superagent-prototype",
+                status: .done,
+                stepCount: 5,
+                isCloud: false,
+                originInstanceUuid: hostAUuid,
+                originHostName: hostAName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-b-cached",
+                title: "Mini Cached Chat",
+                projectSlug: "game_loop",
+                workspaceUri: "file:///Users/dev/code/game_loop",
+                status: .done,
+                stepCount: 2,
+                isCloud: false,
+                originInstanceUuid: hostBUuid,
+                originHostName: hostBName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-b-uncached",
+                title: "Mini Uncached Chat",
+                projectSlug: "game_loop",
+                workspaceUri: "file:///Users/dev/code/game_loop",
+                status: .done,
+                stepCount: 4,
+                isCloud: false,
+                originInstanceUuid: hostBUuid,
+                originHostName: hostBName
+            ),
+            CascadeSummary(
+                cascadeId: "v1/default/jetski_remote_agents_3p/cid-cloud-1",
+                title: "Cloud Repo Chat",
+                projectSlug: "venciallee/iOSAntigravity",
+                workspaceUri: "cloud://venciallee/iOSAntigravity",
+                status: .done,
+                stepCount: 3,
+                isCloud: true,
+                originHostName: "Antigravity"
+            )
+        ]
+        store1.projects = AntigravitySessionStore.reconcileLiveProjects(
+            workspaces: [],
+            summaries: &seedSummaries,
+            existingProjects: [],
+            hostName: hostAName
+        )
+        store1.summaries = seedSummaries
+        await store1.persistHostProjections()
+
+        let cachedMiniSteps: [CascadeStep] = [
+            CascadeStep(
+                cascadeId: "cid-b-cached",
+                stepIndex: 0,
+                type: .userInput,
+                status: .done,
+                userInput: "Summarize swift-vapor build status"
+            ),
+            CascadeStep(
+                cascadeId: "cid-b-cached",
+                stepIndex: 1,
+                type: .plannerResponse,
+                status: .done,
+                plannerResponse: PlannerResponsePayload(
+                    response: "All Vapor routes compiled cleanly on Mac mini."
+                )
+            )
+        ]
+        await projection1.saveProjectedSteps(cachedMiniSteps, for: "cid-b-cached")
+
+        let initialShardB = try XCTUnwrap(await projection1.loadHostProjection(hostKey: "host:\(hostBUuid)"))
+        XCTAssertEqual(Set(initialShardB.summaries.map(\.cascadeId)), ["cid-b-cached", "cid-b-uncached"])
+
+        // 2. Refresh ONLY online Mac A while Mac B is offline -> Mac A's shard updates, Mac B's shard on disk stays untouched!
+        store1.hostRefreshExecutorOverrideForTesting = { target in
+            XCTAssertEqual(target, .localHost(id: hostAUuid, name: hostAName))
+            let updatedA = CascadeSummary(
+                cascadeId: "cid-a-2",
+                title: "Workstation Fresh Chat",
+                projectSlug: "dsh-superagent-prototype",
+                workspaceUri: "file:///Users/work/dsh-superagent-prototype",
+                status: .inProgress,
+                stepCount: 11,
+                isCloud: false,
+                originInstanceUuid: hostAUuid,
+                originHostName: hostAName
+            )
+            return ScopedWorkspaceSyncResult(
+                workspaces: [
+                    WorkspaceInfo(
+                        workspaceUri: "file:///Users/work/dsh-superagent-prototype",
+                        displayName: "dsh-superagent-prototype",
+                        activeBranch: "main",
+                        isCloud: false,
+                        originInstanceUuid: hostAUuid,
+                        originHostName: hostAName
+                    )
+                ],
+                summaries: [updatedA],
+                relayInstances: [
+                    RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
+                    RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .disconnected)
+                ],
+                refreshedLocalHostUuids: [hostAUuid],
+                refreshedLocalHostNames: [hostAName],
+                refreshedCloud: false,
+                targetReachable: true,
+                latencyMs: 18
+            )
+        }
+        let refreshedA = await store1.refreshConversationsForHostFilter(.localHost(id: hostAUuid, name: hostAName))
+        XCTAssertTrue(refreshedA)
+
+        // Verify disk shards independently via a fresh LocalProjectionStore instance (cold disk read)
+        let coldProjection = LocalProjectionStore(storageDirectory: tempDir)
+        let coldShards = await coldProjection.loadAllHostProjections()
+        XCTAssertEqual(Set(coldShards.map(\.hostKey)), ["host:\(hostAUuid)", "host:\(hostBUuid)", "cloud"])
+        let shardAOnDisk = try XCTUnwrap(await coldProjection.loadHostProjection(hostKey: "host:\(hostAUuid)"))
+        let shardBOnDisk = try XCTUnwrap(await coldProjection.loadHostProjection(hostKey: "host:\(hostBUuid)"))
+        XCTAssertEqual(shardAOnDisk.summaries.map(\.cascadeId), ["cid-a-2"])
+        XCTAssertEqual(Set(shardBOnDisk.summaries.map(\.cascadeId)), ["cid-b-cached", "cid-b-uncached"])
+        XCTAssertEqual(
+            shardBOnDisk.updatedAt.timeIntervalSinceReferenceDate,
+            initialShardB.updatedAt.timeIntervalSinceReferenceDate,
+            accuracy: 0.001,
+            "Refreshing online Mac A must not rewrite offline Mac B's shard file"
+        )
+
+        // 3. Cold Launch Simulation (brand-new store with empty memory): instant disk hydration BEFORE any network call!
+        let placeholder = RemoteHostInstance(
+            instanceId: "unpaired",
+            hostname: "Antigravity Desktop",
+            channel: .cloudRelay,
+            endpointURL: URL(string: SAPISIDHashGenerator.defaultOrigin)!,
+            isOnline: false
+        )
+        let coldStore = AntigravitySessionStore(
+            hosts: [],
+            activeHost: placeholder,
+            projectionStore: coldProjection
+        )
+        coldStore.isVerificationMode = false
+
+        let savedCreds = SavedBackendCredentials(
+            endpointURLString: "https://antigravity.google.com/r/\(hostAUuid)",
+            channel: .cloudRelay,
+            hostname: hostAName,
+            sessionCookie: "SAPISID=test",
+            authUser: "0",
+            resolvedInstanceUuid: hostAUuid
+        )
+        await coldStore.hydratePersistedHostProjectionsIfNeeded(savedCredentials: savedCreds)
+
+        XCTAssertTrue(coldStore.hasPairedBackend)
+        XCTAssertTrue(coldStore.isInitialSessionCheckComplete, "Cold-start hydration must unblock Home immediately before handshake finishes")
+        XCTAssertFalse(coldStore.isLiveBackendConnected)
+        XCTAssertEqual(Set(coldStore.pairedLocalHosts.map(\.instanceId)), [hostAUuid, hostBUuid])
+        XCTAssertTrue(coldStore.pairedLocalHosts.allSatisfy { !$0.isOnline }, "Hosts stay Offline until live handshake confirms reachability")
+        XCTAssertEqual(
+            Set(coldStore.summaries.map(\.cascadeId)),
+            ["cid-a-2", "cid-b-cached", "cid-b-uncached", "v1/default/jetski_remote_agents_3p/cid-cloud-1"]
+        )
+        XCTAssertTrue(coldStore.projects.contains(where: { $0.name == "game_loop" }))
+        XCTAssertTrue(coldStore.projects.contains(where: { $0.name == "dsh-superagent-prototype" }))
+
+        // 4. Online Mac A connects while Mac B stays offline -> opening Mac B's cached conversation reads disk steps cleanly!
+        coldStore.isLiveBackendConnected = true
+        coldStore.syncRelayInstancesState(
+            [
+                RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
+                RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .disconnected)
+            ],
+            latencyMs: 22
+        )
+        let sumA = try XCTUnwrap(coldStore.summaries.first(where: { $0.cascadeId == "cid-a-2" }))
+        let sumBCached = try XCTUnwrap(coldStore.summaries.first(where: { $0.cascadeId == "cid-b-cached" }))
+        XCTAssertTrue(coldStore.isSummaryHostOnline(sumA))
+        XCTAssertFalse(coldStore.isSummaryHostOnline(sumBCached))
+
+        coldStore.selectCascade("cid-b-cached")
+        for _ in 0..<200 where (coldStore.stepsByCascadeId["cid-b-cached"] ?? []).isEmpty {
+            await Task.yield()
+        }
+        XCTAssertEqual(coldStore.stepsByCascadeId["cid-b-cached"]?.count, 2, "Cached transcript for offline Mac B must load from disk cleanly")
+        XCTAssertNil(coldStore.stepLoadErrorText, "Viewing cached transcript on an offline Mac must not show an error banner")
+        XCTAssertFalse(coldStore.isLoadingSteps)
+
+        // Opening an uncached conversation on offline Mac B shows clear offline guidance without cross-host failover
+        coldStore.selectCascade("cid-b-uncached")
+        for _ in 0..<200 where coldStore.stepLoadErrorText == nil {
+            await Task.yield()
+        }
+        XCTAssertTrue(coldStore.stepLoadErrorText?.contains(hostBName) == true)
+        XCTAssertFalse(coldStore.isLoadingSteps)
+
+        // 5. Legacy single-file migration & explicit sign-out cleanup
+        let legacyDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AntigravityLegacyMigrate-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: legacyDir) }
+        let legacyWriter = LocalProjectionStore(storageDirectory: legacyDir)
+        await legacyWriter.saveProjectedSummaries(seedSummaries)
+        await legacyWriter.saveProjects(store1.projects)
+        let legacyReader = LocalProjectionStore(storageDirectory: legacyDir)
+        let migratedShards = await legacyReader.loadAllHostProjections()
+        XCTAssertEqual(Set(migratedShards.map(\.hostKey)), ["host:\(hostAUuid)", "host:\(hostBUuid)", "cloud"])
+
+        await coldProjection.clearCachedProjections()
+        let postClearShards = await coldProjection.loadAllHostProjections()
+        let postClearHosts = await coldProjection.loadKnownHosts()
+        let postClearSteps = await coldProjection.loadProjectedSteps(cascadeId: "cid-b-cached")
+        XCTAssertTrue(postClearShards.isEmpty)
+        XCTAssertTrue(postClearHosts.isEmpty)
+        XCTAssertTrue(postClearSteps.isEmpty)
+    }
 }
 
 private actor HostRefreshTestCoordinator {

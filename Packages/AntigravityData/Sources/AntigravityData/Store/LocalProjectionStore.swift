@@ -32,14 +32,50 @@ public struct OutboxEntry: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+/// Per-host cached projection shard persisted under `AntigravityProjections/hosts/host_<key>.json`
+/// so refreshing online Macs never overwrites or discards offline Macs' cached conversation lists or projects.
+public struct HostProjectionSnapshot: Codable, Sendable, Equatable {
+    public var hostKey: String
+    public var instanceId: String?
+    public var hostname: String
+    public var isCloud: Bool
+    public var summaries: [CascadeSummary]
+    public var projects: [ProjectWorkspace]
+    public var updatedAt: Date
+
+    public init(
+        hostKey: String,
+        instanceId: String? = nil,
+        hostname: String,
+        isCloud: Bool = false,
+        summaries: [CascadeSummary] = [],
+        projects: [ProjectWorkspace] = [],
+        updatedAt: Date = Date()
+    ) {
+        self.hostKey = hostKey
+        self.instanceId = instanceId
+        self.hostname = hostname
+        self.isCloud = isCloud
+        self.summaries = summaries
+        self.projects = projects
+        self.updatedAt = updatedAt
+    }
+}
+
 /// Manages local display projections for `<10ms` instant cold start and offline browsing,
-/// plus persisted `AgentDisplayOptions`, `ProjectWorkspace` records, `AutomationItem` records,
-/// and the Durable Outbox queue.
+/// including per-host sharded conversation/project caches (`hosts/host_<key>.json`),
+/// paired host roster (`hosts_projection.json`), per-cascade step caches (`steps_<id>.json`),
+/// `AgentDisplayOptions`, `AutomationItem` records, and the Durable Outbox queue.
 public actor LocalProjectionStore {
     private let storageDirectory: URL
+    private let hostsDirectory: URL
     private var cachedSummaries: [CascadeSummary] = []
     private var cachedStepsByCascade: [String: [CascadeStep]] = [:]
     private var cachedProjects: [ProjectWorkspace] = []
+    private var cachedHostProjections: [String: HostProjectionSnapshot] = [:]
+    private var hasLoadedHostProjectionsFromDisk: Bool = false
+    private var cachedKnownHosts: [RemoteHostInstance] = []
+    private var hasLoadedKnownHostsFromDisk: Bool = false
     private var cachedAutomations: [AutomationItem] = []
     private var cachedDisplayOptions: AgentDisplayOptions?
     private var cachedAppearancePreferences: AppAppearancePreferences?
@@ -53,7 +89,165 @@ public actor LocalProjectionStore {
             ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         self.storageDirectory = base.appendingPathComponent("AntigravityProjections", isDirectory: true)
+        self.hostsDirectory = self.storageDirectory.appendingPathComponent("hosts", isDirectory: true)
         try? FileManager.default.createDirectory(at: self.storageDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: self.hostsDirectory, withIntermediateDirectories: true)
+    }
+
+    public static func sanitizedHostFileKey(for hostKey: String) -> String {
+        let trimmed = hostKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "default" }
+        return trimmed
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
+    }
+
+    private func ensureHostProjectionsLoaded() {
+        guard !hasLoadedHostProjectionsFromDisk else { return }
+        hasLoadedHostProjectionsFromDisk = true
+
+        let fm = FileManager.default
+        if let contents = try? fm.contentsOfDirectory(at: hostsDirectory, includingPropertiesForKeys: nil) {
+            for url in contents where url.lastPathComponent.hasPrefix("host_") && url.pathExtension == "json" {
+                if let data = try? Data(contentsOf: url),
+                   let decoded = try? JSONDecoder().decode(HostProjectionSnapshot.self, from: data) {
+                    cachedHostProjections[decoded.hostKey] = decoded
+                }
+            }
+        }
+
+        // Seamless migration from legacy single-file global projections when no per-host shards exist yet
+        if cachedHostProjections.isEmpty {
+            let legacySummaries = loadProjectedSummaries()
+            let legacyProjects = loadProjects()
+            if !legacySummaries.isEmpty || !legacyProjects.isEmpty {
+                var summariesByKey: [String: [CascadeSummary]] = [:]
+                var projectsByKey: [String: [ProjectWorkspace]] = [:]
+                var metaByKey: [String: (instanceId: String?, hostname: String, isCloud: Bool)] = [:]
+
+                for s in legacySummaries {
+                    let key: String
+                    if s.isCloud {
+                        key = "cloud"
+                        metaByKey[key] = (nil, "Antigravity", true)
+                    } else if let uuid = s.originInstanceUuid?.trimmingCharacters(in: .whitespacesAndNewlines), !uuid.isEmpty {
+                        key = "host:\(uuid)"
+                        metaByKey[key] = (uuid, s.originHostName ?? uuid, false)
+                    } else if let host = s.originHostName?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
+                        key = "host:\(host)"
+                        metaByKey[key] = (nil, host, false)
+                    } else {
+                        key = "host:default"
+                        metaByKey[key] = (nil, "Local Mac", false)
+                    }
+                    summariesByKey[key, default: []].append(s)
+                }
+
+                for p in legacyProjects {
+                    let key: String
+                    if p.runtime == .cloud {
+                        key = "cloud"
+                        metaByKey[key] = (nil, "Antigravity", true)
+                    } else if let uuid = p.originInstanceUuid?.trimmingCharacters(in: .whitespacesAndNewlines), !uuid.isEmpty {
+                        key = "host:\(uuid)"
+                        if metaByKey[key] == nil {
+                            metaByKey[key] = (uuid, p.hostName.isEmpty ? uuid : p.hostName, false)
+                        }
+                    } else if !p.hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        key = "host:\(p.hostName)"
+                        if metaByKey[key] == nil {
+                            metaByKey[key] = (nil, p.hostName, false)
+                        }
+                    } else {
+                        key = "host:default"
+                        if metaByKey[key] == nil {
+                            metaByKey[key] = (nil, "Local Mac", false)
+                        }
+                    }
+                    projectsByKey[key, default: []].append(p)
+                }
+
+                let allKeys = Set(summariesByKey.keys).union(projectsByKey.keys)
+                for key in allKeys {
+                    let meta = metaByKey[key] ?? (nil, key, key == "cloud")
+                    let snapshot = HostProjectionSnapshot(
+                        hostKey: key,
+                        instanceId: meta.instanceId,
+                        hostname: meta.hostname,
+                        isCloud: meta.isCloud,
+                        summaries: summariesByKey[key] ?? [],
+                        projects: projectsByKey[key] ?? [],
+                        updatedAt: Date()
+                    )
+                    cachedHostProjections[key] = snapshot
+                }
+            }
+        }
+    }
+
+    public func loadAllHostProjections() -> [HostProjectionSnapshot] {
+        ensureHostProjectionsLoaded()
+        return cachedHostProjections.values.sorted { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.hostKey < rhs.hostKey
+        }
+    }
+
+    public func loadHostProjection(hostKey: String) -> HostProjectionSnapshot? {
+        ensureHostProjectionsLoaded()
+        return cachedHostProjections[hostKey]
+    }
+
+    public func saveHostProjection(_ snapshot: HostProjectionSnapshot) {
+        ensureHostProjectionsLoaded()
+        cachedHostProjections[snapshot.hostKey] = snapshot
+        try? FileManager.default.createDirectory(at: hostsDirectory, withIntermediateDirectories: true)
+        let safeKey = Self.sanitizedHostFileKey(for: snapshot.hostKey)
+        let file = hostsDirectory.appendingPathComponent("host_\(safeKey).json")
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
+    public func saveHostProjections(_ snapshots: [HostProjectionSnapshot]) {
+        guard !snapshots.isEmpty else { return }
+        ensureHostProjectionsLoaded()
+        try? FileManager.default.createDirectory(at: hostsDirectory, withIntermediateDirectories: true)
+        for snapshot in snapshots {
+            cachedHostProjections[snapshot.hostKey] = snapshot
+            let safeKey = Self.sanitizedHostFileKey(for: snapshot.hostKey)
+            let file = hostsDirectory.appendingPathComponent("host_\(safeKey).json")
+            if let data = try? JSONEncoder().encode(snapshot) {
+                try? data.write(to: file, options: .atomic)
+            }
+        }
+    }
+
+    public func loadKnownHosts() -> [RemoteHostInstance] {
+        if hasLoadedKnownHostsFromDisk {
+            return cachedKnownHosts
+        }
+        hasLoadedKnownHostsFromDisk = true
+        let file = storageDirectory.appendingPathComponent("hosts_projection.json")
+        guard let data = try? Data(contentsOf: file),
+              let decoded = try? JSONDecoder().decode([RemoteHostInstance].self, from: data) else {
+            return []
+        }
+        cachedKnownHosts = decoded
+        return decoded
+    }
+
+    public func saveKnownHosts(_ hosts: [RemoteHostInstance]) {
+        hasLoadedKnownHostsFromDisk = true
+        cachedKnownHosts = hosts
+        let file = storageDirectory.appendingPathComponent("hosts_projection.json")
+        if let data = try? JSONEncoder().encode(hosts) {
+            try? data.write(to: file, options: .atomic)
+        }
     }
 
     public func loadProjectedSummaries() -> [CascadeSummary] {
@@ -266,11 +460,15 @@ public actor LocalProjectionStore {
         return items
     }
 
-    /// Clears persisted conversation summaries, projects, automations, and per-cascade step caches
-    /// (called on explicit sign-out / disconnect so switching accounts never leaks offline host caches).
+    /// Clears persisted conversation summaries, per-host shards, paired host roster, projects,
+    /// automations, and per-cascade step caches on explicit sign-out / disconnect.
     public func clearCachedProjections() {
         cachedSummaries.removeAll()
         cachedProjects.removeAll()
+        cachedHostProjections.removeAll()
+        hasLoadedHostProjectionsFromDisk = false
+        cachedKnownHosts.removeAll()
+        hasLoadedKnownHostsFromDisk = false
         cachedAutomations.removeAll()
         cachedStepsByCascade.removeAll()
 
@@ -278,6 +476,7 @@ public actor LocalProjectionStore {
         let fixedFiles = [
             "summaries_projection.json",
             "projects_projection.json",
+            "hosts_projection.json",
             "automations_projection.json"
         ]
         for name in fixedFiles {
@@ -285,6 +484,11 @@ public actor LocalProjectionStore {
         }
         if let contents = try? fm.contentsOfDirectory(at: storageDirectory, includingPropertiesForKeys: nil) {
             for url in contents where url.lastPathComponent.hasPrefix("steps_") && url.pathExtension == "json" {
+                try? fm.removeItem(at: url)
+            }
+        }
+        if let hostFiles = try? fm.contentsOfDirectory(at: hostsDirectory, includingPropertiesForKeys: nil) {
+            for url in hostFiles where url.pathExtension == "json" {
                 try? fm.removeItem(at: url)
             }
         }

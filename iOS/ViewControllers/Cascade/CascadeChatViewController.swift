@@ -69,8 +69,8 @@ public struct CascadeChatViewController: View {
             forInstanceUuid: originUuid,
             fallback: store.activeSummary?.originHostName
         )
-        if store.hasPairedBackend && !store.isHostOnline(forInstanceUuid: originUuid) {
-            return "\(hostTitle) · Offline"
+        if store.hasPairedBackend && !store.isSummaryHostOnline(store.activeSummary) {
+            return "Offline · \(hostTitle)"
         }
         return hostTitle
     }
@@ -353,9 +353,23 @@ public struct CascadeChatViewController: View {
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                 Button {
-                    if !store.isDeviceNetworkReachable || !store.isLiveBackendConnected || !store.activeHost.isOnline {
+                    if !store.isDeviceNetworkReachable || !store.isLiveBackendConnected {
                         Task {
                             await store.reconnectNow(userInitiated: true)
+                        }
+                    } else if let summary = store.activeSummary,
+                              !summary.isCloud,
+                              !store.isSummaryHostOnline(summary) {
+                        let targetId = summary.originInstanceUuid ?? store.activeHost.instanceId
+                        let targetName = summary.originHostName ?? store.activeHost.hostname
+                        Task {
+                            let online = await store.refreshConversationsForHostFilter(
+                                .localHost(id: targetId, name: targetName),
+                                forceFullSync: true
+                            )
+                            if online {
+                                store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                            }
                         }
                     } else {
                         store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
@@ -499,9 +513,7 @@ public struct CascadeChatViewController: View {
             ?? activePendingDraft?.projectSlug
             ?? store.activeSummary?.projectSlug
             ?? (isLiveOrPaired ? AntigravityCloudDetector.noProjectDisplayName : "ledger-svc")
-        let strippedProjectLabel = rawProjectLabel.hasPrefix("cloud:")
-            ? String(rawProjectLabel.dropFirst("cloud:".count))
-            : rawProjectLabel
+        let strippedProjectLabel = AntigravityCloudDetector.stripProjectNamespacePrefix(rawProjectLabel)
         let isNoProjChat = (activePendingDraft != nil || isLiveOrPaired)
             && ((activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(strippedProjectLabel))
         let projectLabel = isNoProjChat ? AntigravityCloudDetector.noProjectDisplayName : strippedProjectLabel
