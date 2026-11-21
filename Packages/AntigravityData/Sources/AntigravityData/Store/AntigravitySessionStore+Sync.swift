@@ -15,10 +15,19 @@ extension AntigravitySessionStore {
         let localTargets: [(key: String, uuid: String?, hostName: String)] = {
             if activeHost.channel == .cloudRelay {
                 let reachable = availableRelayInstances.filter(\.status.isReachable)
+                if case .localHost(let selectedId, _) = selectedHostScope {
+                    if let exact = reachable.first(where: { $0.uuid == selectedId }) {
+                        return [(exact.uuid, exact.uuid, exact.name)]
+                    }
+                    if activeHost.isOnline && !activeHost.instanceId.isEmpty && activeHost.instanceId != "unpaired" {
+                        return [(activeHost.instanceId, activeHost.instanceId, activeHost.hostname)]
+                    }
+                    return []
+                }
                 if !reachable.isEmpty {
                     return reachable.map { ($0.uuid, $0.uuid, $0.name) }
                 }
-                if !activeHost.instanceId.isEmpty && activeHost.instanceId != "unpaired" {
+                if activeHost.isOnline && !activeHost.instanceId.isEmpty && activeHost.instanceId != "unpaired" {
                     return [(activeHost.instanceId, activeHost.instanceId, activeHost.hostname)]
                 }
                 return []
@@ -26,7 +35,7 @@ extension AntigravitySessionStore {
             return [("direct", nil, activeHost.hostname)]
         }()
 
-        // Cancel local streams for instances that are no longer reachable
+        // Cancel local streams for instances that are no longer reachable or out of scope
         let activeTargetKeys = Set(localTargets.map(\.key))
         for (existingKey, existingTask) in localSummaryStreamTasks where !activeTargetKeys.contains(existingKey) {
             existingTask.cancel()
@@ -37,6 +46,7 @@ extension AntigravitySessionStore {
         }
 
         let generation = self.summaryStreamGeneration
+        let boundHostGen = self.hostSwitchGeneration
 
         for target in localTargets where localSummaryStreamTasks[target.key] == nil {
             let targetKey = target.key
@@ -45,9 +55,10 @@ extension AntigravitySessionStore {
             localSummaryStreamTasks[targetKey] = Task { [weak self] in
                 guard let stream = try? await client.subscribeEnvelopeStream(
                     method: "JetboxSubscribeToSummaries",
-                    instanceUuidOverride: targetUuid
+                    instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: false
                 ) else {
-                    if let self, self.summaryStreamGeneration == generation {
+                    if let self, self.summaryStreamGeneration == generation && self.hostSwitchGeneration == boundHostGen {
                         self.localSummaryStreamTasks.removeValue(forKey: targetKey)
                         if self.localSummaryStreamTasks.isEmpty {
                             self.hasReceivedLocalStreamEvent = false
@@ -57,7 +68,10 @@ extension AntigravitySessionStore {
                 }
                 do {
                     for try await event in stream {
-                        guard let self, !Task.isCancelled, self.summaryStreamGeneration == generation else { break }
+                        guard let self,
+                              !Task.isCancelled,
+                              self.summaryStreamGeneration == generation,
+                              self.hostSwitchGeneration == boundHostGen else { break }
                         self.hasReceivedLocalStreamEvent = true
                         self.lastBackendActivityAt = Date()
                         self.applyJetboxSummaryEvent(
@@ -67,7 +81,7 @@ extension AntigravitySessionStore {
                             originHostName: targetHostName
                         )
                     }
-                    if let self, self.summaryStreamGeneration == generation {
+                    if let self, self.summaryStreamGeneration == generation && self.hostSwitchGeneration == boundHostGen {
                         self.localSummaryStreamTasks.removeValue(forKey: targetKey)
                         if self.localSummaryStreamTasks.isEmpty {
                             self.hasReceivedLocalStreamEvent = false
@@ -75,7 +89,7 @@ extension AntigravitySessionStore {
                     }
                 } catch {
                     // Clear dead stream reference BEFORE running passive probe so it can reopen cleanly
-                    if let self, self.summaryStreamGeneration == generation {
+                    if let self, self.summaryStreamGeneration == generation && self.hostSwitchGeneration == boundHostGen {
                         self.localSummaryStreamTasks.removeValue(forKey: targetKey)
                         if self.localSummaryStreamTasks.isEmpty {
                             self.hasReceivedLocalStreamEvent = false
@@ -113,13 +127,17 @@ extension AntigravitySessionStore {
                     guard let stream = try? await client.subscribeEnvelopeStream(
                         method: "JetboxSubscribeToSummaries",
                         requestPayload: payload,
-                        instanceUuidOverride: resolvedCloudTarget
+                        instanceUuidOverride: resolvedCloudTarget,
+                        allowCrossHostFailover: true
                     ) else {
                         break
                     }
                     do {
                         for try await event in stream {
-                            guard let self, !Task.isCancelled, self.summaryStreamGeneration == generation else { break }
+                            guard let self,
+                                  !Task.isCancelled,
+                                  self.summaryStreamGeneration == generation,
+                                  self.hostSwitchGeneration == boundHostGen else { break }
                             self.hasReceivedCloudStreamEvent = true
                             self.lastBackendActivityAt = Date()
                             self.applyJetboxSummaryEvent(
@@ -137,7 +155,7 @@ extension AntigravitySessionStore {
                         break
                     }
                 }
-                if let self, self.summaryStreamGeneration == generation {
+                if let self, self.summaryStreamGeneration == generation && self.hostSwitchGeneration == boundHostGen {
                     self.cloudSummaryStreamTask = nil
                     self.hasReceivedCloudStreamEvent = false
                 }
@@ -172,10 +190,12 @@ extension AntigravitySessionStore {
             connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
         }
 
+        let boundGeneration = hostSwitchGeneration
         summaryPollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 let sleepSeconds: TimeInterval? = {
                     guard let self,
+                          self.hostSwitchGeneration == boundGeneration,
                           !self.isNetworkingSuspended,
                           self.isDeviceNetworkReachable,
                           (self.hasPairedBackend || self.isLiveBackendConnected) else {
@@ -211,6 +231,7 @@ extension AntigravitySessionStore {
                 try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
                 guard let self,
                       !Task.isCancelled,
+                      self.hostSwitchGeneration == boundGeneration,
                       !self.isNetworkingSuspended,
                       self.isDeviceNetworkReachable,
                       (self.hasPairedBackend || self.isLiveBackendConnected) else {
@@ -252,18 +273,58 @@ extension AntigravitySessionStore {
         }
     }
 
+    /// Resolves the freshest known display name for a local host UUID from `availableRelayInstances` / `hosts`,
+    /// falling back cleanly to `fallback` or `activeHost.hostname`.
+    public func resolvedHostName(forInstanceUuid instanceUuid: String?, fallback: String? = nil) -> String {
+        if let uuid = instanceUuid, !uuid.isEmpty {
+            if let inst = availableRelayInstances.first(where: { $0.uuid == uuid }) {
+                return inst.name
+            }
+            if let host = hosts.first(where: { $0.instanceId == uuid }) {
+                return host.hostname
+            }
+            if activeHost.instanceId == uuid {
+                return activeHost.hostname
+            }
+        }
+        if let fallback, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return fallback
+        }
+        return activeHost.hostname
+    }
+
+    /// Returns live online status for a specific host UUID (consistent with per-device Relay reachability).
+    public func isHostOnline(forInstanceUuid instanceUuid: String?) -> Bool {
+        guard hasPairedBackend else { return true }
+        guard isDeviceNetworkReachable && isLiveBackendConnected else { return false }
+        if let uuid = instanceUuid, !uuid.isEmpty {
+            if let inst = availableRelayInstances.first(where: { $0.uuid == uuid }) {
+                return inst.status.isReachable
+            }
+            if let host = hosts.first(where: { $0.instanceId == uuid }) {
+                return host.isOnline
+            }
+        }
+        return activeHost.isOnline
+    }
+
     internal func syncRelayInstancesToHosts(
         _ relayInstances: [RelayInstanceInfo],
         latencyMs: Int? = nil,
-        preferredActiveInstance: RelayInstanceInfo? = nil
+        preferredActiveInstance: RelayInstanceInfo? = nil,
+        persistKeychainIfChanged: Bool = true
     ) {
         guard !relayInstances.isEmpty else { return }
+        let previousActiveId = activeHost.instanceId
+        let previousActiveHostname = activeHost.hostname
         availableRelayInstances = relayInstances
 
         let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
         let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
         let effectiveLatency = latencyMs ?? lastPingLatencyMs ?? activeHost.latencyMs
         let seenIds = Set(relayInstances.map(\.uuid))
+
+        hosts.removeAll { $0.instanceId == "unpaired" }
 
         for inst in relayInstances {
             let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
@@ -319,59 +380,238 @@ extension AntigravitySessionStore {
             updatedActive.latencyMs = effectiveLatency
             activeHost = updatedActive
         }
+        if isLiveBackendConnected && activeHost.isOnline {
+            if let pingMs = latencyMs ?? lastPingLatencyMs {
+                connectionStatusText = "Connected · \(activeHost.hostname) · \(pingMs)ms"
+            } else {
+                connectionStatusText = "Connected · \(activeHost.hostname)"
+            }
+        } else if hasPairedBackend && !activeHost.isOnline {
+            connectionStatusText = "Offline · \(activeHost.hostname)"
+        }
+
+        var newNameByUuid: [String: String] = [:]
+        for inst in relayInstances {
+            newNameByUuid[inst.uuid] = inst.name
+        }
+        newNameByUuid[activeHost.instanceId] = activeHost.hostname
+
+        let activeUuidRotated = previousActiveId != activeHost.instanceId
+            && previousActiveId != "unpaired"
+            && previousActiveId != "auto"
+            && !previousActiveId.isEmpty
+            && newNameByUuid[previousActiveId] == nil
+        let activeNameChanged = previousActiveHostname != activeHost.hostname
+        let previousNameStillPresent = newNameByUuid.values.contains(previousActiveHostname)
+
+        for idx in workspaces.indices where !workspaces[idx].isCloud {
+            if let u = workspaces[idx].originInstanceUuid {
+                if let freshName = newNameByUuid[u] {
+                    workspaces[idx].originHostName = freshName
+                } else if activeUuidRotated && u == previousActiveId {
+                    workspaces[idx].originInstanceUuid = activeHost.instanceId
+                    workspaces[idx].originHostName = activeHost.hostname
+                }
+            } else if activeNameChanged && !previousNameStillPresent && workspaces[idx].originHostName == previousActiveHostname {
+                workspaces[idx].originHostName = activeHost.hostname
+            }
+        }
+
+        var summariesChanged = false
+        for idx in summaries.indices where !summaries[idx].isCloud {
+            if let u = summaries[idx].originInstanceUuid {
+                if let freshName = newNameByUuid[u] {
+                    if summaries[idx].originHostName != freshName {
+                        summaries[idx].originHostName = freshName
+                        summariesChanged = true
+                    }
+                } else if activeUuidRotated && u == previousActiveId {
+                    summaries[idx].originInstanceUuid = activeHost.instanceId
+                    summaries[idx].originHostName = activeHost.hostname
+                    summariesChanged = true
+                }
+            } else if activeNameChanged && !previousNameStillPresent && summaries[idx].originHostName == previousActiveHostname {
+                summaries[idx].originHostName = activeHost.hostname
+                summariesChanged = true
+            }
+        }
+
+        var projectsChanged = false
+        for idx in projects.indices where projects[idx].runtime != .cloud {
+            if let u = projects[idx].originInstanceUuid {
+                if let freshName = newNameByUuid[u] {
+                    if projects[idx].hostName != freshName {
+                        projects[idx].hostName = freshName
+                        if projects[idx].isNoProject {
+                            projects[idx].pathDisplay = "Unassigned · \(freshName)"
+                        }
+                        projectsChanged = true
+                    }
+                } else if activeUuidRotated && u == previousActiveId {
+                    projects[idx].originInstanceUuid = activeHost.instanceId
+                    projects[idx].hostName = activeHost.hostname
+                    if projects[idx].isNoProject {
+                        projects[idx].pathDisplay = "Unassigned · \(activeHost.hostname)"
+                    }
+                    projectsChanged = true
+                }
+            } else if activeNameChanged && !previousNameStillPresent && projects[idx].hostName == previousActiveHostname {
+                projects[idx].hostName = activeHost.hostname
+                if projects[idx].isNoProject {
+                    projects[idx].pathDisplay = "Unassigned · \(activeHost.hostname)"
+                }
+                projectsChanged = true
+            }
+        }
+
+        if !isVerificationMode && (projectsChanged || summariesChanged) {
+            let localHostsSnapshot = pairedLocalHosts
+            let storeRef = projectionStore
+            Task { [weak self] in
+                await self?.persistHostProjections()
+                if !localHostsSnapshot.isEmpty {
+                    await storeRef.saveKnownHosts(localHostsSnapshot)
+                }
+            }
+        } else if !isVerificationMode && !pairedLocalHosts.isEmpty {
+            let localHostsSnapshot = pairedLocalHosts
+            let storeRef = projectionStore
+            Task {
+                await storeRef.saveKnownHosts(localHostsSnapshot)
+            }
+        }
+
+        if persistKeychainIfChanged
+            && !isVerificationMode
+            && hasPairedBackend
+            && activeHost.channel == .cloudRelay
+            && (activeNameChanged || previousActiveId != activeHost.instanceId) {
+            let updatedHostname = activeHost.hostname
+            let updatedUuid = activeHost.instanceId
+            let updatedEndpoint = activeHost.endpointURL.absoluteString
+            let updatedAuthUser = activeAuthUser
+            let secretStoreRef = secretStore
+            Task {
+                if var saved = await secretStoreRef.loadCredentials(),
+                   saved.channel == .cloudRelay {
+                    var changed = false
+                    if saved.hostname != updatedHostname {
+                        saved.hostname = updatedHostname
+                        changed = true
+                    }
+                    if saved.resolvedInstanceUuid != updatedUuid {
+                        saved.resolvedInstanceUuid = updatedUuid
+                        changed = true
+                    }
+                    if saved.endpointURLString != updatedEndpoint {
+                        saved.endpointURLString = updatedEndpoint
+                        changed = true
+                    }
+                    if !updatedAuthUser.isEmpty && saved.authUser != updatedAuthUser {
+                        saved.authUser = updatedAuthUser
+                        changed = true
+                    }
+                    if changed {
+                        await secretStoreRef.saveCredentials(saved)
+                    }
+                }
+            }
+        }
+        reconcileSelectedHostScopeWithHosts()
     }
 
-    internal func applyRelayProbeMetadata(_ probe: HostReachabilityProbeResult) {
+    internal func applyRelayProbeMetadata(
+        _ probe: HostReachabilityProbeResult,
+        allowCrossHostFallback: Bool
+    ) {
         lastPingLatencyMs = probe.latencyMs
+        let approvedActiveInst: RelayInstanceInfo? = {
+            guard let activeInst = probe.activeRelayInstance else { return nil }
+            let matchesCurrentOrFamily = activeInst.uuid == activeHost.instanceId
+                || activeInst.matches(identifier: activeHost.hostname)
+                || activeInst.sameHostFamily(as: activeHost.hostname)
+            return (allowCrossHostFallback || matchesCurrentOrFamily) ? activeInst : nil
+        }()
+
         if !probe.availableRelayInstances.isEmpty {
             syncRelayInstancesToHosts(
                 probe.availableRelayInstances,
                 latencyMs: probe.latencyMs,
-                preferredActiveInstance: probe.activeRelayInstance
+                preferredActiveInstance: approvedActiveInst
             )
-        } else if let activeInst = probe.activeRelayInstance {
-            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
-            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
-            let nextURL = URL(string: "\(originPrefix)/r/\(activeInst.uuid)") ?? activeHost.endpointURL
-            let refreshedHost = RemoteHostInstance(
-                instanceId: activeInst.uuid,
-                hostname: activeInst.name,
-                version: activeInst.version,
-                channel: .cloudRelay,
-                endpointURL: nextURL,
-                isOnline: activeInst.status.isReachable,
-                latencyMs: probe.latencyMs
-            )
-            activeHost = refreshedHost
-            if let idx = hosts.firstIndex(where: { $0.instanceId == refreshedHost.instanceId }) {
-                hosts[idx] = refreshedHost
+        } else if let activeInst = approvedActiveInst {
+            if probe.isSelectedHostOnline {
+                syncRelayInstancesToHosts(
+                    [activeInst],
+                    latencyMs: probe.latencyMs,
+                    preferredActiveInstance: activeInst
+                )
             } else {
-                hosts.insert(refreshedHost, at: 0)
+                let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
+                let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
+                let nextURL = URL(string: "\(originPrefix)/r/\(activeInst.uuid)") ?? activeHost.endpointURL
+                let refreshedHost = RemoteHostInstance(
+                    instanceId: activeInst.uuid,
+                    hostname: activeInst.name,
+                    version: activeInst.version,
+                    channel: .cloudRelay,
+                    endpointURL: nextURL,
+                    isOnline: false,
+                    latencyMs: probe.latencyMs
+                )
+                activeHost = refreshedHost
+                if let idx = hosts.firstIndex(where: { $0.instanceId == refreshedHost.instanceId }) {
+                    hosts[idx] = refreshedHost
+                } else {
+                    hosts.insert(refreshedHost, at: 0)
+                }
+                reconcileSelectedHostScopeWithHosts()
             }
         } else {
             var updatedHost = activeHost
             updatedHost.latencyMs = probe.latencyMs
-            updatedHost.isOnline = true
+            updatedHost.isOnline = probe.isSelectedHostOnline
             activeHost = updatedHost
             if let idx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
                 hosts[idx] = updatedHost
             }
         }
-        connectionStatusText = "Connected · \(activeHost.hostname) · \(probe.latencyMs)ms"
+        connectionStatusText = (probe.isSelectedHostOnline && activeHost.isOnline)
+            ? "Connected · \(activeHost.hostname) · \(probe.latencyMs)ms"
+            : "Offline · \(activeHost.hostname)"
     }
 
     internal func performLightweightHeartbeatTick(allowFullReconciliation: Bool) async {
         guard !isNetworkingSuspended, isDeviceNetworkReachable, let client = rpcClient else { return }
+        let generation = hostSwitchGeneration
         let isRelay = (activeHost.channel == .cloudRelay)
         let probeTimeout: TimeInterval = isRelay ? 8.0 : 3.0
+        let allowCrossHost = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
 
         do {
-            let probe = try await client.probeHostReachability(timeoutInterval: probeTimeout)
+            let probe = try await client.probeHostReachability(
+                timeoutInterval: probeTimeout,
+                allowCrossHostFallback: allowCrossHost
+            )
+            guard self.hostSwitchGeneration == generation else { return }
+            applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHost)
+
+            if !probe.isSelectedHostOnline {
+                let hasReachablePeers = probe.availableRelayInstances.contains(where: \.status.isReachable)
+                markBackendOffline(
+                    error: AntigravityRPCError.httpError(
+                        statusCode: 503,
+                        body: "\(activeHost.hostname) is offline"
+                    ),
+                    preservePeerOnlineStates: hasReachablePeers
+                )
+                return
+            }
+
             consecutiveSyncFailures = 0
             reconnectAttemptCount = 0
             nextReconnectAt = nil
             lastBackendActivityAt = Date()
-            applyRelayProbeMetadata(probe)
 
             if !isLiveBackendConnected || !activeHost.isOnline {
                 markBackendReconnected()
@@ -383,19 +623,33 @@ extension AntigravitySessionStore {
                 cancelAllSummaryStreams()
                 lastStreamReopenAttemptAt = .distantPast
                 ensureSummaryEnvelopeStreamRunning()
-                await refreshWorkspacesAndSummaries(forceFullSync: true, includeAutomations: false)
+                await refreshWorkspacesAndSummaries(
+                    forceFullSync: true,
+                    includeAutomations: false,
+                    skipRelayMetadataProbe: true
+                )
             } else {
-                let missingLocalStream = localSummaryStreamTasks.isEmpty
-                    || (isRelay && availableRelayInstances.contains { $0.status.isReachable && localSummaryStreamTasks[$0.uuid] == nil })
+                let missingLocalStream: Bool = {
+                    if isRelay, case .localHost(let selectedId, _) = selectedHostScope {
+                        return localSummaryStreamTasks[selectedId] == nil
+                    }
+                    return localSummaryStreamTasks.isEmpty
+                        || (isRelay && availableRelayInstances.contains { $0.status.isReachable && localSummaryStreamTasks[$0.uuid] == nil })
+                }()
                 let missingCloudStream = (cloudSummaryStreamTask == nil)
                 if missingLocalStream || missingCloudStream {
                     ensureSummaryEnvelopeStreamRunning()
                 }
                 if allowFullReconciliation {
-                    await refreshWorkspacesAndSummaries(forceFullSync: false, includeAutomations: false)
+                    await refreshWorkspacesAndSummaries(
+                        forceFullSync: false,
+                        includeAutomations: false,
+                        skipRelayMetadataProbe: true
+                    )
                 }
             }
         } catch {
+            guard self.hostSwitchGeneration == generation else { return }
             if Self.isBackendOfflineError(error) {
                 consecutiveSyncFailures += 1
                 let threshold = ConnectionPowerPolicy.offlineFailureThreshold(
@@ -411,19 +665,32 @@ extension AntigravitySessionStore {
 
     internal func performOfflineRecoveryProbe() async -> Bool {
         guard !isNetworkingSuspended, isDeviceNetworkReachable, let client = rpcClient else { return false }
+        let generation = hostSwitchGeneration
         let isRelay = (activeHost.channel == .cloudRelay)
         let probeTimeout: TimeInterval = isRelay ? 8.0 : 3.0
+        let allowCrossHost = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
 
         do {
-            let probe = try await client.probeHostReachability(timeoutInterval: probeTimeout)
-            applyRelayProbeMetadata(probe)
+            let probe = try await client.probeHostReachability(
+                timeoutInterval: probeTimeout,
+                allowCrossHostFallback: allowCrossHost
+            )
+            guard self.hostSwitchGeneration == generation else { return false }
+            applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHost)
+            guard probe.isSelectedHostOnline else {
+                isLiveBackendConnected = false
+                connectionStatusText = "Offline · \(activeHost.hostname)"
+                return false
+            }
             markBackendReconnected()
             await refreshWorkspacesAndSummaries(
                 forceFullSync: true,
-                includeAutomations: selectedTab == .automations
+                includeAutomations: selectedTab == .automations,
+                skipRelayMetadataProbe: true
             )
             return true
         } catch {
+            guard self.hostSwitchGeneration == generation else { return false }
             if Self.isBackendOfflineError(error) {
                 connectionErrorText = error.localizedDescription
                 if case AntigravityRPCError.unauthorized = error {
@@ -616,6 +883,19 @@ extension AntigravitySessionStore {
         if !activeCascadeId.isEmpty && changedIds.contains(activeCascadeId) {
             syncStepsForCascade(activeCascadeId, pollUntilIdle: activeRoute == .cascadeChat(activeCascadeId))
         }
+
+        if !isVerificationMode && (!changedIds.isEmpty || !decodedBatch.deletes.isEmpty) {
+            let touchedHostKey = Self.projectionHostKey(
+                isCloud: forceCloud,
+                instanceId: forceCloud ? nil : effectiveOriginUuid,
+                hostname: forceCloud ? "Antigravity" : effectiveOriginHost,
+                fallbackHostId: activeHost.instanceId,
+                fallbackHostName: activeHost.hostname
+            )
+            Task { [weak self] in
+                await self?.persistHostProjections(refreshedHostKeys: [touchedHostKey])
+            }
+        }
     }
 
     /// Reconciles summary streaming state from fetched trajectory steps without prematurely flipping
@@ -688,7 +968,7 @@ extension AntigravitySessionStore {
         stepSyncGeneration &+= 1
         let generation = stepSyncGeneration
         guard !isNetworkingSuspended else { return }
-        guard (hasPairedBackend || isLiveBackendConnected), let client = rpcClient, !cascadeId.isEmpty else { return }
+        guard (hasPairedBackend || isLiveBackendConnected), !cascadeId.isEmpty else { return }
 
         stepLoadErrorText = nil
 
@@ -699,30 +979,50 @@ extension AntigravitySessionStore {
             return
         }
 
-        if !isDeviceNetworkReachable {
-            isLoadingSteps = false
-            let storeRef = projectionStore
-            if (stepsByCascadeId[cascadeId] ?? []).isEmpty {
-                Task { [weak self] in
-                    let cached = await storeRef.loadProjectedSteps(cascadeId: cascadeId)
-                    if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
-                        self.stepsByCascadeId[cascadeId] = cached
-                    }
-                }
-            }
-            return
-        }
-
         let initialSummary = summaries.first(where: { $0.cascadeId == cascadeId })
         let withinInitialOptimisticSend = (optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
         let isBrandNewEmptySession = locallyCreatedEmptyCascadeIds.contains(cascadeId)
             && !withinInitialOptimisticSend
+        let summaryHostOnline = isSummaryHostOnline(initialSummary)
         let isKnownOfflineLocal = hasPairedBackend
-            && (!isLiveBackendConnected || !activeHost.isOnline)
+            && !summaryHostOnline
             && (initialSummary?.isCloud != true)
+        let isConfirmedOfflinePeerHost = isKnownOfflineLocal && isLiveBackendConnected
+        let storeRef = projectionStore
 
         if isBrandNewEmptySession && isKnownOfflineLocal {
             isLoadingSteps = false
+            return
+        }
+
+        // Confirmed-offline peer Mac (while another Mac is online), iPhone no-network, or pre-handshake cold start:
+        // serve persisted steps immediately from disk without issuing cross-host failover RPCs against another online Mac.
+        guard isDeviceNetworkReachable, !isConfirmedOfflinePeerHost, let client = rpcClient else {
+            isLoadingSteps = false
+            let offlineHostLabel = initialSummary?.originHostName ?? activeHost.hostname
+            let shouldNoteUncachedOffline = isKnownOfflineLocal && !isBrandNewEmptySession
+            if (stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                stepPollingTask = Task { [weak self] in
+                    defer {
+                        if let self, self.stepSyncGeneration == generation {
+                            self.stepPollingTask = nil
+                        }
+                    }
+                    let cached = await storeRef.loadProjectedSteps(cascadeId: cascadeId)
+                    guard let self, !Task.isCancelled, self.stepSyncGeneration == generation else { return }
+                    if !cached.isEmpty {
+                        if (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                            self.stepsByCascadeId[cascadeId] = cached
+                            self.harvestEmbedResources(from: cached)
+                        }
+                        if self.activeCascadeId == cascadeId {
+                            self.stepLoadErrorText = nil
+                        }
+                    } else if shouldNoteUncachedOffline && self.activeCascadeId == cascadeId {
+                        self.stepLoadErrorText = "\(offlineHostLabel) is currently offline and this conversation has not been cached on this device yet."
+                    }
+                }
+            }
             return
         }
 
@@ -731,7 +1031,6 @@ extension AntigravitySessionStore {
         } else {
             isLoadingSteps = false
         }
-        let storeRef = projectionStore
 
         stepPollingTask = Task { [weak self] in
             defer {
@@ -745,13 +1044,13 @@ extension AntigravitySessionStore {
             }
             if (self?.stepsByCascadeId[cascadeId] ?? []).isEmpty {
                 let cached = await storeRef.loadProjectedSteps(cascadeId: cascadeId)
-                    if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
-                        self.stepsByCascadeId[cascadeId] = cached
-                        self.harvestEmbedResources(from: cached)
-                        if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
-                            self.isLoadingSteps = false
-                        }
+                if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                    self.stepsByCascadeId[cascadeId] = cached
+                    self.harvestEmbedResources(from: cached)
+                    if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
+                        self.isLoadingSteps = false
                     }
+                }
             }
 
             var attempts = 0
@@ -760,6 +1059,13 @@ extension AntigravitySessionStore {
                 guard let self, !self.isNetworkingSuspended, self.isDeviceNetworkReachable else { break }
                 attempts += 1
                 let summaryMeta = self.summaries.first(where: { $0.cascadeId == cascadeId })
+                if let summaryMeta,
+                   !summaryMeta.isCloud,
+                   self.hasPairedBackend,
+                   self.isLiveBackendConnected,
+                   !self.isSummaryHostOnline(summaryMeta) {
+                    break
+                }
                 let knownCount = summaryMeta?.stepCount ?? 0
                 let summaryIsCloud = summaryMeta?.isCloud ?? false
                 let originUuid = summaryMeta?.originInstanceUuid
@@ -773,44 +1079,32 @@ extension AntigravitySessionStore {
                         isCloud: summaryIsCloud,
                         instanceUuidOverride: originUuid
                     )
-                    let liveRelayInst: RelayInstanceInfo? = (self.activeHost.channel == .cloudRelay)
-                        ? await client.currentActiveRelayInstance()
-                        : nil
+                    let liveRelaySnapshot: (instances: [RelayInstanceInfo], active: RelayInstanceInfo?)? =
+                        (self.activeHost.channel == .cloudRelay)
+                            ? await client.currentRelayInstancesSnapshot()
+                            : nil
                     guard !Task.isCancelled, !self.isNetworkingSuspended else { return }
 
                     self.lastBackendActivityAt = Date()
 
-                    if let liveRelayInst {
-                        if self.activeHost.instanceId != liveRelayInst.uuid
-                            || self.activeHost.hostname != liveRelayInst.name
-                            || !self.activeHost.isOnline {
-                            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(self.activeHost.endpointURL.absoluteString)
-                            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
-                            let nextURL = URL(string: "\(originPrefix)/r/\(liveRelayInst.uuid)") ?? self.activeHost.endpointURL
-                            let refreshedHost = RemoteHostInstance(
-                                instanceId: liveRelayInst.uuid,
-                                hostname: liveRelayInst.name,
-                                version: liveRelayInst.version,
-                                channel: .cloudRelay,
-                                endpointURL: nextURL,
-                                isOnline: true,
-                                latencyMs: self.activeHost.latencyMs
-                            )
-                            self.activeHost = refreshedHost
-                            if let hostIdx = self.hosts.firstIndex(where: { $0.instanceId == refreshedHost.instanceId }) {
-                                self.hosts[hostIdx] = refreshedHost
-                            } else {
-                                self.hosts.insert(refreshedHost, at: 0)
-                            }
+                    if let liveRelaySnapshot, !liveRelaySnapshot.instances.isEmpty {
+                        if liveRelaySnapshot.instances != self.availableRelayInstances {
+                            self.syncRelayInstancesToHosts(liveRelaySnapshot.instances)
                         }
                         if !summaryIsCloud,
-                           let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
-                            self.summaries[sumIdx].originInstanceUuid = liveRelayInst.uuid
-                            self.summaries[sumIdx].originHostName = liveRelayInst.name
+                           let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == cascadeId }),
+                           let existingUuid = self.summaries[sumIdx].originInstanceUuid,
+                           let matchedPeer = liveRelaySnapshot.instances.first(where: { $0.uuid == existingUuid }) {
+                            self.summaries[sumIdx].originHostName = matchedPeer.name
                         }
                     }
 
-                    if self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
+                    let belongsToActiveHost = !summaryIsCloud && (
+                        originUuid == nil
+                            || originUuid?.isEmpty == true
+                            || originUuid == self.activeHost.instanceId
+                    )
+                    if belongsToActiveHost && self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
                         self.markBackendReconnected()
                     }
                     self.stepLoadErrorText = nil
@@ -865,7 +1159,9 @@ extension AntigravitySessionStore {
                             || summaryMeta?.status == .inProgress
                             || summaryMeta?.status == .pending
                     }
-                    self.connectionLifecyclePhase = stillActive ? .onlineStreaming : .onlineIdle
+                    if belongsToActiveHost {
+                        self.connectionLifecyclePhase = stillActive ? .onlineStreaming : .onlineIdle
+                    }
                 } catch {
                     if !Task.isCancelled {
                         if Self.isBackendOfflineError(error) && self.activeHost.channel != .cloudRelay {
@@ -886,9 +1182,20 @@ extension AntigravitySessionStore {
                     break
                 }
                 let isViewingThisChat = (self.activeRoute == .cascadeChat(cascadeId) && self.activeCascadeId == cascadeId)
-                let isHostOffline = !self.isLiveBackendConnected || !self.activeHost.isOnline
+                let isTargetHostOffline: Bool = {
+                    if summaryIsCloud {
+                        if self.activeHost.channel == .cloudRelay && !self.availableRelayInstances.isEmpty {
+                            return !self.availableRelayInstances.contains(where: \.status.isReachable)
+                        }
+                        return false
+                    }
+                    if let originUuid, !originUuid.isEmpty {
+                        return !self.isLocalHostOnline(instanceId: originUuid, hostname: summaryMeta?.originHostName)
+                    }
+                    return !self.isLiveBackendConnected || !self.activeHost.isOnline
+                }()
 
-                if isHostOffline {
+                if isTargetHostOffline {
                     // Central exponential-backoff reconnect scheduler owns host recovery; do not spin here
                     break
                 }
@@ -900,9 +1207,18 @@ extension AntigravitySessionStore {
                     )
                     try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 } else {
+                    let streamCoversTarget: Bool = {
+                        if summaryIsCloud {
+                            return self.cloudSummaryStreamTask != nil && self.hasReceivedCloudStreamEvent
+                        }
+                        if self.activeHost.channel == .cloudRelay, let originUuid, !originUuid.isEmpty {
+                            return self.localSummaryStreamTasks[originUuid] != nil && self.hasReceivedLocalStreamEvent
+                        }
+                        return self.isSummaryStreamHealthy
+                    }()
                     guard isViewingThisChat,
                           let fallbackInterval = ConnectionPowerPolicy.idleChatFallbackStepPollInterval(
-                              isStreamHealthy: self.isSummaryStreamHealthy,
+                              isStreamHealthy: streamCoversTarget,
                               isLowPowerMode: self.isLowPowerModeEnabled
                           ) else {
                         // Idle chat with healthy push stream -> stop polling completely (0 idle RPCs)

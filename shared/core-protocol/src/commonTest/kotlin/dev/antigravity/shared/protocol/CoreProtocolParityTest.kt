@@ -123,8 +123,21 @@ class CoreProtocolParityTest {
             timestampSeconds = 1_700_000_000L,
         )
         assertEquals("2", headers["X-Goog-AuthUser"])
+        assertEquals(null, headers["X-Goog-Api-Key"])
         assertEquals("base64", headers["X-Goog-Encode-Response-If-Executable"])
         assertEquals("https://antigravity.google.com", headers["Origin"])
+
+        val keyedHeaders = SapisidHashGenerator.buildApiServiceHeaders(
+            cookieHeader = cookie,
+            authUser = "0",
+            apiKey = "runtime-relay-key",
+            isStreaming = false,
+            timestampSeconds = 1_700_000_000L,
+        )
+        assertEquals("runtime-relay-key", keyedHeaders["X-Goog-Api-Key"])
+        assertEquals("mock-wiz-key-123456", SapisidHashGenerator.extractWebApiKey("""{"SNlM0e":"mock-wiz-key-123456"}"""))
+        assertTrue(SapisidHashGenerator.isInvalidApiKeyError(400, "API_KEY_INVALID: API key not valid"))
+        assertTrue(!SapisidHashGenerator.isInvalidApiKeyError(401, "UNAUTHENTICATED: session expired"))
 
         // ListInstances decoding with Google XSSI prefix
         val listJson = ")]}'\n" + """[[["uuid-mac-1",["macbook-pro-main","v2.33.0",true],1,[1700000000,0]]],5]"""

@@ -159,6 +159,7 @@ extension AntigravityRPCClient {
         )
     }
 
+
     // MARK: - Automations RPC (`UE06` — Native Antigravity 2.0 Sidecars)
 
     internal static func isMethodUnimplementedError(_ error: Error) -> Bool {
@@ -880,4 +881,5 @@ extension AntigravityRPCClient {
             timeoutInterval: 12.0
         )
     }
+
 }

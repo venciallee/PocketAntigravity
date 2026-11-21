@@ -37,7 +37,17 @@ public struct CascadeChatViewController: View {
     }
 
     private var localSelectableProjects: [ProjectWorkspace] {
-        store.projects.filter { $0.runtime != .cloud && !$0.isNoProject }
+        let activeHostScope = AgentsHostFilterScope.localHost(
+            id: store.activeHost.instanceId,
+            name: store.activeHost.hostname
+        )
+        return store.projects.filter { proj in
+            guard proj.runtime != .cloud && !proj.isNoProject else { return false }
+            if store.pairedLocalHosts.count > 1 {
+                return store.projectMatchesHostScope(proj, scope: activeHostScope)
+            }
+            return true
+        }
     }
 
     private var activeProjectWorkspace: ProjectWorkspace? {
@@ -45,10 +55,12 @@ public struct CascadeChatViewController: View {
             if AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug) {
                 return nil
             }
-            return store.projects.first(where: { $0.id == draft.projectSlug || $0.name == draft.projectSlug })
+            return store.projects.first(where: { $0.id == draft.projectSlug })
+                ?? store.projects.first(where: { $0.name == draft.projectSlug })
         }
         if let slug = store.activeSummary?.projectSlug {
-            return store.projects.first(where: { $0.id == slug || $0.name == slug })
+            return store.projects.first(where: { $0.id == slug })
+                ?? store.projects.first(where: { $0.name == slug })
         }
         return store.selectedProject
     }
@@ -60,13 +72,31 @@ public struct CascadeChatViewController: View {
         return store.activeSummary?.isCloud == true || activeProjectWorkspace?.runtime == .cloud
     }
 
+    private var isActiveSessionHostOnline: Bool {
+        if isActiveSessionCloud {
+            return store.isDeviceNetworkReachable
+        }
+        if !store.hasPairedBackend { return true }
+        let hostTitle = store.activeSummary?.originHostName
+            ?? activeProjectWorkspace?.hostName
+            ?? store.activeHost.hostname
+        return store.isLocalHostOnline(
+            instanceId: store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid,
+            hostname: hostTitle
+        )
+    }
+
     private var effectiveHeaderHostLabel: String {
         if isActiveSessionCloud {
             return (store.hasPairedBackend || store.isLiveBackendConnected) ? "Antigravity" : "Cloud"
         }
-        let hostTitle = store.activeSummary?.originHostName ?? store.activeHost.hostname
-        if store.hasPairedBackend && (!store.isLiveBackendConnected || !store.activeHost.isOnline) {
-            return "\(hostTitle) · Offline"
+        let originUuid = store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid
+        let hostTitle = store.resolvedHostName(
+            forInstanceUuid: originUuid,
+            fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
+        )
+        if store.hasPairedBackend && !isActiveSessionHostOnline {
+            return "Offline · \(hostTitle)"
         }
         return hostTitle
     }
@@ -80,7 +110,8 @@ public struct CascadeChatViewController: View {
         let proseLen = lastStep?.plannerResponse?.response.count ?? 0
         let thoughtLen = lastStep?.plannerResponse?.thinking?.count ?? 0
         let statusRaw = lastStep?.status.rawValue ?? 0
-        return (store.activeSteps.count &* 1_000_003) &+ (proseLen &* 31) &+ (thoughtLen &* 7) &+ statusRaw
+        let waitingIdx = store.pendingWaitingStep?.stepIndex ?? -1
+        return (store.activeSteps.count &* 1_000_003) &+ (proseLen &* 31) &+ (thoughtLen &* 7) &+ statusRaw &+ (waitingIdx &* 97)
     }
 
     public var body: some View {
@@ -131,36 +162,6 @@ public struct CascadeChatViewController: View {
                                     }
                                 }
 
-                                if !store.isVerificationMode,
-                                   let waiting = store.pendingWaitingStep,
-                                   waiting.requestedInteraction?.kind == .askQuestion {
-                                    Button {
-                                        store.syncActiveLiveQuestionFromSteps()
-                                        store.presentedSheet = .askQuestion(stepIndex: waiting.stepIndex)
-                                    } label: {
-                                        HStack(spacing: 10) {
-                                            Image(systemName: "list.bullet.rectangle.portrait.fill")
-                                                .foregroundStyle(Self.warmAmber)
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text("Structured Question Pending")
-                                                    .font(.system(size: 13.5, weight: .bold))
-                                                    .foregroundStyle(AntigravityTheme.inkReading)
-                                                Text(waiting.requestedInteraction?.askQuestion?.question ?? "Tap to answer agent question")
-                                                    .font(.system(size: 12.5))
-                                                    .foregroundStyle(AntigravityTheme.inkSecondary)
-                                                    .lineLimit(2)
-                                            }
-                                            Spacer()
-                                            Image(systemName: "chevron.right")
-                                                .foregroundStyle(Self.warmAmber)
-                                        }
-                                        .padding(12)
-                                        .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
-                                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Self.warmAmber.opacity(0.45), lineWidth: 1))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-
                                 if store.isCascadeStreaming || store.activeSummary?.status == .inProgress || store.activeSummary?.status == .pending {
                                     HStack(spacing: 10) {
                                         AntigravityFourDotLoadingView(
@@ -191,6 +192,14 @@ public struct CascadeChatViewController: View {
                     .padding(.vertical, 8)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .onAppear {
+                    guard !isStaticESDDFixtureView, !store.displayItems.isEmpty else { return }
+                    if let waiting = store.pendingWaitingStep {
+                        scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+                    } else {
+                        scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                    }
+                }
                 .onChange(of: streamingFollowSignature) { _, _ in
                     guard !isStaticESDDFixtureView, store.isAutoScrollPinnedToBottom else { return }
                     withAnimation(.easeOut(duration: 0.2)) {
@@ -202,38 +211,38 @@ public struct CascadeChatViewController: View {
                         store.flushNextQueuedMessageIfIdle()
                     }
                 }
-            }
 
-            if !store.displayItems.isEmpty, let errText = store.stepLoadErrorText {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Self.coralError)
-                        .frame(width: 7, height: 7)
-                    Text(errText)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(Self.coralError)
-                        .lineLimit(2)
-                    Spacer(minLength: 4)
-                    Button("Dismiss") {
-                        store.stepLoadErrorText = nil
+                if !store.displayItems.isEmpty, let errText = store.stepLoadErrorText {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Self.coralError)
+                            .frame(width: 7, height: 7)
+                        Text(errText)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(Self.coralError)
+                            .lineLimit(2)
+                        Spacer(minLength: 4)
+                        Button("Dismiss") {
+                            store.stepLoadErrorText = nil
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Self.periwinkle)
+                        .buttonStyle(.plain)
                     }
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Self.periwinkle)
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(AntigravityTheme.surfaceCard)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(.horizontal, 14)
-                .padding(.top, 4)
-            }
-
-            // Above-Composer Status Strip
-            if isStaticESDDFixtureView || (activePendingDraft == nil && (store.isCascadeStreaming || store.pendingWaitingStep != nil || store.activeSummary?.status == .inProgress)) {
-                waitingStatusStrip
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(AntigravityTheme.surfaceCard)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
+                }
+
+                // Above-Composer Status Strip
+                if isStaticESDDFixtureView || (activePendingDraft == nil && (store.isCascadeStreaming || store.pendingWaitingStep != nil || store.activeSummary?.status == .inProgress)) {
+                    waitingStatusStrip(scrollProxy: scrollProxy)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 4)
+                }
             }
 
             if let draft = activePendingDraft {
@@ -370,9 +379,25 @@ public struct CascadeChatViewController: View {
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                 Button {
-                    if !store.isDeviceNetworkReachable || !store.isLiveBackendConnected || !store.activeHost.isOnline {
+                    if !store.isDeviceNetworkReachable || !isActiveSessionHostOnline {
                         Task {
-                            await store.reconnectNow(userInitiated: true)
+                            if !isActiveSessionCloud,
+                               let originId = store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid,
+                               !originId.isEmpty {
+                                let hostLabel = store.resolvedHostName(
+                                    forInstanceUuid: originId,
+                                    fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
+                                )
+                                let hostReachable = await store.refreshConversationsForHostScope(
+                                    .localHost(id: originId, name: hostLabel),
+                                    forceFullSync: true
+                                )
+                                if hostReachable {
+                                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                                }
+                            } else {
+                                await store.reconnectNow(userInitiated: true)
+                            }
                         }
                     } else {
                         store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
@@ -399,8 +424,10 @@ public struct CascadeChatViewController: View {
             .padding(.top, 12)
         } else {
             let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
-            let isOfflinePaired = !isActiveSessionCloud && store.hasPairedBackend && (!store.isLiveBackendConnected || !store.activeHost.isOnline)
-            let rawSlug = activeProjectWorkspace?.name ?? store.activeSummary?.projectSlug ?? AntigravityCloudDetector.noProjectDisplayName
+            let isOfflinePaired = !isActiveSessionCloud && store.hasPairedBackend && !isActiveSessionHostOnline
+            let rawSlug = AntigravityCloudDetector.stripProjectScopePrefix(
+                activeProjectWorkspace?.name ?? store.activeSummary?.projectSlug ?? AntigravityCloudDetector.noProjectDisplayName
+            )
             let isNoProjSession = (activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(rawSlug)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -442,7 +469,7 @@ public struct CascadeChatViewController: View {
         let isNoProj = AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug)
         let currentLabel = isNoProj
             ? AntigravityCloudDetector.noProjectDisplayName
-            : (activeProjectWorkspace?.name ?? draft.projectSlug)
+            : (activeProjectWorkspace?.name ?? AntigravityCloudDetector.stripProjectScopePrefix(draft.projectSlug))
 
         return HStack(spacing: 8) {
             Menu {
@@ -516,9 +543,7 @@ public struct CascadeChatViewController: View {
             ?? activePendingDraft?.projectSlug
             ?? store.activeSummary?.projectSlug
             ?? (isLiveOrPaired ? AntigravityCloudDetector.noProjectDisplayName : "ledger-svc")
-        let strippedProjectLabel = rawProjectLabel.hasPrefix("cloud:")
-            ? String(rawProjectLabel.dropFirst("cloud:".count))
-            : rawProjectLabel
+        let strippedProjectLabel = AntigravityCloudDetector.stripProjectScopePrefix(rawProjectLabel)
         let isNoProjChat = (activePendingDraft != nil || isLiveOrPaired)
             && ((activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(strippedProjectLabel))
         let projectLabel = isNoProjChat ? AntigravityCloudDetector.noProjectDisplayName : strippedProjectLabel
@@ -635,36 +660,103 @@ public struct CascadeChatViewController: View {
 
     // MARK: - Above-Composer Status Strip
 
-    private var waitingStatusStrip: some View {
+    private func openPendingApproval(for waiting: CascadeStep, scrollProxy: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.2)) {
+            scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+        }
+        let kind = waiting.effectiveRequestedInteraction?.kind
+        if kind == .askQuestion || kind == .elicitation {
+            store.syncActiveLiveQuestionFromSteps(stepIndex: waiting.stepIndex)
+            store.presentedSheet = .askQuestion(stepIndex: waiting.stepIndex)
+        } else {
+            store.presentedSheet = .permissionGate(stepIndex: waiting.stepIndex)
+        }
+    }
+
+    private func waitingStatusStrip(scrollProxy: ScrollViewProxy) -> some View {
+        let waitingStep = isTurnStopped ? nil : store.pendingWaitingStep
         let statusLabel: String = {
             if isTurnStopped {
                 return "Turn stopped"
             }
-            if store.pendingWaitingStep != nil {
-                return "Waiting for your approval · Step \(store.activeSteps.count)"
+            if isStaticESDDFixtureView {
+                return "Waiting for your approval · Step 5 of 7"
+            }
+            if let waitingStep {
+                return "Approval needed · Step \(waitingStep.stepIndex + 1)"
             }
             if store.isCascadeStreaming {
-                let sourceTitle = isActiveSessionCloud ? "Antigravity Cloud" : (store.activeSummary?.originHostName ?? store.activeHost.hostname)
+                let sourceTitle = isActiveSessionCloud
+                    ? "Antigravity Cloud"
+                    : store.resolvedHostName(
+                        forInstanceUuid: store.activeSummary?.originInstanceUuid,
+                        fallback: store.activeSummary?.originHostName
+                    )
                 return "Streaming from \(sourceTitle) · \(store.activeSteps.count) steps"
             }
             return "Waiting for your approval · Step 5 of 7"
         }()
 
+        let isQuestionGate = (waitingStep?.effectiveRequestedInteraction?.kind == .askQuestion
+            || waitingStep?.effectiveRequestedInteraction?.kind == .elicitation)
+
         return HStack(spacing: 8) {
-            if !isStaticESDDFixtureView && !isTurnStopped && store.pendingWaitingStep == nil && store.isCascadeStreaming {
-                AntigravityRunningArcIndicatorView(isAnimated: shouldAnimateLive)
+            if let waiting = waitingStep, !isStaticESDDFixtureView {
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Self.warmAmber)
+                            .frame(width: 8, height: 8)
+                        Text(statusLabel)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Self.warmAmber)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             } else {
-                Circle()
-                    .fill(isTurnStopped ? AntigravityTheme.inkSecondary : (store.pendingWaitingStep != nil ? Self.warmAmber : Self.periwinkle))
-                    .frame(width: 8, height: 8)
+                if !isStaticESDDFixtureView && !isTurnStopped && waitingStep == nil && store.isCascadeStreaming {
+                    AntigravityRunningArcIndicatorView(isAnimated: shouldAnimateLive)
+                } else {
+                    Circle()
+                        .fill(isTurnStopped ? AntigravityTheme.inkSecondary : (waitingStep != nil ? Self.warmAmber : Self.periwinkle))
+                        .frame(width: 8, height: 8)
+                }
+
+                Text(statusLabel)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(isTurnStopped ? AntigravityTheme.inkSecondary : (waitingStep != nil ? Self.warmAmber : Self.periwinkle))
+                    .lineLimit(1)
             }
 
-            Text(statusLabel)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isTurnStopped ? AntigravityTheme.inkSecondary : (store.pendingWaitingStep != nil ? Self.warmAmber : Self.periwinkle))
-                .lineLimit(1)
+            Spacer(minLength: 4)
 
-            Spacer()
+            if let waiting = waitingStep, !isStaticESDDFixtureView {
+                Button {
+                    openPendingApproval(for: waiting, scrollProxy: scrollProxy)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: isQuestionGate ? "list.bullet.rectangle.portrait.fill" : "checkmark.shield.fill")
+                            .font(.system(size: 12, weight: .bold))
+                        Text(isQuestionGate ? "Answer" : "Approve")
+                            .font(.system(size: 13, weight: .bold))
+                    }
+                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                    .padding(.horizontal, 13)
+                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
+                    .background(Self.warmAmber)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("btn-status-review-approval")
+            }
 
             Button {
                 isTurnStopped = true

@@ -431,14 +431,25 @@ public struct SevenSegmentTaskProgressCardView: View {
 public struct InlineCommandApprovalCardView: View {
     @Bindable public var store: AntigravitySessionStore
     public let commandLine: String
+    public let stepIndex: Int?
+    public let hostName: String?
     @State private var resolutionState: String? = nil
 
     public init(
         store: AntigravitySessionStore,
-        commandLine: String = "vegeta attack -rate=2000/s -duration=30s \\\n  -targets=load/transfers.txt | vegeta\nreport"
+        commandLine: String = "vegeta attack -rate=2000/s -duration=30s \\\n  -targets=load/transfers.txt | vegeta\nreport",
+        stepIndex: Int? = nil,
+        hostName: String? = nil
     ) {
         self.store = store
         self.commandLine = commandLine
+        self.stepIndex = stepIndex
+        self.hostName = hostName
+    }
+
+    private var displayCommandLine: String {
+        let trimmed = commandLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Confirm pending terminal command" : commandLine
     }
 
     public var body: some View {
@@ -453,7 +464,7 @@ public struct InlineCommandApprovalCardView: View {
                 Spacer()
             }
 
-            Text(commandLine)
+            Text(displayCommandLine)
                 .font(.system(size: 12.5, design: .monospaced))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .lineSpacing(2)
@@ -469,8 +480,8 @@ public struct InlineCommandApprovalCardView: View {
             HStack(spacing: 10) {
                 Button {
                     resolutionState = "Command denied"
-                    if let waiting = store.pendingWaitingStep {
-                        store.resolveWaitingStep(stepIndex: waiting.stepIndex, decision: .reject)
+                    if let targetIdx = stepIndex ?? store.pendingWaitingStep?.stepIndex {
+                        store.resolveWaitingStep(stepIndex: targetIdx, decision: .reject)
                     }
                 } label: {
                     Text("Deny")
@@ -513,9 +524,12 @@ public struct InlineCommandApprovalCardView: View {
     }
 
     private func authenticateWithFaceIDAndApprove() {
+        let promptReason: String = store.isVerificationMode
+            ? "Approve vegeta load-test command on MacBook Pro"
+            : "Approve command on \(hostName ?? store.activeHost.hostname)"
         Task {
             let outcome = await StepBiometricGate.evaluate(
-                reason: "Approve command execution on paired Antigravity host",
+                reason: promptReason,
                 cancelTitle: "Cancel"
             )
             if outcome == .verified || outcome == .unavailable {
@@ -526,7 +540,7 @@ public struct InlineCommandApprovalCardView: View {
 
     private func commitFaceIDApproval() {
         resolutionState = "Approved with Face ID"
-        store.approveWaitingCommandWithFaceID()
+        store.approveWaitingCommandWithFaceID(stepIndex: stepIndex)
     }
 }
 
@@ -713,7 +727,8 @@ public struct CascadeStepCellView: View {
     }
 
     public var body: some View {
-        Group {
+        let effectiveWaitingReq = step.isWaitingForUser ? step.effectiveRequestedInteraction : nil
+        VStack(alignment: .leading, spacing: 8) {
             switch step.type {
             case .userInput:
                 UserPromptContextBubbleView(
@@ -823,58 +838,55 @@ public struct CascadeStepCellView: View {
                 }
 
             case .runCommand:
-                if let cmd = step.runCommand {
-                    if step.status == .waiting {
-                        InlineCommandApprovalCardView(store: store, commandLine: cmd.commandLine)
-                    } else {
-                        let isExpanded = store.expandedTerminalStepIds.contains(step.id)
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "terminal")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                    .foregroundStyle(StepCardPalette.periwinkle)
-                                Text(cmd.commandLine)
-                                    .font(.system(size: 12.5, design: .monospaced))
-                                    .foregroundStyle(AntigravityTheme.inkReading)
-                                    .lineLimit(isExpanded ? nil : 2)
-                                Spacer()
-                                if let code = cmd.exitCode {
-                                    Text(code == 0 ? "exit 0" : "exit \(code)")
+                if let cmd = step.runCommand,
+                   !(step.isWaitingForUser && effectiveWaitingReq?.kind == .runCommand) {
+                    let isExpanded = store.expandedTerminalStepIds.contains(step.id)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "terminal")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(StepCardPalette.periwinkle)
+                            Text(cmd.commandLine)
+                                .font(.system(size: 12.5, design: .monospaced))
+                                .foregroundStyle(AntigravityTheme.inkReading)
+                                .lineLimit(isExpanded ? nil : 2)
+                            Spacer()
+                            if let code = cmd.exitCode {
+                                Text(code == 0 ? "exit 0" : "exit \(code)")
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(code == 0 ? StepCardPalette.emeraldDone : AntigravityTheme.statusError)
+                            } else if (step.status == .inProgress || step.status == .pending) && shouldAnimateLive {
+                                HStack(spacing: 5) {
+                                    AntigravityRunningArcIndicatorView(isAnimated: true)
+                                        .scaleEffect(0.82)
+                                    Text("running")
                                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(code == 0 ? StepCardPalette.emeraldDone : AntigravityTheme.statusError)
-                                } else if (step.status == .inProgress || step.status == .pending) && shouldAnimateLive {
-                                    HStack(spacing: 5) {
-                                        AntigravityRunningArcIndicatorView(isAnimated: true)
-                                            .scaleEffect(0.82)
-                                        Text("running")
-                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(StepCardPalette.periwinkle)
-                                    }
+                                        .foregroundStyle(StepCardPalette.periwinkle)
                                 }
-                            }
-                            if let out = cmd.outputPreview, !out.isEmpty {
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.16)) {
-                                        store.toggleTerminalOutputExpanded(stepId: step.id)
-                                    }
-                                } label: {
-                                    Text(out)
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                                        .lineLimit(isExpanded ? nil : 4)
-                                        .multilineTextAlignment(.leading)
-                                        .padding(8)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(StepCardPalette.codeBlockBg)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
                             }
                         }
-                        .padding(11)
-                        .background(StepCardPalette.cardSurface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        if let out = cmd.outputPreview, !out.isEmpty {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.16)) {
+                                    store.toggleTerminalOutputExpanded(stepId: step.id)
+                                }
+                            } label: {
+                                Text(out)
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                                    .lineLimit(isExpanded ? nil : 4)
+                                    .multilineTextAlignment(.leading)
+                                    .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(StepCardPalette.codeBlockBg)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
+                    .padding(11)
+                    .background(StepCardPalette.cardSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
 
             case .codeAction:
@@ -917,6 +929,40 @@ public struct CascadeStepCellView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                }
+
+            case .viewFile, .listDirectory, .viewContentChunk:
+                if let vf = step.viewFile, !step.isWaitingForUser {
+                    HStack(spacing: 8) {
+                        Image(systemName: step.type == .listDirectory ? "folder" : "doc.text.magnifyingglass")
+                            .font(.system(size: 12))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        Text(vf.fileName)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(StepCardPalette.cardSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+            case .search:
+                if let sc = step.search, !step.isWaitingForUser {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 12))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        Text(sc.query)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(StepCardPalette.cardSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
             case .subagentInvocation:
@@ -965,17 +1011,16 @@ public struct CascadeStepCellView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             default:
-                if step.status == .waiting, let reqInt = step.requestedInteraction {
-                    if reqInt.kind == .askQuestion {
-                        InlineGenericInteractionCardView(store: store, step: step, interaction: reqInt)
-                    } else {
-                        V233InlineApprovalCardView(store: store, step: step, requested: reqInt)
-                    }
-                } else if let prose = step.plannerResponse?.response, !prose.isEmpty {
+                if let prose = step.plannerResponse?.response, !prose.isEmpty {
                     AntigravityMarkdownView(markdown: prose, variant: .assistant, store: store)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("step-prose-\(step.stepIndex)")
                 }
+            }
+
+            // Guarantee EVERY waiting/blocked step renders its interactive approval or question entry point.
+            if let waitingReq = effectiveWaitingReq {
+                StepInlineApprovalCardView(store: store, step: step, requested: waitingReq)
             }
         }
         .sheet(

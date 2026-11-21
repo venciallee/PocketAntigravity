@@ -12,6 +12,7 @@ public struct SavedBackendCredentials: Codable, Sendable, Equatable {
     public var sessionCookie: String?
     public var authUser: String?
     public var resolvedInstanceUuid: String?
+    public var relayApiKey: String?
     public var certFingerprintSHA256: String?
     public var pairedAt: Date
 
@@ -23,6 +24,7 @@ public struct SavedBackendCredentials: Codable, Sendable, Equatable {
         sessionCookie: String? = nil,
         authUser: String? = nil,
         resolvedInstanceUuid: String? = nil,
+        relayApiKey: String? = nil,
         certFingerprintSHA256: String? = nil,
         pairedAt: Date = Date()
     ) {
@@ -33,6 +35,7 @@ public struct SavedBackendCredentials: Codable, Sendable, Equatable {
         self.sessionCookie = sessionCookie
         self.authUser = authUser
         self.resolvedInstanceUuid = resolvedInstanceUuid
+        self.relayApiKey = relayApiKey
         self.certFingerprintSHA256 = certFingerprintSHA256
         self.pairedAt = pairedAt
     }
@@ -45,6 +48,7 @@ public actor KeychainStore: SecretStore {
     public static let shared = KeychainStore()
     public static let serviceIdentifier = "com.antigravity.ios.remotecontrol"
     private static let activeCredentialsAccount = "active_backend_credentials_v2"
+    private static let relayWebApiKeyPrefix = "relay_web_api_key_v1::"
 
     private var memoryFallback: [String: String] = [:]
 
@@ -113,5 +117,26 @@ public actor KeychainStore: SecretStore {
 
     public func clearCredentials() {
         removeSecret(forKey: Self.activeCredentialsAccount)
+    }
+
+    public func saveRelayWebApiKey(_ apiKey: String, forOrigin origin: String) {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let account = Self.relayWebApiKeyPrefix + SAPISIDHashGenerator.normalizeOrigin(origin)
+        storeSecret(trimmed, forKey: account)
+    }
+
+    public func loadRelayWebApiKey(forOrigin origin: String) -> String? {
+        let account = Self.relayWebApiKeyPrefix + SAPISIDHashGenerator.normalizeOrigin(origin)
+        guard let raw = readSecret(forKey: account)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        return raw
+    }
+
+    public func clearRelayWebApiKey(forOrigin origin: String) {
+        let account = Self.relayWebApiKeyPrefix + SAPISIDHashGenerator.normalizeOrigin(origin)
+        removeSecret(forKey: account)
     }
 }

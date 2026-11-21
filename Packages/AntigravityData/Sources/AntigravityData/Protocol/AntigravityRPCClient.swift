@@ -18,6 +18,8 @@ public actor AntigravityRPCClient {
     internal var authUser: String
     internal var targetInstanceIdentifier: String
     internal var resolvedInstanceUuid: String?
+    internal var relayApiKey: String?
+    internal var hasAttemptedApiKeyDiscovery: Bool = false
     internal var preferredCloudInstanceUuid: String? = nil
     internal var cachedRelayInstances: [RelayInstanceInfo] = []
     internal var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
@@ -62,6 +64,7 @@ public actor AntigravityRPCClient {
         sessionCookie: String? = nil,
         authUser: String? = nil,
         resolvedInstanceUuid: String? = nil,
+        relayApiKey: String? = nil,
         pinnedFingerprintSHA256: String? = nil,
         urlSession: URLSession? = nil
     ) {
@@ -73,6 +76,9 @@ public actor AntigravityRPCClient {
         let extractedId = parsedTarget?.instanceId.isEmpty == false ? parsedTarget!.instanceId : host.instanceId
         self.targetInstanceIdentifier = extractedId
         self.resolvedInstanceUuid = resolvedInstanceUuid
+        let trimmedRelayKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.relayApiKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
+            ?? SAPISIDHashGenerator.configuredRelayWebApiKeyOverride()
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         self.explicitAuthUser = effectiveAuthUser
         self.authUser = effectiveAuthUser ?? "0"
@@ -105,6 +111,7 @@ public actor AntigravityRPCClient {
         sessionCookie: String? = nil,
         authUser: String? = nil,
         resolvedInstanceUuid: String? = nil,
+        relayApiKey: String? = nil,
         pinnedFingerprintSHA256: String? = nil,
         urlSession: URLSession? = nil
     ) {
@@ -115,6 +122,9 @@ public actor AntigravityRPCClient {
         self.relayOriginURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin) ?? baseURL
         self.targetInstanceIdentifier = parsedTarget?.instanceId ?? ""
         self.resolvedInstanceUuid = resolvedInstanceUuid
+        let trimmedRelayKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.relayApiKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
+            ?? SAPISIDHashGenerator.configuredRelayWebApiKeyOverride()
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         self.explicitAuthUser = effectiveAuthUser
         self.authUser = effectiveAuthUser ?? "0"
@@ -172,12 +182,155 @@ public actor AntigravityRPCClient {
         return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
+    // MARK: - Cloud Relay Public Web API Key Runtime Discovery
+
+    /// Returns the currently active Cloud Relay public web API key (captured via Sign-In WebView,
+    /// discovered dynamically from the relay web frontend, or supplied via environment/Info.plist).
+    public func currentRelayApiKey() -> String? {
+        relayApiKey
+    }
+
+    /// Resolves the public browser `X-Goog-Api-Key` required by Google Boq `ApiService`
+    /// without hardcoding any API key literal in source code.
+    public func resolveRelayApiKey(forceRefresh: Bool = false) async -> String? {
+        let originStr = SAPISIDHashGenerator.normalizeOrigin(relayOriginURL.absoluteString)
+        let isLoopback = SAPISIDHashGenerator.isLoopbackOrigin(originStr)
+
+        if forceRefresh {
+            relayApiKey = nil
+            hasAttemptedApiKeyDiscovery = false
+            if !isLoopback {
+                await KeychainStore.shared.clearRelayWebApiKey(forOrigin: originStr)
+            }
+        } else if let existing = relayApiKey, !existing.isEmpty {
+            return existing
+        } else if !isLoopback,
+                  let cached = await KeychainStore.shared.loadRelayWebApiKey(forOrigin: originStr) {
+            relayApiKey = cached
+            return cached
+        }
+
+        guard !hasAttemptedApiKeyDiscovery else {
+            return relayApiKey
+        }
+        hasAttemptedApiKeyDiscovery = true
+
+        if let discovered = await discoverRelayWebApiKeyFromOrigin(originStr: originStr) {
+            relayApiKey = discovered
+            if !isLoopback {
+                await KeychainStore.shared.saveRelayWebApiKey(discovered, forOrigin: originStr)
+            }
+            return discovered
+        }
+        return relayApiKey
+    }
+
+    internal func makeBootstrapGetRequest(
+        for url: URL,
+        originStr: String,
+        includeSessionCookie: Bool
+    ) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 8
+        req.setValue("text/html,application/xhtml+xml,application/javascript,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        req.setValue(SAPISIDHashGenerator.mobileRemoteUserAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("\(originStr)/", forHTTPHeaderField: "Referer")
+        if includeSessionCookie,
+           var cleanedCookie = sessionCookie?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !cleanedCookie.isEmpty {
+            if cleanedCookie.lowercased().hasPrefix("cookie:") {
+                cleanedCookie = String(cleanedCookie.dropFirst("cookie:".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if !cleanedCookie.isEmpty
+                && !cleanedCookie.lowercased().hasPrefix("bearer ")
+                && !cleanedCookie.hasPrefix("ya29.") {
+                req.setValue(cleanedCookie, forHTTPHeaderField: "Cookie")
+            }
+        }
+        return req
+    }
+
+    internal func discoverRelayWebApiKeyFromOrigin(originStr: String) async -> String? {
+        let originHost = relayOriginURL.host?.lowercased()
+        var candidatePages: [URL] = []
+        if endpointURL.host?.lowercased() == originHost {
+            candidatePages.append(endpointURL)
+        }
+        if let rootURL = URL(string: "\(originStr)/"),
+           !candidatePages.contains(where: { $0.absoluteString == rootURL.absoluteString }) {
+            candidatePages.append(rootURL)
+        }
+
+        for pageURL in candidatePages {
+            let pageReq = makeBootstrapGetRequest(
+                for: pageURL,
+                originStr: originStr,
+                includeSessionCookie: pageURL.host?.lowercased() == originHost
+            )
+            guard let (data, response) = try? await urlSession.data(for: pageReq),
+                  let http = response as? HTTPURLResponse,
+                  (200..<400).contains(http.statusCode) else {
+                continue
+            }
+
+            if let finalHost = http.url?.host?.lowercased(),
+               let expectedHost = originHost,
+               finalHost != expectedHost,
+               !RemoteHostInstance.isAntigravityRelayHost(finalHost) {
+                continue
+            }
+
+            if let headerKey = http.value(forHTTPHeaderField: "X-Goog-Api-Key")?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !headerKey.isEmpty {
+                return headerKey
+            }
+
+            let html = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1)
+                ?? ""
+            if let inlineKey = SAPISIDHashGenerator.extractWebApiKey(from: html) {
+                return inlineKey
+            }
+
+            let effectiveBaseURL = http.url ?? pageURL
+            let scriptURLs = SAPISIDHashGenerator.extractBootstrapScriptURLs(
+                fromHTML: html,
+                baseURL: effectiveBaseURL,
+                limit: 8
+            )
+            for scriptURL in scriptURLs {
+                let scriptReq = makeBootstrapGetRequest(
+                    for: scriptURL,
+                    originStr: originStr,
+                    includeSessionCookie: scriptURL.host?.lowercased() == originHost
+                )
+                guard let (scriptData, scriptResp) = try? await urlSession.data(for: scriptReq),
+                      let scriptHTTP = scriptResp as? HTTPURLResponse,
+                      (200..<300).contains(scriptHTTP.statusCode) else {
+                    continue
+                }
+                let scriptText = String(data: scriptData, encoding: .utf8)
+                    ?? String(data: scriptData, encoding: .isoLatin1)
+                    ?? ""
+                if let scriptKey = SAPISIDHashGenerator.extractWebApiKey(from: scriptText) {
+                    return scriptKey
+                }
+            }
+        }
+        return nil
+    }
+
+
     // MARK: - Core Unary RPC (`Sendable` JSONValue & Binary Protobuf)
 
     public func callUnaryJSON(
         method: String,
         body: [String: JSONValue] = [:],
         instanceUuidOverride: String? = nil,
+        allowCrossHostFailover: Bool = false,
         timeoutInterval: TimeInterval? = nil
     ) async throws -> [String: JSONValue] {
         if channel == .cloudRelay {
@@ -186,6 +339,7 @@ public actor AntigravityRPCClient {
                 method: method,
                 body: body,
                 instanceUuidOverride: instanceUuidOverride,
+                allowCrossHostFailover: allowCrossHostFailover,
                 timeoutInterval: relayTimeout
             )
         }
@@ -226,6 +380,7 @@ public actor AntigravityRPCClient {
         method: String,
         body: [String: JSONValue],
         instanceUuidOverride: String? = nil,
+        allowCrossHostFailover: Bool = false,
         timeoutInterval: TimeInterval? = nil,
         allowStripUnknownFields: Bool = true
     ) async throws -> [String: JSONValue] {
@@ -236,6 +391,10 @@ public actor AntigravityRPCClient {
             )
         }
 
+        let isCloudBackendRequest = body["backend"]?.stringValue == "BACKEND_TYPE_REMOTE_AICODE"
+            || body["backendType"]?.stringValue == "BACKEND_TYPE_REMOTE_AICODE"
+        let effectiveCrossHostFailover = allowCrossHostFailover || isCloudBackendRequest
+
         var workingBody = try await sanitizeCloudRelayPayload(method: method, body: body)
         for attempt in 1...4 {
             let encodedPayload = workingBody.isEmpty ? Data("{}".utf8) : try JSONEncoder().encode(workingBody)
@@ -244,6 +403,7 @@ public actor AntigravityRPCClient {
                 payload: encodedPayload,
                 contentType: "application/json",
                 instanceUuidOverride: instanceUuidOverride,
+                allowCrossHostFailover: effectiveCrossHostFailover,
                 timeoutInterval: timeoutInterval
             )
             let respData = Self.unwrapConnectFramedPayloadIfNeeded(rawRespData)
@@ -302,27 +462,45 @@ public actor AntigravityRPCClient {
         return out.isEmpty ? data : out
     }
 
-    internal func selectReachableRelayUuid(preferred: String?) -> String? {
-        let candidate = (preferred?.isEmpty == false) ? preferred : resolvedInstanceUuid
+    internal func selectReachableRelayUuid(
+        preferred: String?,
+        allowCrossHostFailover: Bool = false
+    ) -> String? {
+        let explicitOverride = (preferred?.isEmpty == false) ? preferred : nil
+        let candidate = explicitOverride ?? resolvedInstanceUuid
         guard !cachedRelayInstances.isEmpty else { return candidate }
         if let candidate,
            cachedRelayInstances.contains(where: { $0.uuid == candidate && $0.status.isReachable }) {
             return candidate
         }
-        let familySeed = cachedRelayInstances.first(where: { $0.uuid == candidate })?.name ?? targetInstanceIdentifier
-        let familyOnline = cachedRelayInstances.first(where: {
-            $0.status.isReachable && $0.sameHostFamily(as: familySeed)
-        })
-        let preferredResolved = resolvedInstanceUuid.flatMap { resUuid in
-            cachedRelayInstances.contains(where: { $0.uuid == resUuid && $0.status.isReachable }) ? resUuid : nil
-        }
-        let anyOnline = cachedRelayInstances.first(where: \.status.isReachable)
-        if let liveBest = familyOnline?.uuid ?? preferredResolved ?? anyOnline?.uuid {
-            if resolvedInstanceUuid == nil
-                || !cachedRelayInstances.contains(where: { $0.uuid == resolvedInstanceUuid && $0.status.isReachable }) {
-                self.resolvedInstanceUuid = liveBest
+
+        // Only fail over within the SAME machine (`sameHostFamily`) for local RPCs.
+        let familySeed = cachedRelayInstances.first(where: { $0.uuid == candidate })?.name
+            ?? (explicitOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : "")
+        if !familySeed.isEmpty,
+           let familyOnline = cachedRelayInstances.first(where: {
+               $0.status.isReachable && $0.sameHostFamily(as: familySeed)
+           }) {
+            if explicitOverride == nil {
+                self.resolvedInstanceUuid = familyOnline.uuid
             }
-            return liveBest
+            return familyOnline.uuid
+        }
+
+        // Cross-host failover is ONLY allowed for Cloud / host-agnostic RPCs (`allowCrossHostFailover == true`).
+        if allowCrossHostFailover {
+            let preferredResolved = resolvedInstanceUuid.flatMap { resUuid in
+                cachedRelayInstances.contains(where: { $0.uuid == resUuid && $0.status.isReachable }) ? resUuid : nil
+            }
+            let anyOnline = cachedRelayInstances.first(where: \.status.isReachable)
+            if let liveBest = preferredResolved ?? anyOnline?.uuid {
+                return liveBest
+            }
+        }
+
+        if let candidate,
+           cachedRelayInstances.contains(where: { $0.uuid == candidate && !$0.status.isReachable }) {
+            return nil
         }
         return candidate
     }
@@ -332,11 +510,13 @@ public actor AntigravityRPCClient {
         payload: Data,
         contentType: String,
         instanceUuidOverride: String? = nil,
+        allowCrossHostFailover: Bool = false,
         timeoutInterval: TimeInterval? = nil
     ) async throws -> (payload: Data, headers: [String: String]) {
         if instanceUuidOverride == nil && resolvedInstanceUuid == nil {
             _ = try await resolveCloudRelayInstance(
                 preferredIdentifier: targetInstanceIdentifier,
+                allowCrossHostFallback: allowCrossHostFailover,
                 timeoutInterval: timeoutInterval
             )
         } else if cachedRelayInstances.isEmpty {
@@ -346,9 +526,14 @@ public actor AntigravityRPCClient {
             }
         }
 
-        guard let initialTargetUuid = selectReachableRelayUuid(preferred: instanceUuidOverride),
-              !initialTargetUuid.isEmpty else {
-            throw AntigravityRPCError.invalidEndpoint
+        guard let initialTargetUuid = selectReachableRelayUuid(
+            preferred: instanceUuidOverride,
+            allowCrossHostFailover: allowCrossHostFailover
+        ), !initialTargetUuid.isEmpty else {
+            throw AntigravityRPCError.httpError(
+                statusCode: 503,
+                body: "Selected Antigravity Desktop host is offline"
+            )
         }
 
         let originStr = SAPISIDHashGenerator.normalizeOrigin(relayOriginURL.absoluteString)
@@ -364,7 +549,12 @@ public actor AntigravityRPCClient {
         let currentAuthUser = authUser
         let session = urlSession
 
-        func sendOnce(to targetUuid: String, authUserOverride: String? = nil) async throws -> (payload: Data, headers: [String: String]) {
+        func sendOnce(
+            to targetUuid: String,
+            authUserOverride: String? = nil,
+            didRetryInvalidApiKey: Bool = false
+        ) async throws -> (payload: Data, headers: [String: String]) {
+            let activeApiKey = await resolveRelayApiKey()
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             if let timeoutInterval {
@@ -375,6 +565,7 @@ public actor AntigravityRPCClient {
                 cookieHeader: currentCookie,
                 origin: originStr,
                 authUser: authUserOverride ?? currentAuthUser,
+                apiKey: activeApiKey,
                 isStreaming: false
             )
             request.httpBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
@@ -388,6 +579,18 @@ public actor AntigravityRPCClient {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw AntigravityRPCError.invalidEndpoint
+            }
+            if !didRetryInvalidApiKey && (http.statusCode == 400 || http.statusCode == 403) {
+                let text = String(data: data, encoding: .utf8) ?? ""
+                if SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: text),
+                   let refreshedKey = await resolveRelayApiKey(forceRefresh: true),
+                   refreshedKey != activeApiKey {
+                    return try await sendOnce(
+                        to: targetUuid,
+                        authUserOverride: authUserOverride,
+                        didRetryInvalidApiKey: true
+                    )
+                }
             }
             if http.statusCode == 401 || http.statusCode == 403 {
                 let text = String(data: data, encoding: .utf8) ?? "Unauthorized"
@@ -407,13 +610,21 @@ public actor AntigravityRPCClient {
             return try await sendOnce(to: initialTargetUuid)
         } catch let AntigravityRPCError.unauthorized(msg) {
             if let resolved = try? await resolveCloudRelayInstance(
-                preferredIdentifier: targetInstanceIdentifier,
+                preferredIdentifier: instanceUuidOverride ?? targetInstanceIdentifier,
+                allowCrossHostFallback: allowCrossHostFailover,
                 timeoutInterval: 6.0
-            ), (resolved.matchedAuthUser != currentAuthUser || resolved.selected.uuid != initialTargetUuid) {
+            ), resolved.selected.status.isReachable,
+               (resolved.matchedAuthUser != currentAuthUser || resolved.selected.uuid != initialTargetUuid) {
                 return try await sendOnce(to: resolved.selected.uuid, authUserOverride: resolved.matchedAuthUser)
             }
             throw AntigravityRPCError.unauthorized(msg)
         } catch {
+            let isHttp404: Bool = {
+                if case let AntigravityRPCError.httpError(code, _) = error {
+                    return code == 404
+                }
+                return false
+            }()
             let shouldFailover: Bool = {
                 if error is URLError { return true }
                 if case let AntigravityRPCError.httpError(code, _) = error {
@@ -425,13 +636,25 @@ public actor AntigravityRPCClient {
                let refreshed = try? await listRelayInstances(timeoutInterval: 6.0),
                !refreshed.isEmpty {
                 self.cachedRelayInstances = refreshed
-                let familySeed = refreshed.first(where: { $0.uuid == initialTargetUuid })?.name ?? targetInstanceIdentifier
-                if let altInst = refreshed.first(where: {
-                    $0.uuid != initialTargetUuid && $0.status.isReachable && $0.sameHostFamily(as: familySeed)
-                }) ?? refreshed.first(where: {
-                    $0.uuid != initialTargetUuid && $0.status.isReachable
-                }) {
-                    self.resolvedInstanceUuid = altInst.uuid
+                // An HTTP 404 from a still-online instance means the RPC method itself is unimplemented
+                // (e.g. GetWorkspaceInfos) — NEVER fail over to another host on an application-level 404!
+                if isHttp404 && refreshed.contains(where: { $0.uuid == initialTargetUuid && $0.status.isReachable }) {
+                    throw error
+                }
+                let familySeed = refreshed.first(where: { $0.uuid == initialTargetUuid })?.name
+                    ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : "")
+                let sameFamilyAlt: RelayInstanceInfo? = !familySeed.isEmpty
+                    ? refreshed.first(where: {
+                        $0.uuid != initialTargetUuid && $0.status.isReachable && $0.sameHostFamily(as: familySeed)
+                    })
+                    : nil
+                let crossHostAlt: RelayInstanceInfo? = allowCrossHostFailover
+                    ? refreshed.first(where: { $0.uuid != initialTargetUuid && $0.status.isReachable })
+                    : nil
+                if let altInst = sameFamilyAlt ?? crossHostAlt {
+                    if instanceUuidOverride == nil {
+                        self.resolvedInstanceUuid = altInst.uuid
+                    }
                     return try await sendOnce(to: altInst.uuid)
                 }
             }
@@ -576,6 +799,287 @@ public actor AntigravityRPCClient {
         }
     }
 
+    internal func ensureUpstreamModelCatalog() async -> (defaultModel: String?, validModels: Set<String>) {
+        if let cachedValidUpstreamModels {
+            return (cachedDefaultUpstreamModel, cachedValidUpstreamModels)
+        }
+        let result = await fetchModelCatalog()
+        if let cachedValidUpstreamModels {
+            return (cachedDefaultUpstreamModel, cachedValidUpstreamModels)
+        }
+        let ids = Set(result.models.map(\.modelId).filter { $0.hasPrefix("MODEL_") })
+        return (result.defaultModelId, ids)
+    }
+
+    /// Queries the connected `language_server` / `agy` daemon for its live model, custom agent catalog,
+    /// and dual-pool usage quota via `GetCascadeModelConfigs`, `GetCascadeModelConfigData`, `GetAvailableModels`,
+    /// and `GetAllCustomAgentConfigs`.
+    public func fetchModelCatalog(forceRefresh: Bool = false) async -> LiveModelCatalogResult {
+        if forceRefresh {
+            self.cachedValidUpstreamModels = nil
+            self.cachedDefaultUpstreamModel = nil
+        }
+        var parsedModels: [CascadeModelConfig] = []
+        var validIds = Set<String>()
+        var defaultModelId: String? = nil
+        var parsedQuota: ModelUsageQuota? = nil
+
+        let metaReq: [String: JSONValue] = [
+            "forceRefresh": .bool(forceRefresh),
+            "metadata": .object([
+                "ideName": .string("antigravity"),
+                "extensionName": .string("antigravity"),
+                "locale": .string("en")
+            ])
+        ]
+        for method in ["GetCascadeModelConfigs", "GetCascadeModelConfigData"] {
+            if let obj = try? await callUnaryJSON(method: method, body: metaReq, timeoutInterval: 8.0),
+               let configs = obj["clientModelConfigs"]?.arrayValue,
+               !configs.isEmpty {
+                if let quotaObj = obj["usageQuota"]?.objectValue ?? obj["quotaSummary"]?.objectValue {
+                    parsedQuota = Self.parseUsageQuota(quotaObj)
+                }
+                for entry in configs {
+                    guard let cfg = entry.objectValue else { continue }
+                    if cfg["disabled"]?.boolValue == true { continue }
+                    let label = (cfg["label"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !label.isEmpty else { continue }
+                    let moa = cfg["modelOrAlias"]?.objectValue
+                    let rawModel = moa?["model"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let rawAlias = moa?["alias"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let isAlias = (rawModel == nil || rawModel == "MODEL_UNSPECIFIED" || rawModel?.isEmpty == true) && (rawAlias?.isEmpty == false)
+                    guard let modelId = isAlias ? rawAlias : rawModel,
+                          !modelId.isEmpty,
+                          modelId != "MODEL_UNSPECIFIED",
+                          !validIds.contains(modelId) else {
+                        continue
+                    }
+                    validIds.insert(modelId)
+
+                    let lowerLabel = label.lowercased()
+                    let isOrchestrator = (cfg["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
+                    let supportsThinking = (cfg["supportsThoughtCirculation"]?.boolValue ?? false)
+                        || (cfg["supportsThinking"]?.boolValue ?? false)
+                        || lowerLabel.contains("thinking")
+                        || lowerLabel.contains("neon")
+                        || lowerLabel.contains("carbon")
+                        || lowerLabel.contains("argon")
+                        || lowerLabel.contains("hydrogen")
+                        || lowerLabel.contains("pro")
+                        || lowerLabel.contains("opus")
+                    let supportedEfforts: [ThinkingEffortLevel] = {
+                        if let rawEfforts = cfg["supportedEfforts"]?.arrayValue {
+                            let mapped = rawEfforts.compactMap { val -> ThinkingEffortLevel? in
+                                guard let s = val.stringValue?.lowercased() else { return nil }
+                                if s == "xhigh" || s == "extra" { return .extra }
+                                return ThinkingEffortLevel.allCases.first { $0.rawValue.lowercased() == s }
+                            }
+                            if !mapped.isEmpty { return mapped }
+                        }
+                        if isOrchestrator { return [.high] }
+                        if lowerLabel.contains("neon") || lowerLabel.contains("hydrogen") {
+                            return [.low, .medium, .high, .extra]
+                        }
+                        return [.low, .medium, .high]
+                    }()
+                    let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
+                            return .extra
+                        }
+                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                            return .low
+                        }
+                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                            return .medium
+                        }
+                        return .high
+                    }()
+                    let rawTag = Self.nonEmptyString(cfg["tagTitle"]?.stringValue)
+                    let rawDesc = Self.nonEmptyString(cfg["description"]?.stringValue)
+                    let cleanDesc: String? = {
+                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                        return rawDesc
+                    }()
+                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+                    let baseSubtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
+                    let quotaSuffix: String? = {
+                        if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue, rem < 0.99 {
+                            let pct = max(0, min(100, Int((rem * 100.0).rounded())))
+                            return pct == 0 ? "Quota exhausted" : "\(pct)% quota left"
+                        }
+                        return nil
+                    }()
+                    let desc = quotaSuffix.map { "\(baseSubtitle) · \($0)" } ?? baseSubtitle
+
+                    parsedModels.append(
+                        CascadeModelConfig(
+                            modelId: modelId,
+                            displayName: label,
+                            subtitle: desc,
+                            hasThinkingBadge: supportsThinking,
+                            requiresUpgradeNote: Self.nonEmptyString(cfg["upgradeNote"]?.stringValue),
+                            mode: .planning,
+                            agentPersona: "Default",
+                            effort: effort,
+                            isModelAlias: isAlias,
+                            badgeTitle: badgeTitle,
+                            isOrchestrator: isOrchestrator,
+                            plannerModelName: Self.nonEmptyString(cfg["plannerModelName"]?.stringValue),
+                            executorModelName: Self.nonEmptyString(cfg["executorModelName"]?.stringValue),
+                            supportedEfforts: supportedEfforts,
+                            isNewBadge: (cfg["isNew"]?.boolValue ?? false) || lowerLabel.contains("gemini 4") || isOrchestrator
+                        )
+                    )
+                    if cfg["isRecommended"]?.boolValue == true && defaultModelId == nil {
+                        defaultModelId = modelId
+                    }
+                }
+                let overrideMoa = obj["defaultOverrideModelConfig"]?.objectValue?["modelOrAlias"]?.objectValue
+                if let defM = Self.nonEmptyString(overrideMoa?["model"]?.stringValue), defM != "MODEL_UNSPECIFIED" {
+                    defaultModelId = defM
+                } else if let defA = Self.nonEmptyString(overrideMoa?["alias"]?.stringValue) {
+                    defaultModelId = defA
+                }
+                if !parsedModels.isEmpty {
+                    break
+                }
+            }
+        }
+
+        if parsedModels.isEmpty,
+           let availWrapper = try? await callUnaryJSON(
+               method: "GetAvailableModels",
+               body: ["forceRefresh": .bool(forceRefresh)],
+               timeoutInterval: 8.0
+           ) {
+            let resp = availWrapper["response"]?.objectValue ?? availWrapper
+            if parsedQuota == nil, let quotaObj = resp["usageQuota"]?.objectValue {
+                parsedQuota = Self.parseUsageQuota(quotaObj)
+            }
+            if let modelsMap = resp["models"]?.objectValue, !modelsMap.isEmpty {
+                var orderedKeys: [String] = []
+                let sorts = resp["agentModelSorts"]?.arrayValue ?? resp["battleModeModelSorts"]?.arrayValue ?? []
+                for sort in sorts {
+                    for grp in sort.objectValue?["groups"]?.arrayValue ?? [] {
+                        for midVal in grp.objectValue?["modelIds"]?.arrayValue ?? [] {
+                            if let mid = Self.nonEmptyString(midVal.stringValue), !orderedKeys.contains(mid) {
+                                orderedKeys.append(mid)
+                            }
+                        }
+                    }
+                }
+                if orderedKeys.isEmpty {
+                    orderedKeys = modelsMap.keys.sorted()
+                }
+                for key in orderedKeys {
+                    guard let details = modelsMap[key]?.objectValue else { continue }
+                    if details["disabled"]?.boolValue == true || details["isInternal"]?.boolValue == true {
+                        continue
+                    }
+                    let displayName = Self.nonEmptyString(details["displayName"]?.stringValue) ?? key
+                    let protoEnum = Self.nonEmptyString(details["model"]?.stringValue)
+                    let modelId = (protoEnum != nil && protoEnum != "MODEL_UNSPECIFIED") ? protoEnum! : key
+                    guard !validIds.contains(modelId) else { continue }
+                    validIds.insert(modelId)
+
+                    let lowerLabel = displayName.lowercased()
+                    let isOrchestrator = (details["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
+                    let supportsThinking = (details["supportsThinking"]?.boolValue ?? false)
+                        || lowerLabel.contains("thinking")
+                        || lowerLabel.contains("neon")
+                    let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
+                            return .extra
+                        }
+                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                            return .low
+                        }
+                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                            return .medium
+                        }
+                        return .high
+                    }()
+                    let rawTag = Self.nonEmptyString(details["tagTitle"]?.stringValue)
+                        ?? Self.nonEmptyString(details["badge"]?.stringValue)
+                    let rawDesc = Self.nonEmptyString(details["description"]?.stringValue)
+                    let cleanDesc: String? = {
+                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                        return rawDesc
+                    }()
+                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+                    let subtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: displayName)
+
+                    parsedModels.append(
+                        CascadeModelConfig(
+                            modelId: modelId,
+                            displayName: displayName,
+                            subtitle: subtitle,
+                            hasThinkingBadge: supportsThinking,
+                            requiresUpgradeNote: nil,
+                            mode: .planning,
+                            agentPersona: "Default",
+                            effort: effort,
+                            isModelAlias: !modelId.hasPrefix("MODEL_"),
+                            badgeTitle: badgeTitle,
+                            isOrchestrator: isOrchestrator,
+                            supportedEfforts: (lowerLabel.contains("neon") || lowerLabel.contains("hydrogen"))
+                                ? [.low, .medium, .high, .extra] : [.low, .medium, .high],
+                            isNewBadge: lowerLabel.contains("gemini 4") || isOrchestrator
+                        )
+                    )
+                }
+            }
+        }
+
+        if !validIds.isEmpty {
+            self.cachedValidUpstreamModels = validIds
+            self.cachedDefaultUpstreamModel = defaultModelId ?? parsedModels.first?.modelId
+        } else {
+            self.cachedValidUpstreamModels = []
+            self.cachedDefaultUpstreamModel = nil
+        }
+
+        var agents: [String] = ["Default"]
+        if let agentResp = try? await callUnaryJSON(method: "GetAllCustomAgentConfigs", body: [:], timeoutInterval: 5.0) {
+            let rawAgents = agentResp["customAgentConfigs"]?.arrayValue
+                ?? agentResp["agents"]?.arrayValue
+                ?? agentResp["configs"]?.arrayValue
+                ?? []
+            for item in rawAgents {
+                if let name = Self.nonEmptyString(item.objectValue?["name"]?.stringValue)
+                    ?? Self.nonEmptyString(item.objectValue?["displayName"]?.stringValue)
+                    ?? Self.nonEmptyString(item.objectValue?["id"]?.stringValue),
+                   !agents.contains(name) {
+                    agents.append(name)
+                }
+            }
+        }
+
+        let finalModels = parsedModels.isEmpty ? CascadeModelConfig.liveDefaultCatalog : parsedModels
+        return LiveModelCatalogResult(
+            models: finalModels,
+            defaultModelId: defaultModelId ?? finalModels.first?.modelId,
+            agents: agents,
+            usageQuota: parsedQuota
+        )
+    }
+
+    internal static func parseUsageQuota(_ obj: [String: JSONValue]) -> ModelUsageQuota {
+        ModelUsageQuota(
+            geminiWeeklyRemaining: obj["geminiWeeklyRemaining"]?.doubleValue ?? 0.85,
+            geminiFiveHourRemaining: obj["geminiFiveHourRemaining"]?.doubleValue ?? 0.92,
+            partnerWeeklyRemaining: obj["partnerWeeklyRemaining"]?.doubleValue ?? 0.70,
+            partnerFiveHourRemaining: obj["partnerFiveHourRemaining"]?.doubleValue ?? 0.80,
+            aiCreditOveragesEnabled: obj["aiCreditOveragesEnabled"]?.boolValue ?? obj["hasExtraCredits"]?.boolValue ?? false,
+            planDisplayName: obj["planDisplayName"]?.stringValue ?? obj["planTier"]?.stringValue ?? "Google AI Ultra"
+        )
+    }
+
+    internal static func defaultSubtitle(forModelLabel label: String) -> String {
+        CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
+    }
+
+
     // MARK: - Server-Streaming Envelope Subscription
 
     internal static func hasBase64TransferHeader(_ headers: [AnyHashable: Any]) -> Bool {
@@ -611,22 +1115,19 @@ public actor AntigravityRPCClient {
     public func subscribeEnvelopeStream(
         method: String,
         requestPayload: [String: JSONValue] = [:],
-        instanceUuidOverride: String? = nil
+        instanceUuidOverride: String? = nil,
+        allowCrossHostFailover: Bool = false
     ) throws -> AsyncThrowingStream<[String: JSONValue], Error> {
         let rawJSON = requestPayload.isEmpty ? Data("{}".utf8) : try JSONEncoder().encode(requestPayload)
         let framedPayload = ConnectEnvelopeFrame(flags: [], payload: rawJSON).encode()
 
         if channel == .cloudRelay {
-            var effectiveUuid = (instanceUuidOverride?.isEmpty == false) ? instanceUuidOverride : resolvedInstanceUuid
-            if let candidate = effectiveUuid,
-               !cachedRelayInstances.isEmpty,
-               !cachedRelayInstances.contains(where: { $0.uuid == candidate && $0.status.isReachable }),
-               let fallbackOnline = cachedRelayInstances.first(where: { $0.status.isReachable }) {
-                let preferredResolved = resolvedInstanceUuid.flatMap { resUuid in
-                    cachedRelayInstances.contains(where: { $0.uuid == resUuid && $0.status.isReachable }) ? resUuid : nil
-                }
-                effectiveUuid = preferredResolved ?? fallbackOnline.uuid
-            }
+            let isCloudRequest = requestPayload["backend"]?.stringValue == "BACKEND_TYPE_REMOTE_AICODE"
+                || requestPayload["backendType"]?.stringValue == "BACKEND_TYPE_REMOTE_AICODE"
+            let effectiveUuid = selectReachableRelayUuid(
+                preferred: instanceUuidOverride,
+                allowCrossHostFailover: allowCrossHostFailover || isCloudRequest
+            )
             guard let targetUuid = effectiveUuid, !targetUuid.isEmpty else {
                 return AsyncThrowingStream { continuation in
                     continuation.finish()
@@ -640,32 +1141,74 @@ public actor AntigravityRPCClient {
             guard let relayURL = comps.url else {
                 throw AntigravityRPCError.invalidEndpoint
             }
-            var relayRequest = URLRequest(url: relayURL)
-            relayRequest.httpMethod = "POST"
-            relayRequest.timeoutInterval = 300
-            SAPISIDHashGenerator.applyApiServiceHeaders(
-                to: &relayRequest,
-                cookieHeader: sessionCookie ?? "",
-                origin: originStr,
-                authUser: authUser,
-                isStreaming: true
-            )
-            relayRequest.httpBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
+            let encodedStreamBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
                 targetInstanceUuid: targetUuid,
                 rpcPath: "\(Self.servicePrefix)/\(method)",
                 payload: framedPayload,
                 contentType: "application/connect+json",
                 isStreaming: true
             )
-
+            let capturedCookie = sessionCookie ?? ""
+            let capturedAuthUser = authUser
+            let cachedApiKey = relayApiKey
             let session = self.streamingURLSession
-            let immutableRelayReq = relayRequest
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {
-                        let (bytes, response) = try await session.bytes(for: immutableRelayReq)
-                        guard let http = response as? HTTPURLResponse else {
+                        func makeStreamRequest(apiKey: String?) -> URLRequest {
+                            var req = URLRequest(url: relayURL)
+                            req.httpMethod = "POST"
+                            req.timeoutInterval = 300
+                            SAPISIDHashGenerator.applyApiServiceHeaders(
+                                to: &req,
+                                cookieHeader: capturedCookie,
+                                origin: originStr,
+                                authUser: capturedAuthUser,
+                                apiKey: apiKey,
+                                isStreaming: true
+                            )
+                            req.httpBody = encodedStreamBody
+                            return req
+                        }
+
+                        var activeApiKey: String?
+                        if let cachedApiKey, !cachedApiKey.isEmpty {
+                            activeApiKey = cachedApiKey
+                        } else {
+                            activeApiKey = await self.resolveRelayApiKey()
+                        }
+
+                        var (bytes, response) = try await session.bytes(for: makeStreamRequest(apiKey: activeApiKey))
+                        guard var http = response as? HTTPURLResponse else {
                             throw AntigravityRPCError.invalidEndpoint
+                        }
+                        if http.statusCode == 400 || http.statusCode == 403 {
+                            var errBytes: [UInt8] = []
+                            for try await byte in bytes {
+                                errBytes.append(byte)
+                                if errBytes.count >= 2048 { break }
+                            }
+                            let errText = String(decoding: errBytes, as: UTF8.self)
+                            if SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: errText),
+                               let refreshedKey = await self.resolveRelayApiKey(forceRefresh: true),
+                               refreshedKey != activeApiKey {
+                                activeApiKey = refreshedKey
+                                let retryResult = try await session.bytes(for: makeStreamRequest(apiKey: activeApiKey))
+                                bytes = retryResult.0
+                                guard let retryHTTP = retryResult.1 as? HTTPURLResponse else {
+                                    throw AntigravityRPCError.invalidEndpoint
+                                }
+                                http = retryHTTP
+                            } else if http.statusCode == 403 {
+                                throw AntigravityRPCError.unauthorized(
+                                    errText.isEmpty ? "StreamProxyCommand HTTP 403" : errText
+                                )
+                            } else {
+                                throw AntigravityRPCError.httpError(
+                                    statusCode: http.statusCode,
+                                    body: errText.isEmpty ? "StreamProxyCommand HTTP \(http.statusCode)" : errText
+                                )
+                            }
                         }
                         if http.statusCode == 401 || http.statusCode == 403 {
                             throw AntigravityRPCError.unauthorized("StreamProxyCommand HTTP \(http.statusCode)")
@@ -851,4 +1394,5 @@ public actor AntigravityRPCClient {
             request.setValue(sessionCookie, forHTTPHeaderField: "Cookie")
         }
     }
+
 }

@@ -2,15 +2,336 @@ import Foundation
 
 /// Backend login, pairing, Cloud Relay / Direct LAN auth, lifecycle suspension, and network path handling.
 extension AntigravitySessionStore {
-    /// Restores saved Keychain credentials on launch and connects to the live backend if available.
-    /// If the saved host is temporarily offline on launch, retains paired mode (`hasPairedBackend = true`),
-    /// marks `activeHost.isOnline = false`, hydrates cached sessions from `LocalProjectionStore`,
-    /// and starts background reconnect polling.
+    // MARK: - Live Backend Login, Pairing & Streaming Actions
+
+    /// Computes the canonical shard key (`"cloud"` or `"host:<uuid|hostname>"`) for per-host disk caching.
+    internal static func projectionHostKey(
+        isCloud: Bool,
+        instanceId: String?,
+        hostname: String?,
+        fallbackHostId: String,
+        fallbackHostName: String
+    ) -> String {
+        if isCloud {
+            return "cloud"
+        }
+        if let uuid = instanceId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !uuid.isEmpty, uuid != "unpaired" {
+            return "host:\(uuid)"
+        }
+        if let name = hostname?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty {
+            return "host:\(name)"
+        }
+        let trimmedFallbackId = fallbackHostId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedFallbackId.isEmpty && trimmedFallbackId != "unpaired" {
+            return "host:\(trimmedFallbackId)"
+        }
+        let trimmedFallbackName = fallbackHostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedFallbackName.isEmpty {
+            return "host:\(trimmedFallbackName)"
+        }
+        return "host:default"
+    }
+
+    /// Persists per-host sharded projections (`hosts/host_<key>.json`), paired host roster (`hosts_projection.json`),
+    /// and backward-compatible global projections. When `refreshedHostKeys` is provided, only those refreshed shards
+    /// are rewritten on disk so offline hosts' cached shards are never overwritten or touched.
+    internal func persistHostProjections(refreshedHostKeys: Set<String>? = nil) async {
+        let nonFixtureSummaries = summaries.filter { !Self.esddFixtureCascadeIds.contains($0.cascadeId) }
+        let nonFixtureProjects = projects.filter { !Self.esddFixtureProjectIds.contains($0.id) }
+        let fallbackId = activeHost.instanceId
+        let fallbackName = activeHost.hostname
+
+        var summariesByKey: [String: [CascadeSummary]] = [:]
+        var projectsByKey: [String: [ProjectWorkspace]] = [:]
+        var metaByKey: [String: (instanceId: String?, hostname: String, isCloud: Bool)] = [:]
+
+        for s in nonFixtureSummaries {
+            let key = Self.projectionHostKey(
+                isCloud: s.isCloud,
+                instanceId: s.originInstanceUuid,
+                hostname: s.originHostName,
+                fallbackHostId: fallbackId,
+                fallbackHostName: fallbackName
+            )
+            summariesByKey[key, default: []].append(s)
+            if metaByKey[key] == nil {
+                metaByKey[key] = s.isCloud
+                    ? (nil, "Antigravity", true)
+                    : (s.originInstanceUuid, s.originHostName ?? fallbackName, false)
+            }
+        }
+
+        for p in nonFixtureProjects {
+            let isCloud = (p.runtime == .cloud)
+            let key = Self.projectionHostKey(
+                isCloud: isCloud,
+                instanceId: p.originInstanceUuid,
+                hostname: p.hostName,
+                fallbackHostId: fallbackId,
+                fallbackHostName: fallbackName
+            )
+            projectsByKey[key, default: []].append(p)
+            if metaByKey[key] == nil {
+                metaByKey[key] = isCloud
+                    ? (nil, "Antigravity", true)
+                    : (p.originInstanceUuid, p.hostName.isEmpty ? fallbackName : p.hostName, false)
+            }
+        }
+
+        let keysToWrite: Set<String> = {
+            if let refreshedHostKeys, !refreshedHostKeys.isEmpty {
+                return refreshedHostKeys
+            }
+            return Set(summariesByKey.keys).union(projectsByKey.keys)
+        }()
+
+        let now = Date()
+        var shardsToSave: [HostProjectionSnapshot] = []
+        for key in keysToWrite {
+            let meta: (instanceId: String?, hostname: String, isCloud: Bool) = {
+                if let existing = metaByKey[key] {
+                    return existing
+                }
+                if key == "cloud" {
+                    return (nil, "Antigravity", true)
+                }
+                let rawId = key.hasPrefix("host:") ? String(key.dropFirst("host:".count)) : key
+                let matchedHost = hosts.first(where: { $0.instanceId == rawId || $0.hostname == rawId })
+                return (matchedHost?.instanceId ?? rawId, matchedHost?.hostname ?? rawId, false)
+            }()
+            shardsToSave.append(
+                HostProjectionSnapshot(
+                    hostKey: key,
+                    instanceId: meta.instanceId,
+                    hostname: meta.hostname,
+                    isCloud: meta.isCloud,
+                    summaries: summariesByKey[key] ?? [],
+                    projects: projectsByKey[key] ?? [],
+                    updatedAt: now
+                )
+            )
+        }
+
+        let localHostsSnapshot = pairedLocalHosts
+        let projectsSnapshot = nonFixtureProjects
+        let summariesSnapshot = nonFixtureSummaries
+        let storeRef = projectionStore
+        await storeRef.saveHostProjections(shardsToSave)
+        if !localHostsSnapshot.isEmpty {
+            await storeRef.saveKnownHosts(localHostsSnapshot)
+        }
+        await storeRef.saveProjects(projectsSnapshot)
+        await storeRef.saveProjectedSummaries(summariesSnapshot)
+    }
+
+    /// Instantly hydrates cached per-host conversations, projects, and paired host roster from disk (`<10ms`)
+    /// BEFORE waiting on the live network handshake so cold launches show all online/offline hosts immediately.
+    public func hydratePersistedHostProjectionsIfNeeded(
+        savedCredentials: SavedBackendCredentials? = nil
+    ) async {
+        guard !isVerificationMode else { return }
+
+        let shards = await projectionStore.loadAllHostProjections()
+        let savedKnownHosts = await projectionStore.loadKnownHosts()
+
+        var hydratedHosts: [RemoteHostInstance] = []
+        var seenHostIds = Set<String>()
+
+        func appendOfflineHostIfNeeded(_ host: RemoteHostInstance) {
+            guard host.instanceId != "unpaired", !host.instanceId.isEmpty else { return }
+            if seenHostIds.insert(host.instanceId).inserted {
+                var offlineCopy = host
+                offlineCopy.isOnline = false
+                hydratedHosts.append(offlineCopy)
+            }
+        }
+
+        for savedHost in savedKnownHosts {
+            appendOfflineHostIfNeeded(savedHost)
+        }
+
+        var primaryOfflineHost: RemoteHostInstance? = nil
+        if let saved = savedCredentials {
+            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(saved.endpointURLString)
+            let credId: String = {
+                if let resolved = saved.resolvedInstanceUuid, !resolved.isEmpty {
+                    return resolved
+                }
+                if let parsedId = parsedTarget?.instanceId, !parsedId.isEmpty {
+                    return parsedId
+                }
+                if saved.channel == .directHost, let host = URL(string: saved.endpointURLString)?.host {
+                    return "direct-\(host)"
+                }
+                return saved.hostname
+            }()
+            let credURL = URL(string: saved.endpointURLString)
+                ?? URL(string: SAPISIDHashGenerator.defaultOrigin)!
+            let credHost = RemoteHostInstance(
+                instanceId: credId,
+                hostname: saved.hostname,
+                channel: saved.channel,
+                endpointURL: credURL,
+                isOnline: false,
+                certificateFingerprintSHA256: saved.certFingerprintSHA256 ?? ""
+            )
+            if let existing = hydratedHosts.first(where: { $0.instanceId == credId || $0.hostname == saved.hostname }) {
+                primaryOfflineHost = existing
+            } else {
+                appendOfflineHostIfNeeded(credHost)
+                primaryOfflineHost = credHost
+            }
+        }
+
+        // Also surface any offline local host discovered in cached shards even if `hosts_projection.json` wasn't saved yet
+        let defaultChannel: RemoteConnectionChannel = savedCredentials?.channel ?? activeHost.channel
+        for shard in shards where !shard.isCloud {
+            let shardId = (shard.instanceId?.isEmpty == false)
+                ? shard.instanceId!
+                : (shard.hostKey.hasPrefix("host:") ? String(shard.hostKey.dropFirst("host:".count)) : shard.hostKey)
+            guard !shardId.isEmpty, shardId != "default", shardId != "unpaired" else { continue }
+            if !hydratedHosts.contains(where: { $0.instanceId == shardId || $0.hostname == shard.hostname }) {
+                let fallbackURL = URL(string: "\(SAPISIDHashGenerator.defaultOrigin)/r/\(shardId)")
+                    ?? activeHost.endpointURL
+                appendOfflineHostIfNeeded(
+                    RemoteHostInstance(
+                        instanceId: shardId,
+                        hostname: shard.hostname.isEmpty ? shardId : shard.hostname,
+                        channel: defaultChannel,
+                        endpointURL: fallbackURL,
+                        isOnline: false
+                    )
+                )
+            }
+        }
+
+        var mergedSummariesById: [String: CascadeSummary] = [:]
+        var cachedProjects: [ProjectWorkspace] = []
+        var cachedCloudProjects: [ProjectWorkspace] = []
+        var cachedWorkspaces: [WorkspaceInfo] = []
+        var seenWorkspaceKeys = Set<String>()
+
+        for shard in shards {
+            for s in shard.summaries where !Self.esddFixtureCascadeIds.contains(s.cascadeId) {
+                if let existing = mergedSummariesById[s.cascadeId] {
+                    if s.updatedAt > existing.updatedAt || s.stepCount > existing.stepCount {
+                        mergedSummariesById[s.cascadeId] = s
+                    }
+                } else {
+                    mergedSummariesById[s.cascadeId] = s
+                }
+            }
+            for p in shard.projects where !Self.esddFixtureProjectIds.contains(p.id) {
+                cachedProjects.append(p)
+                if p.runtime == .cloud {
+                    cachedCloudProjects.append(p)
+                } else if !p.isNoProject && !p.workspaceUri.isEmpty {
+                    let wsKey = "\(p.originInstanceUuid ?? p.hostName)|\(p.workspaceUri.lowercased())"
+                    if seenWorkspaceKeys.insert(wsKey).inserted {
+                        cachedWorkspaces.append(
+                            WorkspaceInfo(
+                                workspaceUri: p.workspaceUri,
+                                displayName: p.name,
+                                activeBranch: p.activeBranch,
+                                worktrees: p.worktrees,
+                                isCloud: false,
+                                originInstanceUuid: p.originInstanceUuid,
+                                originHostName: p.hostName
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        var hydratedSummaries = mergedSummariesById.values.sorted { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.cascadeId < rhs.cascadeId
+        }
+
+        guard savedCredentials != nil || !hydratedSummaries.isEmpty || !cachedProjects.isEmpty else {
+            return
+        }
+
+        if !hydratedHosts.isEmpty {
+            hosts = hydratedHosts
+            if let primaryOfflineHost {
+                activeHost = primaryOfflineHost
+            } else if activeHost.instanceId == "unpaired", let first = hydratedHosts.first {
+                activeHost = first
+            }
+            if availableRelayInstances.isEmpty {
+                let relayHosts = hydratedHosts.filter { $0.channel == .cloudRelay }
+                if !relayHosts.isEmpty {
+                    availableRelayInstances = relayHosts.map { host in
+                        RelayInstanceInfo(
+                            uuid: host.instanceId,
+                            name: host.hostname,
+                            version: host.version,
+                            status: .disconnected
+                        )
+                    }
+                }
+            }
+        }
+
+        if let savedScope = loadPersistedSelectedHostScope() {
+            selectedHostScope = savedScope
+            reconcileSelectedHostScopeWithHosts()
+        }
+
+        if !hydratedSummaries.isEmpty || !cachedProjects.isEmpty {
+            let reconciled = Self.reconcileLiveProjects(
+                workspaces: cachedWorkspaces,
+                summaries: &hydratedSummaries,
+                existingProjects: cachedProjects,
+                hostName: activeHost.hostname,
+                cloudProjects: cachedCloudProjects
+            )
+            workspaces = cachedWorkspaces
+            projects = reconciled
+            summaries = hydratedSummaries
+            if selectedProjectId.isEmpty {
+                let defaultProj = reconciled.first(where: { projectMatchesHostScope($0) && !$0.isNoProject })
+                    ?? reconciled.first(where: { !$0.isNoProject })
+                    ?? reconciled.first
+                selectedProjectId = defaultProj?.id ?? ""
+                selectedWorkspaceUri = defaultProj?.workspaceUri ?? ""
+            }
+            if activeCascadeId.isEmpty {
+                activeCascadeId = hydratedSummaries.first?.cascadeId ?? ""
+            }
+        }
+
+        let cachedAutomations = (await projectionStore.loadAutomations()).filter {
+            !Self.esddFixtureAutomationIds.contains($0.id)
+        }
+        if automations.isEmpty && !cachedAutomations.isEmpty {
+            automations = cachedAutomations
+        }
+        pendingOutboxCount = await projectionStore.loadPendingOutbox().count
+
+        hasPairedBackend = true
+        isLiveBackendConnected = false
+        isInitialSessionCheckComplete = true
+        connectionLifecyclePhase = savedCredentials != nil ? .connecting : .offlineBackoff(attempt: 0, nextRetrySeconds: 3)
+        connectionStatusText = savedCredentials != nil
+            ? "Reconnecting · \(activeHost.hostname)..."
+            : "Offline · \(activeHost.hostname)"
+    }
+
+    /// Restores saved Keychain credentials on launch: instantly hydrates cached per-host projections from disk
+    /// (`<10ms`) so both online and offline hosts' conversations appear immediately, then connects live to merge fresh data.
     @discardableResult
     public func restoreSavedBackendSession() async -> Bool {
         guard let saved = await secretStore.loadCredentials() else {
             return false
         }
+        await hydratePersistedHostProjectionsIfNeeded(savedCredentials: saved)
         switch saved.channel {
         case .directHost:
             return await connectDirectLAN(
@@ -21,13 +342,21 @@ extension AntigravitySessionStore {
                 isRestoringSavedSession: true
             )
         case .cloudRelay:
+            let hasExplicitLocalScope: Bool = {
+                if case .localHost = loadPersistedSelectedHostScope() {
+                    return true
+                }
+                return false
+            }()
             return await connectCloudRelay(
                 relayURLString: saved.endpointURLString,
                 sessionCookie: saved.sessionCookie ?? "",
                 authUser: saved.authUser,
                 resolvedInstanceUuid: saved.resolvedInstanceUuid,
+                relayApiKey: saved.relayApiKey,
                 hostName: saved.hostname,
-                isRestoringSavedSession: true
+                isRestoringSavedSession: true,
+                strictTargetMatch: hasExplicitLocalScope
             )
         }
     }
@@ -174,7 +503,7 @@ extension AntigravitySessionStore {
 
     ///Resolves HTTP redirects for official Google shortlinks (`g.co`, `c.gle`, `goo.gl`, `*.page.link`)
     /// using an ephemeral `URLSession` (without attaching session cookies) so the target `/r/<instance-id>` is discovered.
-    nonisolated internal static func resolveShortlinkRedirectIfNeeded(_ urlString: String) async -> String? {
+    nonisolated private static func resolveShortlinkRedirectIfNeeded(_ urlString: String) async -> String? {
         guard let url = URL(string: urlString) else { return nil }
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 6
@@ -210,9 +539,11 @@ extension AntigravitySessionStore {
         sessionCookie: String,
         authUser: String? = nil,
         resolvedInstanceUuid: String? = nil,
+        relayApiKey: String? = nil,
         deepLinkedConversationId: String? = nil,
         hostName: String = "Antigravity Desktop",
-        isRestoringSavedSession: Bool = false
+        isRestoringSavedSession: Bool = false,
+        strictTargetMatch: Bool = false
     ) async -> Bool {
         let trimmedInput = relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         var parsedTarget = RemoteHostInstance.parseRemoteControlTarget(
@@ -234,9 +565,26 @@ extension AntigravitySessionStore {
             return false
         }
 
+        hostSwitchGeneration &+= 1
+        let generation = hostSwitchGeneration
+        if !strictTargetMatch {
+            hostSwitchTask?.cancel()
+            hostSwitchTask = nil
+        }
+        cancelAllSummaryStreams()
+        summaryPollingTask?.cancel()
+        summaryPollingTask = nil
+        stepPollingTask?.cancel()
+        stepPollingTask = nil
+
         isConnectingToBackend = true
         connectionErrorText = nil
-        defer { isConnectingToBackend = false }
+        defer {
+            isConnectingToBackend = false
+            if self.hostSwitchGeneration == generation {
+                self.isSwitchingHost = false
+            }
+        }
 
         if parsedTarget?.requiresRedirectResolution == true,
            let origURL = parsedTarget?.originalURLString {
@@ -260,6 +608,18 @@ extension AntigravitySessionStore {
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         let initialInstanceId = parsedTarget?.instanceId.isEmpty == false ? parsedTarget!.instanceId : "auto"
         let deepLinkConv = deepLinkedConversationId ?? parsedTarget?.conversationId
+        let initialOriginPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
+        let trimmedExplicitKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var effectiveRelayApiKey: String? = (trimmedExplicitKey?.isEmpty == false ? trimmedExplicitKey : nil)
+        if effectiveRelayApiKey == nil && !SAPISIDHashGenerator.isLoopbackOrigin(initialOriginPrefix) {
+            if let originCachedKey = await secretStore.loadRelayWebApiKey(forOrigin: initialOriginPrefix) {
+                effectiveRelayApiKey = originCachedKey
+            } else if let savedCredsKey = await secretStore.loadCredentials()?.relayApiKey?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !savedCredsKey.isEmpty {
+                effectiveRelayApiKey = savedCredsKey
+            }
+        }
 
         let hostInstance = RemoteHostInstance(
             instanceId: resolvedInstanceUuid ?? initialInstanceId,
@@ -272,16 +632,22 @@ extension AntigravitySessionStore {
             host: hostInstance,
             sessionCookie: trimmedCookie,
             authUser: effectiveAuthUser,
-            resolvedInstanceUuid: resolvedInstanceUuid
+            resolvedInstanceUuid: resolvedInstanceUuid,
+            relayApiKey: effectiveRelayApiKey
         )
 
         do {
-            let handshake = try await candidateClient.verifyConnection()
+            let handshake = try await candidateClient.verifyConnection(
+                allowCrossHostFallback: !strictTargetMatch
+            )
+            guard self.hostSwitchGeneration == generation else { return false }
+
             let finalHostName = handshake.resolvedHostname ?? hostName
             let finalUuid = handshake.resolvedInstanceUuid ?? hostInstance.instanceId
             let finalAuthUser = handshake.resolvedAuthUser ?? effectiveAuthUser ?? "0"
             let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
             let finalRelayURL = URL(string: "\(originPrefix)/r/\(finalUuid)") ?? url
+            let finalRelayApiKey = await candidateClient.currentRelayApiKey() ?? effectiveRelayApiKey
 
             let verifiedHost = RemoteHostInstance(
                 instanceId: finalUuid,
@@ -289,7 +655,7 @@ extension AntigravitySessionStore {
                 version: handshake.serverVersion,
                 channel: .cloudRelay,
                 endpointURL: finalRelayURL,
-                isOnline: true,
+                isOnline: handshake.isSelectedHostOnline,
                 latencyMs: handshake.latencyMs
             )
 
@@ -302,10 +668,57 @@ extension AntigravitySessionStore {
             )
 
             // Sync all Cloud Relay instances (online & offline) into `hosts` so Home reflects per-device reachability
+            let activeRelayInst = handshake.availableRelayInstances.first(where: { $0.uuid == finalUuid })
             syncRelayInstancesToHosts(
                 handshake.availableRelayInstances,
-                latencyMs: handshake.latencyMs
+                latencyMs: handshake.latencyMs,
+                preferredActiveInstance: activeRelayInst,
+                persistKeychainIfChanged: false
             )
+
+            if let finalRelayApiKey,
+               !finalRelayApiKey.isEmpty,
+               !SAPISIDHashGenerator.isLoopbackOrigin(originPrefix) {
+                await secretStore.saveRelayWebApiKey(finalRelayApiKey, forOrigin: originPrefix)
+            }
+
+            let hasMultipleLocalHosts = pairedLocalHosts.count > 1
+            if strictTargetMatch {
+                selectedHostScope = .localHost(id: finalUuid, name: finalHostName)
+                persistSelectedHostScope()
+            } else if isRestoringSavedSession {
+                if let savedScope = loadPersistedSelectedHostScope() {
+                    selectedHostScope = savedScope
+                    reconcileSelectedHostScopeWithHosts()
+                } else if hasMultipleLocalHosts {
+                    selectedHostScope = .localHost(id: finalUuid, name: finalHostName)
+                    persistSelectedHostScope()
+                } else {
+                    selectedHostScope = .allHosts
+                }
+            } else if hasMultipleLocalHosts && initialInstanceId != "auto" {
+                selectedHostScope = .localHost(id: finalUuid, name: finalHostName)
+                persistSelectedHostScope()
+            } else {
+                selectedHostScope = .allHosts
+            }
+
+            if !handshake.isSelectedHostOnline {
+                isLiveBackendConnected = false
+                var offlineHost = verifiedHost
+                offlineHost.isOnline = false
+                activeHost = offlineHost
+                if let idx = hosts.firstIndex(where: { $0.instanceId == offlineHost.instanceId }) {
+                    hosts[idx] = offlineHost
+                }
+                connectionStatusText = "Offline · \(finalHostName)"
+                connectionErrorText = "\(finalHostName) is currently offline. Ensure Remote Control is enabled on that machine."
+                let nextDelay = ConnectionPowerPolicy.offlineBackoffBaseDelay(
+                    attempt: 0,
+                    isLowPowerMode: isLowPowerModeEnabled
+                )
+                connectionLifecyclePhase = .offlineBackoff(attempt: 0, nextRetrySeconds: nextDelay)
+            }
 
             await secretStore.saveCredentials(
                 SavedBackendCredentials(
@@ -314,7 +727,8 @@ extension AntigravitySessionStore {
                     hostname: finalHostName,
                     sessionCookie: trimmedCookie,
                     authUser: finalAuthUser,
-                    resolvedInstanceUuid: finalUuid
+                    resolvedInstanceUuid: finalUuid,
+                    relayApiKey: finalRelayApiKey
                 )
             )
 
@@ -371,6 +785,9 @@ extension AntigravitySessionStore {
     }
 
     public func disconnectBackendAndClearKeychain() async {
+        hostSwitchGeneration &+= 1
+        hostSwitchTask?.cancel()
+        hostSwitchTask = nil
         cancelAllSummaryStreams()
         summaryPollingTask?.cancel()
         summaryPollingTask = nil
@@ -379,6 +796,13 @@ extension AntigravitySessionStore {
         networkMonitor.stop()
         hasPairedBackend = false
         isLiveBackendConnected = false
+        isSwitchingHost = false
+        activeRefreshCount = 0
+        isRefreshingSummaries = false
+        selectedHostScope = .allHosts
+        if !isVerificationMode {
+            preferencesStore.set(nil, forKey: Self.selectedHostScopeDefaultsKey)
+        }
         cloudAgentWarmingUp = false
         consecutiveSyncFailures = 0
         reconnectAttemptCount = 0
@@ -404,7 +828,14 @@ extension AntigravitySessionStore {
         availableRelayInstances = []
         connectionErrorText = nil
         connectionStatusText = "Not Connected"
+        for task in inFlightHostRefreshTasks.values {
+            task.cancel()
+        }
+        inFlightHostRefreshTasks.removeAll()
+        refreshingHostScopeKeys.removeAll()
+        isRefreshingRelayHosts = false
         if !isVerificationMode {
+            hosts = []
             projects = []
             workspaces = []
             summaries = []
@@ -422,6 +853,7 @@ extension AntigravitySessionStore {
             activeRoute = .tabRoot
         }
         _ = await projectionStore.drainOutbox()
+        await projectionStore.clearCachedProjections()
         await secretStore.clearCredentials()
     }
 
@@ -433,6 +865,13 @@ extension AntigravitySessionStore {
         guard !isVerificationMode else { return }
         guard !isNetworkingSuspended else { return }
         isNetworkingSuspended = true
+        hostSwitchTask?.cancel()
+        hostSwitchTask = nil
+        for task in inFlightHostRefreshTasks.values {
+            task.cancel()
+        }
+        inFlightHostRefreshTasks.removeAll()
+        refreshingHostScopeKeys.removeAll()
         cancelAllSummaryStreams()
         summaryPollingTask?.cancel()
         summaryPollingTask = nil
@@ -610,20 +1049,69 @@ extension AntigravitySessionStore {
             connectionLifecyclePhase = .offlineBackoff(attempt: 0, nextRetrySeconds: nextDelay)
         }
 
-        if wasInESDDDemoState {
-            let cachedProjects = (await projectionStore.loadProjects()).filter {
-                !Self.esddFixtureProjectIds.contains($0.id)
+        if wasInESDDDemoState || (summaries.isEmpty && projects.isEmpty) {
+            let shards = await projectionStore.loadAllHostProjections()
+            let savedKnownHosts = await projectionStore.loadKnownHosts()
+            for savedHost in savedKnownHosts where savedHost.instanceId != "unpaired" && !savedHost.instanceId.isEmpty {
+                if !hosts.contains(where: { $0.instanceId == savedHost.instanceId }) {
+                    var offlinePeer = savedHost
+                    offlinePeer.isOnline = false
+                    hosts.append(offlinePeer)
+                }
             }
-            let cachedSummaries = (await projectionStore.loadProjectedSummaries()).filter {
-                !Self.esddFixtureCascadeIds.contains($0.cascadeId)
+            if availableRelayInstances.isEmpty {
+                let relayHosts = hosts.filter { $0.channel == .cloudRelay && $0.instanceId != "unpaired" }
+                if !relayHosts.isEmpty {
+                    availableRelayInstances = relayHosts.map { h in
+                        RelayInstanceInfo(uuid: h.instanceId, name: h.hostname, version: h.version, status: .disconnected)
+                    }
+                }
             }
-            var hydratedSummaries = cachedSummaries
+
+            var cachedProjects: [ProjectWorkspace] = []
+            var cachedCloudProjects: [ProjectWorkspace] = []
+            var cachedSummariesById: [String: CascadeSummary] = [:]
+            for shard in shards {
+                for proj in shard.projects where !Self.esddFixtureProjectIds.contains(proj.id) {
+                    var copy = proj
+                    if copy.runtime != .cloud && copy.originInstanceUuid == nil {
+                        copy.originInstanceUuid = shard.instanceId ?? offlineHost.instanceId
+                        if copy.hostName.isEmpty || copy.hostName == "MacBook Pro" {
+                            copy.hostName = shard.hostname.isEmpty ? offlineHost.hostname : shard.hostname
+                        }
+                    }
+                    cachedProjects.append(copy)
+                    if copy.runtime == .cloud {
+                        cachedCloudProjects.append(copy)
+                    }
+                }
+                for s in shard.summaries where !Self.esddFixtureCascadeIds.contains(s.cascadeId) {
+                    var copy = s
+                    if !copy.isCloud && copy.originInstanceUuid == nil {
+                        copy.originInstanceUuid = shard.instanceId ?? offlineHost.instanceId
+                        copy.originHostName = copy.originHostName ?? (shard.hostname.isEmpty ? offlineHost.hostname : shard.hostname)
+                    }
+                    if let existing = cachedSummariesById[copy.cascadeId] {
+                        if copy.updatedAt > existing.updatedAt || copy.stepCount > existing.stepCount {
+                            cachedSummariesById[copy.cascadeId] = copy
+                        }
+                    } else {
+                        cachedSummariesById[copy.cascadeId] = copy
+                    }
+                }
+            }
+
+            var hydratedSummaries = cachedSummariesById.values.sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+                return lhs.cascadeId < rhs.cascadeId
+            }
             if !cachedProjects.isEmpty || !hydratedSummaries.isEmpty {
                 projects = Self.reconcileLiveProjects(
                     workspaces: [],
                     summaries: &hydratedSummaries,
                     existingProjects: cachedProjects,
-                    hostName: offlineHost.hostname
+                    hostName: offlineHost.hostname,
+                    cloudProjects: cachedCloudProjects
                 )
                 summaries = hydratedSummaries
             } else {
@@ -631,13 +1119,20 @@ extension AntigravitySessionStore {
                 summaries = []
             }
             workspaces = []
-            stepsByCascadeId = [:]
+            if wasInESDDDemoState {
+                stepsByCascadeId = [:]
+            }
             automations = (await projectionStore.loadAutomations()).filter {
                 !Self.esddFixtureAutomationIds.contains($0.id)
             }
             selectedProjectId = projects.first?.id ?? ""
             selectedWorkspaceUri = projects.first?.workspaceUri ?? ""
             activeCascadeId = summaries.first?.cascadeId ?? ""
+        }
+
+        if let savedScope = loadPersistedSelectedHostScope() {
+            selectedHostScope = savedScope
+            reconcileSelectedHostScopeWithHosts()
         }
 
         startSummarySubscriptionStream()
@@ -667,7 +1162,7 @@ extension AntigravitySessionStore {
         return false
     }
 
-    internal func markBackendOffline(error: Error) {
+    internal func markBackendOffline(error: Error, preservePeerOnlineStates: Bool = false) {
         guard hasPairedBackend || isLiveBackendConnected else { return }
         cancelAllSummaryStreams()
         isLiveBackendConnected = false
@@ -679,7 +1174,7 @@ extension AntigravitySessionStore {
         if let idx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
             hosts[idx] = updatedHost
         }
-        if updatedHost.channel == .cloudRelay || !isDeviceNetworkReachable {
+        if !preservePeerOnlineStates && (updatedHost.channel == .cloudRelay || !isDeviceNetworkReachable) {
             for idx in hosts.indices where hosts[idx].channel == updatedHost.channel || !isDeviceNetworkReachable {
                 hosts[idx].isOnline = false
             }
@@ -786,10 +1281,40 @@ extension AntigravitySessionStore {
         let cloudProjByName = Dictionary(grouping: cloudProjects, by: \.name)
 
         func baseSlug(for rawSlug: String) -> String {
-            if rawSlug.hasPrefix("cloud:") {
-                return String(rawSlug.dropFirst("cloud:".count))
+            AntigravityCloudDetector.stripProjectScopePrefix(rawSlug)
+        }
+
+        func localHostKey(for s: CascadeSummary) -> String {
+            if let uuid = s.originInstanceUuid, !uuid.isEmpty { return uuid }
+            if let hName = s.originHostName, !hName.isEmpty { return hName }
+            return ""
+        }
+
+        func partitionLocalIndicesByHost(_ indices: [Int]) -> [(hostKey: String, indices: [Int])] {
+            var nonEmptyKeys = Set<String>()
+            for idx in indices {
+                let key = localHostKey(for: summaries[idx])
+                if !key.isEmpty {
+                    nonEmptyKeys.insert(key)
+                }
             }
-            return rawSlug
+            // Keep single-host summaries unified even when mixed with legacy untagged entries
+            // (`originInstanceUuid == nil`) so a single Mac never splits into two project sections.
+            if nonEmptyKeys.count <= 1 {
+                return [(nonEmptyKeys.first ?? "", indices)]
+            }
+            var order: [String] = []
+            var grouped: [String: [Int]] = [:]
+            for idx in indices {
+                let key = localHostKey(for: summaries[idx])
+                if grouped[key] == nil {
+                    order.append(key)
+                    grouped[key] = [idx]
+                } else {
+                    grouped[key]?.append(idx)
+                }
+            }
+            return order.map { ($0, grouped[$0] ?? []) }
         }
 
         // Link Cloud summaries (by projectId, workspaceUri, or owner/repo label) to their canonical Cloud project,
@@ -831,6 +1356,77 @@ extension AntigravitySessionStore {
         var reconciled: [ProjectWorkspace] = []
         var knownIds = Set<String>()
 
+        func appendLocalHostGroups(
+            canonicalName: String,
+            isNoProj: Bool,
+            localIndices: [Int],
+            matchingWorkspaces: [WorkspaceInfo],
+            cloudWs: WorkspaceInfo?,
+            allowCloudOnlyFallback: Bool
+        ) {
+            let hostGroups = partitionLocalIndicesByHost(localIndices)
+            let isMultiHostLocal = hostGroups.count > 1
+            let singleLocalWs = matchingWorkspaces.first(where: { !$0.isCloud })
+
+            for (hostKey, groupIndices) in hostGroups {
+                guard let firstIdx = groupIndices.first else { continue }
+                let firstLocal = summaries[firstIdx]
+                let groupOriginHost = groupIndices.compactMap { summaries[$0].originHostName }.first(where: { !$0.isEmpty })
+                let groupOriginUuid = groupIndices.compactMap { summaries[$0].originInstanceUuid }.first(where: { !$0.isEmpty })
+                let projectId = (isMultiHostLocal && !hostKey.isEmpty)
+                    ? "host:\(hostKey):\(canonicalName)"
+                    : canonicalName
+
+                for idx in groupIndices {
+                    summaries[idx].projectSlug = projectId
+                }
+
+                let matchedLocalWs = matchingWorkspaces.first(where: { ws in
+                    guard !ws.isCloud else { return false }
+                    if let wsUuid = ws.originInstanceUuid, !wsUuid.isEmpty,
+                       let sUuid = groupOriginUuid, !sUuid.isEmpty {
+                        return wsUuid == sUuid
+                    }
+                    if let wsHost = ws.originHostName, !wsHost.isEmpty,
+                       let sHost = groupOriginHost, !sHost.isEmpty {
+                        return wsHost == sHost
+                    }
+                    return !isMultiHostLocal
+                }) ?? (isMultiHostLocal ? nil : singleLocalWs)
+
+                let isWsCloudOnly = allowCloudOnlyFallback
+                    && !isMultiHostLocal
+                    && !isNoProj
+                    && (cloudWs != nil && matchedLocalWs == nil && AntigravityCloudDetector.isCloudWorkspaceURI(firstLocal.workspaceUri))
+                let effectiveUri = isNoProj
+                    ? ""
+                    : ((isWsCloudOnly ? cloudWs?.workspaceUri : matchedLocalWs?.workspaceUri) ?? firstLocal.workspaceUri)
+                let effectiveBranch = isNoProj ? "" : (matchedLocalWs?.activeBranch ?? firstLocal.branchName)
+                let resolvedLocalHost = groupOriginHost ?? matchedLocalWs?.originHostName ?? hostName
+                let resolvedOriginUuid = groupOriginUuid ?? matchedLocalWs?.originInstanceUuid
+                let pathDisplay = isNoProj
+                    ? "Unassigned · \(resolvedLocalHost)"
+                    : effectiveUri.replacingOccurrences(of: "file://", with: "")
+
+                if knownIds.insert(projectId).inserted {
+                    reconciled.append(
+                        ProjectWorkspace(
+                            id: projectId,
+                            name: canonicalName,
+                            pathDisplay: pathDisplay,
+                            workspaceUri: effectiveUri,
+                            runtime: isWsCloudOnly ? .cloud : .macBookPro,
+                            hostName: isWsCloudOnly ? "Cloud" : resolvedLocalHost,
+                            activeBranch: effectiveBranch,
+                            worktrees: isNoProj ? [] : (matchedLocalWs?.worktrees.isEmpty == false ? matchedLocalWs!.worktrees : [effectiveBranch]),
+                            isExpandedInHome: expandedById[projectId] ?? expandedById[canonicalName] ?? true,
+                            originInstanceUuid: resolvedOriginUuid
+                        )
+                    )
+                }
+            }
+        }
+
         for slug in orderedBaseSlugs {
             let isNoProj = AntigravityCloudDetector.isNoProjectSlug(slug)
             let canonicalName = isNoProj ? AntigravityCloudDetector.noProjectDisplayName : slug
@@ -840,38 +1436,20 @@ extension AntigravitySessionStore {
 
             let matchingWorkspaces = isNoProj ? [] : (wsByName[slug] ?? [])
             let cloudWs = matchingWorkspaces.first(where: \.isCloud)
-            let localWs = matchingWorkspaces.first(where: { !$0.isCloud })
             let matchedCloudProj = isNoProj ? nil : cloudProjByName[slug]?.first
 
             if !cloudIndices.isEmpty && !localIndices.isEmpty {
                 // Both active local Mac chats and active Cloud chats exist for the same group (`slug` or `No Project`):
-                // keep local chats under `canonicalName` and separate Cloud chats under `cloud:<canonicalName>`.
-                for idx in localIndices {
-                    summaries[idx].projectSlug = canonicalName
-                }
-                let firstLocal = summaries[localIndices[0]]
-                let localUri = isNoProj ? "" : (localWs?.workspaceUri ?? firstLocal.workspaceUri)
-                let localBranch = isNoProj ? "" : (localWs?.activeBranch ?? firstLocal.branchName)
-                let resolvedLocalHost = localWs?.originHostName ?? firstLocal.originHostName ?? hostName
-                let localPathDisplay = isNoProj
-                    ? "Unassigned · \(resolvedLocalHost)"
-                    : localUri.replacingOccurrences(of: "file://", with: "")
-                if knownIds.insert(canonicalName).inserted {
-                    reconciled.append(
-                        ProjectWorkspace(
-                            id: canonicalName,
-                            name: canonicalName,
-                            pathDisplay: localPathDisplay,
-                            workspaceUri: localUri,
-                            runtime: .macBookPro,
-                            hostName: resolvedLocalHost,
-                            activeBranch: localBranch,
-                            worktrees: isNoProj ? [] : (localWs?.worktrees.isEmpty == false ? localWs!.worktrees : [localBranch]),
-                            isExpandedInHome: expandedById[canonicalName] ?? true,
-                            originInstanceUuid: localWs?.originInstanceUuid ?? firstLocal.originInstanceUuid
-                        )
-                    )
-                }
+                // keep local chats under `canonicalName` (or `host:<uuid>:<canonicalName>` across multiple Macs)
+                // and separate Cloud chats under `cloud:<canonicalName>`.
+                appendLocalHostGroups(
+                    canonicalName: canonicalName,
+                    isNoProj: isNoProj,
+                    localIndices: localIndices,
+                    matchingWorkspaces: matchingWorkspaces,
+                    cloudWs: cloudWs,
+                    allowCloudOnlyFallback: false
+                )
 
                 let cloudId = "cloud:\(canonicalName)"
                 for idx in cloudIndices {
@@ -932,35 +1510,14 @@ extension AntigravitySessionStore {
                     )
                 }
             } else if !localIndices.isEmpty {
-                for idx in localIndices {
-                    summaries[idx].projectSlug = canonicalName
-                }
-                let firstLocal = summaries[localIndices[0]]
-                let isWsCloudOnly = !isNoProj && (cloudWs != nil && localWs == nil && AntigravityCloudDetector.isCloudWorkspaceURI(firstLocal.workspaceUri))
-                let effectiveUri = isNoProj
-                    ? ""
-                    : ((isWsCloudOnly ? cloudWs?.workspaceUri : localWs?.workspaceUri) ?? firstLocal.workspaceUri)
-                let effectiveBranch = isNoProj ? "" : (localWs?.activeBranch ?? firstLocal.branchName)
-                let resolvedLocalHost = localWs?.originHostName ?? firstLocal.originHostName ?? hostName
-                let pathDisplay = isNoProj
-                    ? "Unassigned · \(resolvedLocalHost)"
-                    : effectiveUri.replacingOccurrences(of: "file://", with: "")
-                if knownIds.insert(canonicalName).inserted {
-                    reconciled.append(
-                        ProjectWorkspace(
-                            id: canonicalName,
-                            name: canonicalName,
-                            pathDisplay: pathDisplay,
-                            workspaceUri: effectiveUri,
-                            runtime: isWsCloudOnly ? .cloud : .macBookPro,
-                            hostName: isWsCloudOnly ? "Cloud" : resolvedLocalHost,
-                            activeBranch: effectiveBranch,
-                            worktrees: isNoProj ? [] : (localWs?.worktrees.isEmpty == false ? localWs!.worktrees : [effectiveBranch]),
-                            isExpandedInHome: expandedById[canonicalName] ?? true,
-                            originInstanceUuid: localWs?.originInstanceUuid ?? firstLocal.originInstanceUuid
-                        )
-                    )
-                }
+                appendLocalHostGroups(
+                    canonicalName: canonicalName,
+                    isNoProj: isNoProj,
+                    localIndices: localIndices,
+                    matchingWorkspaces: matchingWorkspaces,
+                    cloudWs: cloudWs,
+                    allowCloudOnlyFallback: true
+                )
             }
         }
 
@@ -973,9 +1530,22 @@ extension AntigravitySessionStore {
                 continue
             }
             let isCloud = ws.isCloud || AntigravityCloudDetector.isCloudWorkspaceURI(ws.workspaceUri)
-            if reconciled.contains(where: { !$0.workspaceUri.isEmpty && $0.workspaceUri.caseInsensitiveCompare(ws.workspaceUri) == .orderedSame }) {
+            if reconciled.contains(where: { existing in
+                guard !existing.workspaceUri.isEmpty,
+                      existing.workspaceUri.caseInsensitiveCompare(ws.workspaceUri) == .orderedSame,
+                      (existing.runtime == .cloud) == isCloud else {
+                    return false
+                }
+                if isCloud { return true }
+                if let eUuid = existing.originInstanceUuid, !eUuid.isEmpty,
+                   let wsUuid = ws.originInstanceUuid, !wsUuid.isEmpty {
+                    return eUuid == wsUuid
+                }
+                return true
+            }) {
                 continue
             }
+            let targetId: String
             if knownIds.contains(slug) {
                 if isCloud,
                    let idx = reconciled.firstIndex(where: { $0.id == slug }),
@@ -985,13 +1555,21 @@ extension AntigravitySessionStore {
                     reconciled[idx].hostName = "Cloud"
                     reconciled[idx].workspaceUri = mergedUri
                     reconciled[idx].pathDisplay = mergedUri
+                    continue
                 }
-                continue
+                if !isCloud, let wsKey = (ws.originInstanceUuid?.isEmpty == false ? ws.originInstanceUuid : ws.originHostName), !wsKey.isEmpty {
+                    targetId = "host:\(wsKey):\(slug)"
+                    guard !knownIds.contains(targetId) else { continue }
+                } else {
+                    continue
+                }
+            } else {
+                targetId = slug
             }
-            knownIds.insert(slug)
+            knownIds.insert(targetId)
             reconciled.append(
                 ProjectWorkspace(
-                    id: slug,
+                    id: targetId,
                     name: slug,
                     pathDisplay: ws.workspaceUri.replacingOccurrences(of: "file://", with: ""),
                     workspaceUri: ws.workspaceUri,
@@ -999,7 +1577,7 @@ extension AntigravitySessionStore {
                     hostName: isCloud ? "Cloud" : (ws.originHostName ?? hostName),
                     activeBranch: ws.activeBranch,
                     worktrees: ws.worktrees.isEmpty ? [ws.activeBranch] : ws.worktrees,
-                    isExpandedInHome: expandedById[slug] ?? true,
+                    isExpandedInHome: expandedById[targetId] ?? expandedById[slug] ?? true,
                     originInstanceUuid: ws.originInstanceUuid
                 )
             )
@@ -1148,9 +1726,11 @@ extension AntigravitySessionStore {
         client: AntigravityRPCClient,
         handshake: BackendHandshakeResult
     ) {
+        let wasAlreadyPaired = hasPairedBackend
+        let hostOnline = handshake.isSelectedHostOnline
         var updatedHost = host
         updatedHost.latencyMs = handshake.latencyMs
-        updatedHost.isOnline = true
+        updatedHost.isOnline = hostOnline
         activeHost = updatedHost
         if let existingIdx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
             hosts[existingIdx] = updatedHost
@@ -1166,35 +1746,126 @@ extension AntigravitySessionStore {
         lastStreamReopenAttemptAt = .distantPast
         isDeviceNetworkReachable = true
         hasPairedBackend = true
-        isLiveBackendConnected = true
+        isLiveBackendConnected = hostOnline
         lastPingLatencyMs = handshake.latencyMs
         connectionErrorText = nil
-        connectionStatusText = "Connected · \(updatedHost.hostname) · \(handshake.latencyMs)ms"
-        connectionLifecyclePhase = .onlineIdle
+        if hostOnline {
+            connectionStatusText = "Connected · \(updatedHost.hostname) · \(handshake.latencyMs)ms"
+            connectionLifecyclePhase = .onlineIdle
+        } else {
+            connectionStatusText = "Offline · \(updatedHost.hostname)"
+            let nextDelay = ConnectionPowerPolicy.offlineBackoffBaseDelay(
+                attempt: 0,
+                isLowPowerMode: isLowPowerModeEnabled
+            )
+            connectionLifecyclePhase = .offlineBackoff(attempt: 0, nextRetrySeconds: nextDelay)
+        }
 
-        workspaces = handshake.workspaces
-        var sortedSummaries = handshake.summaries.sorted { lhs, rhs in
+        let existingSummariesBeforeConnect = wasAlreadyPaired
+            ? summaries.filter { !Self.esddFixtureCascadeIds.contains($0.cascadeId) }
+            : []
+        let existingProjectsBeforeConnect = wasAlreadyPaired
+            ? projects.filter { !Self.esddFixtureProjectIds.contains($0.id) }
+            : []
+        let existingWorkspacesBeforeConnect = wasAlreadyPaired ? workspaces : []
+
+        var refreshedHostKeys = Set<String>()
+        if updatedHost.channel == .cloudRelay {
+            for inst in handshake.availableRelayInstances where inst.status.isReachable {
+                refreshedHostKeys.insert("host:\(inst.uuid)")
+            }
+            if hostOnline && !updatedHost.instanceId.isEmpty && updatedHost.instanceId != "unpaired" {
+                refreshedHostKeys.insert("host:\(updatedHost.instanceId)")
+            }
+            if !handshake.cloudProjects.isEmpty || handshake.summaries.contains(where: \.isCloud) {
+                refreshedHostKeys.insert("cloud")
+            }
+        } else {
+            refreshedHostKeys.insert(
+                Self.projectionHostKey(
+                    isCloud: false,
+                    instanceId: updatedHost.instanceId,
+                    hostname: updatedHost.hostname,
+                    fallbackHostId: updatedHost.instanceId,
+                    fallbackHostName: updatedHost.hostname
+                )
+            )
+            if !handshake.cloudProjects.isEmpty || handshake.summaries.contains(where: \.isCloud) {
+                refreshedHostKeys.insert("cloud")
+            }
+        }
+
+        let incomingSummaryIds = Set(handshake.summaries.map(\.cascadeId))
+        let preservedOfflineSummaries = existingSummariesBeforeConnect.filter { existing in
+            guard !incomingSummaryIds.contains(existing.cascadeId) else { return false }
+            let key = Self.projectionHostKey(
+                isCloud: existing.isCloud,
+                instanceId: existing.originInstanceUuid,
+                hostname: existing.originHostName,
+                fallbackHostId: updatedHost.instanceId,
+                fallbackHostName: updatedHost.hostname
+            )
+            return !refreshedHostKeys.contains(key)
+        }
+        let preservedOfflineProjects = existingProjectsBeforeConnect.filter { existing in
+            let key = Self.projectionHostKey(
+                isCloud: existing.runtime == .cloud,
+                instanceId: existing.originInstanceUuid,
+                hostname: existing.hostName,
+                fallbackHostId: updatedHost.instanceId,
+                fallbackHostName: updatedHost.hostname
+            )
+            return !refreshedHostKeys.contains(key)
+        }
+        let preservedOfflineWorkspaces = existingWorkspacesBeforeConnect.filter { existing in
+            let key = Self.projectionHostKey(
+                isCloud: existing.isCloud,
+                instanceId: existing.originInstanceUuid,
+                hostname: existing.originHostName,
+                fallbackHostId: updatedHost.instanceId,
+                fallbackHostName: updatedHost.hostname
+            )
+            return !refreshedHostKeys.contains(key)
+        }
+
+        let mergedWorkspaces = handshake.workspaces + preservedOfflineWorkspaces
+        workspaces = mergedWorkspaces
+
+        var sortedSummaries = (handshake.summaries + preservedOfflineSummaries).sorted { lhs, rhs in
             if lhs.updatedAt != rhs.updatedAt {
                 return lhs.updatedAt > rhs.updatedAt
             }
             return lhs.cascadeId < rhs.cascadeId
         }
+        let preservedCloudProjects = preservedOfflineProjects.filter { $0.runtime == .cloud }
         let nextProjects = Self.reconcileLiveProjects(
-            workspaces: handshake.workspaces,
+            workspaces: mergedWorkspaces,
             summaries: &sortedSummaries,
-            existingProjects: [],
+            existingProjects: preservedOfflineProjects,
             hostName: updatedHost.hostname,
-            cloudProjects: handshake.cloudProjects
+            cloudProjects: handshake.cloudProjects.isEmpty ? preservedCloudProjects : handshake.cloudProjects
         )
         summaries = sortedSummaries
         projects = nextProjects
-        let defaultProject = nextProjects.first(where: { !$0.isNoProject }) ?? nextProjects.first
-        selectedProjectId = defaultProject?.id ?? ""
-        selectedWorkspaceUri = defaultProject?.workspaceUri ?? ""
-        activeCascadeId = sortedSummaries.first?.cascadeId ?? ""
+        let defaultProject = nextProjects.first(where: { projectMatchesHostScope($0) && !$0.isNoProject })
+            ?? nextProjects.first(where: { !$0.isNoProject })
+            ?? nextProjects.first
+        if selectedProjectId.isEmpty || !nextProjects.contains(where: { $0.id == selectedProjectId }) {
+            selectedProjectId = defaultProject?.id ?? ""
+            selectedWorkspaceUri = defaultProject?.workspaceUri ?? ""
+        }
+        if activeCascadeId.isEmpty || !sortedSummaries.contains(where: { $0.cascadeId == activeCascadeId }) {
+            activeCascadeId = sortedSummaries.first?.cascadeId ?? ""
+        }
 
-        // Clear offline ESDD demo state when connected to a live backend
-        stepsByCascadeId = [:]
+        // Clear offline ESDD demo state when transitioning out of demo mode, while keeping any cached steps read during cold-start
+        if !wasAlreadyPaired {
+            stepsByCascadeId = [:]
+        } else {
+            for fixtureId in Self.esddFixtureCascadeIds {
+                stepsByCascadeId.removeValue(forKey: fixtureId)
+            }
+        }
         syncedConfigCascadeIds.removeAll()
         activeTurnDiffs = []
         pendingDraftConversation = nil
@@ -1205,21 +1876,24 @@ extension AntigravitySessionStore {
         automationsErrorText = nil
         isAutomationsAuthExpired = false
         lastAutomationsSyncAt = nil
-        automations = []
+        if !wasAlreadyPaired {
+            automations = []
+        }
 
-        let projectsSnapshot = projects
-        let summariesSnapshot = summaries
-        let storeRef = projectionStore
+        let keysToPersist = refreshedHostKeys
         Task { [weak self] in
-            await storeRef.saveProjects(projectsSnapshot)
-            await storeRef.saveProjectedSummaries(summariesSnapshot)
-            await self?.refreshModelCatalog()
-            await self?.refreshAutomations()
-            await self?.replayPendingOutbox()
+            if !keysToPersist.isEmpty {
+                await self?.persistHostProjections(refreshedHostKeys: keysToPersist)
+            }
+            if hostOnline {
+                await self?.refreshModelCatalog()
+                await self?.refreshAutomations()
+                await self?.replayPendingOutbox()
+            }
         }
 
         startSummarySubscriptionStream()
-        if !activeCascadeId.isEmpty {
+        if hostOnline && !activeCascadeId.isEmpty {
             syncStepsForCascade(activeCascadeId, pollUntilIdle: false)
         }
     }

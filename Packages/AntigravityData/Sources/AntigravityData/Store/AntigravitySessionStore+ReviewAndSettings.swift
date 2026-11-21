@@ -181,6 +181,7 @@ extension AntigravitySessionStore {
         }
     }
 
+
     // MARK: - Implementation Plan Review Actions (`UE11`)
 
     @discardableResult
@@ -428,6 +429,7 @@ extension AntigravitySessionStore {
         }
     }
 
+
     // MARK: - Live Artifacts, Diff Hydration & Git VCS (Stage / Unstage / Discard / Commit / Push / Quote)
 
     public func loadLiveArtifactsAndDiffs(for cascadeId: String? = nil) async {
@@ -559,6 +561,7 @@ extension AntigravitySessionStore {
         imageRegionComments.append(comment)
     }
 
+
     // MARK: - Customizations Hub (Skills, Rules, MCP Servers, Plugins Marketplace, Hooks)
 
     public func refreshCustomizations() async {
@@ -606,6 +609,7 @@ extension AntigravitySessionStore {
             try? await clientRef?.installMarketplacePlugin(pluginId: pluginId)
         }
     }
+
 
     // MARK: - Live Activity & Share Extension Shared Bridge Reconciliation
 
@@ -683,4 +687,5 @@ extension AntigravitySessionStore {
             lastNotificationEvent = (id: UUID().uuidString, title: title, body: body, cascadeId: cascadeId)
         }
     }
+
 }

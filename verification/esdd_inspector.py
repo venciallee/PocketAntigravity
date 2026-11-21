@@ -11,6 +11,7 @@ Validates:
 5. Swift 6 source tree summary (non-blocking during parallel module builds).
 """
 import json
+import re
 from collections import deque
 from pathlib import Path
 
@@ -220,6 +221,28 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
         checks.append(
             "Original AG Orbit AppIcon.appiconset (1024x1024 opaque RGB) & App Store 5.2.2 trademark compliance verified"
         )
+
+    # 7. Zero Hardcoded Google API Key Secret Hygiene
+    google_key_re = re.compile(r"(?<![0-9A-Za-z_-])" + "AI" + "za" + r"[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")
+    secret_hits = []
+    scan_dirs = ["Packages", "iOS", "Shared", "Extensions", "shared", "verification", "scripts"]
+    scan_exts = {".swift", ".kt", ".py", ".sh", ".yml", ".yaml", ".json", ".plist"}
+    for d in scan_dirs:
+        base_d = repo_root / d
+        if not base_d.exists():
+            continue
+        for p in base_d.rglob("*"):
+            if not p.is_file() or p.suffix.lower() not in scan_exts:
+                continue
+            if "output" in p.parts or ".build" in p.parts:
+                continue
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            if google_key_re.search(text):
+                secret_hits.append(str(p.relative_to(repo_root)))
+    if secret_hits:
+        errors.append(f"Hardcoded Google API key literal detected in source files: {sorted(secret_hits)}")
+    else:
+        checks.append("Secret hygiene verified: zero hardcoded Google API key literals across source tree")
 
     return {
         "passed": len(errors) == 0,

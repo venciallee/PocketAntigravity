@@ -17,22 +17,7 @@ public struct AgentsHomeViewController: View {
     public var onOpenContextMenuPreview: (() -> Void)?
     public var onOpenConversation: ((String) -> Void)?
 
-    public enum HostFilterTarget: Equatable, Hashable, Identifiable {
-        case allHosts
-        case antigravityCloud
-        case localHost(id: String, name: String)
-
-        public var id: String {
-            switch self {
-            case .allHosts:
-                return "all-hosts"
-            case .antigravityCloud:
-                return "antigravity-cloud"
-            case .localHost(let id, _):
-                return "host-\(id)"
-            }
-        }
-    }
+    public typealias HostFilterTarget = AgentsHostFilterScope
 
     public enum QuickStatusFilter: String, CaseIterable, Identifiable {
         case all
@@ -79,7 +64,9 @@ public struct AgentsHomeViewController: View {
         public var conversations: [AgentConversationItem]
     }
 
-    @State private var selectedHost: HostFilterTarget = .allHosts
+    private var selectedHost: AgentsHostFilterScope {
+        store.selectedHostScope
+    }
     @State private var searchText: String = ""
     @State private var selectedFilter: QuickStatusFilter = .all
     @State private var collapsedProjects: Set<String> = []
@@ -239,7 +226,11 @@ public struct AgentsHomeViewController: View {
                 .padding(.bottom, 96)
             }
             .refreshable {
-                await store.reconnectNow(userInitiated: true)
+                if store.hasPairedBackend && store.isDeviceNetworkReachable && isSelectedHostOnline {
+                    _ = await store.refreshConversationsForHostScope(store.selectedHostScope, forceFullSync: true)
+                } else {
+                    await store.reconnectNow(userInitiated: true)
+                }
             }
 
             // Subtle bottom obsidian gradient behind floating liquid glass chrome
@@ -282,30 +273,51 @@ public struct AgentsHomeViewController: View {
 
     // MARK: - 1. Top Bar (Host Switcher + Display Options + New Project)
 
-    private var isPairedHostOnline: Bool {
-        store.isDeviceNetworkReachable && store.isLiveBackendConnected && store.activeHost.isOnline
+    private var pairedLocalHosts: [RemoteHostInstance] {
+        store.pairedLocalHosts
+    }
+
+    private func selectedLocalHostResolvedName(id: String, fallback: String) -> String {
+        store.resolvedHostName(forInstanceUuid: id, fallback: fallback)
     }
 
     private func isLocalHostOnline(_ host: RemoteHostInstance) -> Bool {
-        guard store.isDeviceNetworkReachable && store.isLiveBackendConnected else {
-            return false
-        }
-        if let relayInfo = store.availableRelayInstances.first(where: { $0.uuid == host.instanceId }) {
-            return relayInfo.status.isReachable
-        }
-        return host.isOnline
+        store.isLocalHostOnline(instanceId: host.instanceId, hostname: host.hostname)
     }
 
-    private var selectedLocalHostOnline: Bool {
-        if case .localHost(let id, _) = selectedHost,
-           let matched = pairedLocalHosts.first(where: { $0.instanceId == id }) {
-            return isLocalHostOnline(matched)
+    private var isSelectedHostOnline: Bool {
+        switch selectedHost {
+        case .antigravityCloud:
+            guard store.isDeviceNetworkReachable else { return false }
+            if store.activeHost.channel == .cloudRelay && !store.availableRelayInstances.isEmpty {
+                return store.availableRelayInstances.contains(where: \.status.isReachable) || store.isLiveBackendConnected
+            }
+            return true
+        case .localHost(let id, let name):
+            if !store.hasPairedBackend { return true }
+            return store.isLocalHostOnline(instanceId: id, hostname: name)
+        case .allHosts:
+            if !store.hasPairedBackend { return true }
+            guard store.isDeviceNetworkReachable else { return false }
+            if pairedLocalHosts.count > 1 {
+                return pairedLocalHosts.contains(where: { isLocalHostOnline($0) }) || store.isLiveBackendConnected
+            }
+            return store.isLiveBackendConnected && store.activeHost.isOnline
         }
-        return isPairedHostOnline
     }
 
-    private var isAnyPairedLocalHostOnline: Bool {
-        isPairedHostOnline || pairedLocalHosts.contains(where: { isLocalHostOnline($0) })
+    private var selectedHostDisplayName: String {
+        switch selectedHost {
+        case .antigravityCloud:
+            return "Antigravity Cloud"
+        case .localHost(let id, let name):
+            return selectedLocalHostResolvedName(id: id, fallback: name)
+        case .allHosts:
+            if store.hasPairedBackend {
+                return pairedLocalHosts.count > 1 ? "All Hosts" : store.activeHost.hostname
+            }
+            return "MacBook Pro"
+        }
     }
 
     private func isProjectHostOnline(_ proj: ProjectWorkspace) -> Bool {
@@ -313,14 +325,7 @@ public struct AgentsHomeViewController: View {
         if proj.runtime == .cloud {
             return store.isDeviceNetworkReachable
         }
-        if let uuid = proj.originInstanceUuid,
-           let matched = pairedLocalHosts.first(where: { $0.instanceId == uuid }) {
-            return isLocalHostOnline(matched)
-        }
-        if let matchedByName = pairedLocalHosts.first(where: { $0.hostname == proj.hostName }) {
-            return isLocalHostOnline(matchedByName)
-        }
-        return isPairedHostOnline
+        return store.isLocalHostOnline(instanceId: proj.originInstanceUuid, hostname: proj.hostName)
     }
 
     private func hostSelectionBinding(for target: HostFilterTarget) -> Binding<Bool> {
@@ -329,14 +334,14 @@ public struct AgentsHomeViewController: View {
                 switch (selectedHost, target) {
                 case (.allHosts, .allHosts), (.antigravityCloud, .antigravityCloud):
                     return true
-                case (.localHost(let lhsId, _), .localHost(let rhsId, _)):
-                    return lhsId == rhsId
+                case (.localHost(let lhsId, let lhsName), .localHost(let rhsId, let rhsName)):
+                    return lhsId == rhsId || lhsName == rhsName
                 default:
                     return false
                 }
             },
             set: { _ in
-                selectedHost = target
+                store.selectHostScope(target)
             }
         )
     }
@@ -351,32 +356,13 @@ public struct AgentsHomeViewController: View {
         #endif
     }
 
-    private var pairedLocalHosts: [RemoteHostInstance] {
-        var seen = Set<String>()
-        var result: [RemoteHostInstance] = []
-        for host in store.hosts where host.instanceId != "unpaired" && host.hostname.lowercased() != "cloud" {
-            if seen.insert(host.instanceId).inserted {
-                result.append(host)
-            }
-        }
-        if result.isEmpty && store.hasPairedBackend && store.activeHost.instanceId != "unpaired" {
-            result.append(store.activeHost)
-        }
-        return result
-    }
-
     private var hostSwitcherDotColor: Color {
         switch selectedHost {
         case .antigravityCloud:
-            return store.isDeviceNetworkReachable ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.statusError
-        case .localHost:
+            return isSelectedHostOnline ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.statusError
+        case .localHost, .allHosts:
             if store.hasPairedBackend {
-                return selectedLocalHostOnline ? AntigravityTheme.statusDone : AntigravityTheme.statusError
-            }
-            return AntigravityTheme.statusDone
-        case .allHosts:
-            if store.hasPairedBackend {
-                return isAnyPairedLocalHostOnline ? AntigravityTheme.statusDone : AntigravityTheme.statusError
+                return isSelectedHostOnline ? AntigravityTheme.statusDone : AntigravityTheme.statusError
             }
             return AntigravityTheme.statusDone
         }
@@ -389,14 +375,18 @@ public struct AgentsHomeViewController: View {
         switch selectedHost {
         case .antigravityCloud:
             return "Antigravity"
-        case .localHost(_, let name):
+        case .localHost(let id, let fallbackName):
+            let resolved = selectedLocalHostResolvedName(id: id, fallback: fallbackName)
             if store.hasPairedBackend {
-                return selectedLocalHostOnline ? name : "\(name) · Offline"
+                return isSelectedHostOnline ? resolved : "\(resolved) · Offline"
             }
-            return name
+            return resolved
         case .allHosts:
             if store.hasPairedBackend {
-                return isAnyPairedLocalHostOnline
+                if pairedLocalHosts.count > 1 {
+                    return isSelectedHostOnline ? "All Hosts" : "All Hosts · Offline"
+                }
+                return isSelectedHostOnline
                     ? store.activeHost.hostname
                     : "\(store.activeHost.hostname) · Offline"
             }
@@ -411,12 +401,18 @@ public struct AgentsHomeViewController: View {
                     if store.hasPairedBackend {
                         Button {
                             Task {
-                                await store.reconnectNow(userInitiated: true)
+                                if isSelectedHostOnline {
+                                    _ = await store.refreshConversationsForHostScope(selectedHost, forceFullSync: true)
+                                } else {
+                                    await store.reconnectNow(userInitiated: true)
+                                }
                             }
                         } label: {
                             Label(
-                                isPairedHostOnline ? "Sync Desktop & Cloud Now" : "Reconnect \(store.activeHost.hostname)",
-                                systemImage: isPairedHostOnline ? "arrow.clockwise" : "bolt.horizontal.circle"
+                                isSelectedHostOnline
+                                    ? (selectedHost == .allHosts ? "Sync Desktop & Cloud Now" : "Sync \(selectedHostDisplayName) Now")
+                                    : "Reconnect \(selectedHostDisplayName)",
+                                systemImage: isSelectedHostOnline ? "arrow.clockwise" : "bolt.horizontal.circle"
                             )
                         }
                         Button {
@@ -469,9 +465,15 @@ public struct AgentsHomeViewController: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(hostSwitcherDotColor)
-                        .frame(width: 8, height: 8)
+                    if store.isRefreshingSelectedHost || store.isSwitchingHost {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(AntigravityTheme.accentPeriwinkle)
+                    } else {
+                        Circle()
+                            .fill(hostSwitcherDotColor)
+                            .frame(width: 8, height: 8)
+                    }
                     Text(hostSwitcherLabelText)
                         .font(.system(size: 14.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textPrimary)
@@ -601,18 +603,9 @@ public struct AgentsHomeViewController: View {
 
     private var filterPillStrip: some View {
         let usesPairedCounts = usesLiveStoreData
-        let scopedSummaries = usesPairedCounts
-            ? store.summaries.filter { !$0.isArchived && summaryMatchesHostFilter($0) }
-            : []
-        let runningBadge = usesPairedCounts
-            ? scopedSummaries.filter { $0.status == .inProgress || $0.status == .pending }.count
-            : 2
-        let needsYouBadge = usesPairedCounts
-            ? scopedSummaries.filter { $0.status == .waiting || $0.status == .blocked }.count
-            : 1
-        let unreadBadge = usesPairedCounts
-            ? scopedSummaries.filter(\.isUnread).count
-            : 3
+        let runningBadge = usesPairedCounts ? store.runningCount(for: selectedHost) : 2
+        let needsYouBadge = usesPairedCounts ? store.needsYouCount(for: selectedHost) : 1
+        let unreadBadge = usesPairedCounts ? store.unreadCount(for: selectedHost) : 3
 
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
@@ -966,9 +959,7 @@ public struct AgentsHomeViewController: View {
                         }
 
                         if showProjectSlug {
-                            let cleanSlug = item.projectSlug.hasPrefix("cloud:")
-                                ? String(item.projectSlug.dropFirst("cloud:".count))
-                                : item.projectSlug
+                            let cleanSlug = AntigravityCloudDetector.stripProjectScopePrefix(item.projectSlug)
                             let displaySlug = AntigravityCloudDetector.isNoProjectSlug(cleanSlug)
                                 ? AntigravityCloudDetector.noProjectDisplayName
                                 : cleanSlug
@@ -1069,16 +1060,23 @@ public struct AgentsHomeViewController: View {
 
     // MARK: - Filtering & Live Store Binding
 
+    private var syncingStatusMessage: String {
+        switch selectedHost {
+        case .antigravityCloud:
+            return "Syncing Antigravity Cloud sessions..."
+        case .allHosts where pairedLocalHosts.count > 1:
+            return "Syncing conversations across all hosts..."
+        default:
+            return "Syncing conversations from \(selectedHostDisplayName)..."
+        }
+    }
+
     private var liveEmptyConversationsCard: some View {
         VStack(spacing: 10) {
-            if store.isRefreshingSummaries {
+            if store.isRefreshingSummaries || store.isSwitchingHost {
                 ProgressView()
                     .tint(AntigravityTheme.accentPeriwinkle)
-                Text(
-                    selectedHost == .antigravityCloud
-                        ? "Syncing Antigravity Cloud sessions..."
-                        : "Syncing conversations from \(store.activeHost.hostname)..."
-                )
+                Text(syncingStatusMessage)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(AntigravityTheme.textSecondary)
             } else if selectedHost == .antigravityCloud && searchText.isEmpty && selectedFilter == .all {
@@ -1119,6 +1117,37 @@ public struct AgentsHomeViewController: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 4)
+            } else if store.hasPairedBackend && !isSelectedHostOnline && searchText.isEmpty && selectedFilter == .all {
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(AntigravityTheme.statusError)
+                Text("\(selectedHostDisplayName) is offline")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                Text("Ensure Antigravity Desktop with Remote Control is running on \(selectedHostDisplayName), or choose another host above.")
+                    .font(.system(size: 13.5, weight: .regular))
+                    .foregroundStyle(AntigravityTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+
+                Button {
+                    Task {
+                        await store.reconnectNow(userInitiated: true)
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12.5, weight: .bold))
+                        Text("Retry Connection")
+                            .font(.system(size: 13.5, weight: .semibold))
+                    }
+                    .foregroundStyle(Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0))
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 38)
+                    .background(AntigravityTheme.accentPeriwinkle)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
             } else {
                 Image(systemName: searchText.isEmpty && selectedFilter == .all ? "bubble.left.and.bubble.right" : "magnifyingglass")
                     .font(.system(size: 28, weight: .light))
@@ -1132,7 +1161,7 @@ public struct AgentsHomeViewController: View {
                 .foregroundStyle(Color.white)
                 Text(
                     searchText.isEmpty && selectedFilter == .all
-                        ? "Tap the compose button below to start a new session on \(store.activeHost.hostname)."
+                        ? "Tap the compose button below to start a new session on \(selectedHostDisplayName)."
                         : "Try clearing your search or switching filters."
                 )
                 .font(.system(size: 13.5, weight: .regular))
@@ -1171,37 +1200,11 @@ public struct AgentsHomeViewController: View {
     }
 
     private func summaryMatchesHostFilter(_ s: CascadeSummary) -> Bool {
-        switch selectedHost {
-        case .allHosts:
-            return true
-        case .antigravityCloud:
-            return s.isCloud
-        case .localHost(let id, let name):
-            guard !s.isCloud else { return false }
-            if pairedLocalHosts.count <= 1 {
-                return true
-            }
-            return s.originInstanceUuid == id
-                || s.originHostName == name
-                || (s.originInstanceUuid == nil && store.activeHost.instanceId == id)
-        }
+        store.summaryMatchesHostScope(s, scope: selectedHost)
     }
 
     private func projectMatchesHostFilter(_ proj: ProjectWorkspace) -> Bool {
-        switch selectedHost {
-        case .allHosts:
-            return true
-        case .antigravityCloud:
-            return proj.runtime == .cloud
-        case .localHost(let id, let name):
-            guard proj.runtime != .cloud else { return false }
-            if pairedLocalHosts.count <= 1 {
-                return true
-            }
-            return proj.originInstanceUuid == id
-                || proj.hostName == name
-                || (proj.originInstanceUuid == nil && store.activeHost.instanceId == id)
-        }
+        store.projectMatchesHostScope(proj, scope: selectedHost)
     }
 
     private func mapStoreSummary(_ s: CascadeSummary) -> AgentConversationItem {
@@ -1255,17 +1258,23 @@ public struct AgentsHomeViewController: View {
     private var filteredProjectSections: [AgentProjectSection] {
         let sourceSections: [AgentProjectSection]
         if usesLiveStoreData {
-            let fallbackHostOnline = !store.hasPairedBackend || selectedLocalHostOnline
             var builtSections: [AgentProjectSection] = store.projects
                 .filter { projectMatchesHostFilter($0) }
                 .map { proj in
                     let convs = store.summaries
                         .filter { !$0.isPinned && $0.projectSlug == proj.id && summaryMatchesHostFilter($0) }
                         .map(mapStoreSummary)
+                    var displayProj = proj
+                    if displayProj.runtime != .cloud {
+                        displayProj.hostName = store.resolvedHostName(
+                            forInstanceUuid: proj.originInstanceUuid,
+                            fallback: proj.hostName
+                        )
+                    }
                     return AgentProjectSection(
                         id: proj.id,
                         slug: proj.name,
-                        subtitle: proj.homeSubtitle(isHostOnline: isProjectHostOnline(proj)),
+                        subtitle: displayProj.homeSubtitle(isHostOnline: isProjectHostOnline(displayProj)),
                         isCloud: proj.runtime == .cloud,
                         conversations: convs
                     )
@@ -1278,15 +1287,22 @@ public struct AgentsHomeViewController: View {
                     && summaryMatchesHostFilter($0)
                     && !coveredSummaryIds.contains($0.cascadeId)
             }
-            let orphanedLocal = orphaned.filter { !$0.isCloud }.map(mapStoreSummary)
-            if !orphanedLocal.isEmpty {
+            let orphanedLocalSummaries = orphaned.filter { !$0.isCloud }
+            if !orphanedLocalSummaries.isEmpty {
+                let firstOrphan = orphanedLocalSummaries[0]
+                let orphanHostName = store.resolvedHostName(
+                    forInstanceUuid: firstOrphan.originInstanceUuid,
+                    fallback: firstOrphan.originHostName ?? selectedHostDisplayName
+                )
+                let orphanOnline = !store.hasPairedBackend
+                    || store.isLocalHostOnline(instanceId: firstOrphan.originInstanceUuid, hostname: orphanHostName)
                 builtSections.append(
                     AgentProjectSection(
                         id: AntigravityCloudDetector.noProjectDisplayName,
                         slug: AntigravityCloudDetector.noProjectDisplayName,
-                        subtitle: "\(fallbackHostOnline ? "Local" : "Offline") · \(store.activeHost.hostname)",
+                        subtitle: "\(orphanOnline ? "Local" : "Offline") · \(orphanHostName)",
                         isCloud: false,
-                        conversations: orphanedLocal
+                        conversations: orphanedLocalSummaries.map(mapStoreSummary)
                     )
                 )
             }
@@ -1330,7 +1346,9 @@ public struct AgentsHomeViewController: View {
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let query = searchText.lowercased()
             let matchesTitle = item.title.lowercased().contains(query)
-            let matchesProject = item.projectSlug.lowercased().contains(query)
+            let matchesProject = AntigravityCloudDetector.stripProjectScopePrefix(item.projectSlug)
+                .lowercased()
+                .contains(query)
             let matchesStatus = item.statusLine.lowercased().contains(query)
             if !matchesTitle && !matchesProject && !matchesStatus {
                 return false

@@ -341,6 +341,7 @@ internal struct AntigravityMarkdownBlocksView: View {
     }
 }
 
+
 // MARK: - SwiftUI `AttributedString` Fallback Builder (Zero `\u{200A}` Orphan Spaces)
 
 internal enum MarkdownInlineBuilder {

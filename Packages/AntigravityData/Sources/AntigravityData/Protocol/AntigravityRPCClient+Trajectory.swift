@@ -53,46 +53,64 @@ extension AntigravityRPCClient {
         isCloud: Bool = false,
         instanceUuidOverride: String? = nil
     ) async throws -> [CascadeStep] {
+        let isRemoteCloud = isCloud || cascadeId.hasPrefix("v1/")
         let primaryTarget: String? = {
             if channel == .cloudRelay {
-                return selectReachableRelayUuid(preferred: instanceUuidOverride)
+                return selectReachableRelayUuid(
+                    preferred: instanceUuidOverride,
+                    allowCrossHostFailover: isRemoteCloud
+                )
             }
             return instanceUuidOverride
         }()
 
         var primaryError: Error? = nil
-        do {
-            let steps = try await fetchStepsFromSingleInstance(
-                cascadeId: cascadeId,
-                knownStepCount: knownStepCount,
-                isCloud: isCloud,
-                targetUuid: primaryTarget
-            )
-            if !steps.isEmpty {
-                return steps
+        if channel != .cloudRelay || primaryTarget != nil {
+            do {
+                let steps = try await fetchStepsFromSingleInstance(
+                    cascadeId: cascadeId,
+                    knownStepCount: knownStepCount,
+                    isCloud: isRemoteCloud,
+                    targetUuid: primaryTarget
+                )
+                if !steps.isEmpty {
+                    return steps
+                }
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch {
+                primaryError = error
             }
-        } catch let AntigravityRPCError.unauthorized(msg) {
-            throw AntigravityRPCError.unauthorized(msg)
-        } catch {
-            primaryError = error
+        } else {
+            primaryError = AntigravityRPCError.httpError(
+                statusCode: 503,
+                body: "Selected Antigravity Desktop host is offline"
+            )
         }
 
-        // Multi-window Cloud Relay failover: if the trajectory was opened or stored in another live Desktop window,
-        // probe reachable peer instances (`sameHostFamily` windows on the same Mac first).
+        // Multi-window Cloud Relay failover:
+        // - For local conversations: ONLY probe peer windows on the SAME Mac (`sameHostFamily`).
+        // - For Antigravity Cloud (`isRemoteCloud`): any reachable host can proxy remote steps.
         if channel == .cloudRelay {
             if cachedRelayInstances.isEmpty,
                let refreshed = try? await listRelayInstances(timeoutInterval: 6.0),
                !refreshed.isEmpty {
                 self.cachedRelayInstances = refreshed
             }
-            let familySeed = cachedRelayInstances.first(where: { $0.uuid == primaryTarget })?.name ?? targetInstanceIdentifier
+            let seedUuid = primaryTarget ?? instanceUuidOverride ?? resolvedInstanceUuid
+            let familySeed = cachedRelayInstances.first(where: { $0.uuid == seedUuid })?.name
+                ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : "")
             let peerCandidates = cachedRelayInstances
-                .filter { $0.status.isReachable && $0.uuid != primaryTarget }
+                .filter { inst in
+                    guard inst.status.isReachable && inst.uuid != primaryTarget else { return false }
+                    if isRemoteCloud { return true }
+                    return !familySeed.isEmpty && inst.sameHostFamily(as: familySeed)
+                }
                 .sorted { lhs, rhs in
-                    let lFam = lhs.sameHostFamily(as: familySeed)
-                    let rFam = rhs.sameHostFamily(as: familySeed)
+                    let lFam = !familySeed.isEmpty && lhs.sameHostFamily(as: familySeed)
+                    let rFam = !familySeed.isEmpty && rhs.sameHostFamily(as: familySeed)
                     if lFam != rFam { return lFam && !rFam }
-                    return false
+                    return lhs.uuid < rhs.uuid
                 }
 
             for peer in peerCandidates {
@@ -100,11 +118,13 @@ extension AntigravityRPCClient {
                     let peerSteps = try await fetchStepsFromSingleInstance(
                         cascadeId: cascadeId,
                         knownStepCount: knownStepCount,
-                        isCloud: isCloud,
+                        isCloud: isRemoteCloud,
                         targetUuid: peer.uuid
                     )
                     if !peerSteps.isEmpty {
-                        self.resolvedInstanceUuid = peer.uuid
+                        if instanceUuidOverride == nil && !isRemoteCloud {
+                            self.resolvedInstanceUuid = peer.uuid
+                        }
                         return peerSteps
                     }
                 } catch let AntigravityRPCError.unauthorized(msg) {
@@ -139,7 +159,8 @@ extension AntigravityRPCClient {
                     cascadeId: cascadeId,
                     startIndex: 0,
                     endIndex: knownStepCount,
-                    instanceUuidOverride: targetUuid
+                    instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: isRemoteCloud
                 )
                 if !protoSteps.isEmpty {
                     wokenInstanceCascadeKeys.insert(wakeKey)
@@ -155,7 +176,8 @@ extension AntigravityRPCClient {
                 cascadeId: cascadeId,
                 startIndex: 0,
                 endIndex: knownStepCount,
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: isRemoteCloud
             )
             if !retryProtoSteps.isEmpty {
                 wokenInstanceCascadeKeys.insert(wakeKey)
@@ -174,6 +196,7 @@ extension AntigravityRPCClient {
                 method: "GetCascadeTrajectorySteps",
                 body: stepReqBody,
                 instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: isRemoteCloud,
                 timeoutInterval: 10.0
             )
             lastError = nil
@@ -189,7 +212,8 @@ extension AntigravityRPCClient {
                 cascadeId: cascadeId,
                 startIndex: 0,
                 endIndex: max(knownStepCount, Self.protobufStepThreshold),
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: isRemoteCloud
             )
             if !protoSteps.isEmpty {
                 wokenInstanceCascadeKeys.insert(wakeKey)
@@ -207,6 +231,7 @@ extension AntigravityRPCClient {
                     method: "GetCascadeTrajectorySteps",
                     body: stepReqBody,
                     instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: isRemoteCloud,
                     timeoutInterval: 10.0
                 )
                 lastError = nil
@@ -215,7 +240,8 @@ extension AntigravityRPCClient {
                         cascadeId: cascadeId,
                         startIndex: 0,
                         endIndex: max(knownStepCount, Self.protobufStepThreshold),
-                        instanceUuidOverride: targetUuid
+                        instanceUuidOverride: targetUuid,
+                        allowCrossHostFailover: isRemoteCloud
                     )
                     if !protoSteps.isEmpty {
                         wokenInstanceCascadeKeys.insert(wakeKey)
@@ -240,6 +266,7 @@ extension AntigravityRPCClient {
                     method: "GetCascadeTrajectory",
                     body: stepReqBody,
                     instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: isRemoteCloud,
                     timeoutInterval: 10.0
                 )
                 let fallbackArr = trajResp["trajectory"]?.objectValue?["steps"]?.arrayValue
@@ -263,7 +290,8 @@ extension AntigravityRPCClient {
                 cascadeId: cascadeId,
                 startIndex: 0,
                 endIndex: max(knownStepCount, Self.protobufStepThreshold),
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: isRemoteCloud
             ), !protoFallback.isEmpty {
                 wokenInstanceCascadeKeys.insert(wakeKey)
                 return protoFallback
@@ -279,7 +307,8 @@ extension AntigravityRPCClient {
                 cascadeId: cascadeId,
                 startIndex: 0,
                 endIndex: max(knownStepCount, rawSteps.count),
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: isRemoteCloud
             ), protoSteps.count >= rawSteps.count {
                 wokenInstanceCascadeKeys.insert(wakeKey)
                 return protoSteps
@@ -303,7 +332,8 @@ extension AntigravityRPCClient {
             let pageResp = try await callUnaryJSON(
                 method: "GetCascadeTrajectorySteps",
                 body: pageBody,
-                instanceUuidOverride: targetUuid
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: isRemoteCloud
             )
             guard let pageSteps = pageResp["steps"]?.arrayValue, !pageSteps.isEmpty else {
                 break
@@ -362,7 +392,8 @@ extension AntigravityRPCClient {
         cascadeId: String,
         startIndex: Int,
         endIndex: Int,
-        instanceUuidOverride: String? = nil
+        instanceUuidOverride: String? = nil,
+        allowCrossHostFailover: Bool = false
     ) async throws -> [CascadeStep] {
         let protoReqBytes = ProtobufStepCodec.encodeGetStepsRequest(
             cascadeId: cascadeId,
@@ -374,7 +405,8 @@ extension AntigravityRPCClient {
                 method: "GetCascadeTrajectorySteps",
                 payload: protoReqBytes,
                 contentType: "application/proto",
-                instanceUuidOverride: instanceUuidOverride
+                instanceUuidOverride: instanceUuidOverride,
+                allowCrossHostFailover: allowCrossHostFailover
             )
             let unwrapped = Self.unwrapConnectFramedPayloadIfNeeded(rawBytes)
             return ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)
@@ -397,6 +429,7 @@ extension AntigravityRPCClient {
         let unwrapped = Self.unwrapConnectFramedPayloadIfNeeded(data)
         return ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)
     }
+
 
     // MARK: - Conversation & Trajectory Operations (`UE01`, `UE03`, `UE07`)
 
@@ -712,7 +745,8 @@ extension AntigravityRPCClient {
             plannerConfig["agentPersona"] = .string(agentPersona)
         }
         plannerConfig["permissionPreset"] = .string(effectivePermission.rawValue)
-        if (isCloud || cascadeId.hasPrefix("v1/")) && !isModelAlias && protoModel.hasPrefix("MODEL_") {
+        let isRemoteCloud = isCloud || cascadeId.hasPrefix("v1/")
+        if isRemoteCloud && !isModelAlias && protoModel.hasPrefix("MODEL_") {
             plannerConfig["planModel"] = .string(protoModel)
         }
 
@@ -740,6 +774,7 @@ extension AntigravityRPCClient {
                 "modelConfig": .object(modelCfgObj)
             ],
             instanceUuidOverride: instanceUuidOverride,
+            allowCrossHostFailover: isRemoteCloud,
             timeoutInterval: 300.0
         )
     }
@@ -774,7 +809,7 @@ extension AntigravityRPCClient {
                 "allow": .bool(fp.allow),
                 "scope": .string(fp.scope)
             ]
-            if let uri = fp.absolutePathUri {
+            if let uri = fp.absolutePathUri, !uri.isEmpty {
                 fpObj["absolutePathUri"] = .string(uri)
             }
             interactionObj["filePermission"] = .object(fpObj)
@@ -787,18 +822,70 @@ extension AntigravityRPCClient {
             }
             interactionObj["askQuestion"] = .object(qaObj)
         } else if let confirm = payload.genericConfirm {
-            var genericObj: [String: JSONValue] = ["confirm": .bool(confirm)]
-            if let scope = payload.approvalScope {
-                genericObj["scope"] = .string(scope)
+            let memberKey = payload.rawMemberKey ?? payload.kind.rawValue
+            if payload.kind == .deploy {
+                interactionObj[memberKey] = .object(["cancel": .bool(!confirm)])
+            } else {
+                var genericObj: [String: JSONValue] = ["confirm": .bool(confirm)]
+                if let scope = payload.approvalScope {
+                    genericObj["scope"] = .string(scope)
+                }
+                interactionObj[memberKey] = .object(genericObj)
             }
-            interactionObj[payload.kind.rawValue] = .object(genericObj)
         }
 
-        _ = try await callUnaryJSON(
-            method: "HandleCascadeUserInteraction",
-            body: ["interaction": .object(interactionObj)],
-            instanceUuidOverride: instanceUuidOverride
-        )
+        do {
+            _ = try await callUnaryJSON(
+                method: "HandleCascadeUserInteraction",
+                body: ["interaction": .object(interactionObj)],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        } catch let AntigravityRPCError.httpError(statusCode, errorBody)
+            where statusCode == 400
+                || errorBody.lowercased().contains("unknown field")
+                || errorBody.lowercased().contains("invalid_argument") {
+            // Retry with strict upstream-minimal proto3 fields (e.g., Desktop servers whose protojson rejects optional `scope` or expects `allow`)
+            var fallbackObj: [String: JSONValue] = [
+                "trajectoryId": .string(payload.cascadeId),
+                "stepIndex": .int(payload.stepIndex)
+            ]
+            if let perm = payload.permission {
+                var minPerm: [String: JSONValue] = ["allow": .bool(perm.allow)]
+                if !perm.grantPatterns.isEmpty {
+                    minPerm["turnGrants"] = .object([
+                        "allow": .array(perm.grantPatterns.map(JSONValue.string)),
+                        "deny": .array([])
+                    ])
+                }
+                fallbackObj["permission"] = .object(minPerm)
+            } else if let fp = payload.filePermission {
+                let compatScope = (fp.scope == "PERMISSION_SCOPE_CONVERSATION" || fp.scope == "PERMISSION_SCOPE_ALWAYS")
+                    ? "PERMISSION_SCOPE_TURN"
+                    : "PERMISSION_SCOPE_ONCE"
+                var minFp: [String: JSONValue] = [
+                    "allow": .bool(fp.allow),
+                    "scope": .string(compatScope)
+                ]
+                if let uri = fp.absolutePathUri, !uri.isEmpty {
+                    minFp["absolutePathUri"] = .string(uri)
+                }
+                fallbackObj["filePermission"] = .object(minFp)
+            } else if let confirm = payload.genericConfirm {
+                let memberKey = payload.rawMemberKey ?? payload.kind.rawValue
+                let useAllowKey = errorBody.lowercased().contains("\"confirm\"")
+                fallbackObj[memberKey] = .object([
+                    (useAllowKey ? "allow" : "confirm"): .bool(confirm)
+                ])
+            } else {
+                throw AntigravityRPCError.httpError(statusCode: statusCode, body: errorBody)
+            }
+
+            _ = try await callUnaryJSON(
+                method: "HandleCascadeUserInteraction",
+                body: ["interaction": .object(fallbackObj)],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        }
     }
 
     public func handleCascadeUserInteraction(
@@ -960,4 +1047,5 @@ extension AntigravityRPCClient {
             timeoutInterval: 6.0
         )
     }
+
 }

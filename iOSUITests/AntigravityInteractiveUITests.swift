@@ -273,6 +273,38 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
         }
     }
 
+    /// Simulates an outside-workspace permission waiting gate (e.g. listDirectory + requestedInteraction.permission).
+    func injectWaitingPermissionStep(cascadeId: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        var steps = trajectoriesByCascadeId[cascadeId] ?? []
+        let waitingIdx = steps.count
+        steps.append([
+            "stepIndex": waitingIdx,
+            "type": "CORTEX_STEP_TYPE_LIST_DIRECTORY",
+            "status": "CORTEX_STEP_STATUS_WAITING",
+            "listDirectory": [
+                "directoryPathUri": "file:///Users/dev/external-workspace"
+            ],
+            "requestedInteraction": [
+                "permission": [
+                    "action": "list_dir",
+                    "target": "/Users/dev/external-workspace",
+                    "suggestedPersistPattern": "/Users/dev/external-workspace/*",
+                    "reason": "Outside current workspace"
+                ]
+            ]
+        ])
+        trajectoriesByCascadeId[cascadeId] = steps
+        if var summary = summariesMap[cascadeId] {
+            summary["stepCount"] = steps.count
+            summary["status"] = "CASCADE_RUN_STATUS_WAITING_FOR_USER"
+            summary["lastModifiedTime"] = "2026-11-11T09:06:00.000000000Z"
+            summariesMap[cascadeId] = summary
+        }
+        return waitingIdx
+    }
+
     private func acceptLoop() {
         while true {
             var clientAddr = sockaddr_in()
@@ -463,6 +495,30 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
                 summariesMap[cid] = summary
             }
             responseDict = ["ok": true]
+        } else if path.hasSuffix("/HandleCascadeUserInteraction") {
+            let interaction = (jsonBody["interaction"] as? [String: Any]) ?? [:]
+            let cid = (interaction["trajectoryId"] as? String) ?? ""
+            let targetIdx = (interaction["stepIndex"] as? Int) ?? -1
+            var steps = trajectoriesByCascadeId[cid] ?? []
+            if targetIdx >= 0 && targetIdx < steps.count {
+                steps[targetIdx]["status"] = "CORTEX_STEP_STATUS_DONE"
+            }
+            steps.append([
+                "stepIndex": steps.count,
+                "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "plannerResponse": [
+                    "response": "权限已批准，继续执行目录扫描。"
+                ]
+            ])
+            trajectoriesByCascadeId[cid] = steps
+            if var summary = summariesMap[cid] {
+                summary["stepCount"] = steps.count
+                summary["status"] = "CASCADE_RUN_STATUS_DONE"
+                summary["lastModifiedTime"] = "2026-11-11T09:07:00.000000000Z"
+                summariesMap[cid] = summary
+            }
+            responseDict = ["accepted": true]
         } else {
             responseDict = ["ok": true]
         }
@@ -565,6 +621,24 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertTrue(
             waitForTextContaining("已为您补充 RegisterTagValidator 的边界单元测试", in: app, timeout: 6),
             "New assistant reply from PC must automatically appear on iOS"
+        )
+
+        // 2c. Inject outside-workspace `list_dir` permission gate -> verify BOTH inline approval card AND status strip Approve button appear, then tap Allow Once!
+        let waitingStepIdx = server.injectWaitingPermissionStep(cascadeId: "cid-slardar-review")
+        let statusApproveButton = app.buttons["btn-status-review-approval"]
+        XCTAssertTrue(
+            statusApproveButton.waitForExistence(timeout: 12),
+            "Waiting permission step must surface an immediately tappable Approve pill in the status strip"
+        )
+        let inlineApproveButton = app.buttons["btn-step-approve-\(waitingStepIdx)"]
+        XCTAssertTrue(
+            inlineApproveButton.waitForExistence(timeout: 6),
+            "Waiting permission step must render its inline Allow Once button inside the chat stream"
+        )
+        inlineApproveButton.tap()
+        XCTAssertTrue(
+            waitForTextContaining("权限已批准，继续执行目录扫描", in: app, timeout: 10),
+            "Tapping Allow Once must dispatch HandleCascadeUserInteraction and stream resumed steps"
         )
 
         // Verify zero offline ESDD mock artifacts leak into live conversation view

@@ -318,7 +318,9 @@ public struct AntigravityRootContainerView: View {
                 CreateProjectSheetView(store: store, onDismiss: { store.presentedSheet = nil })
             case .contextMenuPreview:
                 ConversationContextPreviewMenu(store: store, onDismiss: { store.presentedSheet = nil })
-            case .permissionGate, .askQuestion, .newCascadeSheet:
+            case .permissionGate(let stepIndex):
+                InteractionGateSheetController(store: store, mode: .permissionGate, stepIndex: stepIndex)
+            case .askQuestion, .newCascadeSheet:
                 StructuredQuestionCardView(store: store)
             }
         }

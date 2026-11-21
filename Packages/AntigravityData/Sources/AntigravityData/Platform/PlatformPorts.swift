@@ -15,6 +15,29 @@ public protocol SecretStore: Sendable {
     func clearCredentials() async
 }
 
+public extension SecretStore {
+    func saveRelayWebApiKey(_ apiKey: String, forOrigin origin: String) async {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let account = "relay_web_api_key_v1::" + SAPISIDHashGenerator.normalizeOrigin(origin)
+        await storeSecret(trimmed, forKey: account)
+    }
+
+    func loadRelayWebApiKey(forOrigin origin: String) async -> String? {
+        let account = "relay_web_api_key_v1::" + SAPISIDHashGenerator.normalizeOrigin(origin)
+        guard let raw = await readSecret(forKey: account)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        return raw
+    }
+
+    func clearRelayWebApiKey(forOrigin origin: String) async {
+        let account = "relay_web_api_key_v1::" + SAPISIDHashGenerator.normalizeOrigin(origin)
+        await removeSecret(forKey: account)
+    }
+}
+
 /// Platform-neutral network reachability & interface-change observer contract.
 ///
 /// - iOS implementation: `NetworkPathObserver` (`NWPathMonitor`)

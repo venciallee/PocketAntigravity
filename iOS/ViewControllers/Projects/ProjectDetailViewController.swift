@@ -192,12 +192,23 @@ public struct ProjectDetailViewController: View {
     }
 
     private var isPairedHostOnline: Bool {
-        !store.hasPairedBackend || (store.isLiveBackendConnected && store.activeHost.isOnline)
+        !store.hasPairedBackend
+            || store.isLocalHostOnline(instanceId: liveProject?.originInstanceUuid, hostname: liveProject?.hostName)
     }
 
     private var liveProject: ProjectWorkspace? {
         store.projects.first(where: { $0.id == projectSlug })
             ?? store.projects.first(where: { $0.name == projectSlug })
+    }
+
+    private var resolvedLocalHostName: String {
+        let fallbackHost = (liveProject?.hostName.isEmpty == false && liveProject?.hostName != "Cloud")
+            ? liveProject?.hostName
+            : nil
+        return store.resolvedHostName(
+            forInstanceUuid: liveProject?.originInstanceUuid,
+            fallback: fallbackHost
+        )
     }
 
     private var isNoProject: Bool {
@@ -209,7 +220,9 @@ public struct ProjectDetailViewController: View {
     }
 
     private var displayTitle: String {
-        isNoProject ? AntigravityCloudDetector.noProjectDisplayName : (liveProject?.name ?? projectSlug)
+        isNoProject
+            ? AntigravityCloudDetector.noProjectDisplayName
+            : (liveProject?.name ?? AntigravityCloudDetector.stripProjectScopePrefix(projectSlug))
     }
 
     private var effectivePathDisplay: String {
@@ -217,7 +230,7 @@ public struct ProjectDetailViewController: View {
         if isNoProject {
             return isCloudSection ? "Antigravity Cloud · Unassigned conversations" : "Unassigned conversations"
         }
-        let raw = liveProject?.pathDisplay ?? "~/workspace/\(projectSlug)"
+        let raw = liveProject?.pathDisplay ?? "~/workspace/\(AntigravityCloudDetector.stripProjectScopePrefix(projectSlug))"
         if raw.hasPrefix("/Users/") {
             let parts = raw.split(separator: "/", omittingEmptySubsequences: true)
             if parts.count >= 2 {
@@ -250,7 +263,7 @@ public struct ProjectDetailViewController: View {
             return "Cloud"
         }
         let prefix = isPairedHostOnline ? "Local" : "Offline"
-        return "\(prefix) · \(store.activeHost.hostname)"
+        return "\(prefix) · \(resolvedLocalHostName)"
     }
 
     private var effectiveBranchName: String {
@@ -287,7 +300,20 @@ public struct ProjectDetailViewController: View {
             return true
         }
         if isNoProject {
-            return AntigravityCloudDetector.isNoProjectSlug(s.projectSlug) && s.isCloud == isCloudSection
+            guard AntigravityCloudDetector.isNoProjectSlug(s.projectSlug) && s.isCloud == isCloudSection else {
+                return false
+            }
+            if !isCloudSection {
+                if let projUuid = liveProject?.originInstanceUuid, !projUuid.isEmpty,
+                   let sumUuid = s.originInstanceUuid, !sumUuid.isEmpty {
+                    return projUuid == sumUuid
+                }
+                if let projHost = liveProject?.hostName, !projHost.isEmpty,
+                   let sumHost = s.originHostName, !sumHost.isEmpty {
+                    return projHost == sumHost
+                }
+            }
+            return true
         }
         return false
     }
@@ -308,10 +334,12 @@ public struct ProjectDetailViewController: View {
 
     private var effectiveProjectAutomations: [AutomationItem] {
         let targetSlugLower = projectSlug.lowercased()
+        let strippedSlugLower = AntigravityCloudDetector.stripProjectScopePrefix(projectSlug).lowercased()
         let targetNameLower = liveProject?.name.lowercased()
         return store.automations.filter { item in
-            if item.projectSlug.lowercased() == targetSlugLower { return true }
-            if let targetNameLower, item.projectSlug.lowercased() == targetNameLower { return true }
+            let itemSlugLower = item.projectSlug.lowercased()
+            if itemSlugLower == targetSlugLower || itemSlugLower == strippedSlugLower { return true }
+            if let targetNameLower, itemSlugLower == targetNameLower { return true }
             if let pid = item.projectId, pid == projectSlug || pid == liveProject?.id { return true }
             if item.allProjects && liveProject?.runtime != .cloud { return true }
             return false
@@ -783,7 +811,7 @@ public struct ProjectDetailViewController: View {
                             .foregroundStyle(AntigravityTheme.textSecondary)
                             .frame(width: 22)
 
-                        Text(finderFeedbackBanner ? "Opened in Finder on \(usesPairedStoreData ? store.activeHost.hostname : "MacBook Pro")" : "Reveal in Finder on Mac")
+                        Text(finderFeedbackBanner ? "Opened in Finder on \(usesPairedStoreData ? resolvedLocalHostName : "MacBook Pro")" : "Reveal in Finder on Mac")
                             .font(.system(size: 15.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textPrimary)
 

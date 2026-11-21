@@ -245,6 +245,7 @@ public final class AntigravitySessionStore {
     public var connectionErrorText: String? = nil
     public var lastPingLatencyMs: Int? = nil
     public var availableRelayInstances: [RelayInstanceInfo] = []
+    public var isRefreshingRelayHosts: Bool = false
     public var activeAuthUser: String = "0"
     public var lastScannedRelayURL: String = ""
     public var isLoadingSteps: Bool = false
@@ -256,8 +257,12 @@ public final class AntigravitySessionStore {
     public var reconnectAttemptCount: Int = 0
     public var nextReconnectAt: Date? = nil
     public var pendingOutboxCount: Int = 0
+    public var selectedHostScope: AgentsHostFilterScope = .allHosts
+    public var isSwitchingHost: Bool = false
+    public var refreshingHostScopeKeys: Set<String> = []
 
     // MARK: - Dependencies
+    internal static let selectedHostScopeDefaultsKey = "antigravity.ios.selectedHostScope.v1"
     internal let projectionStore: LocalProjectionStore
     internal let secretStore: any SecretStore
     internal let networkMonitor: any NetworkReachabilityMonitoring
@@ -270,6 +275,10 @@ public final class AntigravitySessionStore {
     internal var hasReceivedCloudStreamEvent: Bool = false
     internal var summaryPollingTask: Task<Void, Never>? = nil
     internal var stepPollingTask: Task<Void, Never>? = nil
+    internal var hostSwitchTask: Task<Void, Never>? = nil
+    internal var hostSwitchGeneration: UInt64 = 0
+    internal var inFlightHostRefreshTasks: [String: Task<Bool, Never>] = [:]
+    internal var activeRefreshCount: Int = 0
     internal var locallyViewedAtByCascadeId: [String: Date] = [:]
     internal var optimisticActiveUntilByCascadeId: [String: Date] = [:]
     internal var consecutiveSyncFailures: Int = 0
@@ -285,6 +294,7 @@ public final class AntigravitySessionStore {
     internal var lastStreamReopenAttemptAt: Date = .distantPast
     internal var isReplayingOutbox: Bool = false
     internal var lowPowerModeOverrideForTesting: Bool? = nil
+    internal var hostRefreshExecutorOverrideForTesting: ((AgentsHostFilterScope) async throws -> ScopedWorkspaceSyncResult)? = nil
 
     internal var summaryStreamGeneration: UInt64 = 0
 
@@ -387,6 +397,7 @@ public final class AntigravitySessionStore {
             self.harvestEmbedResources(from: stepList)
         }
     }
+
 
     /// Clean, empty production store used on real devices (`launchVerifyCase() == nil`).
     /// Contains zero mock/demo conversations, projects, automations, or context chips.

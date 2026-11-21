@@ -25,6 +25,7 @@ public struct BackendHandshakeResult: Sendable, Equatable {
     public let resolvedInstanceUuid: String?
     public let resolvedAuthUser: String?
     public let availableRelayInstances: [RelayInstanceInfo]
+    public let isSelectedHostOnline: Bool
 
     public init(
         latencyMs: Int,
@@ -35,7 +36,8 @@ public struct BackendHandshakeResult: Sendable, Equatable {
         resolvedHostname: String? = nil,
         resolvedInstanceUuid: String? = nil,
         resolvedAuthUser: String? = nil,
-        availableRelayInstances: [RelayInstanceInfo] = []
+        availableRelayInstances: [RelayInstanceInfo] = [],
+        isSelectedHostOnline: Bool = true
     ) {
         self.latencyMs = latencyMs
         self.workspaces = workspaces
@@ -46,6 +48,7 @@ public struct BackendHandshakeResult: Sendable, Equatable {
         self.resolvedInstanceUuid = resolvedInstanceUuid
         self.resolvedAuthUser = resolvedAuthUser
         self.availableRelayInstances = availableRelayInstances
+        self.isSelectedHostOnline = isSelectedHostOnline
     }
 }
 
@@ -55,17 +58,61 @@ public struct HostReachabilityProbeResult: Sendable, Equatable {
     public let availableRelayInstances: [RelayInstanceInfo]
     public let activeRelayInstance: RelayInstanceInfo?
     public let relayTopologyChanged: Bool
+    public let relayMetadataChanged: Bool
+    public let isSelectedHostOnline: Bool
 
     public init(
         latencyMs: Int,
         availableRelayInstances: [RelayInstanceInfo] = [],
         activeRelayInstance: RelayInstanceInfo? = nil,
-        relayTopologyChanged: Bool = false
+        relayTopologyChanged: Bool = false,
+        relayMetadataChanged: Bool = false,
+        isSelectedHostOnline: Bool = true
     ) {
         self.latencyMs = latencyMs
         self.availableRelayInstances = availableRelayInstances
         self.activeRelayInstance = activeRelayInstance
         self.relayTopologyChanged = relayTopologyChanged
+        self.relayMetadataChanged = relayMetadataChanged
+        self.isSelectedHostOnline = isSelectedHostOnline
+    }
+}
+
+/// Scoped workspace & summary synchronization outcome returned by `fetchScopedWorkspacesAndSummaries(target:)`.
+public struct ScopedWorkspaceSyncResult: Sendable, Equatable {
+    public let workspaces: [WorkspaceInfo]
+    public let summaries: [CascadeSummary]
+    public let cloudProjects: [ProjectWorkspace]
+    public let cloudWarmingUp: Bool
+    public let relayInstances: [RelayInstanceInfo]
+    public let refreshedLocalHostUuids: Set<String>
+    public let refreshedLocalHostNames: Set<String>
+    public let refreshedCloud: Bool
+    public let targetReachable: Bool
+    public let latencyMs: Int
+
+    public init(
+        workspaces: [WorkspaceInfo],
+        summaries: [CascadeSummary],
+        cloudProjects: [ProjectWorkspace] = [],
+        cloudWarmingUp: Bool = false,
+        relayInstances: [RelayInstanceInfo] = [],
+        refreshedLocalHostUuids: Set<String> = [],
+        refreshedLocalHostNames: Set<String> = [],
+        refreshedCloud: Bool = false,
+        targetReachable: Bool = true,
+        latencyMs: Int = 0
+    ) {
+        self.workspaces = workspaces
+        self.summaries = summaries
+        self.cloudProjects = cloudProjects
+        self.cloudWarmingUp = cloudWarmingUp
+        self.relayInstances = relayInstances
+        self.refreshedLocalHostUuids = refreshedLocalHostUuids
+        self.refreshedLocalHostNames = refreshedLocalHostNames
+        self.refreshedCloud = refreshedCloud
+        self.targetReachable = targetReachable
+        self.latencyMs = latencyMs
     }
 }
 

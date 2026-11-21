@@ -93,10 +93,32 @@ public data class RelayInstanceInfo(
 public object SapisidHashGenerator {
     public const val DEFAULT_ORIGIN: String = "https://antigravity.google.com"
     public const val API_SERVICE_PREFIX: String = "/\$rpc/devtools_jetski_boq_api_proto.ApiService"
-    public const val PUBLIC_WEB_API_KEY: String = "AIzaSyCUicsvglkMf8CM2MPlGjopIcIxu3VJEDU"
+    public const val RELAY_API_KEY_ENV_VAR_NAME: String = "ANTIGRAVITY_RELAY_API_KEY"
     public const val ANTIGRAVITY_TEST_HEADER_NAME: String = "x-antigravity-test-72e4dd1c-e8ae-4e97-873b-c3d3a01b735d"
     public const val MOBILE_REMOTE_USER_AGENT: String =
         "Mozilla/5.0 (Mobile; Antigravity-KMP/2.0)"
+
+    private val googleWebApiKeyRegex = Regex("""(?<![0-9A-Za-z_-])AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])""")
+    private val explicitConfigKeyRegex = Regex(
+        """(?:"apiKey"|'apiKey'|apiKey|"x-goog-api-key"|'x-goog-api-key'|"SNlM0e"|'SNlM0e')\s*[:=]\s*["']([^"'\s]{16,128})["']""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    public fun extractWebApiKey(sourceText: String): String? {
+        if (sourceText.isBlank()) return null
+        googleWebApiKeyRegex.find(sourceText)?.value?.let { return it }
+        return explicitConfigKeyRegex.find(sourceText)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+    }
+
+    public fun isInvalidApiKeyError(statusCode: Int, responseBody: String): Boolean {
+        if (statusCode != 400 && statusCode != 403) return false
+        val lower = responseBody.lowercase()
+        return lower.contains("api_key_invalid") ||
+            lower.contains("api key not valid") ||
+            lower.contains("api key expired") ||
+            lower.contains("unregistered callers") ||
+            lower.contains("x-goog-api-key")
+    }
 
     public fun parseCookies(rawCookieHeader: String): Map<String, String> {
         val result = linkedMapOf<String, String>()
@@ -163,6 +185,7 @@ public object SapisidHashGenerator {
         cookieHeader: String,
         origin: String = DEFAULT_ORIGIN,
         authUser: String = "0",
+        apiKey: String? = null,
         isStreaming: Boolean? = null,
         timestampSeconds: Long,
     ): Map<String, String> {
@@ -171,13 +194,15 @@ public object SapisidHashGenerator {
             "Content-Type" to "application/json+protobuf",
             "Accept" to "*/*",
             "X-User-Agent" to "grpc-web-javascript/0.1",
-            "X-Goog-Api-Key" to PUBLIC_WEB_API_KEY,
             "X-Goog-AuthUser" to authUser.ifEmpty { "0" },
             "Origin" to normalizedOrigin,
             "X-Origin" to normalizedOrigin,
             "Referer" to "$normalizedOrigin/",
             ANTIGRAVITY_TEST_HEADER_NAME to "true",
         )
+        apiKey?.trim()?.takeIf { it.isNotEmpty() }?.let { resolvedKey ->
+            headers["X-Goog-Api-Key"] = resolvedKey
+        }
         if (isStreaming != true) {
             headers["X-Goog-Encode-Response-If-Executable"] = "base64"
         }

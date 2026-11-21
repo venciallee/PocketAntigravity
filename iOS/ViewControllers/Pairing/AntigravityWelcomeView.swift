@@ -142,7 +142,7 @@ public struct AntigravityWelcomeView: View {
         .sheet(isPresented: $isShowingGoogleSignIn) {
             CloudRelaySignInSheet(
                 targetRelayURLString: pendingRelayURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : pendingRelayURL,
-                onAuthenticated: { cookieHeader, finalURL, detectedAuthUser in
+                onAuthenticated: { cookieHeader, finalURL, detectedAuthUser, detectedRelayApiKey in
                     isShowingGoogleSignIn = false
                     let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(
                         scannedInput: pendingRelayURL,
@@ -152,7 +152,8 @@ public struct AntigravityWelcomeView: View {
                         let ok = await store.connectCloudRelay(
                             relayURLString: effectiveURL,
                             sessionCookie: cookieHeader,
-                            authUser: detectedAuthUser
+                            authUser: detectedAuthUser,
+                            relayApiKey: detectedRelayApiKey
                         )
                         if ok {
                             onConnected?()

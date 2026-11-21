@@ -709,13 +709,27 @@ extension AntigravitySessionStore {
             let cid = activeCascadeId
             let originUuid = summaries.first(where: { $0.cascadeId == cid })?.originInstanceUuid
             let shouldSyncLive = (hasPairedBackend || isLiveBackendConnected)
+            let isRejection = (decision == .reject)
             let entry = OutboxEntry(cascadeId: cid, kind: .interactionApproval, messageText: "\(payload.stepIndex)")
             Task { [weak self] in
                 await storeRef.enqueueOutbox(entry)
-                try? await clientRef.handleCascadeUserInteraction(payload, instanceUuidOverride: originUuid)
+                var interactionError: String? = nil
+                do {
+                    try await clientRef.handleCascadeUserInteraction(payload, instanceUuidOverride: originUuid)
+                } catch {
+                    if shouldSyncLive {
+                        interactionError = error.localizedDescription
+                    }
+                }
                 await storeRef.removeOutboxEntry(id: entry.id)
+                guard let self else { return }
+                if let interactionError {
+                    self.stepLoadErrorText = "Approval failed: \(interactionError)"
+                } else if shouldSyncLive && !isRejection {
+                    self.optimisticActiveUntilByCascadeId[cid] = Date().addingTimeInterval(6.0)
+                }
                 if shouldSyncLive && !cid.isEmpty {
-                    self?.syncStepsForCascade(cid, pollUntilIdle: true)
+                    self.syncStepsForCascade(cid, pollUntilIdle: !isRejection && interactionError == nil)
                 }
             }
         }
@@ -776,6 +790,7 @@ extension AntigravitySessionStore {
             sendCurrentDraft()
         }
     }
+
 
     // MARK: - Conversation Overview, Subagents & Background Tasks
 
@@ -963,12 +978,13 @@ extension AntigravitySessionStore {
         }
     }
 
+
     // MARK: - Live Structured Question Hydration (`UE10`)
 
-    public func syncActiveLiveQuestionFromSteps() {
+    public func syncActiveLiveQuestionFromSteps(stepIndex: Int? = nil) {
         guard !isVerificationMode else { return }
-        guard let waiting = pendingWaitingStep,
-              let ask = waiting.requestedInteraction?.askQuestion else {
+        guard let waiting = waitingStep(at: stepIndex),
+              let ask = waiting.effectiveRequestedInteraction?.askQuestion else {
             return
         }
         let stepId = "live-q-\(waiting.stepIndex)"
@@ -989,6 +1005,7 @@ extension AntigravitySessionStore {
             activeQuestionStepIndex = 0
         }
     }
+
 
     // MARK: - Gemini Live Voice Mode
 
@@ -1070,4 +1087,5 @@ extension AntigravitySessionStore {
         }
         presentedSheet = nil
     }
+
 }

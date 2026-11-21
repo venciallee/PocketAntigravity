@@ -56,6 +56,18 @@ public struct RelayInstanceInfo: Codable, Sendable, Equatable, Identifiable {
         self.updatedAt = updatedAt
     }
 
+    /// Returns a copy of this Relay instance with an updated lifecycle `status` (e.g. after end-to-end `ProxyCommand` probe).
+    public func withStatus(_ nextStatus: RelayInstanceStatus) -> RelayInstanceInfo {
+        RelayInstanceInfo(
+            uuid: uuid,
+            name: name,
+            version: version,
+            supportsChunking: supportsChunking,
+            status: nextStatus,
+            updatedAt: updatedAt
+        )
+    }
+
     /// Matches either the full relay UUID (`0f5819ac-9308-40d8-a308-98b55122c533-v2`),
     /// human-readable device slug (`lt74xt6l0m-golden-star`), or UUID prefix.
     public func matches(identifier rawIdentifier: String) -> Bool {
@@ -114,10 +126,180 @@ public struct RelayInstanceInfo: Codable, Sendable, Equatable, Identifiable {
 public enum SAPISIDHashGenerator: Sendable {
     public static let defaultOrigin = "https://antigravity.google.com"
     public static let apiServicePrefix = "/$rpc/devtools_jetski_boq_api_proto.ApiService"
-    public static let publicWebApiKey = "AIzaSyCUicsvglkMf8CM2MPlGjopIcIxu3VJEDU"
+    public static let relayApiKeyEnvVarName = "ANTIGRAVITY_RELAY_API_KEY"
+    public static let relayApiKeyInfoPlistKey = "AntigravityRelayAPIKey"
     public static let antigravityTestHeaderName = "x-antigravity-test-72e4dd1c-e8ae-4e97-873b-c3d3a01b735d"
     public static let mobileRemoteUserAgent =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Antigravity-iOS/2.0"
+
+    /// Optional explicit override via process environment (`ANTIGRAVITY_RELAY_API_KEY`)
+    /// or `Info.plist` (`AntigravityRelayAPIKey`). Never hardcodes any API key in source.
+    public static func configuredRelayWebApiKeyOverride() -> String? {
+        if let envVal = ProcessInfo.processInfo.environment[relayApiKeyEnvVarName]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !envVal.isEmpty,
+           !envVal.hasPrefix("$(") {
+            return envVal
+        }
+        if let plistVal = (Bundle.main.object(forInfoDictionaryKey: relayApiKeyInfoPlistKey) as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !plistVal.isEmpty,
+           !plistVal.hasPrefix("$(") {
+            return plistVal
+        }
+        return nil
+    }
+
+    /// Returns `true` for loopback hosts (`127.0.0.1`, `localhost`, `::1`) used by local mock servers and tests.
+    public static func isLoopbackOrigin(_ rawOrigin: String) -> Bool {
+        guard let host = URLComponents(string: rawOrigin.trimmingCharacters(in: .whitespacesAndNewlines))?
+            .host?.lowercased() else {
+            return false
+        }
+        return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+    }
+
+    /// Returns `true` when an HTTP 400/403 response indicates an invalid, missing, or rotated `X-Goog-Api-Key`.
+    public static func isInvalidApiKeyError(statusCode: Int, responseBody: String) -> Bool {
+        guard statusCode == 400 || statusCode == 403 else { return false }
+        let lower = responseBody.lowercased()
+        let markers = [
+            "api_key_invalid",
+            "api key not valid",
+            "api key expired",
+            "invalid api key",
+            "x-goog-api-key",
+            "unregistered callers"
+        ]
+        return markers.contains { lower.contains($0) }
+    }
+
+    /// Extracts the public frontend `X-Goog-Api-Key` dynamically from `antigravity.google.com`
+    /// HTML, `WIZ_global_data`, loaded JS bundles, or explicit relay metadata tags.
+    public static func extractWebApiKey(from rawText: String) -> String? {
+        guard !rawText.isEmpty else { return nil }
+        let fullRange = NSRange(rawText.startIndex..<rawText.endIndex, in: rawText)
+
+        func firstCapture(
+            pattern: String,
+            options: NSRegularExpression.Options = []
+        ) -> String? {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: options),
+                  let match = regex.firstMatch(in: rawText, options: [], range: fullRange) else {
+                return nil
+            }
+            let groupIndex = match.numberOfRanges > 1 ? 1 : 0
+            guard let range = Range(match.range(at: groupIndex), in: rawText) else {
+                return nil
+            }
+            let extracted = String(rawText[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return extracted.isEmpty ? nil : extracted
+        }
+
+        // 1. Contextual Google Boq/Wiz config keys paired with a 39-char Google browser API key
+        if let contextual = firstCapture(
+            pattern: #"(?:x-goog-api-key|WIu0Nc|QrtxK|P10xbc|apiKey|api_key|webApiKey)["']?\s*[:=]\s*["'](AIza[0-9A-Za-z_\-]{35})["']"#,
+            options: [.caseInsensitive]
+        ) {
+            return contextual
+        }
+
+        // 2. Standalone Google browser API key token in HTML/JS bootstrap
+        if let standalone = firstCapture(
+            pattern: #"(?<![0-9A-Za-z_\-])(AIza[0-9A-Za-z_\-]{35})(?![0-9A-Za-z_\-])"#
+        ) {
+            return standalone
+        }
+
+        // 3. Explicit relay metadata tag (used by custom/mock relays in verification & testing)
+        if let metaNameFirst = firstCapture(
+            pattern: #"<meta\b[^>]*\bname\s*=\s*["']antigravity-relay-api-key["'][^>]*\bcontent\s*=\s*["']([A-Za-z0-9_\-\.]{8,128})["']"#,
+            options: [.caseInsensitive]
+        ) {
+            return metaNameFirst
+        }
+        if let metaContentFirst = firstCapture(
+            pattern: #"<meta\b[^>]*\bcontent\s*=\s*["']([A-Za-z0-9_\-\.]{8,128})["'][^>]*\bname\s*=\s*["']antigravity-relay-api-key["']"#,
+            options: [.caseInsensitive]
+        ) {
+            return metaContentFirst
+        }
+        if let explicitHeaderJson = firstCapture(
+            pattern: #"["']x-goog-api-key["']\s*[:=]\s*["']([A-Za-z0-9_\-\.]{8,128})["']"#,
+            options: [.caseInsensitive]
+        ) {
+            return explicitHeaderJson
+        }
+
+        return nil
+    }
+
+    /// Extracts trusted same-origin or Google-hosted `<script src="...">` bootstrap bundle URLs from HTML.
+    public static func extractBootstrapScriptURLs(
+        fromHTML html: String,
+        baseURL: URL,
+        limit: Int = 8
+    ) -> [URL] {
+        guard !html.isEmpty, limit > 0 else { return [] }
+        let pattern = #"<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        let baseHost = baseURL.host?.lowercased()
+        let fullRange = NSRange(html.startIndex..<html.endIndex, in: html)
+        let matches = regex.matches(in: html, options: [], range: fullRange)
+
+        var seen = Set<String>()
+        var prioritized: [URL] = []
+        var secondary: [URL] = []
+
+        for match in matches {
+            guard match.numberOfRanges > 1,
+                  let range = Range(match.range(at: 1), in: html) else {
+                continue
+            }
+            let rawSrc = String(html[range])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "&amp;", with: "&")
+            guard !rawSrc.isEmpty,
+                  let resolved = URL(string: rawSrc, relativeTo: baseURL)?.absoluteURL,
+                  let scheme = resolved.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http",
+                  let host = resolved.host?.lowercased() else {
+                continue
+            }
+            let isTrustedHost =
+                (baseHost != nil && host == baseHost) ||
+                host == "google.com" ||
+                host.hasSuffix(".google.com") ||
+                host == "gstatic.com" ||
+                host.hasSuffix(".gstatic.com") ||
+                host.hasSuffix(".googleusercontent.com")
+            guard isTrustedHost else { continue }
+
+            let key = resolved.absoluteString
+            guard seen.insert(key).inserted else { continue }
+
+            let lowerPathAndQuery = (resolved.path + "?" + (resolved.query ?? "")).lowercased()
+            let isPriorityBundle =
+                lowerPathAndQuery.contains("antigravity") ||
+                lowerPathAndQuery.contains("jetski") ||
+                lowerPathAndQuery.contains("boq") ||
+                lowerPathAndQuery.contains("/_/") ||
+                lowerPathAndQuery.contains("main") ||
+                lowerPathAndQuery.contains("app") ||
+                lowerPathAndQuery.contains("bundle") ||
+                lowerPathAndQuery.contains("chunk") ||
+                lowerPathAndQuery.contains("bootstrap")
+            if isPriorityBundle {
+                prioritized.append(resolved)
+            } else {
+                secondary.append(resolved)
+            }
+        }
+
+        return Array((prioritized + secondary).prefix(limit))
+    }
 
     /// Parses a semicolon-delimited HTTP `Cookie` header into `[name: value]`.
     public static func parseCookies(_ rawCookieHeader: String) -> [String: String] {
@@ -196,6 +378,7 @@ public enum SAPISIDHashGenerator: Sendable {
         cookieHeader: String,
         origin: String = defaultOrigin,
         authUser: String = "0",
+        apiKey: String? = nil,
         isStreaming: Bool? = nil,
         timestamp: Int = Int(Date().timeIntervalSince1970)
     ) {
@@ -203,7 +386,12 @@ public enum SAPISIDHashGenerator: Sendable {
         request.setValue("application/json+protobuf", forHTTPHeaderField: "Content-Type")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
         request.setValue("grpc-web-javascript/0.1", forHTTPHeaderField: "X-User-Agent")
-        request.setValue(publicWebApiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        let explicitKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveApiKey = (explicitKey?.isEmpty == false ? explicitKey : nil)
+            ?? configuredRelayWebApiKeyOverride()
+        if let effectiveApiKey, !effectiveApiKey.isEmpty {
+            request.setValue(effectiveApiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        }
         request.setValue(authUser.isEmpty ? "0" : authUser, forHTTPHeaderField: "X-Goog-AuthUser")
         if isStreaming != true {
             request.setValue("base64", forHTTPHeaderField: "X-Goog-Encode-Response-If-Executable")
@@ -426,7 +614,7 @@ public enum CloudRelayJSPBCodec: Sendable {
         Data("[]".utf8)
     }
 
-    /// Decodes `ListInstancesResponse` JSPB array:
+    /// Decodes `ListInstancesResponse` JSPB array (or protojson object fallback):
     /// `[ [ [uuid, [name, version, supportsChunking], statusInt, [seconds, nanos]], ... ], maxConnected ]`
     public static func decodeListInstancesResponse(
         _ rawData: Data,
@@ -437,50 +625,164 @@ public enum CloudRelayJSPBCodec: Sendable {
             return []
         }
         let rootValue = try JSONDecoder().decode(JSONValue.self, from: unwrapped)
-        guard let rootArray = rootValue.arrayValue else {
+
+        let rawInstances: [JSONValue]
+        if let rootArray = rootValue.arrayValue {
+            guard let firstArr = rootArray.first?.arrayValue else {
+                return []
+            }
+            rawInstances = firstArr
+        } else if let rootObj = rootValue.objectValue,
+                  let objInstances = rootObj["instances"]?.arrayValue {
+            rawInstances = objInstances
+        } else {
             throw AntigravityRPCError.decodingError("Expected JSPB array from ListInstances")
         }
-        guard let rawInstances = rootArray.first?.arrayValue else {
-            return []
-        }
 
-        return rawInstances.compactMap { item -> RelayInstanceInfo? in
-            guard let row = item.arrayValue,
-                  let uuid = row.first?.stringValue,
-                  !uuid.isEmpty else {
-                return nil
-            }
-            let metadataArr = row.count > 1 ? row[1].arrayValue : nil
-            let rawName = metadataArr?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = (rawName?.isEmpty == false) ? rawName! : uuid
-            let version = (metadataArr != nil && metadataArr!.count > 1 ? metadataArr![1].stringValue : nil) ?? "v2.32.0"
-            let supportsChunking: Bool = {
-                guard let metadataArr, metadataArr.count > 2 else { return true }
-                if let b = metadataArr[2].boolValue { return b }
-                if let i = metadataArr[2].intValue { return i != 0 }
-                return true
-            }()
-
-            let statusCode = row.count > 2 ? (row[2].intValue ?? 0) : 1
-            let status = RelayInstanceStatus(rawStatusCode: statusCode)
-
-            var updatedAt: Date? = nil
-            if row.count > 3, let tsArr = row[3].arrayValue, !tsArr.isEmpty {
-                let secs = tsArr[0].doubleValue ?? Double(tsArr[0].stringValue ?? "")
-                let nanos = tsArr.count > 1 ? (tsArr[1].doubleValue ?? Double(tsArr[1].stringValue ?? "") ?? 0) : 0
-                if let secs, secs > 0 {
-                    updatedAt = Date(timeIntervalSince1970: secs + nanos / 1_000_000_000.0)
+        func firstNonEmptyString(in obj: [String: JSONValue]?, keys: [String]) -> String? {
+            guard let obj else { return nil }
+            for key in keys {
+                if let str = obj[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !str.isEmpty {
+                    return str
                 }
             }
+            return nil
+        }
 
-            return RelayInstanceInfo(
-                uuid: uuid,
-                name: name,
-                version: version,
-                supportsChunking: supportsChunking,
-                status: status,
-                updatedAt: updatedAt
-            )
+        func decodeStatus(_ value: JSONValue?) -> RelayInstanceStatus {
+            if let code = value?.intValue {
+                return RelayInstanceStatus(rawStatusCode: code)
+            }
+            if let rawStr = value?.stringValue?.uppercased() {
+                if rawStr.contains("CONNECTED") && !rawStr.contains("DISCONNECTED") {
+                    return .connected
+                }
+                if rawStr.contains("IDLE") {
+                    return .idle
+                }
+                if rawStr.contains("DISCONNECTED") || rawStr.contains("OFFLINE") {
+                    return .disconnected
+                }
+            }
+            return .unknown
+        }
+
+        func decodeTimestamp(_ value: JSONValue?) -> Date? {
+            if let tsArr = value?.arrayValue, !tsArr.isEmpty {
+                let secs = tsArr[0].doubleValue ?? Double(tsArr[0].stringValue ?? "")
+                let nanos: Double
+                if tsArr.count > 1 {
+                    nanos = tsArr[1].doubleValue ?? Double(tsArr[1].stringValue ?? "") ?? 0
+                } else {
+                    nanos = 0
+                }
+                if let secs, secs > 0 {
+                    return Date(timeIntervalSince1970: secs + nanos / 1_000_000_000.0)
+                }
+            } else if let tsObj = value?.objectValue {
+                let secs = tsObj["seconds"]?.doubleValue ?? Double(tsObj["seconds"]?.stringValue ?? "")
+                let nanos = tsObj["nanos"]?.doubleValue ?? Double(tsObj["nanos"]?.stringValue ?? "") ?? 0
+                if let secs, secs > 0 {
+                    return Date(timeIntervalSince1970: secs + nanos / 1_000_000_000.0)
+                }
+            } else if let iso = value?.stringValue {
+                let fmt = ISO8601DateFormatter()
+                fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let parsed = fmt.date(from: iso) {
+                    return parsed
+                }
+                fmt.formatOptions = [.withInternetDateTime]
+                return fmt.date(from: iso)
+            }
+            return nil
+        }
+
+        let preferredNameKeys = [
+            "deviceName", "device_name",
+            "displayName", "display_name",
+            "customName", "custom_name",
+            "nickname", "hostname", "name"
+        ]
+        let versionKeys = ["version", "appVersion", "app_version"]
+
+        return rawInstances.compactMap { item -> RelayInstanceInfo? in
+            if let row = item.arrayValue {
+                guard let rawUuid = row.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !rawUuid.isEmpty else {
+                    return nil
+                }
+                let metadataVal: JSONValue? = row.count > 1 ? row[1] : nil
+                let metadataArr = metadataVal?.arrayValue
+                let metadataObj = metadataVal?.objectValue
+
+                let arrName = metadataArr?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let objName = firstNonEmptyString(in: metadataObj, keys: preferredNameKeys)
+                let resolvedName = objName ?? arrName
+                let name = (resolvedName?.isEmpty == false) ? resolvedName! : rawUuid
+
+                let arrVersion: String? = (metadataArr != nil && metadataArr!.count > 1) ? metadataArr![1].stringValue : nil
+                let objVersion = firstNonEmptyString(in: metadataObj, keys: versionKeys)
+                let version = objVersion ?? arrVersion ?? "v2.32.0"
+
+                let supportsChunking: Bool = {
+                    if let b = metadataObj?["supportsChunking"]?.boolValue { return b }
+                    if let b = metadataObj?["supports_chunking"]?.boolValue { return b }
+                    guard let metadataArr, metadataArr.count > 2 else { return true }
+                    if let b = metadataArr[2].boolValue { return b }
+                    if let i = metadataArr[2].intValue { return i != 0 }
+                    return true
+                }()
+
+                let status = row.count > 2 ? decodeStatus(row[2]) : .unknown
+                let updatedAt = row.count > 3 ? decodeTimestamp(row[3]) : nil
+
+                return RelayInstanceInfo(
+                    uuid: rawUuid,
+                    name: name,
+                    version: version,
+                    supportsChunking: supportsChunking,
+                    status: status,
+                    updatedAt: updatedAt
+                )
+            }
+
+            if let obj = item.objectValue {
+                guard let rawUuid = firstNonEmptyString(in: obj, keys: ["uuid", "instanceId", "instance_id", "id"]) else {
+                    return nil
+                }
+                let metadataObj = obj["metadata"]?.objectValue
+                let metadataArr = obj["metadata"]?.arrayValue
+
+                let topName = firstNonEmptyString(in: obj, keys: preferredNameKeys)
+                let metaName = firstNonEmptyString(in: metadataObj, keys: preferredNameKeys)
+                let arrName = metadataArr?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let resolvedName = topName ?? metaName ?? arrName
+                let name = (resolvedName?.isEmpty == false) ? resolvedName! : rawUuid
+
+                let metaVersion = firstNonEmptyString(in: metadataObj, keys: versionKeys)
+                let topVersion = firstNonEmptyString(in: obj, keys: versionKeys)
+                let arrVersion: String? = (metadataArr != nil && metadataArr!.count > 1) ? metadataArr![1].stringValue : nil
+                let version = metaVersion ?? topVersion ?? arrVersion ?? "v2.32.0"
+
+                let chunkFlag = metadataObj?["supportsChunking"]?.boolValue
+                    ?? metadataObj?["supports_chunking"]?.boolValue
+                let supportsChunking = chunkFlag ?? true
+                let status = obj["status"] != nil ? decodeStatus(obj["status"]) : .connected
+                let tsVal = obj["updatedAt"] ?? obj["updated_at"] ?? obj["lastSeen"] ?? obj["last_seen"]
+                let updatedAt = decodeTimestamp(tsVal)
+
+                return RelayInstanceInfo(
+                    uuid: rawUuid,
+                    name: name,
+                    version: version,
+                    supportsChunking: supportsChunking,
+                    status: status,
+                    updatedAt: updatedAt
+                )
+            }
+
+            return nil
         }
     }
 
