@@ -3166,7 +3166,9 @@ public final class AntigravitySessionStore {
                 }
                 if self.activeCascadeId == optimisticId {
                     self.activeCascadeId = realCascadeId
-                    self.activeRoute = .cascadeChat(realCascadeId)
+                    if case .cascadeChat = self.activeRoute {
+                        self.activeRoute = .cascadeChat(realCascadeId)
+                    }
                 }
                 if let prompt = initialPrompt, !prompt.isEmpty {
                     self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
@@ -3741,7 +3743,9 @@ public final class AntigravitySessionStore {
                         }
                         if self.activeCascadeId == targetCascadeId || self.activeCascadeId.isEmpty {
                             self.activeCascadeId = createdId
-                            self.activeRoute = .cascadeChat(createdId)
+                            if case .cascadeChat = self.activeRoute {
+                                self.activeRoute = .cascadeChat(createdId)
+                            }
                         }
                         targetCascadeId = createdId
                     }

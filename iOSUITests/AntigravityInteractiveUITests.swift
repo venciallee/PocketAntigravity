@@ -662,6 +662,71 @@ final class AntigravityInteractiveUITests: XCTestCase {
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
     }
 
+    /// Verifies native iOS left-edge swipe-back (`interactivePopGestureRecognizer`) on Conversation
+    /// (`CascadeChatViewController`) returns smoothly to `AgentsHomeViewController`, and when opened
+    /// from `ProjectDetailViewController`, returns to Project Detail and then to Agents Home.
+    func testConversationEdgeSwipeBackToAgentsHomeAndProjectDetail() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
+
+        let app = XCUIApplication()
+        app.launchEnvironment["ANTIGRAVITY_BACKEND_URL"] = "http://127.0.0.1:\(server.port)"
+        app.launchEnvironment["ANTIGRAVITY_CSRF_TOKEN"] = "uitest-csrf-token"
+        app.launchEnvironment["ANTIGRAVITY_HOST_NAME"] = "MacBook-Pro-Live"
+        app.launchEnvironment["NO_PROXY"] = "127.0.0.1,localhost,::1"
+        app.launchEnvironment["no_proxy"] = "127.0.0.1,localhost,::1"
+        app.launch()
+
+        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+
+        // 1. Open Conversation from Agents Home -> edge-swipe right -> must pop back to Agents Home
+        reviewRow.tap()
+        let backToSessionsButton = app.buttons["btn-back-sessions"]
+        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 6))
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 5),
+            "Swiping from the left edge on Conversation must pop back to Agents Home"
+        )
+        XCTAssertFalse(
+            backToSessionsButton.exists,
+            "Conversation screen must be popped after completing edge-swipe back"
+        )
+
+        // 2. Open Project Detail -> Conversation -> edge-swipe back to Project Detail -> edge-swipe back to Agents Home
+        let projectHeader = app.buttons["project-header-slardar_app_ai"]
+        XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
+        projectHeader.tap()
+
+        let backToAgentsButton = app.buttons["btn-back-agents"]
+        XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
+
+        let projectConvRow = app.buttons["project-conv-row-cid-slardar-tracking"]
+        XCTAssertTrue(projectConvRow.waitForExistence(timeout: 5))
+        projectConvRow.tap()
+        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 5))
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            backToAgentsButton.waitForExistence(timeout: 5),
+            "Edge-swipe back from a project-launched Conversation must pop back to Project Detail"
+        )
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 5),
+            "Edge-swipe back from Project Detail must pop back to Agents Home"
+        )
+    }
+
+    private func performEdgeSwipeBack(in app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+        start.press(forDuration: 0.02, thenDragTo: end)
+    }
+
     private func waitForTextContaining(_ substring: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
         let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", substring, substring)
         return app.descendants(matching: .any).containing(predicate).firstMatch.waitForExistence(timeout: timeout)

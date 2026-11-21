@@ -167,6 +167,7 @@ public struct CascadeChatViewController: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                 }
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: streamingFollowSignature) { _, _ in
                     guard !isStaticESDDFixtureView, store.isAutoScrollPinnedToBottom else { return }
                     withAnimation(.easeOut(duration: 0.2)) {
