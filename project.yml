@@ -26,7 +26,8 @@ targets:
       - path: iOS
         excludes:
           - "**/Info.plist"
-      - path: Shared
+      - path: Shared/DesignSystem
+      - path: Shared/LiveActivity
       - path: Extensions/LiveActivity
         excludes:
           - "**/*Bundle*"
