@@ -268,17 +268,17 @@ public enum SAPISIDHashGenerator: Sendable {
             let key = resolved.absoluteString
             guard seen.insert(key).inserted else { continue }
 
-            let lowerURL = key.lowercased()
+            let lowerPathAndQuery = (resolved.path + "?" + (resolved.query ?? "")).lowercased()
             let isPriorityBundle =
-                lowerURL.contains("antigravity") ||
-                lowerURL.contains("jetski") ||
-                lowerURL.contains("boq") ||
-                lowerURL.contains("/_/") ||
-                lowerURL.contains("main") ||
-                lowerURL.contains("app") ||
-                lowerURL.contains("bundle") ||
-                lowerURL.contains("chunk") ||
-                lowerURL.contains("bootstrap")
+                lowerPathAndQuery.contains("antigravity") ||
+                lowerPathAndQuery.contains("jetski") ||
+                lowerPathAndQuery.contains("boq") ||
+                lowerPathAndQuery.contains("/_/") ||
+                lowerPathAndQuery.contains("main") ||
+                lowerPathAndQuery.contains("app") ||
+                lowerPathAndQuery.contains("bundle") ||
+                lowerPathAndQuery.contains("chunk") ||
+                lowerPathAndQuery.contains("bootstrap")
             if isPriorityBundle {
                 prioritized.append(resolved)
             } else {
