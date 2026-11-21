@@ -55,7 +55,7 @@ public enum InteractionBuilder: Sendable {
         decision: InteractionDecision,
         workspaceUri: String? = nil
     ) -> CascadeUserInteractionPayload? {
-        guard let requested = step.requestedInteraction else {
+        guard let requested = step.effectiveRequestedInteraction else {
             return nil
         }
 
@@ -67,7 +67,8 @@ public enum InteractionBuilder: Sendable {
                     stepIndex: step.stepIndex,
                     kind: .permission,
                     workspaceUri: workspaceUri,
-                    permission: .init(allow: false)
+                    permission: .init(allow: false),
+                    rawMemberKey: requested.rawMemberKey
                 )
             case .filePermission:
                 return CascadeUserInteractionPayload(
@@ -75,7 +76,8 @@ public enum InteractionBuilder: Sendable {
                     stepIndex: step.stepIndex,
                     kind: .filePermission,
                     workspaceUri: workspaceUri,
-                    filePermission: .init(allow: false, absolutePathUri: requested.filePermission?.absolutePathUri)
+                    filePermission: .init(allow: false, absolutePathUri: requested.filePermission?.absolutePathUri),
+                    rawMemberKey: requested.rawMemberKey
                 )
             case .runCommand:
                 let proposed = requested.runCommand?.proposedCommandLine
@@ -92,7 +94,8 @@ public enum InteractionBuilder: Sendable {
                         proposedCommandLine: proposed,
                         submittedCommandLine: proposed,
                         faceIdVerified: false
-                    )
+                    ),
+                    rawMemberKey: requested.rawMemberKey
                 )
             default:
                 return CascadeUserInteractionPayload(
@@ -100,7 +103,8 @@ public enum InteractionBuilder: Sendable {
                     stepIndex: step.stepIndex,
                     kind: requested.kind,
                     workspaceUri: workspaceUri,
-                    genericConfirm: false
+                    genericConfirm: false,
+                    rawMemberKey: requested.rawMemberKey
                 )
             }
         }
@@ -119,12 +123,13 @@ public enum InteractionBuilder: Sendable {
 
         switch requested.kind {
         case .permission:
-            guard let spec = requested.permission else { return nil }
             var grants: [String] = []
-            let shouldGrant = (decision == .alwaysAllowInTurn || decision == .allowInConversation || decision == .alwaysAllow)
-            if shouldGrant && spec.persistSuggestionType != .blocked {
-                let patternTarget = spec.suggestedPersistPattern ?? spec.target
-                grants = ["\(spec.action)(\(patternTarget))"]
+            if let spec = requested.permission {
+                let shouldGrant = (decision == .alwaysAllowInTurn || decision == .allowInConversation || decision == .alwaysAllow)
+                if shouldGrant && spec.persistSuggestionType != .blocked {
+                    let patternTarget = spec.suggestedPersistPattern ?? spec.target
+                    grants = ["\(spec.action)(\(patternTarget))"]
+                }
             }
             return CascadeUserInteractionPayload(
                 cascadeId: step.cascadeId,
@@ -132,7 +137,8 @@ public enum InteractionBuilder: Sendable {
                 kind: .permission,
                 workspaceUri: workspaceUri,
                 permission: .init(allow: true, grantPatterns: grants, scope: resolvedScope),
-                approvalScope: resolvedScope
+                approvalScope: resolvedScope,
+                rawMemberKey: requested.rawMemberKey
             )
 
         case .filePermission:
@@ -143,7 +149,8 @@ public enum InteractionBuilder: Sendable {
                 kind: .filePermission,
                 workspaceUri: workspaceUri,
                 filePermission: .init(allow: true, scope: resolvedScope, absolutePathUri: uri),
-                approvalScope: resolvedScope
+                approvalScope: resolvedScope,
+                rawMemberKey: requested.rawMemberKey
             )
 
         case .runCommand:
@@ -169,7 +176,8 @@ public enum InteractionBuilder: Sendable {
                     submittedCommandLine: submitted,
                     faceIdVerified: faceId
                 ),
-                approvalScope: resolvedScope
+                approvalScope: resolvedScope,
+                rawMemberKey: requested.rawMemberKey
             )
 
         case .askQuestion, .elicitation:
@@ -184,7 +192,8 @@ public enum InteractionBuilder: Sendable {
                 askQuestion: .init(
                     selectedOptions: selectedOptions,
                     customResponse: (customWriteIn?.isEmpty == false) ? customWriteIn : nil
-                )
+                ),
+                rawMemberKey: requested.rawMemberKey
             )
 
         case .executeUrl, .downloadUrl, .mcp:
@@ -194,7 +203,8 @@ public enum InteractionBuilder: Sendable {
                 kind: requested.kind,
                 workspaceUri: workspaceUri,
                 genericConfirm: true,
-                approvalScope: resolvedScope
+                approvalScope: resolvedScope,
+                rawMemberKey: requested.rawMemberKey
             )
 
         case .browserUpload, .workflowScript:
@@ -205,7 +215,8 @@ public enum InteractionBuilder: Sendable {
                 kind: requested.kind,
                 workspaceUri: workspaceUri,
                 genericConfirm: true,
-                approvalScope: "PERMISSION_SCOPE_ONCE"
+                approvalScope: "PERMISSION_SCOPE_ONCE",
+                rawMemberKey: requested.rawMemberKey
             )
 
         default:
@@ -215,7 +226,8 @@ public enum InteractionBuilder: Sendable {
                 kind: requested.kind,
                 workspaceUri: workspaceUri,
                 genericConfirm: true,
-                approvalScope: resolvedScope
+                approvalScope: resolvedScope,
+                rawMemberKey: requested.rawMemberKey
             )
         }
     }

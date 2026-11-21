@@ -360,6 +360,7 @@ public struct RemotePairingViewController: View {
             if store.hasPairedBackend && !store.isVerificationMode {
                 await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
             }
+            await store.reconnectNow(userInitiated: true)
         }
         .background(AntigravityTheme.canvasObsidian)
         .task {

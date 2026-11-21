@@ -437,14 +437,25 @@ public struct SevenSegmentTaskProgressCardView: View {
 public struct InlineCommandApprovalCardView: View {
     @Bindable public var store: AntigravitySessionStore
     public let commandLine: String
+    public let stepIndex: Int?
+    public let hostName: String?
     @State private var resolutionState: String? = nil
 
     public init(
         store: AntigravitySessionStore,
-        commandLine: String = "vegeta attack -rate=2000/s -duration=30s \\\n  -targets=load/transfers.txt | vegeta\nreport"
+        commandLine: String = "vegeta attack -rate=2000/s -duration=30s \\\n  -targets=load/transfers.txt | vegeta\nreport",
+        stepIndex: Int? = nil,
+        hostName: String? = nil
     ) {
         self.store = store
         self.commandLine = commandLine
+        self.stepIndex = stepIndex
+        self.hostName = hostName
+    }
+
+    private var displayCommandLine: String {
+        let trimmed = commandLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Confirm pending terminal command" : commandLine
     }
 
     public var body: some View {
@@ -459,7 +470,7 @@ public struct InlineCommandApprovalCardView: View {
                 Spacer()
             }
 
-            Text(commandLine)
+            Text(displayCommandLine)
                 .font(.system(size: 12.5, design: .monospaced))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .lineSpacing(2)
@@ -475,8 +486,8 @@ public struct InlineCommandApprovalCardView: View {
             HStack(spacing: 10) {
                 Button {
                     resolutionState = "Command denied"
-                    if let waiting = store.pendingWaitingStep {
-                        store.resolveWaitingStep(stepIndex: waiting.stepIndex, decision: .reject)
+                    if let targetIdx = stepIndex ?? store.pendingWaitingStep?.stepIndex {
+                        store.resolveWaitingStep(stepIndex: targetIdx, decision: .reject)
                     }
                 } label: {
                     Text("Deny")
@@ -519,9 +530,12 @@ public struct InlineCommandApprovalCardView: View {
     }
 
     private func authenticateWithFaceIDAndApprove() {
+        let promptReason: String = store.isVerificationMode
+            ? "Approve vegeta load-test command on MacBook Pro"
+            : "Approve command on \(hostName ?? store.activeHost.hostname)"
         Task {
             let outcome = await StepBiometricGate.evaluate(
-                reason: "Approve command execution on paired Antigravity host",
+                reason: promptReason,
                 cancelTitle: "Cancel"
             )
             if outcome == .verified || outcome == .unavailable {
@@ -532,7 +546,7 @@ public struct InlineCommandApprovalCardView: View {
 
     private func commitFaceIDApproval() {
         resolutionState = "Approved with Face ID"
-        store.approveWaitingCommandWithFaceID()
+        store.approveWaitingCommandWithFaceID(stepIndex: stepIndex)
     }
 }
 
@@ -719,7 +733,8 @@ public struct CascadeStepCellView: View {
     }
 
     public var body: some View {
-        Group {
+        let effectiveWaitingReq = step.isWaitingForUser ? step.effectiveRequestedInteraction : nil
+        VStack(alignment: .leading, spacing: 8) {
             switch step.type {
             case .userInput:
                 UserPromptContextBubbleView(
@@ -829,58 +844,55 @@ public struct CascadeStepCellView: View {
                 }
 
             case .runCommand:
-                if let cmd = step.runCommand {
-                    if step.status == .waiting {
-                        InlineCommandApprovalCardView(store: store, commandLine: cmd.commandLine)
-                    } else {
-                        let isExpanded = store.expandedTerminalStepIds.contains(step.id)
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "terminal")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                    .foregroundStyle(StepCardPalette.periwinkle)
-                                Text(cmd.commandLine)
-                                    .font(.system(size: 12.5, design: .monospaced))
-                                    .foregroundStyle(AntigravityTheme.inkReading)
-                                    .lineLimit(isExpanded ? nil : 2)
-                                Spacer()
-                                if let code = cmd.exitCode {
-                                    Text(code == 0 ? "exit 0" : "exit \(code)")
+                if let cmd = step.runCommand,
+                   !(step.isWaitingForUser && effectiveWaitingReq?.kind == .runCommand) {
+                    let isExpanded = store.expandedTerminalStepIds.contains(step.id)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "terminal")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(StepCardPalette.periwinkle)
+                            Text(cmd.commandLine)
+                                .font(.system(size: 12.5, design: .monospaced))
+                                .foregroundStyle(AntigravityTheme.inkReading)
+                                .lineLimit(isExpanded ? nil : 2)
+                            Spacer()
+                            if let code = cmd.exitCode {
+                                Text(code == 0 ? "exit 0" : "exit \(code)")
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(code == 0 ? StepCardPalette.emeraldDone : AntigravityTheme.statusError)
+                            } else if (step.status == .inProgress || step.status == .pending) && shouldAnimateLive {
+                                HStack(spacing: 5) {
+                                    AntigravityRunningArcIndicatorView(isAnimated: true)
+                                        .scaleEffect(0.82)
+                                    Text("running")
                                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(code == 0 ? StepCardPalette.emeraldDone : AntigravityTheme.statusError)
-                                } else if (step.status == .inProgress || step.status == .pending) && shouldAnimateLive {
-                                    HStack(spacing: 5) {
-                                        AntigravityRunningArcIndicatorView(isAnimated: true)
-                                            .scaleEffect(0.82)
-                                        Text("running")
-                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(StepCardPalette.periwinkle)
-                                    }
+                                        .foregroundStyle(StepCardPalette.periwinkle)
                                 }
-                            }
-                            if let out = cmd.outputPreview, !out.isEmpty {
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.16)) {
-                                        store.toggleTerminalOutputExpanded(stepId: step.id)
-                                    }
-                                } label: {
-                                    Text(out)
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                                        .lineLimit(isExpanded ? nil : 4)
-                                        .multilineTextAlignment(.leading)
-                                        .padding(8)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(StepCardPalette.codeBlockBg)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
                             }
                         }
-                        .padding(11)
-                        .background(StepCardPalette.cardSurface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        if let out = cmd.outputPreview, !out.isEmpty {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.16)) {
+                                    store.toggleTerminalOutputExpanded(stepId: step.id)
+                                }
+                            } label: {
+                                Text(out)
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                                    .lineLimit(isExpanded ? nil : 4)
+                                    .multilineTextAlignment(.leading)
+                                    .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(StepCardPalette.codeBlockBg)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
+                    .padding(11)
+                    .background(StepCardPalette.cardSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
 
             case .codeAction:
@@ -923,6 +935,40 @@ public struct CascadeStepCellView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                }
+
+            case .viewFile, .listDirectory, .viewContentChunk:
+                if let vf = step.viewFile, !step.isWaitingForUser {
+                    HStack(spacing: 8) {
+                        Image(systemName: step.type == .listDirectory ? "folder" : "doc.text.magnifyingglass")
+                            .font(.system(size: 12))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        Text(vf.fileName)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(StepCardPalette.cardSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+            case .search:
+                if let sc = step.search, !step.isWaitingForUser {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 12))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        Text(sc.query)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(StepCardPalette.cardSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
             case .subagentInvocation:
@@ -971,17 +1017,16 @@ public struct CascadeStepCellView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             default:
-                if step.status == .waiting, let reqInt = step.requestedInteraction {
-                    if reqInt.kind == .askQuestion {
-                        InlineGenericInteractionCardView(store: store, step: step, interaction: reqInt)
-                    } else {
-                        V233InlineApprovalCardView(store: store, step: step, requested: reqInt)
-                    }
-                } else if let prose = step.plannerResponse?.response, !prose.isEmpty {
+                if let prose = step.plannerResponse?.response, !prose.isEmpty {
                     AntigravityMarkdownView(markdown: prose, variant: .assistant, store: store)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("step-prose-\(step.stepIndex)")
                 }
+            }
+
+            // Guarantee EVERY waiting/blocked step renders its interactive approval or question entry point.
+            if let waitingReq = effectiveWaitingReq {
+                StepInlineApprovalCardView(store: store, step: step, requested: waitingReq)
             }
         }
         .sheet(
@@ -1243,95 +1288,344 @@ private struct GitHubPRStatusPillsRow: View {
     }
 }
 
-private struct V233InlineApprovalCardView: View {
-    let store: AntigravitySessionStore
-    let step: CascadeStep
-    let requested: RequestedInteraction
+public struct StepInlineApprovalCardView: View {
+    @Bindable public var store: AntigravitySessionStore
+    public let step: CascadeStep
+    public let requested: RequestedInteraction
 
-    private var titleAndDetail: (String, String, Bool) {
+    public init(
+        store: AntigravitySessionStore,
+        step: CascadeStep,
+        requested: RequestedInteraction
+    ) {
+        self.store = store
+        self.step = step
+        self.requested = requested
+    }
+
+    private struct CardDescriptor {
+        let icon: String
+        let title: String
+        let detail: String
+        let secondaryNote: String?
+        let primaryLabel: String
+        let supportsScopedAllow: Bool
+    }
+
+    private var descriptor: CardDescriptor {
         switch requested.kind {
-        case .executeUrl:
-            let domain = requested.executeUrl?.domain ?? "external site"
-            let url = requested.executeUrl?.url ?? ""
-            return ("Browser Action Approval · \(domain)", url, true)
-        case .downloadUrl:
-            let file = requested.downloadUrl?.fileName ?? "file"
-            let origin = requested.downloadUrl?.origin ?? ""
-            return ("Browser Download · \(file)", "From \(origin) → \(requested.downloadUrl?.destinationFolder ?? "~/Downloads")", true)
-        case .browserUpload:
-            let files = requested.browserUpload?.fileNames.joined(separator: ", ") ?? "files"
-            return ("One-Time Upload Confirmation", "Upload \(files) to \(requested.browserUpload?.origin ?? "site")", false)
-        case .workflowScript:
-            return ("Approve Dynamic Workflow Script", requested.workflowScript?.title ?? "Python orchestrator script", false)
-        case .mcp:
-            return ("MCP Tool Approval · \(requested.mcpServerName ?? "Server")", "Invoke \(requested.mcpToolName ?? "tool")", true)
         case .permission:
             let action = requested.permission?.action ?? "action"
             let target = requested.permission?.target ?? "*"
             let plugin = requested.permission?.pluginName.map { " [\($0)]" } ?? ""
-            return ("Permission Request\(plugin)", "\(action)(\(target))", true)
+            let allowScopes = (requested.permission?.persistSuggestionType != .blocked)
+            return CardDescriptor(
+                icon: "exclamationmark.shield.fill",
+                title: "Permission Request\(plugin)",
+                detail: "\(action)(\(target))",
+                secondaryNote: requested.permission?.reason,
+                primaryLabel: "Allow Once",
+                supportsScopedAllow: allowScopes
+            )
+        case .filePermission:
+            let rawPath = requested.filePermission?.absolutePathUri
+                ?? step.viewFile?.fileUri
+                ?? step.codeAction?.targetFileUri
+                ?? ""
+            let cleanedPath = rawPath.replacingOccurrences(of: "file://", with: "")
+            let isDir = requested.filePermission?.isDirectory ?? (step.type == .listDirectory)
+            return CardDescriptor(
+                icon: isDir ? "folder.badge.questionmark" : "doc.badge.gearshape",
+                title: isDir ? "Folder Access Approval" : "File Access Approval",
+                detail: cleanedPath.isEmpty ? "Confirm access to workspace or external file" : cleanedPath,
+                secondaryNote: requested.filePermission?.blockReason,
+                primaryLabel: "Allow Once",
+                supportsScopedAllow: true
+            )
+        case .executeUrl, .openBrowserUrl, .browserAction, .executeBrowserJavascript,
+             .captureBrowserScreenshot, .clickBrowserPixel, .openBrowserSetup, .confirmBrowserSetup:
+            let domain = requested.executeUrl?.domain ?? "Browser"
+            let detail = requested.executeUrl?.url
+                ?? requested.rawSummary
+                ?? "Allow agent to continue browser action"
+            return CardDescriptor(
+                icon: "safari.fill",
+                title: "Browser Action · \(domain)",
+                detail: detail.isEmpty ? "Allow agent to continue browser action" : detail,
+                secondaryNote: nil,
+                primaryLabel: "Allow Once",
+                supportsScopedAllow: true
+            )
+        case .downloadUrl:
+            let file = requested.downloadUrl?.fileName ?? "file"
+            let origin = requested.downloadUrl?.origin ?? ""
+            return CardDescriptor(
+                icon: "arrow.down.circle.fill",
+                title: "Browser Download · \(file)",
+                detail: "From \(origin) → \(requested.downloadUrl?.destinationFolder ?? "~/Downloads")",
+                secondaryNote: nil,
+                primaryLabel: "Allow Once",
+                supportsScopedAllow: true
+            )
+        case .browserUpload:
+            let files = requested.browserUpload?.fileNames.joined(separator: ", ") ?? "files"
+            return CardDescriptor(
+                icon: "arrow.up.doc.fill",
+                title: "One-Time Upload Confirmation",
+                detail: "Upload \(files) to \(requested.browserUpload?.origin ?? "site")",
+                secondaryNote: nil,
+                primaryLabel: "Allow Once",
+                supportsScopedAllow: false
+            )
+        case .workflowScript:
+            return CardDescriptor(
+                icon: "flowchart.fill",
+                title: "Approve Dynamic Workflow Script",
+                detail: requested.workflowScript?.title ?? "Python orchestrator script",
+                secondaryNote: nil,
+                primaryLabel: "Approve",
+                supportsScopedAllow: false
+            )
+        case .mcp:
+            let server = requested.mcpServerName ?? step.mcpToolCall?.serverName ?? "MCP"
+            let tool = requested.mcpToolName ?? step.mcpToolCall?.toolName ?? "tool"
+            return CardDescriptor(
+                icon: "wrench.and.screwdriver.fill",
+                title: "MCP Tool Approval · \(server)",
+                detail: "Invoke \(tool)",
+                secondaryNote: requested.rawSummary,
+                primaryLabel: "Allow Once",
+                supportsScopedAllow: true
+            )
+        case .sendCommandInput:
+            let stdinText = requested.rawSummary ?? step.runCommand?.commandLine ?? "Send input to running terminal process"
+            return CardDescriptor(
+                icon: "terminal.fill",
+                title: "Send Terminal Input?",
+                detail: stdinText,
+                secondaryNote: nil,
+                primaryLabel: "Approve",
+                supportsScopedAllow: false
+            )
+        case .readUrlContent:
+            return CardDescriptor(
+                icon: "globe",
+                title: "Fetch External URL?",
+                detail: requested.rawSummary ?? "Allow agent to fetch external web content",
+                secondaryNote: nil,
+                primaryLabel: "Allow Once",
+                supportsScopedAllow: true
+            )
+        case .deploy:
+            return CardDescriptor(
+                icon: "paperplane.fill",
+                title: "Confirm Deployment?",
+                detail: requested.rawSummary ?? "Allow agent to proceed with deployment",
+                secondaryNote: nil,
+                primaryLabel: "Approve",
+                supportsScopedAllow: false
+            )
+        case .runExtensionCode:
+            return CardDescriptor(
+                icon: "puzzlepiece.extension.fill",
+                title: "Run Extension Action?",
+                detail: requested.rawSummary ?? "Allow agent to execute IDE extension action",
+                secondaryNote: nil,
+                primaryLabel: "Allow Once",
+                supportsScopedAllow: false
+            )
         default:
-            return ("Approval Required", requested.filePermission?.absolutePathUri ?? "Confirm pending agent action", true)
+            let fallbackCandidates: [String?] = [
+                requested.rawSummary,
+                requested.filePermission?.absolutePathUri,
+                step.viewFile?.fileUri,
+                step.codeAction?.targetFileUri,
+                step.search?.query,
+                step.runCommand?.commandLine
+            ]
+            let fallbackDetail = fallbackCandidates
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first(where: { !$0.isEmpty })
+                ?? "Step \(step.stepIndex + 1) is waiting for your approval to continue."
+            let title: String = {
+                if step.type == .notifyUser {
+                    return "Waiting for Your Review"
+                }
+                if let key = requested.rawMemberKey, !key.isEmpty, key != "approvalInteraction" {
+                    return "Approval Required · \(key)"
+                }
+                return "Approval Required · Step \(step.stepIndex + 1)"
+            }()
+            return CardDescriptor(
+                icon: "exclamationmark.shield.fill",
+                title: title,
+                detail: fallbackDetail,
+                secondaryNote: nil,
+                primaryLabel: "Approve",
+                supportsScopedAllow: false
+            )
         }
     }
 
-    var body: some View {
-        let info = titleAndDetail
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.shield.fill")
-                    .foregroundStyle(AntigravityTheme.statusWaiting)
-                Text(info.0)
-                    .font(.system(size: 13.5, weight: .bold))
-                    .foregroundStyle(AntigravityTheme.inkReading)
-            }
-            Text(info.1)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(AntigravityTheme.inkSecondary)
-                .lineLimit(3)
-
-            HStack(spacing: 8) {
-                Button("Allow Once") {
-                    store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .allowOnce)
-                }
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
-                .frame(maxWidth: .infinity, minHeight: 38)
-                .background(AntigravityTheme.statusWaiting, in: RoundedRectangle(cornerRadius: 10))
-
-                if info.2 {
-                    Button("In Chat") {
-                        store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .allowInConversation)
+    public var body: some View {
+        if requested.kind == .runCommand {
+            let resolvedCmd = requested.runCommand?.proposedCommandLine
+                ?? step.runCommand?.proposedCommandLine
+                ?? step.runCommand?.commandLine
+                ?? ""
+            InlineCommandApprovalCardView(
+                store: store,
+                commandLine: resolvedCmd,
+                stepIndex: step.stepIndex,
+                hostName: store.activeSummary?.originHostName ?? store.activeHost.hostname
+            )
+        } else if requested.kind == .askQuestion || requested.kind == .elicitation {
+            Button {
+                store.syncActiveLiveQuestionFromSteps(stepIndex: step.stepIndex)
+                store.presentedSheet = .askQuestion(stepIndex: step.stepIndex)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "list.bullet.rectangle.portrait.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(StepCardPalette.warmAmber)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Structured Question Pending")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(StepCardPalette.warmAmber)
+                        Text(requested.askQuestion?.question ?? requested.rawSummary ?? "Tap to answer agent question")
+                            .font(.system(size: 13))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .lineLimit(3)
                     }
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.inkReading)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 38)
-                    .background(AntigravityTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
-
-                    Button("Always") {
-                        store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .alwaysAllow)
-                    }
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.periwinkle)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 38)
-                    .background(StepCardPalette.periwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                    Spacer(minLength: 6)
+                    Text("Answer")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(StepCardPalette.inkOnCTA)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 36)
+                        .background(StepCardPalette.warmAmber, in: Capsule())
                 }
-
-                Button("Deny") {
-                    store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .reject)
-                }
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(AntigravityTheme.statusError)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 38)
-                .background(AntigravityTheme.statusError.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                .padding(14)
+                .background(StepCardPalette.amberCardSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(StepCardPalette.warmAmber.opacity(0.35), lineWidth: 1)
+                )
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("card-step-approval-\(step.stepIndex)")
+        } else {
+            let info = descriptor
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: info.icon)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(StepCardPalette.warmAmber)
+                    Text(info.title)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(StepCardPalette.warmAmber)
+                        .lineLimit(2)
+                    Spacer()
+                }
+
+                Text(info.detail)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+                    .lineSpacing(2)
+                    .lineLimit(4)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(StepCardPalette.codeBlockBg)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                if let note = info.secondaryNote, !note.isEmpty {
+                    Text(note)
+                        .font(.system(size: 12))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                        .lineLimit(2)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .reject)
+                    } label: {
+                        Text("Deny")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .padding(.horizontal, 16)
+                            .frame(maxWidth: info.supportsScopedAllow ? nil : CGFloat.infinity, minHeight: AntigravityTheme.minTouchTargetPt)
+                            .background(StepCardPalette.neutralButtonBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-step-deny-\(step.stepIndex)")
+
+                    Button {
+                        store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .allowOnce)
+                    } label: {
+                        Text(info.primaryLabel)
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(StepCardPalette.inkOnCTA)
+                            .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
+                            .background(StepCardPalette.warmAmber, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-step-approve-\(step.stepIndex)")
+                }
+
+                if info.supportsScopedAllow {
+                    HStack(spacing: 8) {
+                        Button {
+                            store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .allowInConversation)
+                        } label: {
+                            Text("Allow in Chat")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.inkReading)
+                                .frame(maxWidth: .infinity, minHeight: 38)
+                                .background(AntigravityTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .alwaysAllow)
+                        } label: {
+                            Text("Always Allow")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(StepCardPalette.periwinkle)
+                                .frame(maxWidth: .infinity, minHeight: 38)
+                                .background(StepCardPalette.periwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else if step.type == .notifyUser && !store.activeArtifacts.isEmpty {
+                    Button {
+                        store.currentRoute = .planReview
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .font(.system(size: 12.5, weight: .semibold))
+                            Text("Review Plan & Comment")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .frame(maxWidth: .infinity, minHeight: 38)
+                        .background(StepCardPalette.periwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(14)
+            .background(StepCardPalette.amberCardSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(StepCardPalette.warmAmber.opacity(0.32), lineWidth: 1)
+            )
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("card-step-approval-\(step.stepIndex)")
         }
-        .padding(12)
-        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.statusWaiting.opacity(0.45), lineWidth: 1))
     }
 }
 
