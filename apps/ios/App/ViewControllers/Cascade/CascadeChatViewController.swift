@@ -10,12 +10,6 @@ public struct CascadeChatViewController: View {
     public var onBack: (() -> Void)?
     @State private var isTurnStopped: Bool = false
 
-    private static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
-    private static let warmAmber = Color(red: 0xEB / 255.0, green: 0xB3 / 255.0, blue: 0x65 / 255.0) // #EBB365
-    private static let emeraldDone = Color(red: 0x57 / 255.0, green: 0xC8 / 255.0, blue: 0x8A / 255.0) // #57C88A
-    private static let coralError = Color(red: 0xF0 / 255.0, green: 0x71 / 255.0, blue: 0x67 / 255.0) // #F07167
-    private static let pillBg = Color(red: 0x1A / 255.0, green: 0x1C / 255.0, blue: 0x23 / 255.0)
-
     public init(
         store: AntigravitySessionStore,
         onBack: (() -> Void)? = nil
@@ -122,7 +116,7 @@ public struct CascadeChatViewController: View {
             chatTopNavigationBar
 
             Divider()
-                .overlay(Color.white.opacity(0.06))
+                .overlay(AntigravityTheme.subtleDivider)
 
             ScrollViewReader { scrollProxy in
                 ScrollView {
@@ -171,7 +165,7 @@ public struct CascadeChatViewController: View {
                                             isAnimated: shouldAnimateLive,
                                             dotSize: 4.5,
                                             spacing: 3.5,
-                                            tint: Self.periwinkle
+                                            tint: AntigravityTheme.accentPeriwinkle
                                         )
                                         Text("Agent is thinking and executing steps...")
                                             .font(.system(size: 13.5, weight: .medium))
@@ -180,7 +174,11 @@ public struct CascadeChatViewController: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 10)
-                                    .background(AntigravityTheme.surfaceCard.opacity(0.65))
+                                    .background(AntigravityTheme.surfaceCard)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                                    )
                                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                     .accessibilityIdentifier("chat-inline-four-dot-loading")
                                 }
@@ -218,23 +216,27 @@ public struct CascadeChatViewController: View {
                 if !store.displayItems.isEmpty, let errText = store.stepLoadErrorText {
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(Self.coralError)
+                            .fill(AntigravityTheme.statusError)
                             .frame(width: 7, height: 7)
                         Text(errText)
                             .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(Self.coralError)
+                            .foregroundStyle(AntigravityTheme.statusError)
                             .lineLimit(2)
                         Spacer(minLength: 4)
                         Button("Dismiss") {
                             store.stepLoadErrorText = nil
                         }
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Self.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(AntigravityTheme.surfaceCard)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
@@ -315,7 +317,7 @@ public struct CascadeChatViewController: View {
                 HStack(spacing: 8) {
                     Image(systemName: isAutomationDraft ? "sparkles" : "bubble.left.and.bubble.right")
                         .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(Self.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     Text(isAutomationDraft ? "Create Automation with Prompt" : "New Conversation")
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
@@ -334,7 +336,7 @@ public struct CascadeChatViewController: View {
             .background(AntigravityTheme.surfaceCard)
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .padding(.top, 12)
@@ -348,7 +350,7 @@ public struct CascadeChatViewController: View {
                     isAnimated: shouldAnimateLive,
                     dotSize: 4.5,
                     spacing: 3.5,
-                    tint: Self.periwinkle
+                    tint: AntigravityTheme.accentPeriwinkle
                 )
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Loading conversation history...")
@@ -369,7 +371,7 @@ public struct CascadeChatViewController: View {
             .background(AntigravityTheme.surfaceCard)
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .padding(.top, 12)
@@ -378,7 +380,7 @@ public struct CascadeChatViewController: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Circle()
-                        .fill(Self.coralError)
+                        .fill(AntigravityTheme.statusError)
                         .frame(width: 8, height: 8)
                     Text("Could not load trajectory steps")
                         .font(.system(size: 14.5, weight: .semibold))
@@ -414,10 +416,10 @@ public struct CascadeChatViewController: View {
                 } label: {
                     Text("Retry")
                         .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(Self.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .padding(.horizontal, 14)
                         .frame(minHeight: 36)
-                        .background(Self.pillBg)
+                        .background(AntigravityTheme.surfaceElevated)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -427,7 +429,7 @@ public struct CascadeChatViewController: View {
             .background(AntigravityTheme.surfaceCard)
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .padding(.top, 12)
@@ -441,7 +443,7 @@ public struct CascadeChatViewController: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Circle()
-                        .fill((isNoInternet || isOfflinePaired) ? Self.coralError : (store.isLiveBackendConnected ? Self.emeraldDone : Self.periwinkle))
+                        .fill((isNoInternet || isOfflinePaired) ? AntigravityTheme.statusError : (store.isLiveBackendConnected ? AntigravityTheme.statusDone : AntigravityTheme.accentPeriwinkle))
                         .frame(width: 8, height: 8)
                     Text(
                         isNoInternet
@@ -467,7 +469,7 @@ public struct CascadeChatViewController: View {
             .background(AntigravityTheme.surfaceCard)
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .padding(.top, 12)
@@ -517,10 +519,10 @@ public struct CascadeChatViewController: View {
                 }
                 .padding(.horizontal, 11)
                 .frame(minHeight: 32)
-                .background(Self.pillBg)
+                .background(AntigravityTheme.surfacePill)
                 .overlay(
                     Capsule()
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
                 .clipShape(Capsule())
             }
@@ -576,7 +578,7 @@ public struct CascadeChatViewController: View {
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Self.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                     .contentShape(Rectangle())
             }
@@ -605,17 +607,17 @@ public struct CascadeChatViewController: View {
                 } label: {
                     HStack(spacing: 5) {
                         Text("+\(store.totalDiffAdditions)")
-                            .foregroundStyle(Self.emeraldDone)
+                            .foregroundStyle(AntigravityTheme.statusDone)
                         Text("-\(store.totalDiffDeletions)")
-                            .foregroundStyle(Self.coralError)
+                            .foregroundStyle(AntigravityTheme.statusError)
                     }
                     .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                     .padding(.horizontal, 11)
                     .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
-                    .background(Self.pillBg)
+                    .background(AntigravityTheme.surfacePill)
                     .overlay(
                         Capsule()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
                     .clipShape(Capsule())
                 }
@@ -718,11 +720,11 @@ public struct CascadeChatViewController: View {
                 } label: {
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(Self.warmAmber)
+                            .fill(AntigravityTheme.statusWaiting)
                             .frame(width: 8, height: 8)
                         Text(statusLabel)
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Self.warmAmber)
+                            .foregroundStyle(AntigravityTheme.statusWaiting)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -735,13 +737,13 @@ public struct CascadeChatViewController: View {
                     AntigravityRunningArcIndicatorView(isAnimated: shouldAnimateLive)
                 } else {
                     Circle()
-                        .fill(isTurnStopped ? AntigravityTheme.inkSecondary : (waitingStep != nil ? Self.warmAmber : Self.periwinkle))
+                        .fill(isTurnStopped ? AntigravityTheme.inkSecondary : (waitingStep != nil ? AntigravityTheme.statusWaiting : AntigravityTheme.accentPeriwinkle))
                         .frame(width: 8, height: 8)
                 }
 
                 Text(statusLabel)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isTurnStopped ? AntigravityTheme.inkSecondary : (waitingStep != nil ? Self.warmAmber : Self.periwinkle))
+                    .foregroundStyle(isTurnStopped ? AntigravityTheme.inkSecondary : (waitingStep != nil ? AntigravityTheme.statusWaiting : AntigravityTheme.accentPeriwinkle))
                     .lineLimit(1)
             }
 
@@ -757,10 +759,10 @@ public struct CascadeChatViewController: View {
                         Text(isQuestionGate ? "Answer" : "Approve")
                             .font(.system(size: 13, weight: .bold))
                     }
-                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                    .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                     .padding(.horizontal, 13)
                     .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
-                    .background(Self.warmAmber)
+                    .background(AntigravityTheme.statusWaiting)
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -773,7 +775,7 @@ public struct CascadeChatViewController: View {
             } label: {
                 HStack(spacing: 6) {
                     RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                        .fill(Color.white)
+                        .fill(AntigravityTheme.inkReading)
                         .frame(width: 9, height: 9)
                     Text("Stop")
                         .font(.system(size: 13, weight: .semibold))
@@ -781,10 +783,10 @@ public struct CascadeChatViewController: View {
                 }
                 .padding(.horizontal, 14)
                 .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
-                .background(Self.pillBg)
+                .background(AntigravityTheme.surfacePill)
                 .overlay(
                     Capsule()
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
                 .clipShape(Capsule())
             }

@@ -23,7 +23,11 @@ public data class RequestedInteraction(
     public val pluginName: String? = null,
     public val rawMemberKey: String? = null,
     public val rawSummary: String? = null,
+    public val rawWireFieldNumber: Int? = null,
 ) {
+    public val isUnrecognizedWireMember: Boolean
+        get() = rawWireFieldNumber != null && rawMemberKey.isNullOrEmpty()
+
     @Serializable
     public enum class MemberKind(public val wireKey: String) {
         DEPLOY("deploy"),

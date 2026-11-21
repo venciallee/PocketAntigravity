@@ -20,12 +20,6 @@ public struct ChatComposerView: View {
     @State private var isShowingFileImporter: Bool = false
     @State private var voiceManager = VoiceInputManager()
 
-    private static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
-    private static let warmAmber = AntigravityTheme.statusWaiting // #EBB365
-    private static let inkOnCTA = Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0) // #0A0E17
-    private static let composerCardBg = Color(red: 0x14 / 255.0, green: 0x15 / 255.0, blue: 0x19 / 255.0) // #141519
-    private static let controlPillBg = Color(red: 0x20 / 255.0, green: 0x22 / 255.0, blue: 0x2A / 255.0)
-
     public init(store: AntigravitySessionStore) {
         self.store = store
         if !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected {
@@ -83,9 +77,9 @@ public struct ChatComposerView: View {
     private var permissionButtonForeground: Color {
         switch store.activePermissionPreset {
         case .turbo:
-            return Self.warmAmber
+            return AntigravityTheme.statusWaiting
         case .auto:
-            return Self.periwinkle
+            return AntigravityTheme.accentPeriwinkle
         case .defaultPolicy, .requestReview, .inheritGlobal:
             return AntigravityTheme.inkLabel
         }
@@ -94,22 +88,22 @@ public struct ChatComposerView: View {
     private var permissionButtonBackground: Color {
         switch store.activePermissionPreset {
         case .turbo:
-            return Self.warmAmber.opacity(0.14)
+            return AntigravityTheme.statusWaiting.opacity(0.14)
         case .auto:
-            return Self.periwinkle.opacity(0.14)
+            return AntigravityTheme.accentPeriwinkle.opacity(0.14)
         case .defaultPolicy, .requestReview, .inheritGlobal:
-            return Self.controlPillBg
+            return AntigravityTheme.surfaceElevated
         }
     }
 
     private var permissionButtonStroke: Color {
         switch store.activePermissionPreset {
         case .turbo:
-            return Self.warmAmber.opacity(0.32)
+            return AntigravityTheme.statusWaiting.opacity(0.32)
         case .auto:
-            return Self.periwinkle.opacity(0.32)
+            return AntigravityTheme.accentPeriwinkle.opacity(0.32)
         case .defaultPolicy, .requestReview, .inheritGlobal:
-            return Color.white.opacity(0.06)
+            return AntigravityTheme.cardBorder
         }
     }
 
@@ -127,7 +121,7 @@ public struct ChatComposerView: View {
                                 HStack(spacing: 10) {
                                     Image(systemName: cmd.icon.sfSymbolName)
                                         .font(.system(size: 13))
-                                        .foregroundStyle(Self.periwinkle)
+                                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                         .frame(width: 20)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(cmd.command)
@@ -142,13 +136,19 @@ public struct ChatComposerView: View {
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 7)
-                                .background(Self.controlPillBg.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
+                                .background(AntigravityTheme.surfaceSubtleBox, in: RoundedRectangle(cornerRadius: 10))
                             }
                             .buttonStyle(.plain)
                         }
                     }
                 }
                 .frame(maxHeight: 200)
+                .padding(6)
+                .background(AntigravityTheme.surfacePopover, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                )
                 .accessibilityIdentifier("composer-slash-popup")
             }
 
@@ -171,14 +171,18 @@ public struct ChatComposerView: View {
                                     HStack(spacing: 5) {
                                         Image(systemName: "doc.text")
                                             .font(.system(size: 11))
-                                            .foregroundStyle(Self.periwinkle)
+                                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                         Text("@\(candidate.title)")
                                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                                             .foregroundStyle(AntigravityTheme.inkReading)
                                     }
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
-                                    .background(Self.controlPillBg, in: Capsule())
+                                    .background(AntigravityTheme.surfacePill, in: Capsule())
+                                    .overlay(
+                                        Capsule()
+                                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                                    )
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -212,7 +216,11 @@ public struct ChatComposerView: View {
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(Self.controlPillBg.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
+                        .background(AntigravityTheme.surfaceSubtleBox, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                        )
                     }
                 }
             }
@@ -239,7 +247,7 @@ public struct ChatComposerView: View {
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Self.controlPillBg.opacity(0.7), in: Capsule())
+                            .background(AntigravityTheme.surfacePill, in: Capsule())
                         }
                         .accessibilityIdentifier("composer-permission-preset")
 
@@ -248,10 +256,10 @@ public struct ChatComposerView: View {
                         } label: {
                             Label("/btw", systemImage: "questionmark.bubble")
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Self.periwinkle)
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
-                                .background(Self.periwinkle.opacity(0.12), in: Capsule())
+                                .background(AntigravityTheme.accentPeriwinkle.opacity(0.12), in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("composer-btn-btw")
@@ -264,7 +272,7 @@ public struct ChatComposerView: View {
                                 .foregroundStyle(AntigravityTheme.inkLabel)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
-                                .background(Self.controlPillBg.opacity(0.7), in: Capsule())
+                                .background(AntigravityTheme.surfacePill, in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("composer-btn-voice-mode")
@@ -277,7 +285,7 @@ public struct ChatComposerView: View {
                                 .foregroundStyle(AntigravityTheme.inkLabel)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
-                                .background(Self.controlPillBg.opacity(0.7), in: Capsule())
+                                .background(AntigravityTheme.surfacePill, in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("composer-btn-attach-file")
@@ -304,7 +312,11 @@ public struct ChatComposerView: View {
                                 }
                                 .padding(.horizontal, 11)
                                 .frame(height: 30)
-                                .background(Self.controlPillBg)
+                                .background(AntigravityTheme.surfacePill)
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                                )
                                 .clipShape(Capsule())
                                 .frame(minHeight: 36)
                                 .contentShape(Rectangle())
@@ -335,17 +347,17 @@ public struct ChatComposerView: View {
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                             Text(workflowName)
                                 .font(.system(size: 13.5, weight: .semibold))
-                                .foregroundStyle(Color.white)
+                                .foregroundStyle(AntigravityTheme.inkReading)
                             Image(systemName: "xmark")
                                 .font(.system(size: 9.5, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                         }
                         .padding(.horizontal, 10)
                         .frame(height: 30)
-                        .background(Self.controlPillBg)
+                        .background(AntigravityTheme.surfacePill)
                         .overlay(
                             Capsule()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                         )
                         .clipShape(Capsule())
                         .frame(minHeight: 36)
@@ -397,10 +409,10 @@ public struct ChatComposerView: View {
                         .font(.system(size: 15.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .frame(width: 34, height: 34)
-                        .background(Self.controlPillBg)
+                        .background(AntigravityTheme.surfaceElevated)
                         .overlay(
                             Circle()
-                                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                         )
                         .clipShape(Circle())
                         .frame(width: 38, height: AntigravityTheme.minTouchTargetPt)
@@ -417,7 +429,7 @@ public struct ChatComposerView: View {
                         HStack(spacing: 5) {
                             Image(systemName: store.selectedModelConfig.mode == .planning ? "doc.text" : "bolt.fill")
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Self.periwinkle)
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             Text(store.selectedModelConfig.mode.rawValue)
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.inkReading)
@@ -428,10 +440,10 @@ public struct ChatComposerView: View {
                         }
                         .padding(.horizontal, 11)
                         .frame(height: 34)
-                        .background(Self.controlPillBg)
+                        .background(AntigravityTheme.surfaceElevated)
                         .overlay(
                             Capsule()
-                                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                         )
                         .clipShape(Capsule())
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -458,10 +470,10 @@ public struct ChatComposerView: View {
                     }
                     .padding(.horizontal, 11)
                     .frame(height: 34)
-                    .background(Self.controlPillBg)
+                    .background(AntigravityTheme.surfaceElevated)
                     .overlay(
                         Capsule()
-                            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
                     .clipShape(Capsule())
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -520,9 +532,9 @@ public struct ChatComposerView: View {
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 15.5, weight: .bold))
-                        .foregroundStyle(Self.inkOnCTA)
+                        .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(width: 34, height: 34)
-                        .background(Self.periwinkle)
+                        .background(AntigravityTheme.accentPeriwinkle)
                         .clipShape(Circle())
                         .frame(width: 38, height: AntigravityTheme.minTouchTargetPt)
                         .contentShape(Rectangle())
@@ -533,10 +545,10 @@ public struct ChatComposerView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Self.composerCardBg)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .onAppear {

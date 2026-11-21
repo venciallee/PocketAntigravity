@@ -22,12 +22,12 @@ public struct ConversationContextPreviewMenu: View {
 
     public var body: some View {
         ZStack(alignment: .topLeading) {
-            // Soft ambient blurred glow matching UE03 dark backdrop
+            // Soft ambient blurred glow matching UE03 backdrop
             AntigravityTheme.canvasObsidian
                 .ignoresSafeArea()
                 .overlay(alignment: .topLeading) {
                     Ellipse()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(AntigravityTheme.glassHairline)
                         .frame(width: 140, height: 42)
                         .blur(radius: 20)
                         .offset(x: 20, y: 58)
@@ -67,7 +67,7 @@ public struct ConversationContextPreviewMenu: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Fix flaky TestSettlementBatch")
                         .font(.system(size: 16.5, weight: .semibold))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Text("ledger-svc · Gemini 3.1 Pro · 8m")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
@@ -98,11 +98,11 @@ public struct ConversationContextPreviewMenu: View {
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                     .background(
                         RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .fill(Color(red: 0x26 / 255.0, green: 0x28 / 255.0, blue: 0x30 / 255.0))
+                            .fill(AntigravityTheme.surfaceBadge)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+                            .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
                     )
                 }
                 .buttonStyle(.plain)
@@ -118,7 +118,7 @@ public struct ConversationContextPreviewMenu: View {
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                         .background(
                             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(AntigravityTheme.statusWaiting.opacity(0.16))
+                                .fill(AntigravityTheme.surfaceAmberTint)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -132,11 +132,11 @@ public struct ConversationContextPreviewMenu: View {
         .padding(18)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(red: 0x1A / 255.0, green: 0x1B / 255.0, blue: 0x20 / 255.0))
+                .fill(AntigravityTheme.surfaceCard)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
+                .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .accessibilityIdentifier("context-preview-card")
     }
@@ -192,7 +192,7 @@ public struct ConversationContextPreviewMenu: View {
             }
 
             Rectangle()
-                .fill(Color(red: 0x1A / 255.0, green: 0x1B / 255.0, blue: 0x21 / 255.0))
+                .fill(AntigravityTheme.surfaceElevated)
                 .frame(height: 7)
 
             menuRowButton(
@@ -224,9 +224,9 @@ public struct ConversationContextPreviewMenu: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.45), radius: 22, x: 0, y: 10)
+        .shadow(color: AntigravityTheme.glassShadow, radius: 22, x: 0, y: 10)
     }
 
     private func menuRowButton(
@@ -237,7 +237,7 @@ public struct ConversationContextPreviewMenu: View {
         accessibilityId: String,
         action: @escaping () -> Void
     ) -> some View {
-        let fg = isDestructive ? AntigravityTheme.statusError : Color.white
+        let fg = isDestructive ? AntigravityTheme.statusError : AntigravityTheme.textPrimary
         return Button(action: action) {
             HStack {
                 Text(title)
@@ -250,7 +250,7 @@ public struct ConversationContextPreviewMenu: View {
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 45)
-            .background(isHighlighted ? Color.white.opacity(0.05) : Color.clear)
+            .background(isHighlighted ? AntigravityTheme.textPrimary.opacity(0.06) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -270,7 +270,7 @@ public struct ConversationContextPreviewMenu: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Upgrade to Go 1.25")
                         .font(.system(size: 15.5, weight: .semibold))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                         .lineLimit(1)
                     Text(swipeTargetArchived ? "Archived · 1h" : "Done · 1h")
                         .font(.system(size: 13, weight: .regular))
@@ -305,9 +305,9 @@ public struct ConversationContextPreviewMenu: View {
                         Text("Archive")
                             .font(.system(size: 13, weight: .semibold))
                     }
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .frame(width: 78, height: 66)
-                    .background(Color(red: 0x38 / 255.0, green: 0x3A / 255.0, blue: 0x43 / 255.0))
+                    .background(AntigravityTheme.surfaceActiveTabSlot)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("swipe-action-archive")

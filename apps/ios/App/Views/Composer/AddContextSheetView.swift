@@ -59,12 +59,6 @@ public struct AddContextSheetView: View {
     @State private var activeCategoryFilter: CategoryTile? = nil
     @State private var selectedItemIds: Set<String>
 
-    private static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
-    private static let inkOnCTA = Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0) // #0A0E17
-    private static let sheetSurface = Color(red: 0x15 / 255.0, green: 0x16 / 255.0, blue: 0x1B / 255.0)
-    private static let groupSurface = Color(red: 0x1E / 255.0, green: 0x20 / 255.0, blue: 0x28 / 255.0)
-    private static let tileSurface = Color(red: 0x21 / 255.0, green: 0x23 / 255.0, blue: 0x2B / 255.0)
-
     private let verificationRows: [ContextRowSpec] = [
         ContextRowSpec(
             id: "ratelimit.go",
@@ -233,7 +227,7 @@ public struct AddContextSheetView: View {
             VStack(spacing: 0) {
                 // Sheet Grabber
                 Capsule()
-                    .fill(Color.white.opacity(0.26))
+                    .fill(AntigravityTheme.sheetHandle)
                     .frame(width: 38, height: 5)
                     .padding(.top, 10)
                     .padding(.bottom, 6)
@@ -251,7 +245,7 @@ public struct AddContextSheetView: View {
                         } label: {
                             ZStack {
                                 Circle()
-                                    .fill(Self.tileSurface)
+                                    .fill(AntigravityTheme.surfaceBadge)
                                     .frame(width: 32, height: 32)
                                 Image(systemName: "xmark")
                                     .font(.system(size: 13, weight: .bold))
@@ -276,7 +270,7 @@ public struct AddContextSheetView: View {
                 }
                 .padding(.horizontal, 14)
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                .background(Self.tileSurface)
+                .background(AntigravityTheme.surfaceBadge)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -292,18 +286,18 @@ public struct AddContextSheetView: View {
                             VStack(spacing: 6) {
                                 Image(systemName: tile.iconName)
                                     .font(.system(size: 18, weight: .medium))
-                                    .foregroundStyle(isSelected ? Self.periwinkle : AntigravityTheme.inkReading)
+                                    .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkReading)
                                 Text(tile.rawValue)
                                     .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(isSelected ? Self.periwinkle : AntigravityTheme.inkLabel)
+                                    .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkLabel)
                                     .lineLimit(1)
                             }
                             .frame(maxWidth: .infinity, minHeight: 62)
-                            .background(Self.tileSurface)
+                            .background(isSelected ? AntigravityTheme.surfaceSelectionTint : AntigravityTheme.surfaceSheetGroup)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 15, style: .continuous)
                                     .stroke(
-                                        isSelected ? Self.periwinkle : Color.white.opacity(0.06),
+                                        isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.cardBorder,
                                         lineWidth: isSelected ? 1.5 : 1
                                     )
                             )
@@ -334,12 +328,16 @@ public struct AddContextSheetView: View {
                                             contextRowButton(row)
                                             if idx < rows.count - 1 {
                                                 Divider()
-                                                    .overlay(Color.white.opacity(0.06))
+                                                    .overlay(AntigravityTheme.subtleDivider)
                                                     .padding(.leading, 44)
                                             }
                                         }
                                     }
-                                    .background(Self.groupSurface)
+                                    .background(AntigravityTheme.surfaceSheetGroup)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                                    )
                                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                 }
                             }
@@ -351,7 +349,7 @@ public struct AddContextSheetView: View {
 
                 // Sticky Bottom Footer
                 Divider()
-                    .overlay(Color.white.opacity(0.08))
+                    .overlay(AntigravityTheme.subtleDivider)
 
                 HStack {
                     Text("\(selectedItemIds.count) selected")
@@ -365,10 +363,10 @@ public struct AddContextSheetView: View {
                     } label: {
                         Text("Add to message")
                             .font(.system(size: 15.5, weight: .bold))
-                            .foregroundStyle(Self.inkOnCTA)
+                            .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                             .padding(.horizontal, 24)
                             .frame(minHeight: 48)
-                            .background(Self.periwinkle)
+                            .background(AntigravityTheme.accentPeriwinkle)
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -377,7 +375,7 @@ public struct AddContextSheetView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
             }
-            .background(Self.sheetSurface)
+            .background(AntigravityTheme.surfaceSheet)
             .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
         }
         .background(AntigravityTheme.canvasObsidian)
@@ -418,11 +416,11 @@ public struct AddContextSheetView: View {
                 if isSelected {
                     ZStack {
                         Circle()
-                            .fill(Self.periwinkle)
+                            .fill(AntigravityTheme.accentPeriwinkle)
                             .frame(width: 24, height: 24)
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(Self.inkOnCTA)
+                            .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     }
                 } else if row.usesPlusAffordance {
                     Image(systemName: "plus")
@@ -431,7 +429,7 @@ public struct AddContextSheetView: View {
                         .frame(width: 24, height: 24)
                 } else {
                     Circle()
-                        .stroke(Color.white.opacity(0.24), lineWidth: 1.5)
+                        .stroke(AntigravityTheme.inkSecondary.opacity(0.45), lineWidth: 1.5)
                         .frame(width: 24, height: 24)
                 }
             }

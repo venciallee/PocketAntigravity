@@ -98,7 +98,7 @@ public final class AntigravityShareExtensionViewController: UIViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor(red: 0x09 / 255.0, green: 0x0A / 255.0, blue: 0x0D / 255.0, alpha: 1.0)
+        view.backgroundColor = AntigravityTheme.canvasObsidianUIColor
         mountSheetView()
         extractSharedItemsFromContext()
     }
@@ -119,6 +119,7 @@ public final class AntigravityShareExtensionViewController: UIViewController {
             hostingController.rootView = root
         } else {
             let host = UIHostingController(rootView: root)
+            host.view.backgroundColor = .clear
             addChild(host)
             host.view.frame = view.bounds
             host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

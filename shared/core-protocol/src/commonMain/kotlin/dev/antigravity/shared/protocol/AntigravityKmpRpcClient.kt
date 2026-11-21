@@ -9,6 +9,8 @@ import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.CascadeSummary
 import dev.antigravity.shared.model.CascadeUserInteractionPayload
 import dev.antigravity.shared.model.ComposerAttachmentChip
+import dev.antigravity.shared.model.CortexStepStatus
+import dev.antigravity.shared.model.CortexStepType
 import dev.antigravity.shared.model.NewProjectDraft
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
@@ -41,12 +43,14 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlin.math.max
 import kotlin.random.Random
@@ -118,13 +122,65 @@ public class AntigravityKmpRpcClient(
 ) {
     public companion object {
         public const val SERVICE_PREFIX: String = "/exa.language_server_pb.LanguageServerService"
-        public const val PROTOBUF_STEP_THRESHOLD: Int = 600
 
         private val localDesktopOnlyMethods = setOf("OpenWorkspaceInFinder", "ReadArtifactFile")
         private val unknownFieldRegex = Regex("""unknown field\s+"([^"]+)"""", RegexOption.IGNORE_CASE)
 
         public fun extractUnknownProtoFieldName(message: String): String? =
             unknownFieldRegex.find(message)?.groupValues?.getOrNull(1)
+
+        internal fun extractJsonTruncationCeiling(response: JsonObject, fallbackStepCount: Int): Int? {
+            val truncatedPrim = response["truncatedAt"] as? JsonPrimitive
+            if (truncatedPrim != null && truncatedPrim !is JsonNull) {
+                val parsed = truncatedPrim.intOrNull ?: truncatedPrim.contentOrNull?.toIntOrNull()
+                if (parsed != null) {
+                    if (parsed > 0) return parsed
+                } else if (truncatedPrim.booleanOrNull == true) {
+                    return max(1, fallbackStepCount)
+                }
+            }
+            val isTruncated = (response["isTruncated"] as? JsonPrimitive)?.booleanOrNull == true
+            val truncated = (response["truncated"] as? JsonPrimitive)?.booleanOrNull == true
+            if (isTruncated || truncated) {
+                return max(1, fallbackStepCount)
+            }
+            return null
+        }
+
+        internal fun isJsonPayloadLimitError(error: Throwable): Boolean {
+            if (error is AntigravityRpcError.HttpError) {
+                if (error.statusCode == 413) return true
+                val lower = error.body.lowercase()
+                return lower.contains("resource_exhausted") ||
+                    lower.contains("message too large") ||
+                    lower.contains("max message size") ||
+                    lower.contains("payload too large") ||
+                    lower.contains("too many steps")
+            }
+            val lower = error.message?.lowercase().orEmpty()
+            return lower.contains("resource_exhausted") ||
+                lower.contains("message too large") ||
+                lower.contains("max message size") ||
+                lower.contains("payload too large") ||
+                lower.contains("too many steps")
+        }
+
+        internal fun isBinaryProtobufUnsupportedError(error: Throwable): Boolean {
+            if (error is AntigravityRpcError.HttpError) {
+                if (error.statusCode == 415 || error.statusCode == 406 || error.statusCode == 501) {
+                    return true
+                }
+                if (error.statusCode == 400) {
+                    val lower = error.body.lowercase()
+                    return lower.contains("unsupported media") ||
+                        lower.contains("application/proto") ||
+                        lower.contains("content-type") ||
+                        lower.contains("invalid json") ||
+                        lower.contains("unexpected character")
+                }
+            }
+            return false
+        }
 
         public fun isWildcardRelayIdentifier(raw: String): Boolean {
             val trimmed = raw.trim().lowercase()
@@ -189,6 +245,9 @@ public class AntigravityKmpRpcClient(
     private var attemptedApiKeyDiscovery: Boolean = false
     private var cachedRelayInstances: List<RelayInstanceInfo> = emptyList()
     private val wokenInstanceCascadeKeys = mutableSetOf<String>()
+    private val learnedJsonStepCeilingsByHost = mutableMapOf<String, Int>()
+    private val binaryProtobufUnsupportedHosts = mutableSetOf<String>()
+    private val hostVersionsByKey = mutableMapOf<String, String>()
 
     private val httpClient: HttpClient = httpClientOverride ?: createPlatformHttpClient(
         endpointHost = endpointHost,
@@ -213,6 +272,64 @@ public class AntigravityKmpRpcClient(
 
     public suspend fun currentRelayApiKey(): String? =
         stateMutex.withLock { currentRelayApiKey }
+
+    private fun hostCapabilityKey(instanceUuidOverride: String?): String =
+        instanceUuidOverride?.takeIf { it.isNotBlank() }
+            ?: resolvedInstanceUuidState?.takeIf { it.isNotBlank() }
+            ?: host.instanceId.takeIf { it.isNotBlank() }
+            ?: endpointBaseUrl
+
+    public suspend fun learnedJsonStepCeiling(instanceUuidOverride: String? = null): Int? =
+        stateMutex.withLock {
+            learnedJsonStepCeilingsByHost[hostCapabilityKey(instanceUuidOverride)]
+        }
+
+    public suspend fun isBinaryProtobufStepsUnsupported(instanceUuidOverride: String? = null): Boolean =
+        stateMutex.withLock {
+            hostCapabilityKey(instanceUuidOverride) in binaryProtobufUnsupportedHosts
+        }
+
+    public suspend fun updateReportedHostVersion(version: String, instanceUuidOverride: String? = null) {
+        val trimmed = version.trim()
+        if (trimmed.isEmpty()) return
+        stateMutex.withLock {
+            updateReportedHostVersionLocked(hostCapabilityKey(instanceUuidOverride), trimmed)
+        }
+    }
+
+    private fun updateReportedHostVersionLocked(key: String, version: String) {
+        val trimmed = version.trim()
+        if (trimmed.isEmpty()) return
+        val previous = hostVersionsByKey[key]
+        if (previous != trimmed) {
+            learnedJsonStepCeilingsByHost.remove(key)
+            binaryProtobufUnsupportedHosts.remove(key)
+        }
+        hostVersionsByKey[key] = trimmed
+    }
+
+    private fun recordRelayInstanceVersionsLocked(instances: List<RelayInstanceInfo>) {
+        for (inst in instances) {
+            if (inst.uuid.isNotBlank() && inst.version.isNotBlank()) {
+                updateReportedHostVersionLocked(inst.uuid, inst.version)
+            }
+        }
+    }
+
+    private suspend fun recordLearnedJsonStepCeiling(ceiling: Int, instanceUuidOverride: String?) {
+        if (ceiling <= 0) return
+        stateMutex.withLock {
+            val key = hostCapabilityKey(instanceUuidOverride)
+            val existing = learnedJsonStepCeilingsByHost[key]
+            learnedJsonStepCeilingsByHost[key] = if (existing != null) minOf(existing, ceiling) else ceiling
+        }
+    }
+
+    private suspend fun recordBinaryProtobufStepsUnsupported(instanceUuidOverride: String?) {
+        stateMutex.withLock {
+            binaryProtobufUnsupportedHosts.add(hostCapabilityKey(instanceUuidOverride))
+        }
+    }
 
     private suspend fun ensureRelayWebApiKey(forceRefresh: Boolean = false): String? {
         val existing = stateMutex.withLock {
@@ -395,6 +512,7 @@ public class AntigravityKmpRpcClient(
             this.currentAuthUser = authUser
             this.resolvedInstanceUuidState = resolvedUuid
             this.cachedRelayInstances = instances
+            recordRelayInstanceVersionsLocked(instances)
         }
     }
 
@@ -614,7 +732,10 @@ public class AntigravityKmpRpcClient(
             resolveCloudRelayInstance(allowCrossHostFallback = allowCrossHostFailover)
         } else if (currentCachedRelayInstances().isEmpty()) {
             runCatching { listRelayInstances() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { refreshed ->
-                stateMutex.withLock { cachedRelayInstances = refreshed }
+                stateMutex.withLock {
+                    cachedRelayInstances = refreshed
+                    recordRelayInstanceVersionsLocked(refreshed)
+                }
             }
         }
 
@@ -679,7 +800,10 @@ public class AntigravityKmpRpcClient(
             if (shouldFailover) {
                 val refreshed = runCatching { listRelayInstances() }.getOrNull().orEmpty()
                 if (refreshed.isNotEmpty()) {
-                    stateMutex.withLock { cachedRelayInstances = refreshed }
+                    stateMutex.withLock {
+                        cachedRelayInstances = refreshed
+                        recordRelayInstanceVersionsLocked(refreshed)
+                    }
                     if (isHttp404 && refreshed.any { it.uuid == initialTargetUuid && it.status.isReachable }) {
                         throw e
                     }
@@ -846,7 +970,12 @@ public class AntigravityKmpRpcClient(
 
         val relayInstances = if (!skipRelayListRefresh) {
             runCatching { listRelayInstances() }.getOrNull()?.also { list ->
-                if (list.isNotEmpty()) stateMutex.withLock { cachedRelayInstances = list }
+                if (list.isNotEmpty()) {
+                    stateMutex.withLock {
+                        cachedRelayInstances = list
+                        recordRelayInstanceVersionsLocked(list)
+                    }
+                }
             } ?: currentCachedRelayInstances()
         } else {
             currentCachedRelayInstances()
@@ -908,7 +1037,7 @@ public class AntigravityKmpRpcClient(
         )
     }
 
-    // MARK: - Trajectory Steps (`<600` JSON + `>=600` Binary Protobuf)
+    // MARK: - Trajectory Steps (Binary-First + Adaptive JSON Ceiling)
 
     public suspend fun loadTrajectory(
         cascadeId: String,
@@ -926,24 +1055,61 @@ public class AntigravityKmpRpcClient(
     public suspend fun fetchTrajectoryStepsJson(
         cascadeId: String,
         startIndex: Int = 0,
-        endIndex: Int = 200,
+        endIndex: Int = 0,
         instanceUuidOverride: String? = null,
     ): List<CascadeStep> {
+        val isRemoteCloud = cascadeId.startsWith("v1/")
         val body = buildJsonObject {
             put("cascadeId", cascadeId)
             if (startIndex > 0) put("stepOffset", startIndex)
+            if (isRemoteCloud) put("backend", "BACKEND_TYPE_REMOTE_AICODE")
         }
-        val res = callUnaryJson("GetCascadeTrajectorySteps", body = body, instanceUuidOverride = instanceUuidOverride)
-        if (res.containsKey("truncatedAt")) {
-            return fetchTrajectoryStepsProtobuf(
-                cascadeId = cascadeId,
-                startIndex = startIndex,
-                endIndex = max(endIndex, PROTOBUF_STEP_THRESHOLD),
+        val res = try {
+            callUnaryJson(
+                method = "GetCascadeTrajectorySteps",
+                body = body,
                 instanceUuidOverride = instanceUuidOverride,
+                allowCrossHostFailover = isRemoteCloud,
             )
+        } catch (e: AntigravityRpcError.Unauthorized) {
+            throw e
+        } catch (e: Throwable) {
+            if (isJsonPayloadLimitError(e) && !isBinaryProtobufStepsUnsupported(instanceUuidOverride)) {
+                val protoSteps = fetchTrajectoryStepsProtobuf(
+                    cascadeId = cascadeId,
+                    startIndex = startIndex,
+                    endIndex = endIndex,
+                    instanceUuidOverride = instanceUuidOverride,
+                    allowCrossHostFailover = isRemoteCloud,
+                )
+                if (protoSteps.isNotEmpty()) {
+                    val observed = if (endIndex > 0) minOf(endIndex, protoSteps.size) else protoSteps.size
+                    recordLearnedJsonStepCeiling(observed, instanceUuidOverride)
+                }
+                return protoSteps
+            }
+            throw e
         }
-        val rawSteps = res["steps"] as? JsonArray ?: return emptyList()
-        return rawSteps.mapIndexedNotNull { idx, item ->
+
+        val rawSteps = res["steps"] as? JsonArray
+        val ceiling = extractJsonTruncationCeiling(
+            response = res,
+            fallbackStepCount = max(rawSteps?.size ?: 0, endIndex),
+        )
+        if (ceiling != null) {
+            recordLearnedJsonStepCeiling(ceiling, instanceUuidOverride)
+            if (!isBinaryProtobufStepsUnsupported(instanceUuidOverride)) {
+                return fetchTrajectoryStepsProtobuf(
+                    cascadeId = cascadeId,
+                    startIndex = startIndex,
+                    endIndex = max(endIndex, ceiling),
+                    instanceUuidOverride = instanceUuidOverride,
+                    allowCrossHostFailover = isRemoteCloud,
+                )
+            }
+        }
+        val stepsArray = rawSteps ?: return emptyList()
+        return stepsArray.mapIndexedNotNull { idx, item ->
             JsonStepAndSummaryDecoder.decodeJsonStep(item, cascadeId, startIndex + idx)
         }
     }
@@ -951,7 +1117,7 @@ public class AntigravityKmpRpcClient(
     public suspend fun fetchTrajectoryStepsProtobuf(
         cascadeId: String,
         startIndex: Int = 0,
-        endIndex: Int = PROTOBUF_STEP_THRESHOLD,
+        endIndex: Int = 0,
         instanceUuidOverride: String? = null,
         allowCrossHostFailover: Boolean = false,
     ): List<CascadeStep> {
@@ -965,7 +1131,13 @@ public class AntigravityKmpRpcClient(
                 allowCrossHostFailover = allowCrossHostFailover,
             )
             val unwrapped = unwrapConnectFramedPayloadIfNeeded(rawBytes)
-            return ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId, startingIndex = startIndex)
+            val decoded = ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId, startingIndex = startIndex)
+            return repairUnrecognizedWireStepsIfNeeded(
+                steps = decoded,
+                cascadeId = cascadeId,
+                instanceUuidOverride = instanceUuidOverride,
+                allowCrossHostFailover = allowCrossHostFailover,
+            )
         }
 
         val url = "$endpointBaseUrl$SERVICE_PREFIX/GetCascadeTrajectorySteps"
@@ -980,10 +1152,97 @@ public class AntigravityKmpRpcClient(
         val code = response.status.value
         if (code == 401 || code == 403) throw AntigravityRpcError.Unauthorized
         if (code !in 200..299) {
-            throw AntigravityRpcError.HttpError(code, "Binary step fetch failed")
+            val bodyText = runCatching { data.decodeToString() }.getOrDefault("")
+            throw AntigravityRpcError.HttpError(code, bodyText.ifBlank { "Binary step fetch failed" })
         }
         val unwrapped = unwrapConnectFramedPayloadIfNeeded(data)
-        return ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId, startingIndex = startIndex)
+        val decoded = ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId, startingIndex = startIndex)
+        return repairUnrecognizedWireStepsIfNeeded(
+            steps = decoded,
+            cascadeId = cascadeId,
+            instanceUuidOverride = instanceUuidOverride,
+            allowCrossHostFailover = allowCrossHostFailover,
+        )
+    }
+
+    internal suspend fun repairUnrecognizedWireStepsIfNeeded(
+        steps: List<CascadeStep>,
+        cascadeId: String,
+        instanceUuidOverride: String? = null,
+        allowCrossHostFailover: Boolean = false,
+    ): List<CascadeStep> {
+        val targetIndices = steps.indices.filter { idx ->
+            val step = steps[idx]
+            val needsInteractionRepair =
+                (step.status == CortexStepStatus.WAITING || step.status == CortexStepStatus.BLOCKED) &&
+                    step.requestedInteraction?.isUnrecognizedWireMember == true
+            val needsStepTypeRepair =
+                step.type == CortexStepType.UNSPECIFIED && !step.rawTypeName.isNullOrBlank()
+            needsInteractionRepair || needsStepTypeRepair
+        }
+        if (targetIndices.isEmpty()) return steps
+
+        val repaired = steps.toMutableList()
+        for (idx in targetIndices.take(4)) {
+            val current = repaired[idx]
+            val stepIndex = current.stepIndex
+            val reqBody = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("stepOffset", stepIndex)
+                if (cascadeId.startsWith("v1/")) {
+                    put("backend", "BACKEND_TYPE_REMOTE_AICODE")
+                }
+            }
+            val jsonResp = runCatching {
+                callUnaryJson(
+                    method = "GetCascadeTrajectorySteps",
+                    body = reqBody,
+                    instanceUuidOverride = instanceUuidOverride,
+                    allowCrossHostFailover = allowCrossHostFailover,
+                )
+            }.getOrNull() ?: continue
+
+            val rawSteps = jsonResp["steps"] as? JsonArray ?: continue
+            if (rawSteps.isEmpty()) continue
+
+            val decodedSlice = rawSteps.mapIndexedNotNull { offset, item ->
+                JsonStepAndSummaryDecoder.decodeJsonStep(item, cascadeId, stepIndex + offset)
+            }
+            val matched = decodedSlice.firstOrNull { it.stepIndex == stepIndex } ?: continue
+
+            var updated = current
+            if (current.type == CortexStepType.UNSPECIFIED && !current.rawTypeName.isNullOrBlank()) {
+                if (matched.type != CortexStepType.UNSPECIFIED ||
+                    matched.plannerResponse != null ||
+                    matched.requestedInteraction != null ||
+                    !matched.fallbackSummary.isNullOrBlank() ||
+                    (!matched.rawTypeName.isNullOrBlank() && matched.rawTypeName != current.rawTypeName)
+                ) {
+                    updated = if (matched.fallbackSummary.isNullOrBlank() && !current.fallbackSummary.isNullOrBlank()) {
+                        matched.copy(fallbackSummary = current.fallbackSummary)
+                    } else {
+                        matched
+                    }
+                }
+            }
+
+            val recoveredInteraction = matched.requestedInteraction
+            if (recoveredInteraction != null &&
+                !recoveredInteraction.isUnrecognizedWireMember &&
+                !recoveredInteraction.rawMemberKey.isNullOrEmpty()
+            ) {
+                val mergedInteraction = if (recoveredInteraction.rawSummary.isNullOrBlank() &&
+                    !current.requestedInteraction?.rawSummary.isNullOrBlank()
+                ) {
+                    recoveredInteraction.copy(rawSummary = current.requestedInteraction?.rawSummary)
+                } else {
+                    recoveredInteraction
+                }
+                updated = updated.copy(requestedInteraction = mergedInteraction)
+            }
+            repaired[idx] = updated
+        }
+        return repaired
     }
 
     public suspend fun fetchAllTrajectorySteps(
@@ -1050,21 +1309,99 @@ public class AntigravityKmpRpcClient(
         targetUuid: String?,
     ): List<CascadeStep> {
         val wakeKey = "${targetUuid ?: "direct"}|$cascadeId"
-        if (knownStepCount >= PROTOBUF_STEP_THRESHOLD) {
-            val firstTry = runCatching {
-                fetchTrajectoryStepsProtobuf(cascadeId, 0, knownStepCount, targetUuid, isRemoteCloud)
+        var lastError: Throwable? = null
+
+        // Path 1 (Local PC Default): Binary Protobuf (`application/proto`) first.
+        // Saves ~65% mobile bandwidth, avoids server-side JSON truncation dynamically,
+        // and repairs unknown wire interactions/step types via targeted JSON `stepOffset` lookups.
+        if (!isRemoteCloud && !isBinaryProtobufStepsUnsupported(targetUuid)) {
+            try {
+                val protoSteps = fetchTrajectoryStepsProtobuf(
+                    cascadeId = cascadeId,
+                    startIndex = 0,
+                    endIndex = knownStepCount,
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = false,
+                )
+                if (protoSteps.isNotEmpty()) {
+                    stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                    return protoSteps
+                }
+                val alreadyWoken = stateMutex.withLock { wakeKey in wokenInstanceCascadeKeys }
+                if (knownStepCount > 0 || !alreadyWoken) {
+                    runCatching { loadTrajectory(cascadeId, isCloud = false, instanceUuidOverride = targetUuid) }
+                    val retryProtoSteps = fetchTrajectoryStepsProtobuf(
+                        cascadeId = cascadeId,
+                        startIndex = 0,
+                        endIndex = knownStepCount,
+                        instanceUuidOverride = targetUuid,
+                        allowCrossHostFailover = false,
+                    )
+                    if (retryProtoSteps.isNotEmpty()) {
+                        stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                        return retryProtoSteps
+                    }
+                }
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: Throwable) {
+                if (isBinaryProtobufUnsupportedError(e)) {
+                    recordBinaryProtobufStepsUnsupported(targetUuid)
+                } else {
+                    lastError = e
+                }
             }
-            firstTry.getOrNull()?.takeIf { it.isNotEmpty() }?.let {
-                stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                return it
+        }
+
+        // Path 2: Adaptive JSON (`GetCascadeTrajectorySteps`) for Cloud (`v1/...`) or fallback,
+        // with zero hardcoded step thresholds and per-host runtime ceiling learning.
+        return fetchStepsViaAdaptiveJson(
+            cascadeId = cascadeId,
+            knownStepCount = knownStepCount,
+            isRemoteCloud = isRemoteCloud,
+            targetUuid = targetUuid,
+            wakeKey = wakeKey,
+            initialError = lastError,
+        )
+    }
+
+    private suspend fun fetchStepsViaAdaptiveJson(
+        cascadeId: String,
+        knownStepCount: Int,
+        isRemoteCloud: Boolean,
+        targetUuid: String?,
+        wakeKey: String,
+        initialError: Throwable? = null,
+    ): List<CascadeStep> {
+        var lastError: Throwable? = initialError
+        val learnedCeiling = learnedJsonStepCeiling(targetUuid)
+
+        // Learned fast-path: skip JSON when host previously revealed a ceiling <= knownStepCount
+        if (!isBinaryProtobufStepsUnsupported(targetUuid) &&
+            learnedCeiling != null &&
+            knownStepCount >= learnedCeiling
+        ) {
+            try {
+                val protoSteps = fetchTrajectoryStepsProtobuf(
+                    cascadeId = cascadeId,
+                    startIndex = 0,
+                    endIndex = knownStepCount,
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = isRemoteCloud,
+                )
+                if (protoSteps.isNotEmpty()) {
+                    stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                    return protoSteps
+                }
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: Throwable) {
+                if (isBinaryProtobufUnsupportedError(e)) {
+                    recordBinaryProtobufStepsUnsupported(targetUuid)
+                } else {
+                    lastError = e
+                }
             }
-            if (firstTry.exceptionOrNull() is AntigravityRpcError.Unauthorized) {
-                throw firstTry.exceptionOrNull()!!
-            }
-            runCatching { loadTrajectory(cascadeId, isRemoteCloud, targetUuid) }
-            val retry = fetchTrajectoryStepsProtobuf(cascadeId, 0, knownStepCount, targetUuid, isRemoteCloud)
-            if (retry.isNotEmpty()) stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-            return retry
         }
 
         val reqBody = buildJsonObject {
@@ -1072,26 +1409,69 @@ public class AntigravityKmpRpcClient(
             if (isRemoteCloud) put("backend", "BACKEND_TYPE_REMOTE_AICODE")
         }
 
-        var lastError: Throwable? = null
-        val firstResp = try {
-            callUnaryJson("GetCascadeTrajectorySteps", reqBody, targetUuid, isRemoteCloud)
+        var firstResp: JsonObject? = null
+        try {
+            firstResp = callUnaryJson("GetCascadeTrajectorySteps", reqBody, targetUuid, isRemoteCloud)
+            lastError = null
         } catch (e: AntigravityRpcError.Unauthorized) {
             throw e
         } catch (e: Throwable) {
             lastError = e
-            null
+            firstResp = null
+            if (isJsonPayloadLimitError(e) && !isBinaryProtobufStepsUnsupported(targetUuid)) {
+                try {
+                    val protoSteps = fetchTrajectoryStepsProtobuf(
+                        cascadeId = cascadeId,
+                        startIndex = 0,
+                        endIndex = knownStepCount,
+                        instanceUuidOverride = targetUuid,
+                        allowCrossHostFailover = isRemoteCloud,
+                    )
+                    if (protoSteps.isNotEmpty()) {
+                        val observed = if (knownStepCount > 0) minOf(knownStepCount, protoSteps.size) else protoSteps.size
+                        recordLearnedJsonStepCeiling(observed, targetUuid)
+                        stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                        return protoSteps
+                    }
+                } catch (pe: AntigravityRpcError.Unauthorized) {
+                    throw pe
+                } catch (pe: Throwable) {
+                    if (isBinaryProtobufUnsupportedError(pe)) {
+                        recordBinaryProtobufStepsUnsupported(targetUuid)
+                    }
+                }
+            }
         }
 
-        if (firstResp != null && firstResp.containsKey("truncatedAt")) {
-            val protoSteps = fetchTrajectoryStepsProtobuf(
-                cascadeId = cascadeId,
-                startIndex = 0,
-                endIndex = max(knownStepCount, PROTOBUF_STEP_THRESHOLD),
-                instanceUuidOverride = targetUuid,
-                allowCrossHostFailover = isRemoteCloud,
-            )
-            if (protoSteps.isNotEmpty()) stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-            return protoSteps
+        if (firstResp != null) {
+            val firstStepCount = (firstResp["steps"] as? JsonArray)?.size ?: knownStepCount
+            val ceiling = extractJsonTruncationCeiling(firstResp, fallbackStepCount = firstStepCount)
+            if (ceiling != null) {
+                recordLearnedJsonStepCeiling(ceiling, targetUuid)
+                if (!isBinaryProtobufStepsUnsupported(targetUuid)) {
+                    try {
+                        val protoSteps = fetchTrajectoryStepsProtobuf(
+                            cascadeId = cascadeId,
+                            startIndex = 0,
+                            endIndex = max(knownStepCount, ceiling),
+                            instanceUuidOverride = targetUuid,
+                            allowCrossHostFailover = isRemoteCloud,
+                        )
+                        if (protoSteps.isNotEmpty()) {
+                            stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                            return protoSteps
+                        }
+                    } catch (pe: AntigravityRpcError.Unauthorized) {
+                        throw pe
+                    } catch (pe: Throwable) {
+                        if (isBinaryProtobufUnsupportedError(pe)) {
+                            recordBinaryProtobufStepsUnsupported(targetUuid)
+                        } else {
+                            lastError = pe
+                        }
+                    }
+                }
+            }
         }
 
         var rawSteps = (firstResp?.get("steps") as? JsonArray)?.toList().orEmpty()
@@ -1103,12 +1483,33 @@ public class AntigravityKmpRpcClient(
             try {
                 val retryResp = callUnaryJson("GetCascadeTrajectorySteps", reqBody, targetUuid, isRemoteCloud)
                 lastError = null
-                if (retryResp.containsKey("truncatedAt")) {
-                    val protoSteps = fetchTrajectoryStepsProtobuf(
-                        cascadeId, 0, max(knownStepCount, PROTOBUF_STEP_THRESHOLD), targetUuid, isRemoteCloud
-                    )
-                    if (protoSteps.isNotEmpty()) stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                    return protoSteps
+                val retryCount = (retryResp["steps"] as? JsonArray)?.size ?: knownStepCount
+                val retryCeiling = extractJsonTruncationCeiling(retryResp, fallbackStepCount = retryCount)
+                if (retryCeiling != null) {
+                    recordLearnedJsonStepCeiling(retryCeiling, targetUuid)
+                    if (!isBinaryProtobufStepsUnsupported(targetUuid)) {
+                        try {
+                            val protoSteps = fetchTrajectoryStepsProtobuf(
+                                cascadeId = cascadeId,
+                                startIndex = 0,
+                                endIndex = max(knownStepCount, retryCeiling),
+                                instanceUuidOverride = targetUuid,
+                                allowCrossHostFailover = isRemoteCloud,
+                            )
+                            if (protoSteps.isNotEmpty()) {
+                                stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                                return protoSteps
+                            }
+                        } catch (pe: AntigravityRpcError.Unauthorized) {
+                            throw pe
+                        } catch (pe: Throwable) {
+                            if (isBinaryProtobufUnsupportedError(pe)) {
+                                recordBinaryProtobufStepsUnsupported(targetUuid)
+                            } else {
+                                lastError = pe
+                            }
+                        }
+                    }
                 }
                 rawSteps = (retryResp["steps"] as? JsonArray)?.toList().orEmpty()
                 if (rawSteps.isNotEmpty()) stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
@@ -1116,28 +1517,48 @@ public class AntigravityKmpRpcClient(
                 throw e
             } catch (e: Throwable) {
                 lastError = e
+                if (isJsonPayloadLimitError(e) && !isBinaryProtobufStepsUnsupported(targetUuid)) {
+                    val protoSteps = runCatching {
+                        fetchTrajectoryStepsProtobuf(
+                            cascadeId = cascadeId,
+                            startIndex = 0,
+                            endIndex = knownStepCount,
+                            instanceUuidOverride = targetUuid,
+                            allowCrossHostFailover = isRemoteCloud,
+                        )
+                    }.getOrNull()
+                    if (!protoSteps.isNullOrEmpty()) {
+                        val observed = if (knownStepCount > 0) minOf(knownStepCount, protoSteps.size) else protoSteps.size
+                        recordLearnedJsonStepCeiling(observed, targetUuid)
+                        stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                        return protoSteps
+                    }
+                }
             }
         }
 
-        if (rawSteps.isEmpty() && (firstResp == null || lastError != null || knownStepCount > 0)) {
-            runCatching {
-                fetchTrajectoryStepsProtobuf(cascadeId, 0, max(knownStepCount, PROTOBUF_STEP_THRESHOLD), targetUuid, isRemoteCloud)
-            }.getOrNull()?.takeIf { it.isNotEmpty() }?.let {
+        if (rawSteps.isEmpty() &&
+            (firstResp == null || lastError != null || knownStepCount > 0) &&
+            !isBinaryProtobufStepsUnsupported(targetUuid)
+        ) {
+            val protoFallback = runCatching {
+                fetchTrajectoryStepsProtobuf(
+                    cascadeId = cascadeId,
+                    startIndex = 0,
+                    endIndex = knownStepCount,
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = isRemoteCloud,
+                )
+            }.getOrNull()
+            if (!protoFallback.isNullOrEmpty()) {
+                val observed = if (knownStepCount > 0) minOf(knownStepCount, protoFallback.size) else protoFallback.size
+                recordLearnedJsonStepCeiling(observed, targetUuid)
                 stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                return it
+                return protoFallback
             }
         }
 
         if (rawSteps.isEmpty() && lastError != null) throw lastError
-
-        if (rawSteps.size >= 590) {
-            runCatching {
-                fetchTrajectoryStepsProtobuf(cascadeId, 0, max(knownStepCount, rawSteps.size), targetUuid, isRemoteCloud)
-            }.getOrNull()?.takeIf { it.size >= rawSteps.size }?.let {
-                stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                return it
-            }
-        }
 
         val seen = mutableSetOf<Int>()
         val collected = mutableListOf<CascadeStep>()
@@ -1146,6 +1567,122 @@ public class AntigravityKmpRpcClient(
                 if (seen.add(step.stepIndex)) collected.add(step)
             }
         }
+
+        // If knownStepCount was omitted (0) and we hit a previously learned JSON ceiling, probe Binary Protobuf
+        val postInitialCeiling = learnedJsonStepCeiling(targetUuid)
+        if (knownStepCount == 0 &&
+            !isBinaryProtobufStepsUnsupported(targetUuid) &&
+            postInitialCeiling != null &&
+            collected.size >= postInitialCeiling
+        ) {
+            val protoSteps = runCatching {
+                fetchTrajectoryStepsProtobuf(
+                    cascadeId = cascadeId,
+                    startIndex = 0,
+                    endIndex = collected.size,
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = isRemoteCloud,
+                )
+            }.getOrNull()
+            if (protoSteps != null && protoSteps.size > collected.size) {
+                stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                return protoSteps
+            }
+        }
+
+        // Dynamic stepOffset pagination with automatic truncation & stall detection (no hardcoded ceiling)
+        var offset = collected.size
+        var pagesFetched = 0
+        val maxPaginationRounds = 32
+        while (offset > 0 && knownStepCount > 0 && collected.size < knownStepCount && pagesFetched < maxPaginationRounds) {
+            pagesFetched += 1
+            val pageBody = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("stepOffset", offset)
+                if (isRemoteCloud) put("backend", "BACKEND_TYPE_REMOTE_AICODE")
+            }
+            val pageResp = try {
+                callUnaryJson(
+                    method = "GetCascadeTrajectorySteps",
+                    body = pageBody,
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = isRemoteCloud,
+                )
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: Throwable) {
+                if (isJsonPayloadLimitError(e)) {
+                    recordLearnedJsonStepCeiling(max(1, collected.size), targetUuid)
+                }
+                if (!isBinaryProtobufStepsUnsupported(targetUuid)) {
+                    val protoSteps = runCatching {
+                        fetchTrajectoryStepsProtobuf(
+                            cascadeId = cascadeId,
+                            startIndex = 0,
+                            endIndex = knownStepCount,
+                            instanceUuidOverride = targetUuid,
+                            allowCrossHostFailover = isRemoteCloud,
+                        )
+                    }.getOrNull()
+                    if (protoSteps != null && protoSteps.size > collected.size) {
+                        recordLearnedJsonStepCeiling(max(1, collected.size), targetUuid)
+                        return protoSteps
+                    }
+                }
+                break
+            }
+
+            val pageCeiling = extractJsonTruncationCeiling(pageResp, fallbackStepCount = collected.size)
+            if (pageCeiling != null) {
+                recordLearnedJsonStepCeiling(max(collected.size, pageCeiling), targetUuid)
+                if (!isBinaryProtobufStepsUnsupported(targetUuid)) {
+                    val protoSteps = runCatching {
+                        fetchTrajectoryStepsProtobuf(
+                            cascadeId = cascadeId,
+                            startIndex = 0,
+                            endIndex = max(knownStepCount, pageCeiling),
+                            instanceUuidOverride = targetUuid,
+                            allowCrossHostFailover = isRemoteCloud,
+                        )
+                    }.getOrNull()
+                    if (protoSteps != null && protoSteps.size >= collected.size) {
+                        return protoSteps
+                    }
+                }
+                break
+            }
+
+            val pageSteps = (pageResp["steps"] as? JsonArray)?.toList().orEmpty()
+            var addedNew = false
+            pageSteps.forEachIndexed { idxOffset, el ->
+                JsonStepAndSummaryDecoder.decodeJsonStep(el, cascadeId, offset + idxOffset)?.let { step ->
+                    if (seen.add(step.stepIndex)) {
+                        collected.add(step)
+                        addedNew = true
+                    }
+                }
+            }
+            if (pageSteps.isEmpty() || !addedNew) {
+                recordLearnedJsonStepCeiling(max(1, collected.size), targetUuid)
+                if (!isBinaryProtobufStepsUnsupported(targetUuid)) {
+                    val protoSteps = runCatching {
+                        fetchTrajectoryStepsProtobuf(
+                            cascadeId = cascadeId,
+                            startIndex = 0,
+                            endIndex = knownStepCount,
+                            instanceUuidOverride = targetUuid,
+                            allowCrossHostFailover = isRemoteCloud,
+                        )
+                    }.getOrNull()
+                    if (protoSteps != null && protoSteps.size > collected.size) {
+                        return protoSteps
+                    }
+                }
+                break
+            }
+            offset = max(offset + pageSteps.size, collected.size)
+        }
+
         return collected.sortedBy { it.stepIndex }
     }
 

@@ -17,7 +17,7 @@ internal struct MarkdownCarouselCardView: View {
             HStack(spacing: 8) {
                 Image(systemName: "rectangle.stack")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 Text("Carousel")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkLabel)
@@ -28,10 +28,10 @@ internal struct MarkdownCarouselCardView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(Color.white.opacity(0.03))
+            .background(AntigravityTheme.surfaceSubtleBox)
 
             Rectangle()
-                .fill(Color.white.opacity(0.06))
+                .fill(AntigravityTheme.subtleDivider)
                 .frame(height: 1)
 
             if !slides.isEmpty {
@@ -49,9 +49,9 @@ internal struct MarkdownCarouselCardView: View {
                         } label: {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(activeIndex > 0 ? StepCardPalette.periwinkle : AntigravityTheme.inkSecondary.opacity(0.4))
+                                .foregroundStyle(activeIndex > 0 ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary.opacity(0.4))
                                 .frame(width: 30, height: 28)
-                                .background(Color.white.opacity(0.05))
+                                .background(AntigravityTheme.surfaceElevated)
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
@@ -62,7 +62,7 @@ internal struct MarkdownCarouselCardView: View {
                         HStack(spacing: 5) {
                             ForEach(0..<slides.count, id: \.self) { idx in
                                 Circle()
-                                    .fill(idx == activeIndex ? StepCardPalette.periwinkle : Color.white.opacity(0.22))
+                                    .fill(idx == activeIndex ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkMuted.opacity(0.45))
                                     .frame(width: idx == activeIndex ? 7 : 5, height: idx == activeIndex ? 7 : 5)
                             }
                         }
@@ -76,9 +76,9 @@ internal struct MarkdownCarouselCardView: View {
                         } label: {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(activeIndex + 1 < slides.count ? StepCardPalette.periwinkle : AntigravityTheme.inkSecondary.opacity(0.4))
+                                .foregroundStyle(activeIndex + 1 < slides.count ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary.opacity(0.4))
                                 .frame(width: 30, height: 28)
-                                .background(Color.white.opacity(0.05))
+                                .background(AntigravityTheme.surfaceElevated)
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
@@ -89,10 +89,10 @@ internal struct MarkdownCarouselCardView: View {
                 }
             }
         }
-        .background(StepCardPalette.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
@@ -128,7 +128,7 @@ internal struct MarkdownDetailsCardView: View {
                 HStack(spacing: 8) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .frame(width: 14)
                     Text(
                         MarkdownInlineBuilder.build(
@@ -149,17 +149,17 @@ internal struct MarkdownDetailsCardView: View {
 
             if isExpanded && !innerBlocks.isEmpty {
                 Rectangle()
-                    .fill(Color.white.opacity(0.07))
+                    .fill(AntigravityTheme.subtleDivider)
                     .frame(height: 1)
 
                 AnyView(AntigravityMarkdownBlocksView(blocks: innerBlocks, variant: .blockquote, store: store))
                     .padding(12)
             }
         }
-        .background(StepCardPalette.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -183,11 +183,11 @@ internal struct MarkdownPluginCardView: View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(StepCardPalette.softViolet.opacity(0.16))
+                    .fill(AntigravityTheme.syntaxKeyword.opacity(0.16))
                     .frame(width: 36, height: 36)
                 Image(systemName: "puzzlepiece.extension.fill")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.softViolet)
+                    .foregroundStyle(AntigravityTheme.syntaxKeyword)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -202,10 +202,10 @@ internal struct MarkdownPluginCardView: View {
             Spacer()
         }
         .padding(12)
-        .background(StepCardPalette.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(StepCardPalette.softViolet.opacity(0.28), lineWidth: 1)
+                .stroke(AntigravityTheme.syntaxKeyword.opacity(0.28), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
@@ -246,13 +246,13 @@ internal struct MarkdownImageBlockView: View {
                         fallbackImageCard
                     case .empty:
                         HStack(spacing: 8) {
-                            ProgressView().tint(StepCardPalette.periwinkle)
+                            ProgressView().tint(AntigravityTheme.accentPeriwinkle)
                             Text("Loading image…")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                         }
                         .frame(maxWidth: .infinity, minHeight: 80)
-                        .background(StepCardPalette.cardSurface)
+                        .background(AntigravityTheme.surfaceCard)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     @unknown default:
                         fallbackImageCard
@@ -283,14 +283,14 @@ internal struct MarkdownImageBlockView: View {
                 #endif
             } else if isLoading {
                 HStack(spacing: 8) {
-                    ProgressView().tint(StepCardPalette.periwinkle)
+                    ProgressView().tint(AntigravityTheme.accentPeriwinkle)
                     Text("Loading \(MarkdownLinkFormatting.shortFileBadge(src))…")
                         .font(.system(size: 12.5))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(StepCardPalette.cardSurface)
+                .background(AntigravityTheme.surfaceCard)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
                 fallbackImageCard
@@ -321,7 +321,7 @@ internal struct MarkdownImageBlockView: View {
         HStack(spacing: 10) {
             Image(systemName: "photo")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(StepCardPalette.periwinkle)
+                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
             VStack(alignment: .leading, spacing: 2) {
                 Text(captionText.isEmpty ? "Host Image" : captionText)
                     .font(.system(size: 13.5, weight: .medium))
@@ -337,14 +337,14 @@ internal struct MarkdownImageBlockView: View {
                 MarkdownClipboardHelper.copyText(MarkdownLinkFormatting.cleanDisplayPath(src))
             }
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(StepCardPalette.periwinkle)
+            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
             .buttonStyle(.plain)
         }
         .padding(12)
-        .background(StepCardPalette.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -358,7 +358,7 @@ internal struct MarkdownFootnoteSectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Rectangle()
-                .fill(Color.white.opacity(0.09))
+                .fill(AntigravityTheme.subtleDivider)
                 .frame(height: 1)
                 .padding(.vertical, 2)
 
@@ -366,7 +366,7 @@ internal struct MarkdownFootnoteSectionView: View {
                 HStack(alignment: .top, spacing: 6) {
                     Text("[\(item.label)]")
                         .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .padding(.top, 2)
                     RichMarkdownInlineBlockView(
                         inlines: item.inlines,
@@ -417,7 +417,7 @@ internal struct MarkdownCodeBlockCardView: View {
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.04))
+                        .background(AntigravityTheme.surfaceElevated)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -440,20 +440,20 @@ internal struct MarkdownCodeBlockCardView: View {
                         Text(didCopy ? "Copied" : "Copy")
                             .font(.system(size: 11.5, weight: .semibold))
                     }
-                    .foregroundStyle(didCopy ? StepCardPalette.emeraldDone : StepCardPalette.periwinkle)
+                    .foregroundStyle(didCopy ? AntigravityTheme.statusDone : AntigravityTheme.accentPeriwinkle)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.05))
+                    .background(AntigravityTheme.surfaceElevated)
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Color.white.opacity(0.03))
+            .background(AntigravityTheme.surfaceSubtleBox)
 
             Rectangle()
-                .fill(Color.white.opacity(0.06))
+                .fill(AntigravityTheme.subtleDivider)
                 .frame(height: 1)
 
             if wrapLines {
@@ -466,10 +466,10 @@ internal struct MarkdownCodeBlockCardView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(StepCardPalette.codeBlockBg)
+        .background(AntigravityTheme.surfaceCodeBlock)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -494,6 +494,9 @@ internal struct MarkdownCodeBlockCardView: View {
                 Text(line.isEmpty ? " " : line)
                     .font(.system(size: 12.5, weight: .regular, design: .monospaced))
                     .foregroundStyle(diffLineColor(line))
+                    .padding(.horizontal, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(diffLineBackground(line))
                     .textSelection(.enabled)
             }
         }
@@ -503,19 +506,29 @@ internal struct MarkdownCodeBlockCardView: View {
         if line.hasPrefix("+++") || line.hasPrefix("---") {
             return AntigravityTheme.inkSecondary
         } else if line.hasPrefix("+") {
-            return StepCardPalette.emeraldDone
+            return AntigravityTheme.statusDone
         } else if line.hasPrefix("-") {
-            return StepCardPalette.coralError
+            return AntigravityTheme.statusError
         } else if line.hasPrefix("@@") {
-            return StepCardPalette.periwinkle
+            return AntigravityTheme.accentPeriwinkle
         }
         return AntigravityTheme.inkReading
     }
+
+    private func diffLineBackground(_ line: String) -> Color {
+        if line.hasPrefix("+++") || line.hasPrefix("---") {
+            return Color.clear
+        } else if line.hasPrefix("+") {
+            return AntigravityTheme.surfaceDiffAdd
+        } else if line.hasPrefix("-") {
+            return AntigravityTheme.surfaceDiffRemove
+        }
+        return Color.clear
+    }
 }
 
-/// Zero-dependency Matte Obsidian single-pass syntax highlighter for common languages.
+/// Zero-dependency adaptive Light/Dark single-pass syntax highlighter for common languages.
 internal enum MarkdownSyntaxHighlighter {
-    private static let commentColor = Color(red: 0x6E / 255.0, green: 0x76 / 255.0, blue: 0x8A / 255.0)
     private static let monoFont = Font.system(size: 12.5, weight: .regular, design: .monospaced)
 
     private static let commonKeywords: Set<String> = [
@@ -536,7 +549,7 @@ internal enum MarkdownSyntaxHighlighter {
         guard code.count <= 12_000 else {
             var plain = AttributedString(code)
             plain.swiftUI.font = monoFont
-            plain.swiftUI.foregroundColor = AntigravityTheme.inkReading
+            plain.swiftUI.foregroundColor = AntigravityTheme.syntaxPlain
             return plain
         }
 
@@ -564,7 +577,7 @@ internal enum MarkdownSyntaxHighlighter {
                 || (dashComments && ch == "-" && i + 1 < chars.count && chars[i + 1] == "-") {
                 let start = i
                 while i < chars.count && chars[i] != "\n" { i += 1 }
-                appendToken(String(chars[start..<i]), color: commentColor, italic: true)
+                appendToken(String(chars[start..<i]), color: AntigravityTheme.syntaxComment, italic: true)
                 continue
             }
 
@@ -574,7 +587,7 @@ internal enum MarkdownSyntaxHighlighter {
                 i += 2
                 while i + 1 < chars.count && !(chars[i] == "*" && chars[i + 1] == "/") { i += 1 }
                 i = min(chars.count, i + 2)
-                appendToken(String(chars[start..<i]), color: commentColor, italic: true)
+                appendToken(String(chars[start..<i]), color: AntigravityTheme.syntaxComment, italic: true)
                 continue
             }
 
@@ -594,7 +607,7 @@ internal enum MarkdownSyntaxHighlighter {
                     }
                     i += 1
                 }
-                appendToken(String(chars[start..<i]), color: StepCardPalette.emeraldDone)
+                appendToken(String(chars[start..<i]), color: AntigravityTheme.syntaxString)
                 continue
             }
 
@@ -603,7 +616,7 @@ internal enum MarkdownSyntaxHighlighter {
                 let start = i
                 i += 1
                 while i < chars.count && (chars[i].isLetter || chars[i].isNumber || chars[i] == "_") { i += 1 }
-                appendToken(String(chars[start..<i]), color: StepCardPalette.softViolet)
+                appendToken(String(chars[start..<i]), color: AntigravityTheme.syntaxProperty)
                 continue
             }
 
@@ -613,21 +626,27 @@ internal enum MarkdownSyntaxHighlighter {
                 while i < chars.count && (chars[i].isHexDigit || chars[i] == "." || chars[i] == "_" || chars[i] == "x" || chars[i] == "X") {
                     i += 1
                 }
-                appendToken(String(chars[start..<i]), color: StepCardPalette.warmAmber)
+                appendToken(String(chars[start..<i]), color: AntigravityTheme.syntaxNumber)
                 continue
             }
 
-            // Identifier / Keyword / PascalCase Type
+            // Identifier / Keyword / PascalCase Type / Function / Property
             if ch.isLetter || ch == "_" {
                 let start = i
                 while i < chars.count && (chars[i].isLetter || chars[i].isNumber || chars[i] == "_") { i += 1 }
                 let word = String(chars[start..<i])
+                let isFollowedByParen = i < chars.count && chars[i] == "("
+                let isPrecededByDot = start > 0 && chars[start - 1] == "."
                 if commonKeywords.contains(word) || (language == "sql" && commonKeywords.contains(word.uppercased())) {
-                    appendToken(word, color: StepCardPalette.periwinkle)
+                    appendToken(word, color: AntigravityTheme.syntaxKeyword)
                 } else if let first = word.first, first.isASCII && first.isUppercase && word.count >= 2 {
-                    appendToken(word, color: StepCardPalette.softViolet)
+                    appendToken(word, color: AntigravityTheme.syntaxType)
+                } else if isFollowedByParen {
+                    appendToken(word, color: AntigravityTheme.syntaxFunction)
+                } else if isPrecededByDot {
+                    appendToken(word, color: AntigravityTheme.syntaxProperty)
                 } else {
-                    appendToken(word, color: AntigravityTheme.inkReading)
+                    appendToken(word, color: AntigravityTheme.syntaxPlain)
                 }
                 continue
             }
@@ -642,7 +661,7 @@ internal enum MarkdownSyntaxHighlighter {
                 }
                 i += 1
             }
-            appendToken(String(chars[start..<i]), color: AntigravityTheme.inkReading)
+            appendToken(String(chars[start..<i]), color: AntigravityTheme.syntaxPlain)
         }
 
         return out
@@ -690,7 +709,7 @@ internal struct MarkdownBlockquoteCardView: View {
         } else {
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                    .fill(StepCardPalette.periwinkle.opacity(0.55))
+                    .fill(AntigravityTheme.accentPeriwinkle.opacity(0.55))
                     .frame(width: 3)
 
                 AnyView(AntigravityMarkdownBlocksView(blocks: innerBlocks, variant: .blockquote, store: store))
@@ -702,11 +721,11 @@ internal struct MarkdownBlockquoteCardView: View {
 
     private func alertAccent(for kind: MarkdownAlertKind) -> Color {
         switch kind {
-        case .note: return StepCardPalette.periwinkle
-        case .tip: return StepCardPalette.emeraldDone
-        case .important: return StepCardPalette.softViolet
-        case .warning: return StepCardPalette.warmAmber
-        case .caution: return StepCardPalette.coralError
+        case .note: return AntigravityTheme.accentPeriwinkle
+        case .tip: return AntigravityTheme.statusDone
+        case .important: return AntigravityTheme.syntaxKeyword
+        case .warning: return AntigravityTheme.statusWaiting
+        case .caution: return AntigravityTheme.statusError
         }
     }
 }
@@ -742,10 +761,10 @@ internal struct MarkdownTableCardView: View {
                         .gridColumnAlignment(horizontalAlignment(for: colIdx))
                     }
                 }
-                .background(Color.white.opacity(0.05))
+                .background(AntigravityTheme.surfaceSubtleBox)
 
                 Rectangle()
-                    .fill(Color.white.opacity(0.09))
+                    .fill(AntigravityTheme.subtleDivider)
                     .frame(height: 1)
 
                 ForEach(0..<rows.count, id: \.self) { rowIdx in
@@ -766,21 +785,21 @@ internal struct MarkdownTableCardView: View {
                             .padding(.vertical, 7)
                         }
                     }
-                    .background(rowIdx.isMultiple(of: 2) ? Color.clear : Color.white.opacity(0.02))
+                    .background(rowIdx.isMultiple(of: 2) ? Color.clear : AntigravityTheme.surfaceSubtleBox.opacity(0.5))
 
                     if rowIdx + 1 < rows.count {
                         Rectangle()
-                            .fill(Color.white.opacity(0.05))
+                            .fill(AntigravityTheme.subtleDivider)
                             .frame(height: 1)
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(StepCardPalette.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -822,16 +841,16 @@ internal struct MarkdownMathBlockCardView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             Text(MarkdownMathNormalizer.prettify(latex))
                 .font(.system(size: 13.5, weight: .regular, design: .serif).italic())
-                .foregroundStyle(StepCardPalette.inlineCodeInk)
+                .foregroundStyle(AntigravityTheme.inkInlineCode)
                 .textSelection(.enabled)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(StepCardPalette.codeBlockBg)
+        .background(AntigravityTheme.surfaceCodeBlock)
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }

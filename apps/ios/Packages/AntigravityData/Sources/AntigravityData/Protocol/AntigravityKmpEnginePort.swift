@@ -53,7 +53,7 @@ public struct KmpFederatedSyncResult: Sendable, Equatable {
 }
 
 /// Dependency-inverted pure-Swift port for delegating core connection, conversation sync,
-/// trajectory step loading (`<600` JSON + `>=600` Binary Protobuf), and PC-side core interactions
+/// adaptive binary-first trajectory step loading (Binary Protobuf default + runtime JSON ceiling learning), and PC-side core interactions
 /// (`StartCascade`, `SendUserCascadeMessage`, `HandleCascadeUserInteraction`, `CancelCascadeInvocation`)
 /// to the Kotlin Multiplatform `AntigravityShared.xcframework` (`Ktor Darwin` + `SKIE` + `AntigravityCoreCoordinator`).
 ///

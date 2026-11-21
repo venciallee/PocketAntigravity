@@ -47,7 +47,7 @@ public struct RemoteControlQRScannerSheet: View {
 
                 Text("Scan Remote Control QR")
                     .font(.system(size: 16.5, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.inkReading)
 
                 Spacer()
 
@@ -162,8 +162,12 @@ public struct RemoteControlQRScannerSheet: View {
                         .autocorrectionDisabled()
                         .padding(.horizontal, 12)
                         .frame(minHeight: 46)
-                        .background(AntigravityTheme.surfaceElevated)
+                        .background(AntigravityTheme.surfaceInput)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                        )
 
                     Button {
                         _ = handleScannedCandidate(manualLinkDraft)
@@ -208,7 +212,7 @@ public struct RemoteControlQRScannerSheet: View {
                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
             Text("Camera Unavailable")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color.white)
+                .foregroundStyle(AntigravityTheme.inkReading)
             Text("Choose a QR screenshot from Photos or paste the https://antigravity.google.com/r/... link below.")
                 .font(.system(size: 12.5, weight: .regular))
                 .foregroundStyle(AntigravityTheme.textSecondary)

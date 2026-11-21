@@ -9,6 +9,7 @@ import UIKit
 public struct AgentsHomeViewController: View {
     @Bindable public var store: AntigravitySessionStore
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.colorScheme) private var colorScheme
 
     public var onSelectTab: ((ShellTab) -> Void)?
     public var onOpenDisplayOptions: (() -> Void)?
@@ -349,7 +350,7 @@ public struct AgentsHomeViewController: View {
     @ViewBuilder
     private func deviceStatusMenuIcon(isOnline: Bool) -> some View {
         #if canImport(UIKit)
-        Image(uiImage: DeviceStatusMenuIconRenderer.image(isOnline: isOnline, scale: displayScale))
+        Image(uiImage: DeviceStatusMenuIconRenderer.image(isOnline: isOnline, isDark: colorScheme == .dark, scale: displayScale))
             .renderingMode(.original)
         #else
         Image(systemName: isOnline ? "laptopcomputer" : "laptopcomputer.slash")
@@ -569,7 +570,7 @@ public struct AgentsHomeViewController: View {
             Text("Agents")
                 .font(.system(size: 32, weight: .bold))
                 .tracking(-0.5)
-                .foregroundStyle(Color.white)
+                .foregroundStyle(AntigravityTheme.textPrimary)
 
             HStack(spacing: 9) {
                 Image(systemName: "magnifyingglass")
@@ -609,7 +610,7 @@ public struct AgentsHomeViewController: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
             )
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("agents-search-input")
@@ -667,19 +668,19 @@ public struct AgentsHomeViewController: View {
             HStack(spacing: 5) {
                 if let dotColor {
                     Circle()
-                        .fill(isActive ? AntigravityTheme.canvasObsidian : dotColor)
+                        .fill(isActive ? AntigravityTheme.pillActiveForeground : dotColor)
                         .frame(width: 7, height: 7)
                 }
                 Text(label)
                     .font(.system(size: 13.5, weight: isActive ? .semibold : .medium))
-                    .foregroundStyle(isActive ? AntigravityTheme.canvasObsidian : AntigravityTheme.textBody)
+                    .foregroundStyle(isActive ? AntigravityTheme.pillActiveForeground : AntigravityTheme.textBody)
                     .lineLimit(1)
             }
             .padding(.horizontal, 11.5)
             .frame(minWidth: 44, minHeight: AntigravityTheme.minTouchTargetPt)
             .background(
                 Capsule()
-                    .fill(isActive ? Color.white : AntigravityTheme.surfacePill)
+                    .fill(isActive ? AntigravityTheme.pillActiveBackground : AntigravityTheme.surfacePill)
             )
             .overlay(
                 Capsule()
@@ -1095,9 +1096,13 @@ public struct AgentsHomeViewController: View {
         }
     }
 
+    private var isShowingLoadingEmptyState: Bool {
+        isConnectingToHost || store.isRefreshingSummaries || store.isRefreshingSelectedHost || store.isSwitchingHost
+    }
+
     private var liveEmptyConversationsCard: some View {
         VStack(spacing: 10) {
-            if isConnectingToHost || store.isRefreshingSummaries || store.isRefreshingSelectedHost || store.isSwitchingHost {
+            if isShowingLoadingEmptyState {
                 VStack(spacing: 10) {
                     AntigravityFourDotLoadingView(
                         isAnimated: shouldAnimateLive,
@@ -1107,21 +1112,20 @@ public struct AgentsHomeViewController: View {
                     )
                     Text(isConnectingToHost ? "Loading conversations..." : "Syncing conversations...")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                        .accessibilityIdentifier("agents-loading-conversations")
                     Text(syncingStatusMessage)
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .multilineTextAlignment(.center)
                 }
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("agents-loading-conversations")
             } else if selectedHost == .antigravityCloud && searchText.isEmpty && selectedFilter == .all {
                 Image(systemName: "cloud")
                     .font(.system(size: 28, weight: .light))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 Text(store.cloudAgentWarmingUp ? "Antigravity Cloud is warming up..." : "No Antigravity Cloud conversations yet")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                 Text(
                     store.cloudAgentWarmingUp
                         ? "Remote Agents are initializing on your desktop daemon. Pull down to refresh in a few seconds."
@@ -1145,7 +1149,7 @@ public struct AgentsHomeViewController: View {
                         Text("New Cloud Project")
                             .font(.system(size: 13.5, weight: .semibold))
                     }
-                    .foregroundStyle(Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0))
+                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .padding(.horizontal, 16)
                     .frame(minHeight: 38)
                     .background(AntigravityTheme.accentPeriwinkle)
@@ -1159,7 +1163,7 @@ public struct AgentsHomeViewController: View {
                     .foregroundStyle(AntigravityTheme.statusError)
                 Text("\(selectedHostDisplayName) is offline")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                 Text("Ensure Antigravity Desktop with Remote Control is running on \(selectedHostDisplayName), or choose another host above.")
                     .font(.system(size: 13.5, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textSecondary)
@@ -1177,7 +1181,7 @@ public struct AgentsHomeViewController: View {
                             Text("Retry Connection")
                                 .font(.system(size: 13.5, weight: .semibold))
                         }
-                        .foregroundStyle(Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0))
+                        .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .padding(.horizontal, 16)
                         .frame(minHeight: 38)
                         .background(AntigravityTheme.accentPeriwinkle)
@@ -1215,7 +1219,7 @@ public struct AgentsHomeViewController: View {
                         : "No matching conversations"
                 )
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.white)
+                .foregroundStyle(AntigravityTheme.textPrimary)
                 Text(
                     searchText.isEmpty && selectedFilter == .all
                         ? "Tap the compose button below to start a new session on \(selectedHostDisplayName)."
@@ -1238,7 +1242,8 @@ public struct AgentsHomeViewController: View {
                 .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
         )
         .padding(.top, 8)
-        .accessibilityIdentifier("agents-empty-state")
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(isShowingLoadingEmptyState ? "agents-loading-conversations" : "agents-empty-state")
     }
 
     private var usesLiveStoreData: Bool {
@@ -1486,15 +1491,16 @@ private enum DeviceStatusMenuIconRenderer {
     private static var cache: [String: UIImage] = [:]
 
     /// Renders a `24×20pt` always-original `UIImage` combining `laptopcomputer` with a top-right
-    /// online (solid `#57C88A` emerald dot) or offline (hollow `#F07167` coral ring) status indicator
+    /// online (solid emerald dot) or offline (hollow coral ring) status indicator
     /// so iOS `UIMenu` preserves status color instead of flattening SF Symbols to template monochrome.
-    static func image(isOnline: Bool, scale: CGFloat) -> UIImage {
+    static func image(isOnline: Bool, isDark: Bool = true, scale: CGFloat) -> UIImage {
         let clampedScale = max(scale, 2.0)
-        let cacheKey = "\(isOnline ? "online" : "offline")-\(Int((clampedScale * 10).rounded()))"
+        let cacheKey = "\(isOnline ? "online" : "offline")-\(isDark ? "dark" : "light")-\(Int((clampedScale * 10).rounded()))"
         if let cached = cache[cacheKey] {
             return cached
         }
 
+        let traits = UITraitCollection(userInterfaceStyle: isDark ? .dark : .light)
         let canvasSize = CGSize(width: 24, height: 20)
         let format = UIGraphicsImageRendererFormat()
         format.scale = clampedScale
@@ -1503,9 +1509,9 @@ private enum DeviceStatusMenuIconRenderer {
         let renderer = UIGraphicsImageRenderer(size: canvasSize, format: format)
         let rendered = renderer.image { ctx in
             let cg = ctx.cgContext
-            let glyphColor = isOnline
-                ? UIColor(white: 1.0, alpha: 0.94)
-                : UIColor(white: 1.0, alpha: 0.48)
+            let glyphColor = AntigravityTheme.inkReadingUIColor
+                .resolvedColor(with: traits)
+                .withAlphaComponent(isOnline ? 0.94 : 0.48)
             let symbolConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .regular)
             if let baseSymbol = UIImage(systemName: "laptopcomputer", withConfiguration: symbolConfig)?
                 .withTintColor(glyphColor, renderingMode: .alwaysOriginal) {
@@ -1541,7 +1547,7 @@ private enum DeviceStatusMenuIconRenderer {
                     width: dotRadius * 2,
                     height: dotRadius * 2
                 )
-                UIColor(red: 0x57 / 255.0, green: 0xC8 / 255.0, blue: 0x8A / 255.0, alpha: 1.0).setFill()
+                UIColor(AntigravityTheme.statusDone).resolvedColor(with: traits).setFill()
                 cg.fillEllipse(in: dotRect)
             } else {
                 let lineWidth: CGFloat = 1.5
@@ -1552,7 +1558,7 @@ private enum DeviceStatusMenuIconRenderer {
                     width: ringRadius * 2,
                     height: ringRadius * 2
                 )
-                UIColor(red: 0xF0 / 255.0, green: 0x71 / 255.0, blue: 0x67 / 255.0, alpha: 1.0).setStroke()
+                UIColor(AntigravityTheme.statusError).resolvedColor(with: traits).setStroke()
                 cg.setLineWidth(lineWidth)
                 cg.strokeEllipse(in: ringRect)
             }

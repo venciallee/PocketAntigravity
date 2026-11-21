@@ -274,6 +274,11 @@ public struct HostCapabilityProfile: Codable, Sendable, Equatable {
     public var strippedFieldsByMethod: [String: Set<String>]
     public var downgradedEnumsByMethod: [String: [String: String]]
     public var passiveSignals: [HostCapability: CapabilitySupportState]
+    /// Runtime-discovered JSON `GetCascadeTrajectorySteps` truncation ceiling for this host.
+    /// `nil` until observed via `truncatedAt`, payload-limit error, or pagination stall — never hardcoded.
+    public var learnedJsonStepCeiling: Int?
+    /// `true` if this host explicitly rejected `Content-Type: application/proto` for trajectory steps.
+    public var binaryProtobufStepsUnsupported: Bool
     public var updatedAt: Date
 
     public init(
@@ -286,6 +291,8 @@ public struct HostCapabilityProfile: Codable, Sendable, Equatable {
         strippedFieldsByMethod: [String: Set<String>] = [:],
         downgradedEnumsByMethod: [String: [String: String]] = [:],
         passiveSignals: [HostCapability: CapabilitySupportState] = [:],
+        learnedJsonStepCeiling: Int? = nil,
+        binaryProtobufStepsUnsupported: Bool = false,
         updatedAt: Date = Date()
     ) {
         self.hostKey = hostKey
@@ -297,7 +304,43 @@ public struct HostCapabilityProfile: Codable, Sendable, Equatable {
         self.strippedFieldsByMethod = strippedFieldsByMethod
         self.downgradedEnumsByMethod = downgradedEnumsByMethod
         self.passiveSignals = passiveSignals
+        self.learnedJsonStepCeiling = (learnedJsonStepCeiling ?? 0) > 0 ? learnedJsonStepCeiling : nil
+        self.binaryProtobufStepsUnsupported = binaryProtobufStepsUnsupported
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hostKey
+        case reportedVersion
+        case isCompanionBridge
+        case bridgeSupportedMethods
+        case supportedMethods
+        case unsupportedMethods
+        case strippedFieldsByMethod
+        case downgradedEnumsByMethod
+        case passiveSignals
+        case learnedJsonStepCeiling
+        case binaryProtobufStepsUnsupported
+        case updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.hostKey = try container.decodeIfPresent(String.self, forKey: .hostKey) ?? "default"
+        self.reportedVersion = Self.normalizedVersionString(
+            try container.decodeIfPresent(String.self, forKey: .reportedVersion)
+        )
+        self.isCompanionBridge = try container.decodeIfPresent(Bool.self, forKey: .isCompanionBridge) ?? false
+        self.bridgeSupportedMethods = try container.decodeIfPresent(Set<String>.self, forKey: .bridgeSupportedMethods) ?? []
+        self.supportedMethods = try container.decodeIfPresent(Set<String>.self, forKey: .supportedMethods) ?? []
+        self.unsupportedMethods = try container.decodeIfPresent(Set<String>.self, forKey: .unsupportedMethods) ?? []
+        self.strippedFieldsByMethod = try container.decodeIfPresent([String: Set<String>].self, forKey: .strippedFieldsByMethod) ?? [:]
+        self.downgradedEnumsByMethod = try container.decodeIfPresent([String: [String: String]].self, forKey: .downgradedEnumsByMethod) ?? [:]
+        self.passiveSignals = try container.decodeIfPresent([HostCapability: CapabilitySupportState].self, forKey: .passiveSignals) ?? [:]
+        let rawCeiling = try container.decodeIfPresent(Int.self, forKey: .learnedJsonStepCeiling)
+        self.learnedJsonStepCeiling = (rawCeiling ?? 0) > 0 ? rawCeiling : nil
+        self.binaryProtobufStepsUnsupported = try container.decodeIfPresent(Bool.self, forKey: .binaryProtobufStepsUnsupported) ?? false
+        self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 
     public static func normalizedVersionString(_ raw: String?) -> String? {
@@ -326,7 +369,7 @@ public struct HostCapabilityProfile: Codable, Sendable, Equatable {
     }
 
     /// Updates reported version; if the host upgraded/downgraded to a different version,
-    /// clears stale negative caches so newly added methods are re-probed automatically.
+    /// clears stale negative caches and learned trajectory ceilings so capabilities re-probe automatically.
     public mutating func updateReportedVersion(_ newVersion: String?) {
         let normalized = Self.normalizedVersionString(newVersion)
         guard let normalized else { return }
@@ -335,6 +378,8 @@ public struct HostCapabilityProfile: Codable, Sendable, Equatable {
             strippedFieldsByMethod.removeAll()
             downgradedEnumsByMethod.removeAll()
             passiveSignals.removeAll()
+            learnedJsonStepCeiling = nil
+            binaryProtobufStepsUnsupported = false
         }
         reportedVersion = normalized
         updatedAt = Date()
@@ -390,6 +435,32 @@ public struct HostCapabilityProfile: Codable, Sendable, Equatable {
     public mutating func recordPassiveSignal(_ capability: HostCapability, state: CapabilitySupportState) {
         passiveSignals[capability] = state
         updatedAt = Date()
+    }
+
+    /// Records a runtime-observed JSON trajectory step ceiling for this host.
+    /// Keeps the tightest positive observed ceiling so future large trajectories skip doomed JSON probes.
+    public mutating func recordJsonStepCeiling(_ ceiling: Int) {
+        guard ceiling > 0 else { return }
+        if let existing = learnedJsonStepCeiling {
+            learnedJsonStepCeiling = min(existing, ceiling)
+        } else {
+            learnedJsonStepCeiling = ceiling
+        }
+        updatedAt = Date()
+    }
+
+    /// Records that this host explicitly does not accept binary `application/proto` trajectory step requests.
+    public mutating func recordBinaryProtobufStepsUnsupported() {
+        binaryProtobufStepsUnsupported = true
+        updatedAt = Date()
+    }
+
+    /// Returns `true` only when this host has previously demonstrated a JSON step ceiling at or below `knownStepCount`.
+    public func shouldPreferBinaryProtobufSteps(forKnownStepCount knownStepCount: Int) -> Bool {
+        guard !binaryProtobufStepsUnsupported, knownStepCount > 0, let ceiling = learnedJsonStepCeiling else {
+            return false
+        }
+        return knownStepCount >= ceiling
     }
 
     public func isMethodKnownUnsupported(_ method: String) -> Bool {

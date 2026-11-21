@@ -287,8 +287,16 @@ public enum class AppThemePreset(public val displayTitle: String) {
 }
 
 @Serializable
+public enum class AppAppearanceMode(public val displayTitle: String) {
+    SYSTEM("System"),
+    DARK("Dark"),
+    LIGHT("Light"),
+}
+
+@Serializable
 public data class AppAppearancePreferences(
     public val layoutMode: InterfaceLayoutMode = InterfaceLayoutMode.COMFORTABLE,
+    public val appearanceMode: AppAppearanceMode = AppAppearanceMode.SYSTEM,
     public val theme: AppThemePreset = AppThemePreset.OBSIDIAN,
     public val collapsedProjectIds: Set<String> = emptySet(),
     public val globalPermissionPreset: AgentPermissionPreset = AgentPermissionPreset.DEFAULT_POLICY,

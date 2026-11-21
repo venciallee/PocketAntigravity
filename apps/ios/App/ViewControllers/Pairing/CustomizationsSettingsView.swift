@@ -48,7 +48,6 @@ public struct CustomizationsSettingsView: View {
                 await store.refreshCustomizations()
             }
         }
-        .preferredColorScheme(.dark)
         .accessibilityIdentifier("sheet_customizations_settings")
     }
 
@@ -93,10 +92,18 @@ public struct CustomizationsSettingsView: View {
                     }
                     .padding(10)
                     .background(
-                        isSelected ? AntigravityTheme.surfaceElevated : AntigravityTheme.surfaceObsidian,
+                        isSelected ? AntigravityTheme.surfaceSelectionTint : AntigravityTheme.surfaceObsidian,
                         in: RoundedRectangle(cornerRadius: 12)
                     )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(
+                                isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.45) : AntigravityTheme.glassHairline,
+                                lineWidth: 1
+                            )
+                    )
                 }
+                .buttonStyle(.plain)
             }
 
             // Fine-grained Deny / Ask / Allow Rule List
@@ -150,7 +157,11 @@ public struct CustomizationsSettingsView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(8)
-                        .background(AntigravityTheme.surfaceObsidian, in: RoundedRectangle(cornerRadius: 8))
+                        .background(AntigravityTheme.surfaceInput, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
+                        )
 
                     Button("Add") {
                         let t = newRuleTarget.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -339,10 +350,78 @@ public struct CustomizationsSettingsView: View {
     // MARK: - 3. Appearance, Interface Layout & Proactive Notifications
 
     private var appearanceSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Appearance & Notifications", systemImage: "paintbrush")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(AntigravityTheme.inkReading)
+        let currentMode = store.appearancePreferences.appearanceMode
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Appearance & Notifications", systemImage: "paintbrush")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+                Spacer(minLength: 8)
+                Text(currentMode.displayLabel)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(AntigravityTheme.surfaceSelectionTint))
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(AntigravityTheme.accentPeriwinkle.opacity(0.28), lineWidth: 1)
+                    )
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Appearance")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+
+                HStack(spacing: 6) {
+                    ForEach(AppAppearanceMode.allCases) { mode in
+                        let isSelected = (currentMode == mode)
+                        Button {
+                            store.setAppearanceMode(mode)
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: mode.sfSymbolName)
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text(mode.displayLabel)
+                                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(
+                                isSelected
+                                    ? AntigravityTheme.accentPeriwinkle
+                                    : AntigravityTheme.inkSecondary
+                            )
+                            .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
+                            .background(
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .fill(isSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .strokeBorder(
+                                        isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.55) : Color.clear,
+                                        lineWidth: 1.2
+                                    )
+                            )
+                            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier(appearanceSheetAccessibilityId(for: mode))
+                        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+                        .accessibilityValue(isSelected ? "selected" : "unselected")
+                    }
+                }
+                .padding(4)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(AntigravityTheme.surfaceSubtleBox)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
+                )
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Interface Layout")
@@ -360,6 +439,21 @@ public struct CustomizationsSettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
+                Text("Chat Font Size")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                Picker("Font Size", selection: $store.appearancePreferences.fontSizePt) {
+                    Text("12 pt").tag(12)
+                    Text("14 pt").tag(14)
+                    Text("16 pt").tag(16)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: store.appearancePreferences.fontSizePt) { _, _ in
+                    store.saveAppearancePreferences()
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Theme Preset")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -371,21 +465,6 @@ public struct CustomizationsSettingsView: View {
                 .pickerStyle(.menu)
                 .tint(AntigravityTheme.accentPeriwinkle)
                 .onChange(of: store.appearancePreferences.theme) { _, _ in
-                    store.saveAppearancePreferences()
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Chat Font Size")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.inkSecondary)
-                Picker("Font Size", selection: $store.appearancePreferences.fontSizePt) {
-                    Text("12 pt").tag(12)
-                    Text("14 pt").tag(14)
-                    Text("16 pt").tag(16)
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: store.appearancePreferences.fontSizePt) { _, _ in
                     store.saveAppearancePreferences()
                 }
             }
@@ -410,6 +489,14 @@ public struct CustomizationsSettingsView: View {
         .padding(14)
         .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
+    }
+
+    private func appearanceSheetAccessibilityId(for mode: AppAppearanceMode) -> String {
+        switch mode {
+        case .system: return "appearance-mode-sheet-system"
+        case .dark:   return "appearance-mode-sheet-dark"
+        case .light:  return "appearance-mode-sheet-light"
+        }
     }
 
     private func ruleColor(_ kind: PermissionRuleListKind) -> Color {

@@ -85,7 +85,7 @@ public struct AutomationsViewController: View {
                     Text("Automations")
                         .font(.system(size: 32, weight: .bold))
                         .tracking(-0.5)
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
 
                     quickCreateCapsuleBar
 
@@ -326,23 +326,23 @@ public struct AutomationsViewController: View {
                 Group {
                     if isLiveMode && store.isMutatingAutomation {
                         ProgressView()
-                            .tint(Color.white)
+                            .tint(AntigravityTheme.textPrimary)
                             .scaleEffect(0.8)
                     } else {
                         Text("Create")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
                     }
                 }
                 .padding(.horizontal, 16)
                 .frame(minWidth: 74, minHeight: AntigravityTheme.minTouchTargetPt)
                 .background(
                     Capsule()
-                        .fill(Color(red: 0x26 / 255.0, green: 0x28 / 255.0, blue: 0x30 / 255.0))
+                        .fill(AntigravityTheme.surfaceBadge)
                 )
                 .overlay(
                     Capsule()
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
@@ -358,7 +358,7 @@ public struct AutomationsViewController: View {
         )
         .overlay(
             Capsule()
-                .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
         )
     }
 
@@ -380,7 +380,7 @@ public struct AutomationsViewController: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title)
                                 .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Color.white)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                             Text(item.subtitle)
                                 .font(.system(size: 13, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textSecondary)
@@ -401,7 +401,7 @@ public struct AutomationsViewController: View {
                                 )
                                 .background(
                                     Circle()
-                                        .fill(Color(red: 0x1E / 255.0, green: 0x24 / 255.0, blue: 0x33 / 255.0))
+                                        .fill(AntigravityTheme.surfaceSelectionTint)
                                 )
                                 .overlay(
                                     Circle()
@@ -462,7 +462,7 @@ public struct AutomationsViewController: View {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(
                                     item.needsReview
-                                        ? AntigravityTheme.statusWaiting.opacity(0.14)
+                                        ? AntigravityTheme.surfaceAmberTint
                                         : AntigravityTheme.surfaceSubtleBox
                                 )
                         )
@@ -514,7 +514,7 @@ public struct AutomationsViewController: View {
                 VStack(alignment: .leading, spacing: 2.5) {
                     Text("Triage new pull requests")
                         .font(.system(size: 15.5, weight: .semibold))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Text("web-console · On PR opened · Flash Lite")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
@@ -560,8 +560,8 @@ public struct AutomationsViewController: View {
                         .font(.system(size: 15.5, weight: .semibold))
                         .foregroundStyle(
                             isPausedResumed
-                                ? Color.white
-                                : Color(red: 0xA0 / 255.0, green: 0xA5 / 255.0, blue: 0xB4 / 255.0)
+                                ? AntigravityTheme.textPrimary
+                                : AntigravityTheme.textSecondary
                         )
                     Text("web-console · Daily at 08:00 · Flash")
                         .font(.system(size: 13, weight: .regular))
@@ -580,11 +580,11 @@ public struct AutomationsViewController: View {
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                         .background(
                             Capsule()
-                                .fill(Color(red: 0x23 / 255.0, green: 0x25 / 255.0, blue: 0x2D / 255.0))
+                                .fill(AntigravityTheme.surfaceBadge)
                         )
                         .overlay(
                             Capsule()
-                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                                .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
                         )
                 }
                 .buttonStyle(.plain)
@@ -638,7 +638,7 @@ public struct AutomationsViewController: View {
                             .foregroundStyle(AntigravityTheme.statusWaiting)
                         Text("Pair a Host to Use Automations")
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
                     }
                     Text("Connect to Antigravity Desktop via Cloud Relay or Direct LAN in Settings to view, create, and trigger scheduled Automations.")
                         .font(.system(size: 13.5, weight: .regular))
@@ -682,7 +682,7 @@ public struct AutomationsViewController: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("No automations yet")
                                 .font(.system(size: 16.5, weight: .semibold))
-                                .foregroundStyle(Color.white)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                             Text("Running on \(store.activeHost.hostname)")
                                 .font(.system(size: 12.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -712,7 +712,7 @@ public struct AutomationsViewController: View {
                             .padding(.horizontal, 14)
                             .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
                             .background(
-                                Capsule().fill(AntigravityTheme.surfaceSheetGroup)
+                                Capsule().fill(AntigravityTheme.surfaceBadge)
                             )
                             .overlay(
                                 Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
@@ -851,7 +851,7 @@ public struct AutomationsViewController: View {
                         } label: {
                             Text("重新登录 Google")
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                                .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                                 .padding(.horizontal, 12)
                                 .frame(minHeight: 32)
                                 .background(
@@ -901,7 +901,7 @@ public struct AutomationsViewController: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                         .lineLimit(2)
                     Text(item.scheduleSummary)
                         .font(.system(size: 13, weight: .regular))
@@ -931,7 +931,7 @@ public struct AutomationsViewController: View {
                     )
                     .background(
                         Circle()
-                            .fill(Color(red: 0x1E / 255.0, green: 0x24 / 255.0, blue: 0x33 / 255.0))
+                            .fill(AntigravityTheme.surfaceSelectionTint)
                     )
                     .overlay(
                         Circle()
@@ -1059,7 +1059,7 @@ public struct AutomationsViewController: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(
                     item.needsReview
-                        ? AntigravityTheme.statusWaiting.opacity(0.14)
+                        ? AntigravityTheme.surfaceAmberTint
                         : AntigravityTheme.surfaceSubtleBox
                 )
         )
@@ -1097,7 +1097,7 @@ public struct AutomationsViewController: View {
             VStack(alignment: .leading, spacing: 2.5) {
                 Text(item.title)
                     .font(.system(size: 15.5, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .lineLimit(2)
                 Text(item.scheduleSummary)
                     .font(.system(size: 13, weight: .regular))
@@ -1165,7 +1165,7 @@ public struct AutomationsViewController: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
                     .font(.system(size: 15.5, weight: .semibold))
-                    .foregroundStyle(Color(red: 0xA0 / 255.0, green: 0xA5 / 255.0, blue: 0xB4 / 255.0))
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                     .lineLimit(2)
                 Text(item.scheduleSummary)
                     .font(.system(size: 13, weight: .regular))
@@ -1184,11 +1184,11 @@ public struct AutomationsViewController: View {
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                     .background(
                         Capsule()
-                            .fill(Color(red: 0x23 / 255.0, green: 0x25 / 255.0, blue: 0x2D / 255.0))
+                            .fill(AntigravityTheme.surfaceBadge)
                     )
                     .overlay(
                         Capsule()
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                            .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
                     )
             }
             .buttonStyle(.plain)
@@ -1489,14 +1489,13 @@ private struct AutomationEditorSheetView: View {
             .padding(.bottom, 28)
         }
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
-        .preferredColorScheme(.dark)
     }
 
     private var headerBar: some View {
         HStack(alignment: .center, spacing: 10) {
             TextField("Untitled", text: $displayName)
                 .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(Color.white)
+                .foregroundStyle(AntigravityTheme.textPrimary)
                 .tint(AntigravityTheme.accentPeriwinkle)
                 .lineLimit(1)
 
@@ -1510,7 +1509,7 @@ private struct AutomationEditorSheetView: View {
                     .frame(minHeight: 36)
                     .background(
                         Capsule()
-                            .fill(Color(red: 0x24 / 255.0, green: 0x26 / 255.0, blue: 0x2E / 255.0))
+                            .fill(AntigravityTheme.surfaceBadge)
                     )
             }
             .buttonStyle(.plain)
@@ -1533,7 +1532,7 @@ private struct AutomationEditorSheetView: View {
                 .frame(minWidth: 74, minHeight: 36)
                 .background(
                     Capsule()
-                        .fill(canSubmit ? AntigravityTheme.accentPeriwinkle : Color(red: 0x1D / 255.0, green: 0x2C / 255.0, blue: 0x45 / 255.0))
+                        .fill(canSubmit ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.surfaceSelectionTint)
                 )
             }
             .buttonStyle(.plain)
@@ -1653,7 +1652,7 @@ private struct AutomationEditorSheetView: View {
                         onRequestSignIn()
                     }
                     .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                    .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                     .padding(.horizontal, 10)
                     .frame(minHeight: 28)
                     .background(Capsule().fill(AntigravityTheme.statusWaiting))

@@ -7,7 +7,6 @@ import Foundation
 /// 2. Direct LAN / Tailscale `language_server` or Mac Companion Bridge (`https://<host>:<port>`) with `x-codeium-csrf-token`
 public actor AntigravityRPCClient {
     public static let servicePrefix = "/exa.language_server_pb.LanguageServerService"
-    public static let protobufStepThreshold = 600
     public static let clientAppVersion = "2.33.0"
 
     internal let channel: RemoteConnectionChannel
@@ -387,6 +386,32 @@ public actor AntigravityRPCClient {
         var profile = capabilityProfilesByHost[key] ?? HostCapabilityProfile(hostKey: key)
         mutate(&profile)
         capabilityProfilesByHost[key] = profile
+    }
+
+    /// Returns the runtime-learned JSON step ceiling for the active or specified host (`nil` if no truncation observed).
+    public func learnedJsonTrajectoryStepCeiling(forHostKey key: String? = nil) -> Int? {
+        capabilityProfile(forHostKey: key).learnedJsonStepCeiling
+    }
+
+    internal func learnedJsonStepCeiling(for instanceUuidOverride: String? = nil) -> Int? {
+        capabilityProfile(forHostKey: capabilityHostKey(for: instanceUuidOverride)).learnedJsonStepCeiling
+    }
+
+    internal func recordLearnedJsonStepCeiling(_ ceiling: Int, for instanceUuidOverride: String? = nil) {
+        guard ceiling > 0 else { return }
+        mutateCapabilityProfile(for: instanceUuidOverride) { profile in
+            profile.recordJsonStepCeiling(ceiling)
+        }
+    }
+
+    internal func isBinaryProtobufStepsUnsupported(for instanceUuidOverride: String? = nil) -> Bool {
+        capabilityProfile(forHostKey: capabilityHostKey(for: instanceUuidOverride)).binaryProtobufStepsUnsupported
+    }
+
+    internal func recordBinaryProtobufStepsUnsupported(for instanceUuidOverride: String? = nil) {
+        mutateCapabilityProfile(for: instanceUuidOverride) { profile in
+            profile.recordBinaryProtobufStepsUnsupported()
+        }
     }
 
     internal func observeResponseMetadata(

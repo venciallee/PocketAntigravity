@@ -51,19 +51,25 @@ public struct DisplayOptionsSheetView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Agents")
                     .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(0.24))
+                    .foregroundStyle(AntigravityTheme.textPrimary.opacity(0.24))
                     .padding(.leading, 18)
                     .padding(.top, 56)
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
+            .background(
+                ZStack {
+                    AntigravityTheme.canvasObsidian
+                    AntigravityTheme.scrimOverlay
+                }
+                .ignoresSafeArea()
+            )
 
             // Bottom Sheet Surface
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 12) {
                     Capsule()
-                        .fill(Color.white.opacity(0.24))
+                        .fill(AntigravityTheme.sheetHandle)
                         .frame(width: 38, height: 5)
                         .padding(.top, 10)
 
@@ -127,7 +133,7 @@ public struct DisplayOptionsSheetView: View {
             } label: {
                 Text("Reset")
                     .font(.system(size: 16.5, weight: .regular))
-                    .foregroundStyle(Color(red: 0x9D / 255.0, green: 0xA2 / 255.0, blue: 0xB0 / 255.0))
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                     .frame(minWidth: 56, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .leading)
             }
             .buttonStyle(.plain)
@@ -137,7 +143,7 @@ public struct DisplayOptionsSheetView: View {
 
             Text("Display Options")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color.white)
+                .foregroundStyle(AntigravityTheme.textPrimary)
 
             Spacer()
 
@@ -209,7 +215,7 @@ public struct DisplayOptionsSheetView: View {
                 }
                 .padding(.horizontal, 16)
                 .frame(minHeight: 48)
-                .background(isSortPopoverPresented ? Color.white.opacity(0.04) : Color.clear)
+                .background(isSortPopoverPresented ? AntigravityTheme.textPrimary.opacity(0.05) : Color.clear)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -393,11 +399,11 @@ public struct DisplayOptionsSheetView: View {
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(sortField == field ? Color.white : Color.clear)
+                            .foregroundStyle(sortField == field ? AntigravityTheme.textPrimary : Color.clear)
                             .frame(width: 16)
                         Text(field.rawValue)
                             .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
                         Spacer()
                     }
                     .padding(.horizontal, 16)
@@ -408,12 +414,12 @@ public struct DisplayOptionsSheetView: View {
 
                 if index < ConversationSortField.allCases.count - 1 {
                     Divider()
-                        .overlay(Color.white.opacity(0.06))
+                        .overlay(AntigravityTheme.subtleDivider)
                 }
             }
 
             Rectangle()
-                .fill(Color(red: 0x1D / 255.0, green: 0x1F / 255.0, blue: 0x25 / 255.0))
+                .fill(AntigravityTheme.surfaceElevated)
                 .frame(height: 7)
 
             ForEach(Array(SortOrderDirection.allCases.enumerated()), id: \.element.id) { index, direction in
@@ -423,11 +429,11 @@ public struct DisplayOptionsSheetView: View {
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(sortDirection == direction ? Color.white : Color.clear)
+                            .foregroundStyle(sortDirection == direction ? AntigravityTheme.textPrimary : Color.clear)
                             .frame(width: 16)
                         Text(direction.rawValue)
                             .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
                         Spacer()
                     }
                     .padding(.horizontal, 16)
@@ -438,20 +444,20 @@ public struct DisplayOptionsSheetView: View {
 
                 if index < SortOrderDirection.allCases.count - 1 {
                     Divider()
-                        .overlay(Color.white.opacity(0.06))
+                        .overlay(AntigravityTheme.subtleDivider)
                 }
             }
         }
         .frame(width: 236)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(red: 0x2A / 255.0, green: 0x2C / 255.0, blue: 0x34 / 255.0).opacity(0.97))
+                .fill(AntigravityTheme.surfacePopover.opacity(0.97))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.50), radius: 24, x: 0, y: 12)
+        .shadow(color: AntigravityTheme.glassShadow, radius: 24, x: 0, y: 12)
         .accessibilityIdentifier("sort-popover-menu")
     }
 }

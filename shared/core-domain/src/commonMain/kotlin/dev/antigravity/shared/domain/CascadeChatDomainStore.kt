@@ -53,7 +53,7 @@ public data class OutboxReplayResult(
  * Shared KMP message-list & PC-side core interaction store (`StateFlow<CascadeChatState>`).
  *
  * Owns:
- * - Trajectory step fetching (`<600` JSON + `>=600` Binary Protobuf) + disk caching
+ * - Trajectory step fetching (Binary-first Protobuf + adaptive JSON ceiling discovery) + disk caching
  * - `CascadeDisplayItem.buildDisplayItems` evidence grouping
  * - Markdown AST parsing cache (`AntigravityMarkdownParser`)
  * - Durable Outbox message send & offline replay (`StartCascade` + `SendUserCascadeMessage`)

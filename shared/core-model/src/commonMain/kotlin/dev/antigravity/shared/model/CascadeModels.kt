@@ -237,12 +237,19 @@ public data class CascadeStep(
     public val swarmBoard: SwarmBoardPayload? = null,
     public val mcpToolCall: McpToolCallPayload? = null,
     public val voiceSummary: VoiceCallTranscriptSummary? = null,
+    public val rawTypeName: String? = null,
+    public val fallbackSummary: String? = null,
 ) {
     public val id: String get() = "$cascadeId-$stepIndex"
+
+    public val isUnrecognizedForwardStep: Boolean
+        get() = type == CortexStepType.UNSPECIFIED &&
+            (!rawTypeName.isNullOrBlank() || !fallbackSummary.isNullOrBlank())
 
     public val hasRenderableChatContent: Boolean
         get() {
             if (status == CortexStepStatus.WAITING || requestedInteraction != null) return true
+            if (isUnrecognizedForwardStep) return true
             if (voiceSummary != null || subagent != null || dynamicWorkflow != null ||
                 swarmBoard != null || mcpToolCall != null
             ) {

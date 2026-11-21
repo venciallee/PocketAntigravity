@@ -539,4 +539,107 @@ final class AntigravityV233Tests: XCTestCase {
             )
         )
     }
+
+    // MARK: - TC-26: Appearance Mode Switching, Cold-Start Persistence & Legacy Migration
+
+    @MainActor
+    func testTC26_AppearanceModeSwitchingPersistenceAndLegacyMigration() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AntigravityV233Appearance-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let projStore = LocalProjectionStore(storageDirectory: tempDir)
+
+        // 1. Round-trip .system, .dark, .light through LocalProjectionStore
+        for mode in [AppAppearanceMode.system, .dark, .light] {
+            let prefs = AppAppearancePreferences(
+                interfaceLayout: .softwareEngineering,
+                appearanceMode: mode,
+                theme: .obsidian
+            )
+            await projStore.saveAppearancePreferences(prefs)
+            let loaded = await projStore.loadAppearancePreferences()
+            XCTAssertEqual(loaded?.appearanceMode, mode)
+            XCTAssertEqual(loaded, prefs)
+        }
+
+        // 2. Legacy JSON without `appearanceMode` migrates Everforest Light -> .light and Matte Obsidian -> .system
+        let legacyLightJSON = Data("""
+        {
+          "interfaceLayout": "Software Engineering",
+          "theme": "Everforest Light",
+          "fontSizePt": 14,
+          "collapsedProjectIds": [],
+          "notificationsEnabled": true,
+          "suppressManualStopNotification": true,
+          "globalPermissionPreset": "default",
+          "terminalSandboxEnabled": true
+        }
+        """.utf8)
+        let migratedLight = try JSONDecoder().decode(AppAppearancePreferences.self, from: legacyLightJSON)
+        XCTAssertEqual(migratedLight.theme, .everforestLight)
+        XCTAssertEqual(migratedLight.appearanceMode, .light)
+
+        let legacyObsidianJSON = Data("""
+        {
+          "interfaceLayout": "Software Engineering",
+          "theme": "Matte Obsidian",
+          "fontSizePt": 14,
+          "collapsedProjectIds": [],
+          "notificationsEnabled": true,
+          "suppressManualStopNotification": true,
+          "globalPermissionPreset": "default",
+          "terminalSandboxEnabled": true
+        }
+        """.utf8)
+        let migratedSystem = try JSONDecoder().decode(AppAppearancePreferences.self, from: legacyObsidianJSON)
+        XCTAssertEqual(migratedSystem.theme, .obsidian)
+        XCTAssertEqual(migratedSystem.appearanceMode, .system)
+
+        // 3. Synchronous persistence & cold-start anti-flash hydration on frame 1
+        let prefsStore = InMemoryPreferencesStore()
+        let liveStore1 = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projStore,
+            secretStore: InMemorySecretStore(),
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(),
+            preferencesStore: prefsStore
+        )
+        XCTAssertEqual(liveStore1.appearancePreferences.appearanceMode, .system)
+
+        liveStore1.setAppearanceMode(.light)
+        XCTAssertEqual(liveStore1.appearancePreferences.appearanceMode, .light)
+        XCTAssertEqual(
+            prefsStore.string(forKey: AntigravitySessionStore.appearanceModeDefaultsKey),
+            AppAppearanceMode.light.rawValue
+        )
+
+        let liveStore2 = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projStore,
+            secretStore: InMemorySecretStore(),
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(),
+            preferencesStore: prefsStore
+        )
+        XCTAssertEqual(
+            liveStore2.appearancePreferences.appearanceMode,
+            .light,
+            "Cold-start makeLiveStore must synchronously hydrate .light from preferencesStore on frame 1"
+        )
+
+        // 4. Switching .light -> .dark -> .system updates both store and preferencesStore synchronously
+        liveStore2.setAppearanceMode(.dark)
+        XCTAssertEqual(liveStore2.appearancePreferences.appearanceMode, .dark)
+        XCTAssertEqual(
+            prefsStore.string(forKey: AntigravitySessionStore.appearanceModeDefaultsKey),
+            AppAppearanceMode.dark.rawValue
+        )
+
+        liveStore2.setAppearanceMode(.system)
+        XCTAssertEqual(liveStore2.appearancePreferences.appearanceMode, .system)
+        XCTAssertEqual(
+            prefsStore.string(forKey: AntigravitySessionStore.appearanceModeDefaultsKey),
+            AppAppearanceMode.system.rawValue
+        )
+    }
 }

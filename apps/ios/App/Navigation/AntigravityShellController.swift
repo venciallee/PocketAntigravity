@@ -38,6 +38,14 @@ public enum ShellTab: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
+    public init(primaryTab: PrimaryTab) {
+        switch primaryTab {
+        case .agents:      self = .agents
+        case .automations: self = .automations
+        case .settings:    self = .settings
+        }
+    }
+
     public var defaultFABAccessibilityId: String {
         switch self {
         case .agents:      return "fab-compose"
@@ -51,6 +59,8 @@ public enum ShellTab: String, CaseIterable, Sendable, Identifiable {
 /// Left Floating Liquid Glass 3-Tab Capsule (`Agents` | `Automations` | `Settings`)
 /// + Detached Right `56×56pt` Periwinkle (`AntigravityTheme.accentPeriwinkle`) Circular FAB.
 public struct AntigravityFloatingTabBar: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     public let selectedTab: ShellTab
     public let tabBarAccessibilityId: String
     public let fabAccessibilityId: String
@@ -72,6 +82,10 @@ public struct AntigravityFloatingTabBar: View {
     }
 
     public var body: some View {
+        let inactiveTabForeground: Color = colorScheme == .dark
+            ? AntigravityTheme.inkLabel
+            : AntigravityTheme.inkSecondary
+
         HStack(spacing: 12) {
             // Left: Floating Liquid Glass 3-Tab Capsule
             HStack(spacing: 2) {
@@ -90,7 +104,7 @@ public struct AntigravityFloatingTabBar: View {
                         .foregroundStyle(
                             isSelected
                                 ? AntigravityTheme.accentPeriwinkle
-                                : Color(red: 0xC2 / 255.0, green: 0xC6 / 255.0, blue: 0xD2 / 255.0)
+                                : inactiveTabForeground
                         )
                         .frame(maxWidth: .infinity, minHeight: 52)
                         .background(
@@ -119,9 +133,9 @@ public struct AntigravityFloatingTabBar: View {
             )
             .overlay(
                 Capsule()
-                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 8)
+            .shadow(color: AntigravityTheme.glassShadow, radius: 18, x: 0, y: 8)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(tabBarAccessibilityId)
 
@@ -137,7 +151,7 @@ public struct AntigravityFloatingTabBar: View {
                         Circle()
                             .fill(AntigravityTheme.accentPeriwinkle)
                     )
-                    .shadow(color: Color.black.opacity(0.40), radius: 14, x: 0, y: 6)
+                    .shadow(color: AntigravityTheme.glassShadow, radius: 14, x: 0, y: 6)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier(fabAccessibilityId)
@@ -159,7 +173,7 @@ public struct AntigravityInteractiveRowButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 AntigravityTheme.surfaceCard
-                    .overlay(Color.white.opacity(configuration.isPressed ? 0.09 : 0.0))
+                    .overlay(AntigravityTheme.inkReading.opacity(configuration.isPressed ? 0.09 : 0.0))
             )
             .contentShape(Rectangle())
     }
@@ -171,7 +185,7 @@ public struct AntigravityRootContainerView: View {
     @Bindable public var store: AntigravitySessionStore
     @Binding public var activeVerifyCase: ESDDVerifySceneCase?
 
-    @State private var selectedTab: ShellTab = .agents
+    @State private var selectedTab: ShellTab
     @State private var activeModalSheet: ModalSheetDestination?
     @State private var navigationPath: [ShellPushDestination] = []
     @State private var settingsScannerTriggered: Bool = false
@@ -200,6 +214,7 @@ public struct AntigravityRootContainerView: View {
     ) {
         self.store = store
         self._activeVerifyCase = activeVerifyCase
+        self._selectedTab = State(initialValue: ShellTab(primaryTab: store.selectedTab))
     }
 
     public var body: some View {
@@ -217,6 +232,12 @@ public struct AntigravityRootContainerView: View {
             }
             if activeVerifyCase == nil {
                 syncNavigationPath(from: newRoute)
+            }
+        }
+        .onChange(of: store.selectedTab) { _, newPrimaryTab in
+            let mapped = ShellTab(primaryTab: newPrimaryTab)
+            if selectedTab != mapped {
+                selectedTab = mapped
             }
         }
         .onChange(of: selectedTab) { _, newTab in
@@ -297,7 +318,7 @@ public struct AntigravityRootContainerView: View {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(AntigravityTheme.statusWaiting.opacity(0.4), lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.35), radius: 12, x: 0, y: 6)
+                .shadow(color: AntigravityTheme.glassShadow, radius: 12, x: 0, y: 6)
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
                 .accessibilityIdentifier("banner-compatibility-notice")
@@ -652,12 +673,7 @@ private final class InteractivePopGestureHandler: NSObject, UIGestureRecognizerD
                 previousView.removeGestureRecognizer(edgeSwipeFallbackRecognizer)
             }
             self.navigationController = navController
-            navController.view.backgroundColor = UIColor(
-                red: 0x09 / 255.0,
-                green: 0x0A / 255.0,
-                blue: 0x0D / 255.0,
-                alpha: 1.0
-            )
+            navController.view.backgroundColor = AntigravityTheme.canvasObsidianUIColor
         }
         if edgeSwipeFallbackRecognizer.view !== navController.view {
             navController.view.addGestureRecognizer(edgeSwipeFallbackRecognizer)

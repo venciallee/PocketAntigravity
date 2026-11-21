@@ -48,7 +48,6 @@ public struct SwarmBoardSheetView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .accessibilityIdentifier("sheet_swarm_board")
     }
 

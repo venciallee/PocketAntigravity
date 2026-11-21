@@ -37,7 +37,7 @@ public struct RemotePairingViewController: View {
                     Text("Settings")
                         .font(.system(size: 30, weight: .bold))
                         .tracking(-0.5)
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Text("Scan Antigravity Desktop's Remote Control QR code — works over Wi-Fi & 5G")
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
@@ -66,7 +66,7 @@ public struct RemotePairingViewController: View {
 
                                 Text(store.isSwitchingHost ? "Switching Host..." : "Connecting to Antigravity...")
                                     .font(.system(size: 16.5, weight: .semibold))
-                                    .foregroundStyle(Color.white)
+                                    .foregroundStyle(AntigravityTheme.textPrimary)
 
                                 Text(store.connectionStatusText)
                                     .font(.system(size: 12.5, weight: .regular))
@@ -94,7 +94,7 @@ public struct RemotePairingViewController: View {
                                             : (isOfflinePaired ? "Host Offline: \(store.activeHost.hostname)" : "Tap to Scan Remote Control QR"))
                                 )
                                 .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(Color.white)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                                 .multilineTextAlignment(.center)
 
                                 let visibleSessionCount = store.summaries.filter {
@@ -199,6 +199,9 @@ public struct RemotePairingViewController: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
+                // First-level Appearance selector (System / Dark / Light), always available even when unpaired/offline
+                appearanceModeCard
+
                 // Antigravity 2.0 (v2.33) Permissions, Customizations Hub & Appearance Card
                 Button {
                     store.presentedSheet = .customizationsSettings
@@ -212,8 +215,8 @@ public struct RemotePairingViewController: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Permissions, Customizations & Layout")
                                 .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(Color.white)
-                            Text("\(store.appearancePreferences.globalPermissionPreset.rawValue) · \(store.customizations.plugins.filter(\.isInstalled).count) plugins · \(store.appearancePreferences.interfaceLayout.rawValue)")
+                                .foregroundStyle(AntigravityTheme.textPrimary)
+                            Text("\(store.appearancePreferences.appearanceMode.displayLabel) · \(store.appearancePreferences.globalPermissionPreset.rawValue) · \(store.customizations.plugins.filter(\.isInstalled).count) plugins · \(store.appearancePreferences.interfaceLayout.rawValue)")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(AntigravityTheme.textSecondary)
                                 .lineLimit(1)
@@ -285,7 +288,7 @@ public struct RemotePairingViewController: View {
                                     ZStack(alignment: .topTrailing) {
                                         Image(systemName: "laptopcomputer")
                                             .font(.system(size: 16, weight: .regular))
-                                            .foregroundStyle(isInstOnline ? Color.white.opacity(0.94) : Color.white.opacity(0.45))
+                                            .foregroundStyle(isInstOnline ? AntigravityTheme.inkReading : AntigravityTheme.inkMuted)
                                             .frame(width: 24, height: 20)
                                         ZStack {
                                             Circle()
@@ -306,7 +309,7 @@ public struct RemotePairingViewController: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(inst.name)
                                             .font(.system(size: 14.5, weight: .semibold))
-                                            .foregroundStyle(isInstOnline ? Color.white : AntigravityTheme.textSecondary)
+                                            .foregroundStyle(isInstOnline ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
                                         let statusBadge = isInstOnline ? inst.status.badgeText : "Offline"
                                         let versionPart = inst.version.trimmingCharacters(in: .whitespacesAndNewlines)
                                         let subtitleLine = versionPart.isEmpty ? statusBadge : "\(statusBadge) · \(versionPart)"
@@ -423,6 +426,115 @@ public struct RemotePairingViewController: View {
         }
     }
 
+    private var appearanceModeCard: some View {
+        let currentMode = store.appearancePreferences.appearanceMode
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: currentMode.sfSymbolName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        AntigravityTheme.accentPeriwinkle.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Appearance")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                    Text("Follow iOS or lock Dark / Light mode")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textSecondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(currentMode.displayLabel)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(AntigravityTheme.surfaceSelectionTint)
+                    )
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(AntigravityTheme.accentPeriwinkle.opacity(0.28), lineWidth: 1)
+                    )
+            }
+
+            HStack(spacing: 6) {
+                ForEach(AppAppearanceMode.allCases) { mode in
+                    let isSelected = (currentMode == mode)
+                    Button {
+                        store.setAppearanceMode(mode)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: mode.sfSymbolName)
+                                .font(.system(size: 13.5, weight: .semibold))
+                            Text(mode.displayLabel)
+                                .font(.system(size: 13.5, weight: isSelected ? .semibold : .medium))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(
+                            isSelected
+                                ? AntigravityTheme.accentPeriwinkle
+                                : AntigravityTheme.inkSecondary
+                        )
+                        .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(isSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(
+                                    isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.55) : Color.clear,
+                                    lineWidth: 1.2
+                                )
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(appearanceModeAccessibilityId(for: mode))
+                    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+                    .accessibilityValue(isSelected ? "selected" : "unselected")
+                }
+            }
+            .padding(4)
+            .background(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(AntigravityTheme.surfaceSubtleBox)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
+            )
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AntigravityTheme.surfaceCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("card-appearance-mode")
+    }
+
+    private func appearanceModeAccessibilityId(for mode: AppAppearanceMode) -> String {
+        switch mode {
+        case .system: return "appearance-mode-system"
+        case .dark:   return "appearance-mode-dark"
+        case .light:  return "appearance-mode-light"
+        }
+    }
+
     private var appVersionLabel: String {
         let info = Bundle.main.infoDictionary
         let version = (info?["CFBundleShortVersionString"] as? String) ?? "2.0.0"
@@ -444,14 +556,14 @@ public struct RemotePairingViewController: View {
                         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                         )
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Text("AG Orbit")
                                 .font(.system(size: 15.5, weight: .semibold))
-                                .foregroundStyle(Color.white)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                             Text(appVersionLabel)
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)

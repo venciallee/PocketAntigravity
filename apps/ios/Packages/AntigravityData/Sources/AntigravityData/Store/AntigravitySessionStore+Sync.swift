@@ -970,7 +970,7 @@ extension AntigravitySessionStore {
         return (currentStatus, false)
     }
 
-    /// Synchronizes `GetCascadeTrajectorySteps` (`stepOffset` JSON `<600`, Binary Protobuf `>=600`) for `cascadeId`.
+    /// Synchronizes `GetCascadeTrajectorySteps` (local-default Binary Protobuf + targeted JSON repair + runtime JSON ceiling learning) for `cascadeId`.
     /// Polls adaptively ONLY while an agent turn is actively streaming (`500ms` LAN / `1.0s` Relay; slowed in Low Power Mode).
     /// When the conversation is idle and the push stream is healthy, stops polling completely (0 idle RPCs) and relies
     /// on `JetboxSubscribeToSummaries` to wake step sync on demand.

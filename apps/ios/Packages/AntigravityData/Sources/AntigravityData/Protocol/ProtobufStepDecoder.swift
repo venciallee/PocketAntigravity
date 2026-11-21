@@ -2,10 +2,11 @@ import Foundation
 
 /// Encodes and decodes binary Protobuf payloads for `GetCascadeTrajectorySteps`.
 ///
-/// Why binary Protobuf is required:
-/// The JSON Connect-RPC endpoint caps `GetCascadeTrajectorySteps` at 600 steps.
-/// Sending `Content-Type: application/proto` bypasses the 600-step ceiling and reduces
-/// payload size by ~65% over mobile connections.
+/// Why binary Protobuf is supported alongside JSON:
+/// Upstream `language_server` enforces an unadvertised server-side ceiling on JSON
+/// `GetCascadeTrajectorySteps` responses (which varies by version/payload size).
+/// Sending `Content-Type: application/proto` bypasses JSON truncation dynamically and
+/// reduces payload size by ~65% over mobile connections.
 public enum ProtobufStepCodec {
 
     /// Encodes a `GetCascadeTrajectoryStepsRequest` (`cascade_id=1`, `step_offset=2`).

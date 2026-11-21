@@ -161,11 +161,11 @@
 
   <rect x="618" y="566" width="250" height="122" rx="10" fill="#1B1730" stroke="#9A8DF4" stroke-width="1.2"/>
   <g><circle cx="640.0" cy="590.0" r="10.5" fill="#A99DF7"/><text x="640.0" y="594.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" fill="#100C24">3</text></g>
-  <text x="658" y="594" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#E4DFFF">Dual-Mode Step Decoder</text>
+  <text x="658" y="594" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#E4DFFF">Adaptive Protobuf Decoder</text>
   <line x1="632" y1="608" x2="854" y2="608" stroke="#9A8DF4" stroke-opacity="0.3" stroke-width="1"/>
-  <text x="632" y="628" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="10.2" fill="#F0F3F8">&lt; 600 steps → Fast JSON payload</text>
-  <text x="632" y="650" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#B4BDCC">≥ 600 steps → Binary Protobuf</text>
-  <text x="632" y="670" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#B4BDCC">21 step types + field 56 oneofs</text>
+  <text x="632" y="628" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="10.2" fill="#F0F3F8">Binary Protobuf default (-65%)</text>
+  <text x="632" y="650" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#B4BDCC">Targeted JSON for unknown fields</text>
+  <text x="632" y="670" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#B4BDCC">Auto-learns JSON cap (0 hardcode)</text>
 
   <line x1="872" y1="627.0" x2="900" y2="627.0" stroke="#8F9BB0" stroke-width="1.8" marker-end="url(#arrNeutral)"/>
 

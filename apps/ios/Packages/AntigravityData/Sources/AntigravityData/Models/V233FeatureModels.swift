@@ -996,8 +996,35 @@ public enum AppThemePreset: String, ResilientStringEnum, CaseIterable, Identifia
     public static var unknownFallback: AppThemePreset { .obsidian }
 }
 
+/// User-facing color appearance preference (`System` follows iOS Dark/Light setting).
+public enum AppAppearanceMode: String, ResilientStringEnum, CaseIterable, Identifiable {
+    case system = "System"
+    case dark = "Dark"
+    case light = "Light"
+
+    public var id: String { rawValue }
+    public static var unknownFallback: AppAppearanceMode { .system }
+
+    public var displayLabel: String {
+        switch self {
+        case .system: return "System"
+        case .dark: return "Dark"
+        case .light: return "Light"
+        }
+    }
+
+    public var sfSymbolName: String {
+        switch self {
+        case .system: return "circle.lefthalf.filled"
+        case .dark: return "moon.fill"
+        case .light: return "sun.max.fill"
+        }
+    }
+}
+
 public struct AppAppearancePreferences: Codable, Sendable, Equatable {
     public var interfaceLayout: InterfaceLayoutMode
+    public var appearanceMode: AppAppearanceMode
     public var theme: AppThemePreset
     public var fontSizePt: Int
     public var collapsedProjectIds: Set<String>
@@ -1008,6 +1035,7 @@ public struct AppAppearancePreferences: Codable, Sendable, Equatable {
 
     public init(
         interfaceLayout: InterfaceLayoutMode = .softwareEngineering,
+        appearanceMode: AppAppearanceMode = .system,
         theme: AppThemePreset = .obsidian,
         fontSizePt: Int = 14,
         collapsedProjectIds: Set<String> = [],
@@ -1017,6 +1045,7 @@ public struct AppAppearancePreferences: Codable, Sendable, Equatable {
         terminalSandboxEnabled: Bool = true
     ) {
         self.interfaceLayout = interfaceLayout
+        self.appearanceMode = appearanceMode
         self.theme = theme
         self.fontSizePt = [12, 14, 16].contains(fontSizePt) ? fontSizePt : 14
         self.collapsedProjectIds = collapsedProjectIds
@@ -1024,6 +1053,49 @@ public struct AppAppearancePreferences: Codable, Sendable, Equatable {
         self.suppressManualStopNotification = suppressManualStopNotification
         self.globalPermissionPreset = globalPermissionPreset
         self.terminalSandboxEnabled = terminalSandboxEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case interfaceLayout
+        case appearanceMode
+        case theme
+        case fontSizePt
+        case collapsedProjectIds
+        case notificationsEnabled
+        case suppressManualStopNotification
+        case globalPermissionPreset
+        case terminalSandboxEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedLayout = try container.decodeIfPresent(InterfaceLayoutMode.self, forKey: .interfaceLayout) ?? .softwareEngineering
+        let decodedTheme = try container.decodeIfPresent(AppThemePreset.self, forKey: .theme) ?? .obsidian
+        let decodedAppearanceMode: AppAppearanceMode
+        if let explicitMode = try container.decodeIfPresent(AppAppearanceMode.self, forKey: .appearanceMode) {
+            decodedAppearanceMode = explicitMode
+        } else {
+            // Migrate legacy `appearance_prefs.json` snapshots without `appearanceMode`.
+            decodedAppearanceMode = (decodedTheme == .everforestLight) ? .light : .system
+        }
+        let rawFontSize = try container.decodeIfPresent(Int.self, forKey: .fontSizePt) ?? 14
+        let decodedCollapsed = try container.decodeIfPresent(Set<String>.self, forKey: .collapsedProjectIds) ?? []
+        let decodedNotifications = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
+        let decodedSuppressStop = try container.decodeIfPresent(Bool.self, forKey: .suppressManualStopNotification) ?? true
+        let decodedPermission = try container.decodeIfPresent(AgentPermissionPreset.self, forKey: .globalPermissionPreset) ?? .defaultSandbox
+        let decodedSandbox = try container.decodeIfPresent(Bool.self, forKey: .terminalSandboxEnabled) ?? true
+
+        self.init(
+            interfaceLayout: decodedLayout,
+            appearanceMode: decodedAppearanceMode,
+            theme: decodedTheme,
+            fontSizePt: rawFontSize,
+            collapsedProjectIds: decodedCollapsed,
+            notificationsEnabled: decodedNotifications,
+            suppressManualStopNotification: decodedSuppressStop,
+            globalPermissionPreset: decodedPermission,
+            terminalSandboxEnabled: decodedSandbox
+        )
     }
 }
 

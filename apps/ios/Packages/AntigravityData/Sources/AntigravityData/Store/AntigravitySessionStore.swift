@@ -142,6 +142,8 @@ public final class AntigravitySessionStore {
 
     internal static let localPermissionDefaultsKey = "antigravity.ios.permissionPreset.local"
     internal static let remotePermissionDefaultsKey = "antigravity.ios.permissionPreset.remote"
+    public static let appearanceModeDefaultsKey = "antigravity.ios.appearanceMode"
+    internal var hasModifiedAppearanceModeInSession: Bool = false
 
     /// `true` when the active conversation or selected project targets Antigravity Cloud / Remote Agents.
     public var isActiveSessionCloud: Bool {
@@ -628,6 +630,10 @@ public final class AntigravitySessionStore {
         if let rawRemote = store.preferencesStore.string(forKey: Self.remotePermissionDefaultsKey),
            let savedRemote = AgentPermissionPreset(rawValue: rawRemote) {
             store.remotePermissionPreset = savedRemote
+        }
+        if let rawAppearance = store.preferencesStore.string(forKey: Self.appearanceModeDefaultsKey),
+           let savedAppearance = AppAppearanceMode(rawValue: rawAppearance) {
+            store.appearancePreferences.appearanceMode = savedAppearance
         }
         return store
     }
