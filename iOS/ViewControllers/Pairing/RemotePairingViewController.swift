@@ -58,13 +58,13 @@ public struct RemotePairingViewController: View {
                     )
                     .overlay(
                         VStack(spacing: 12) {
-                            if store.isConnectingToBackend {
+                            if store.isConnectingToBackend || store.isSwitchingHost {
                                 ProgressView()
                                     .controlSize(.large)
                                     .tint(AntigravityTheme.accentPeriwinkle)
                                     .padding(.bottom, 4)
 
-                                Text("Connecting to Antigravity...")
+                                Text(store.isSwitchingHost ? "Switching Host..." : "Connecting to Antigravity...")
                                     .font(.system(size: 16.5, weight: .semibold))
                                     .foregroundStyle(Color.white)
 
@@ -97,9 +97,12 @@ public struct RemotePairingViewController: View {
                                 .foregroundStyle(Color.white)
                                 .multilineTextAlignment(.center)
 
+                                let visibleSessionCount = store.summaries.filter {
+                                    store.summaryMatchesHostScope($0)
+                                }.count
                                 Text(
                                     isOnlineConnected
-                                        ? "\(store.activeHost.channel.displayName) · \(store.lastPingLatencyMs ?? store.activeHost.latencyMs)ms · \(store.summaries.count) sessions"
+                                        ? "\(store.activeHost.channel.displayName) · \(store.lastPingLatencyMs ?? store.activeHost.latencyMs)ms · \(visibleSessionCount) sessions"
                                         : (isNoInternet
                                             ? "Paused while iPhone is offline · Auto-resumes when network returns"
                                             : (isOfflinePaired
@@ -176,7 +179,7 @@ public struct RemotePairingViewController: View {
                     )
                     .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .onTapGesture {
-                        if !store.isConnectingToBackend && !isOnlineConnected && !isOfflinePaired {
+                        if !store.isConnectingToBackend && !store.isSwitchingHost && !isOnlineConnected && !isOfflinePaired {
                             isShowingQRScanner = true
                         }
                     }
@@ -240,17 +243,9 @@ public struct RemotePairingViewController: View {
                             let isInstOnline = store.isDeviceNetworkReachable && inst.status.isReachable
                             Button {
                                 Task {
-                                    if let cached = await store.loadSavedSessionCookie() {
-                                        let ok = await store.connectCloudRelay(
-                                            relayURLString: "https://antigravity.google.com/r/\(inst.uuid)",
-                                            sessionCookie: cached.cookie,
-                                            authUser: store.activeAuthUser,
-                                            resolvedInstanceUuid: inst.uuid,
-                                            hostName: inst.name
-                                        )
-                                        if ok {
-                                            onConnected?()
-                                        }
+                                    let connected = await store.switchToRelayInstance(inst)
+                                    if connected || (store.hasPairedBackend && store.activeHost.instanceId == inst.uuid) {
+                                        onConnected?()
                                     }
                                 }
                             } label: {
