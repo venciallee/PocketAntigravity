@@ -3881,11 +3881,17 @@ public final class AntigravitySessionStore {
         let isKnownOfflineLocal = hasPairedBackend
             && !summaryHostOnline
             && (initialSummary?.isCloud != true)
+        let isConfirmedOfflinePeerHost = isKnownOfflineLocal && isLiveBackendConnected
         let storeRef = projectionStore
 
-        // Offline device / no network / pre-handshake cold start: serve persisted steps immediately from disk
-        // without issuing cross-host failover RPCs against another online Mac.
-        guard isDeviceNetworkReachable, !isKnownOfflineLocal, let client = rpcClient else {
+        if isBrandNewEmptySession && isKnownOfflineLocal {
+            isLoadingSteps = false
+            return
+        }
+
+        // Confirmed-offline peer Mac (while another Mac is online), iPhone no-network, or pre-handshake cold start:
+        // serve persisted steps immediately from disk without issuing cross-host failover RPCs against another online Mac.
+        guard isDeviceNetworkReachable, !isConfirmedOfflinePeerHost, let client = rpcClient else {
             isLoadingSteps = false
             let offlineHostLabel = initialSummary?.originHostName ?? activeHost.hostname
             let shouldNoteUncachedOffline = isKnownOfflineLocal && !isBrandNewEmptySession
@@ -3947,7 +3953,11 @@ public final class AntigravitySessionStore {
                 guard let self, !self.isNetworkingSuspended, self.isDeviceNetworkReachable else { break }
                 attempts += 1
                 let summaryMeta = self.summaries.first(where: { $0.cascadeId == cascadeId })
-                if let summaryMeta, !summaryMeta.isCloud, self.hasPairedBackend, !self.isSummaryHostOnline(summaryMeta) {
+                if let summaryMeta,
+                   !summaryMeta.isCloud,
+                   self.hasPairedBackend,
+                   self.isLiveBackendConnected,
+                   !self.isSummaryHostOnline(summaryMeta) {
                     break
                 }
                 let knownCount = summaryMeta?.stepCount ?? 0
