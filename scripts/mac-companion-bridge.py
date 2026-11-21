@@ -985,9 +985,9 @@ class CompanionState:
                 "displayName": slug,
                 "activeBranch": "main",
                 "indexedFiles": [
-                    "iOS/Application/AntigravityApp.swift",
-                    "Packages/AntigravityData/Sources/AntigravityData/Protocol/AntigravityRPCClient.swift",
-                    "Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore.swift",
+                    "apps/ios/App/Application/AntigravityApp.swift",
+                    "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Protocol/AntigravityRPCClient.swift",
+                    "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore.swift",
                 ],
             }
         ]
@@ -1054,7 +1054,7 @@ class CompanionState:
             if idx == count - 1:
                 step_buf += encode_varint_field(1, 21)  # RUN_COMMAND
                 step_buf += encode_varint_field(4, 9)   # WAITING
-                cmd_spec = encode_ld(1, b"swift test --package-path Packages/AntigravityData")
+                cmd_spec = encode_ld(1, b"swift test --package-path apps/ios/Packages/AntigravityData")
                 step_buf += encode_ld(56, encode_ld(23, cmd_spec))
             else:
                 step_buf += encode_varint_field(1, 15)  # PLANNER_RESPONSE

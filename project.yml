@@ -16,19 +16,19 @@ settings:
 
 packages:
   AntigravityData:
-    path: Packages/AntigravityData
+    path: apps/ios/Packages/AntigravityData
 
 targets:
   Antigravity:
     type: application
     platform: iOS
     sources:
-      - path: iOS
+      - path: apps/ios/App
         excludes:
           - "**/Info.plist"
-      - path: Shared/DesignSystem
-      - path: Shared/LiveActivity
-      - path: Extensions/LiveActivity
+      - path: apps/ios/SharedUI/DesignSystem
+      - path: apps/ios/SharedUI/LiveActivity
+      - path: apps/ios/Extensions/LiveActivity
         excludes:
           - "**/*Bundle*"
           - "**/Info.plist"
@@ -41,7 +41,7 @@ targets:
       - target: AntigravityShare
         embed: true
     info:
-      path: iOS/Support/Info.plist
+      path: apps/ios/App/Support/Info.plist
       properties:
         CFBundleDisplayName: "AG Orbit"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
@@ -80,15 +80,15 @@ targets:
     type: app-extension
     platform: iOS
     sources:
-      - path: Extensions/LiveActivity
+      - path: apps/ios/Extensions/LiveActivity
         excludes:
           - "**/Info.plist"
-      - path: Shared/LiveActivity
-      - path: Shared/DesignSystem
+      - path: apps/ios/SharedUI/LiveActivity
+      - path: apps/ios/SharedUI/DesignSystem
     dependencies:
       - package: AntigravityData
     info:
-      path: Extensions/LiveActivity/Info.plist
+      path: apps/ios/Extensions/LiveActivity/Info.plist
       properties:
         CFBundleDisplayName: "AG Orbit Live Activity"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
@@ -109,14 +109,14 @@ targets:
     type: app-extension
     platform: iOS
     sources:
-      - path: Extensions/Share
+      - path: apps/ios/Extensions/Share
         excludes:
           - "**/Info.plist"
-      - path: Shared/DesignSystem
+      - path: apps/ios/SharedUI/DesignSystem
     dependencies:
       - package: AntigravityData
     info:
-      path: Extensions/Share/Info.plist
+      path: apps/ios/Extensions/Share/Info.plist
       properties:
         CFBundleDisplayName: "Send to AG Orbit"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
@@ -145,7 +145,7 @@ targets:
     type: bundle.ui-testing
     platform: iOS
     sources:
-      - path: iOSUITests
+      - path: tests/ios-ui
     dependencies:
       - target: Antigravity
     settings:

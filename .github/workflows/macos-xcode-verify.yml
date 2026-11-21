@@ -20,6 +20,10 @@ on:
           - release
           - auto
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   plan-and-fast-gates:
     name: Impact Analysis + Fast Gates (DocSync, Compat Guardrails, Live RPC, ESDD)
@@ -63,6 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m py_compile \
+            scripts/verify.py \
             scripts/sync-antigravity-docs.py \
             scripts/run-doc-sync-agent.py \
             scripts/prepare-cr-context.py \
@@ -76,6 +81,7 @@ jobs:
             verification/ios-simulator-runner.py \
             verification/esdd_inspector.py \
             verification/esdd-verify.py
+          python3 scripts/verify.py --self-test
           python3 scripts/sync-antigravity-docs.py --self-test
           python3 verification/verify_compat_guardrails.py
           python3 scripts/prepare-cr-context.py --validate-config --self-test
@@ -116,7 +122,7 @@ jobs:
     needs: plan-and-fast-gates
     if: needs.plan-and-fast-gates.outputs.needs_macos == 'true'
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
@@ -142,7 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p verification/output/real-simulator
-          swift test --package-path Packages/AntigravityData 2>&1 | tee verification/output/real-simulator/swift-test.log
+          swift test --package-path apps/ios/Packages/AntigravityData 2>&1 | tee verification/output/real-simulator/swift-test.log
 
       - name: Restore Cached KMP AntigravityShared.xcframework (skipped on release)
         id: kmp-xcf-cache
