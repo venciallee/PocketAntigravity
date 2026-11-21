@@ -3,7 +3,7 @@
 
 Pure Python 3.11+ standard-library implementation designed for pure-cloud GitHub Actions:
 1. Subscribes to official multi-source Google Antigravity 2.0 endpoints:
-   - https://antigravity.google/changelog
+   - https://antigravity.google/docs/changelog
    - 16 core https://antigravity.google/docs/* feature guides
    - https://raw.githubusercontent.com/google-antigravity/antigravity-cli/main/CHANGELOG.md
    - https://github.com/google-antigravity/antigravity-cli/releases.atom
@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_DIR = REPO_ROOT / "docs" / "upstream-snapshots"
@@ -41,7 +42,7 @@ MANIFEST_PATH = SNAPSHOT_DIR / "manifest.json"
 
 OFFICIAL_SOURCES: dict[str, dict[str, str]] = {
     "changelog": {
-        "url": "https://antigravity.google/changelog",
+        "url": "https://antigravity.google/docs/changelog",
         "kind": "html",
         "snapshot": "changelog.md",
     },
@@ -83,8 +84,13 @@ CORE_DOC_SLUGS: list[str] = [
 
 DESKTOP_ONLY_NOISE_PATTERNS = (
     r"\bwindows\s*(?:10|11|installer|defender|credential|powershell|git\.exe)\b",
+    r"\b(?:on|for)\s+windows\b",
+    r"\bon\s+linux\b",
     r"\bantivirus\b",
     r"\bmacos\s+installer\b",
+    r"\bdock\s+icon\b",
+    r"\bwindow\s+title\s+bar\b",
+    r"\bwindow\s+minimize,\s*maximize\b",
     r"\belectron\b",
     r"\bchrome\s+tab\s+groups?\s+on\s+linux\b",
     r"\bctrl\+d\s+on\s+windows\b",
@@ -138,7 +144,6 @@ TIER1_KEYWORDS = (
     "thinking level",
     "xhigh",
     "slash command",
-    "/",
     "theme",
     "font size",
     "markdown",
@@ -170,7 +175,7 @@ def format_semver(tup: tuple[int, int, int]) -> str:
 class _MainContentHTMLStripper(HTMLParser):
     """Extracts clean readable Markdown-like text from HTML while dropping nav/script/style chrome."""
 
-    SKIP_TAGS = {"script", "style", "noscript", "nav", "header", "footer", "svg", "template"}
+    SKIP_TAGS = {"head", "title", "script", "style", "noscript", "nav", "header", "footer", "aside", "button", "svg", "template"}
     BLOCK_TAGS = {"h1", "h2", "h3", "h4", "p", "li", "tr", "section", "article", "div", "pre", "blockquote"}
 
     def __init__(self) -> None:
@@ -185,6 +190,8 @@ class _MainContentHTMLStripper(HTMLParser):
         t = tag.lower()
         self._tag_stack.append(t)
         if t == "main" or t == "article":
+            if not self._seen_main:
+                self._chunks.clear()
             self._in_main = True
             self._seen_main = True
         if t in self.SKIP_TAGS:
@@ -266,10 +273,12 @@ def normalize_atom_to_markdown(raw_xml: str) -> str:
 
 
 def extract_app_versions(text: str) -> list[tuple[int, int, int]]:
-    """Extracts Antigravity App v2.x.y versions (filtering out v1.x CLI/Extension tags)."""
+    """Extracts Antigravity App versions >= v2.0.0 (e.g. v2.33.0, v3.0.0+, filtering out v0.x/v1.x CLI tags)."""
     found: set[tuple[int, int, int]] = set()
-    for m in re.finditer(r"\bv(2\.\d+\.\d+)\b", text):
-        found.add(parse_semver(m.group(1)))
+    for m in re.finditer(r"\bv(\d+\.\d+\.\d+)\b", text):
+        ver = parse_semver(m.group(1))
+        if ver[0] >= 2:
+            found.add(ver)
     return sorted(found, reverse=True)
 
 
@@ -330,7 +339,22 @@ class SyncReport:
     errors: list[str] = field(default_factory=list)
 
 
-def fetch_url(url: str, timeout: float = 20.0) -> str:
+def _extract_meta_refresh_url(raw_html: str) -> str | None:
+    """Extracts the target URL from an HTML `<meta http-equiv="refresh" content="...;url=...">` tag."""
+    for tag_m in re.finditer(r"<meta\b[^>]*>", raw_html, flags=re.IGNORECASE):
+        tag = tag_m.group(0)
+        if not re.search(r'http-equiv\s*=\s*["\']?refresh["\']?', tag, flags=re.IGNORECASE):
+            continue
+        content_m = re.search(r'content\s*=\s*(["\'])(.*?)\1', tag, flags=re.IGNORECASE)
+        if not content_m:
+            continue
+        url_m = re.search(r"url\s*=\s*([^;\s\"']+)", content_m.group(2), flags=re.IGNORECASE)
+        if url_m:
+            return html.unescape(url_m.group(1).strip())
+    return None
+
+
+def fetch_url(url: str, timeout: float = 20.0, _max_meta_redirects: int = 2) -> str:
     req = urllib.request.Request(
         url,
         headers={
@@ -340,8 +364,16 @@ def fetch_url(url: str, timeout: float = 20.0) -> str:
         },
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read()
-        return raw.decode("utf-8", errors="replace")
+        final_url = resp.geturl() or url
+        raw = resp.read().decode("utf-8", errors="replace")
+
+    if _max_meta_redirects > 0:
+        meta_target = _extract_meta_refresh_url(raw)
+        if meta_target:
+            resolved = urljoin(final_url, meta_target)
+            if resolved != final_url:
+                return fetch_url(resolved, timeout=timeout, _max_meta_redirects=_max_meta_redirects - 1)
+    return raw
 
 
 def compute_semantic_delta(
@@ -361,6 +393,20 @@ def compute_semantic_delta(
             continue
         cleaned = line[1:].strip().lstrip("-*• ").strip()
         if len(cleaned) < 16 or cleaned in seen:
+            continue
+        low_c = cleaned.lower()
+        if (
+            cleaned.startswith("<!--")
+            or cleaned.endswith("-->")
+            or cleaned.startswith("#")
+            or cleaned.startswith("<a ")
+            or cleaned.startswith("http://")
+            or cleaned.startswith("https://")
+            or "redirecting to:" in low_c
+            or "redirecting from" in low_c
+            or low_c.startswith("section titled ")
+            or set(cleaned) <= set("-_=*` ")
+        ):
             continue
         seen.add(cleaned)
         tier, rationale = classify_delta_line(cleaned)
@@ -614,6 +660,50 @@ def run_self_test() -> None:
         assert updated_manifest["latestAppVersion"] == "v2.34.0"
         assert (out_dir / "delta-report.json").exists() and (out_dir / "delta-summary.md").exists()
         print("  [PASS] 2. Detected v2.33.0 -> v2.34.0 delta, filtered Windows noise, classified Tier 1/2/3 & persisted snapshots")
+
+        # 3. Major version upgrade (Google Antigravity 3.0: v2.34.0 -> v3.0.0) + meta-refresh + noise filtering
+        meta_html = '<html><head><meta http-equiv="refresh" content="0;url=/docs/changelog"></head><body>Redirecting to: /docs/changelog</body></html>'
+        assert _extract_meta_refresh_url(meta_html) == "/docs/changelog", "Expected meta-refresh URL extraction"
+
+        def v3_fetcher(url: str) -> str:
+            if "changelog" in url and "github" not in url:
+                return (
+                    "<main><h1>Changelog</h1>"
+                    "<h2>v3.0.0 — Google Antigravity 3.0</h2>"
+                    "<ul>"
+                    "<li>Introduced Gemini 5 Aurora model with Adaptive Thinking budget controls.</li>"
+                    "<li>Added multi-cluster Remote Agent orchestration RPC and signed session handoff.</li>"
+                    "</ul></main>"
+                )
+            if "CHANGELOG.md" in url:
+                return (
+                    "# CLI Changelog\n"
+                    "<!-- Release notes below -->\n"
+                    "## v1.5.12\n"
+                    "- Added /usage quota breakdown.\n"
+                    "- Redirecting to: /docs/changelog\n"
+                )
+            if "releases.atom" in url:
+                return "<feed><entry><title>v1.5.12</title><updated>2026-11-25T00:00:00Z</updated></entry></feed>"
+            return "<main><p>Unchanged</p></main>"
+
+        v3_report = run_sync(
+            snapshot_dir=snap_dir,
+            output_dir=out_dir,
+            apply_snapshots=True,
+            include_core_docs=False,
+            fetch_fn=v3_fetcher,
+        )
+        assert v3_report.stale_cdn_detected is False
+        assert v3_report.has_meaningful_delta is True
+        assert v3_report.previous_app_version == "v2.34.0"
+        assert v3_report.detected_app_version == "v3.0.0", f"Expected v3.0.0, got {v3_report.detected_app_version}"
+        assert not any("<!--" in it.summary or "redirecting to:" in it.summary.lower() for it in v3_report.items), (
+            "HTML comments & redirect stubs must be filtered from delta items"
+        )
+        v3_manifest = json.loads((snap_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert v3_manifest["latestAppVersion"] == "v3.0.0"
+        print("  [PASS] 3. Detected major upgrade v2.34.0 -> v3.0.0 (Antigravity 3.0), meta-refresh parsing & noise filtering")
 
     print("ALL DOC-SYNC SELF-TESTS PASSED.")
 

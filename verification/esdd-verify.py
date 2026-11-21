@@ -20,6 +20,7 @@ import json
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -145,71 +146,112 @@ class CDPPageDriver:
         self.ws = None
         self._msg_id = 0
         self._rx_buf = ""
+        self._user_data_dir = None
+        self._stderr_handle = None
 
-    def __enter__(self):
-        self.proc = subprocess.Popen(
-            [
-                self.chromium_bin,
-                "--headless",
-                "--no-sandbox",
-                "--disable-gpu",
-                "--hide-scrollbars",
-                "--disable-dev-shm-usage",
-                f"--remote-debugging-port={self.debug_port}",
-                "about:blank",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        ws_url = None
-        for _ in range(60):
-            try:
-                targets = json.loads(
-                    urllib.request.urlopen(
-                        f"http://127.0.0.1:{self.debug_port}/json/list", timeout=1
-                    ).read()
-                )
-                for t in targets:
-                    if t.get("type") == "page" and t.get("webSocketDebuggerUrl"):
-                        ws_url = t["webSocketDebuggerUrl"]
-                        break
-                if ws_url:
-                    break
-            except Exception:
-                time.sleep(0.1)
-        if not ws_url:
-            raise RuntimeError("Failed to connect to Headless Chromium CDP page target")
-
-        parsed = urlparse(ws_url)
-        self.sock = socket.create_connection((parsed.hostname, parsed.port), timeout=15)
-        self.ws = WSConnection(ConnectionType.CLIENT)
-        target_path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
-        self.sock.sendall(self.ws.send(Request(host=f"{parsed.hostname}:{parsed.port}", target=target_path)))
-
-        accepted = False
-        while not accepted:
-            chunk = self.sock.recv(65536)
-            self.ws.receive_data(chunk)
-            for ev in self.ws.events():
-                if isinstance(ev, AcceptConnection):
-                    accepted = True
-
-        self.send("Page.enable")
-        self.send("Runtime.enable")
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def _cleanup(self):
         if self.sock:
             try:
                 self.sock.close()
             except Exception:
                 pass
+            self.sock = None
         if self.proc:
-            self.proc.terminate()
             try:
+                self.proc.terminate()
                 self.proc.wait(timeout=5)
             except Exception:
-                self.proc.kill()
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+            self.proc = None
+        if self._stderr_handle:
+            try:
+                self._stderr_handle.close()
+            except Exception:
+                pass
+            self._stderr_handle = None
+        if self._user_data_dir:
+            shutil.rmtree(self._user_data_dir, ignore_errors=True)
+            self._user_data_dir = None
+
+    def __enter__(self):
+        self._user_data_dir = tempfile.mkdtemp(prefix="ag-esdd-chrome-")
+        stderr_path = Path(self._user_data_dir) / "chrome-stderr.log"
+        try:
+            self._stderr_handle = open(stderr_path, "wb")
+            self.proc = subprocess.Popen(
+                [
+                    self.chromium_bin,
+                    "--headless=new",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--hide-scrollbars",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--remote-allow-origins=*",
+                    f"--user-data-dir={self._user_data_dir}",
+                    f"--remote-debugging-port={self.debug_port}",
+                    "about:blank",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=self._stderr_handle,
+            )
+            local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            ws_url = None
+            for _ in range(100):
+                if self.proc.poll() is not None:
+                    break
+                try:
+                    with local_opener.open(
+                        f"http://127.0.0.1:{self.debug_port}/json/list", timeout=1
+                    ) as resp:
+                        targets = json.loads(resp.read())
+                    for t in targets:
+                        if t.get("type") == "page" and t.get("webSocketDebuggerUrl"):
+                            ws_url = t["webSocketDebuggerUrl"]
+                            break
+                    if ws_url:
+                        break
+                except Exception:
+                    time.sleep(0.1)
+            if not ws_url:
+                stderr_tail = ""
+                try:
+                    if self._stderr_handle:
+                        self._stderr_handle.flush()
+                    stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-600:]
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"Failed to connect to Headless Chromium CDP page target (bin={self.chromium_bin}, rc={self.proc.poll()}): {stderr_tail}"
+                )
+
+            parsed = urlparse(ws_url)
+            self.sock = socket.create_connection((parsed.hostname, parsed.port), timeout=15)
+            self.ws = WSConnection(ConnectionType.CLIENT)
+            target_path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+            self.sock.sendall(self.ws.send(Request(host=f"{parsed.hostname}:{parsed.port}", target=target_path)))
+
+            accepted = False
+            while not accepted:
+                chunk = self.sock.recv(65536)
+                self.ws.receive_data(chunk)
+                for ev in self.ws.events():
+                    if isinstance(ev, AcceptConnection):
+                        accepted = True
+
+            self.send("Page.enable")
+            self.send("Runtime.enable")
+            return self
+        except Exception:
+            self._cleanup()
+            raise
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._cleanup()
 
     def send(self, method: str, params: dict = None) -> dict:
         self._msg_id += 1
