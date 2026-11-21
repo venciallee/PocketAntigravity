@@ -111,10 +111,13 @@ Contributions of all kinds are welcome — from Android Jetpack Compose screens 
 Use the single stateless [`scripts/verify.py`](scripts/verify.py) CLI from any directory — it auto-detects available toolchains on Linux/macOS, suppresses noisy HTTP logs, keeps `git status` clean, and supports machine-readable `--json` output:
 
 ```bash
-# Fast default gates: Spec-DAG + live mock Connect-RPC + v2.33 + 3-version compat matrix (~6s)
+# Fast default gates: Spec-DAG + live mock Connect-RPC + v2.33 + 3-version compat matrix (~7s)
 ./scripts/verify.py
 
-# Full available suite: adds Chromium ESDD 16-TC/@3x audit, KMP JVM tests & Swift 6 XCTest (when installed)
+# Impact-scoped mode: fast gates + change-scoped ESDD (`e2e_impact_planner`)
+./scripts/verify.py --auto
+
+# Full available suite: adds full Chromium ESDD 16-TC/@3x audit, KMP JVM tests & Swift 6 XCTest
 ./scripts/verify.py --full
 
 # Machine-readable JSON report (ideal for coding agents & CI tooling)

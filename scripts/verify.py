@@ -10,8 +10,9 @@ Single stateless entrypoint that replaces juggling 5+ disparate scripts and `cd`
     artifacts after `esdd` (unless `--keep-artifacts` is passed).
 
 Examples:
-  ./scripts/verify.py                     # Fast default gates: spec + rpc + v233 + compat (~6s)
-  ./scripts/verify.py --full              # All available gates: fast + esdd + kmp + swift
+  ./scripts/verify.py                     # Fast default gates: spec + rpc + v233 + compat (~7s)
+  ./scripts/verify.py --auto              # Impact-scoped ESDD + fast gates (skips unaffected browser TCs)
+  ./scripts/verify.py --full              # All available gates: fast + full esdd + kmp + swift
   ./scripts/verify.py --json              # Machine-readable JSON report for agents
   ./scripts/verify.py --suite rpc,compat  # Run specific suite(s) only
   ./scripts/verify.py --suite swift       # Run Swift 6 XCTest (stateless `--package-path`)
@@ -39,6 +40,7 @@ VERIFICATION_DIR = REPO_ROOT / "verification"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 FAST_SUITES = ["spec", "rpc", "v233", "compat"]
+AUTO_SUITES = ["spec", "rpc", "v233", "compat", "esdd"]
 FULL_SUITES = ["spec", "rpc", "v233", "compat", "esdd", "kmp", "swift"]
 ALL_SUITES = ["spec", "rpc", "v233", "compat", "esdd", "kmp", "swift", "bridge", "sim"]
 
@@ -60,6 +62,7 @@ PY_COMPILE_FILES = [
     "verification/verify-v233-capabilities.py",
     "verification/verify_compat_guardrails.py",
     "verification/verify-compat-matrix.py",
+    "verification/e2e_impact_planner.py",
     "verification/esdd_inspector.py",
 ]
 
@@ -289,8 +292,22 @@ def run_spec_gate(args: argparse.Namespace) -> GateResult:
             tail_log=[str(e) for e in errors[-args.tail_lines :]],
         )
 
+    planner_path = VERIFICATION_DIR / "e2e_impact_planner.py"
+    if planner_path.exists():
+        rc, planner_out = run_subprocess([sys.executable, str(planner_path), "--self-test"])
+        if rc != 0:
+            return GateResult(
+                name="spec",
+                status="failed",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                command="python3 verification/e2e_impact_planner.py --self-test",
+                summary="e2e_impact_planner --self-test failed",
+                tail_log=filter_noise_lines(planner_out)[-args.tail_lines :],
+            )
+
+    duration_ms = int((time.monotonic() - t0) * 1000)
     summary = (
-        f"py_compile ({len(py_files)} files) + "
+        f"py_compile ({len(py_files)} files) + impact-planner + "
         f"{payload.get('stateCount', 0)} states, "
         f"{payload.get('claimCount', 0)} claims, "
         f"{payload.get('selectorCount', 0)} selectors, "
@@ -408,13 +425,15 @@ def run_suite(
 
     if suite == "esdd":
         pre_dirty = git_status_verification_output()
+        esdd_flag = "--auto" if getattr(args, "auto", False) else "--full"
         res = run_command_gate(
             "esdd",
-            [sys.executable, "verification/esdd-verify.py"],
+            [sys.executable, "verification/esdd-verify.py", esdd_flag],
             args,
             success_summary=lambda lines: (
+                f"ESDD ({esdd_flag.lstrip('-')}) passed: "
                 f"{sum(1 for l in lines if '[TC-' in l)} interactive TCs + "
-                f"{sum(1 for l in lines if '[CLAIM-' in l)} @3x visual claims passed"
+                f"{sum(1 for l in lines if '[CLAIM-' in l)} @3x visual claims"
             ),
         )
         restored = False
@@ -509,6 +528,8 @@ def resolve_suites(args: argparse.Namespace) -> tuple[str, list[str]]:
         if not selected:
             raise ValueError("No valid suites specified via --suite")
         return "custom", selected
+    if args.auto:
+        return "auto", list(AUTO_SUITES)
     if args.full:
         return "full", list(FULL_SUITES)
     return "fast", list(FAST_SUITES)
@@ -578,6 +599,8 @@ def run_self_test() -> int:
     parser = build_parser()
     ns_fast = parser.parse_args([])
     assert resolve_suites(ns_fast) == ("fast", FAST_SUITES)
+    ns_auto = parser.parse_args(["--auto"])
+    assert resolve_suites(ns_auto) == ("auto", AUTO_SUITES)
     ns_full = parser.parse_args(["--full"])
     assert resolve_suites(ns_full) == ("full", FULL_SUITES)
     ns_custom = parser.parse_args(["--suite", "rpc,spec", "--suite", "kmp"])
@@ -596,6 +619,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--fast",
         action="store_true",
         help=f"Run fast default gates ({' + '.join(FAST_SUITES)}; default when no flags given).",
+    )
+    mode_group.add_argument(
+        "--auto",
+        action="store_true",
+        help="Run fast gates plus impact-scoped ESDD (`esdd-verify.py --auto`).",
     )
     mode_group.add_argument(
         "--full",
