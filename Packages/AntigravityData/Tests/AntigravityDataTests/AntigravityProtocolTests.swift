@@ -2220,6 +2220,221 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertTrue(store.hosts.allSatisfy { !$0.isOnline })
         XCTAssertTrue(store.availableRelayInstances.allSatisfy { !$0.status.isReachable })
     }
+
+    func testUniversalMarkdownAgentEmbedRichHTMLMermaidCarouselAndUserScreenshotParity() throws {
+        // 1. Reproduce the exact user screenshot message with inline code tokens & immediate `<agent-embed>`
+        let screenshotMarkdown = """
+        ### 2.2 6 层全栈对齐验收矩阵
+
+        - 关键接口（`UserError`、`DomainEvent` 顺序、`Assessor` 判定逻辑）与老服务逐项对齐。
+        - 逐表 `SELECT` + `core` 验证，禁止写死 `0`/`409`/`403` 同源头校验。
+        - 全量 `go test -race ./...` 通过。
+        <agent-embed src="file:///Users/bytedance/.gemini/antigravity/brain/71d80260-b9b2-4f5f-b568-5374f6aebbdd/fig4-verification-pyramid.html"></agent-embed>
+        """
+
+        let screenshotBlocks = AntigravityMarkdownParser.parse(screenshotMarkdown)
+        XCTAssertEqual(screenshotBlocks.count, 5)
+        if case .heading(_, let level, _) = screenshotBlocks[0] {
+            XCTAssertEqual(level, 3)
+        } else {
+            XCTFail("Expected H3 heading at index 0")
+        }
+        if case .agentEmbed(_, let src, let title, let kind, _, let isIncomplete) = screenshotBlocks[4] {
+            XCTAssertEqual(
+                src,
+                "file:///Users/bytedance/.gemini/antigravity/brain/71d80260-b9b2-4f5f-b568-5374f6aebbdd/fig4-verification-pyramid.html"
+            )
+            XCTAssertNil(title)
+            XCTAssertEqual(kind, .htmlWidget)
+            XCTAssertFalse(isIncomplete)
+            XCTAssertEqual(
+                AntigravityMarkdownParser.humanReadableEmbedTitle(src: src, explicitTitle: title),
+                "Fig 4 · Verification Pyramid"
+            )
+        } else {
+            XCTFail("Expected .agentEmbed at index 4, got \(screenshotBlocks[4])")
+        }
+
+        // 2. Inline `<agent-embed>` mid-paragraph splits cleanly while backticked `` `<agent-embed>` `` stays inline code
+        let inlineSplit = """
+        使用 `<agent-embed>` 标签渲染组件：见下方 <agent-embed src="file:///brain/chart.html" title="Latency Chart" /> 后继续说明。
+        """
+        let splitBlocks = AntigravityMarkdownParser.parse(inlineSplit)
+        XCTAssertEqual(splitBlocks.count, 3)
+        if case .paragraph(_, let leadInlines) = splitBlocks[0] {
+            XCTAssertTrue(leadInlines.contains(.code("<agent-embed>")))
+        } else {
+            XCTFail("Expected leading paragraph with literal `<agent-embed>` code span")
+        }
+        if case .agentEmbed(_, let embedSrc, let embedTitle, let embedKind, _, let incomplete) = splitBlocks[1] {
+            XCTAssertEqual(embedSrc, "file:///brain/chart.html")
+            XCTAssertEqual(embedTitle, "Latency Chart")
+            XCTAssertEqual(embedKind, .htmlWidget)
+            XCTAssertFalse(incomplete)
+        } else {
+            XCTFail("Expected promoted .agentEmbed block")
+        }
+
+        // 3. Streaming unclosed `<agent-embed` tag mid-token does not dump raw markup
+        let midStream = AntigravityMarkdownParser.parse("<agent-embed src=\"file:///brain/fig5-pending")
+        XCTAssertEqual(midStream.count, 1)
+        if case .agentEmbed(_, _, _, _, _, let isStreaming) = midStream[0] {
+            XCTAssertTrue(isStreaming)
+        } else {
+            XCTFail("Expected streaming .agentEmbed placeholder")
+        }
+
+        // 4. Full universal rich blocks: plugin-card, details, carousel, mermaid, HTML table, <pre>, images, footnotes, generics
+        let richDoc = """
+        <!-- internal comment should be stripped -->
+        Overview Heading
+        ================
+
+        Generics like Array<String> &amp; Result<Int, Error> stay intact &rarr; <kbd>⌘</kbd>+<kbd>K</kbd> <mark>highlighted</mark> <u>underlined</u> H<sub>2</sub>O x<sup>2</sup> [Ref][doc] [^1].
+
+        <plugin-card catalog-id="github"></plugin-card>
+
+        <details open>
+        <summary>验证详情 (<b>6</b> 项)</summary>
+
+        - <a href="https://antigravity.google.com">Antigravity</a>
+        - Autolink: <https://example.com/docs>
+        </details>
+
+        ````carousel
+        ![Slide 1](file:///brain/slide1.png)
+        <!-- slide -->
+        ```go
+        func main() {}
+        ```
+        ````
+
+        ```mermaid
+        flowchart LR
+            A[Client] --> B[Bridge]
+            B --> C[LanguageServer]
+        ```
+
+        <table>
+          <tr><th>Layer</th><th>Check</th></tr>
+          <tr><td>L1</td><td><code>go test</code><br/>pass</td></tr>
+        </table>
+
+        <pre><code class="language-swift">let x = 1 &lt; 2</code></pre>
+
+        <figure>
+          <img src="file:///brain/arch.png" alt="Architecture" />
+          <figcaption>System Architecture</figcaption>
+        </figure>
+
+        [doc]: https://antigravity.google.com/docs
+        [^1]: Verified across direct LAN and Cloud Relay.
+        """
+
+        let richBlocks = AntigravityMarkdownParser.parse(richDoc)
+        XCTAssertTrue(richBlocks.contains { if case .heading(_, 1, _) = $0 { return true }; return false })
+        XCTAssertTrue(richBlocks.contains { if case .pluginCard(_, "github", _) = $0 { return true }; return false })
+        XCTAssertTrue(richBlocks.contains { if case .details(_, _, _, true) = $0 { return true }; return false })
+        XCTAssertTrue(richBlocks.contains { if case .carousel(_, let slides) = $0 { return slides.count == 2 }; return false })
+        XCTAssertTrue(richBlocks.contains { if case .mermaid(_, let src) = $0 { return src.contains("flowchart LR") }; return false })
+        XCTAssertTrue(richBlocks.contains { if case .table(_, let headers, _, let rows) = $0 { return headers.count == 2 && rows.count == 1 }; return false })
+        XCTAssertTrue(richBlocks.contains { if case .codeBlock(_, "swift", "let x = 1 < 2") = $0 { return true }; return false })
+        XCTAssertTrue(richBlocks.contains { if case .image(_, "Architecture", "file:///brain/arch.png", "System Architecture") = $0 { return true }; return false })
+        XCTAssertTrue(richBlocks.contains { if case .footnoteSection(_, let items) = $0 { return items.count == 1 && items[0].label == "1" }; return false })
+
+        // Verify programming generics were NOT stripped and inline HTML tags parsed cleanly
+        if case .paragraph(_, let pInlines) = richBlocks[1] {
+            let plain = pInlines.map(\.plainText).joined()
+            XCTAssertTrue(plain.contains("Array<String> & Result<Int, Error>"))
+            XCTAssertTrue(plain.contains("→"))
+            XCTAssertTrue(pInlines.contains(.keyboardKey("⌘")))
+            XCTAssertTrue(pInlines.contains(.highlight([.text("highlighted")])))
+            XCTAssertTrue(pInlines.contains(.underline([.text("underlined")])))
+            XCTAssertTrue(pInlines.contains(.subscriptText("2")))
+            XCTAssertTrue(pInlines.contains(.superscript("2")))
+            XCTAssertTrue(pInlines.contains(.footnoteRef("1")))
+            XCTAssertTrue(pInlines.contains(.link(label: [.text("Ref")], destination: "https://antigravity.google.com/docs")))
+        } else {
+            XCTFail("Expected paragraph with generics and inline HTML at index 1")
+        }
+    }
+
+    @MainActor
+    func testEmbedArtifactHarvestingAndFourTierResourceResolution() async throws {
+        // 1. JSON `decodeJSONStep` harvests newly created HTML artifact from `actionResult.edit.diff.unifiedDiff.lines`
+        let htmlArtifactURI = "file:///Users/bytedance/.gemini/antigravity/brain/71d80260-b9b2-4f5f-b568-5374f6aebbdd/fig4-verification-pyramid.html"
+        let createArtifactStepJSON: JSONValue = .object([
+            "stepIndex": .int(5),
+            "type": .string("CORTEX_STEP_TYPE_CODE_ACTION"),
+            "status": .string("CORTEX_STEP_STATUS_DONE"),
+            "codeAction": .object([
+                "targetFileUri": .string(htmlArtifactURI),
+                "description": .string("Create verification pyramid interactive diagram"),
+                "actionResult": .object([
+                    "edit": .object([
+                        "diff": .object([
+                            "unifiedDiff": .object([
+                                "lines": .array([
+                                    .object(["text": .string("<!doctype html>"), "type": .string("DIFF_LINE_TYPE_INSERT")]),
+                                    .object(["text": .string("<html><body><h1>Verification Pyramid</h1></body></html>"), "type": .string("DIFF_LINE_TYPE_INSERT")])
+                                ])
+                            ])
+                        ])
+                    ])
+                ])
+            ])
+        ])
+        let decodedArtifactStep = try XCTUnwrap(
+            AntigravityRPCClient.decodeJSONStep(createArtifactStepJSON, cascadeId: "cid-pyramid", fallbackIndex: 5)
+        )
+        XCTAssertEqual(decodedArtifactStep.codeAction?.isArtifactFile, true)
+        XCTAssertTrue(decodedArtifactStep.codeAction?.fileContent?.contains("Verification Pyramid") == true)
+
+        // 2. Live `taskBoundary` JSON & Protobuf decoding does NOT inject fake `1/4` or `4/7` fixture counts
+        let liveTaskJSON: JSONValue = .object([
+            "stepIndex": .int(6),
+            "type": .string("CORTEX_STEP_TYPE_TASK_BOUNDARY"),
+            "status": .string("CORTEX_STEP_STATUS_IN_PROGRESS"),
+            "taskBoundary": .object([
+                "taskName": .string("Running 6-layer verification"),
+                "taskStatus": .string("Executing go test -race"),
+                "taskSummary": .string("Checking SQL parity across 12 tables")
+            ])
+        ])
+        let decodedTask = try XCTUnwrap(
+            AntigravityRPCClient.decodeJSONStep(liveTaskJSON, cascadeId: "cid-pyramid", fallbackIndex: 6)
+        )
+        XCTAssertEqual(decodedTask.taskBoundary?.completedCount, 0)
+        XCTAssertEqual(decodedTask.taskBoundary?.totalCount, 0)
+        XCTAssertEqual(decodedTask.taskBoundary?.elapsedLabel, "")
+
+        // 3. AntigravitySessionStore harvests trajectory steps and resolves via 4-tier pipeline
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.harvestEmbedResources(from: [decodedArtifactStep])
+
+        // Tier 1a: exact URI match
+        let resolvedExact = await store.resolveEmbedResource(uri: htmlArtifactURI)
+        XCTAssertEqual(resolvedExact?.source, .trajectoryStep)
+        XCTAssertEqual(resolvedExact?.isHTML, true)
+        XCTAssertTrue(resolvedExact?.textContent?.contains("Verification Pyramid") == true)
+
+        // Tier 1b: cross-host home prefix match (`/brain/.../<filename>`)
+        let resolvedCrossHost = await store.resolveEmbedResource(
+            uri: "file:///home/antigravity/.gemini/antigravity/brain/other-id/fig4-verification-pyramid.html"
+        )
+        XCTAssertEqual(resolvedCrossHost?.source, .trajectoryStep)
+
+        // Tier 2: inline `data:` URI (base64 SVG)
+        let svgB64 = Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"10\"/></svg>".utf8).base64EncodedString()
+        let resolvedData = await store.resolveEmbedResource(uri: "data:image/svg+xml;base64,\(svgB64)")
+        XCTAssertEqual(resolvedData?.source, .inlineDataURI)
+        XCTAssertEqual(resolvedData?.isSVG, true)
+        XCTAssertTrue(resolvedData?.textContent?.contains("<svg") == true)
+
+        // Tier 3: direct HTTPS URL
+        let resolvedHTTP = await store.resolveEmbedResource(uri: "https://antigravity.google.com/preview/widget")
+        XCTAssertEqual(resolvedHTTP?.source, .directNetwork)
+    }
 }
 
 private extension AntigravitySessionStore {

@@ -182,10 +182,11 @@ public actor AntigravityRPCClient {
         }
     }
 
-    /// Only true local-OS-only desktop commands (like revealing a local folder in macOS Finder)
-    /// are unsupported over Antigravity Cloud Relay; all data & review RPCs forward to upstream.
+    /// Only true local-OS-only desktop commands (like revealing a local folder in macOS Finder
+    /// or Companion Bridge's sandboxed `ReadArtifactFile`) are local-only; all upstream data & review RPCs forward over Cloud Relay.
     private static let localDesktopOnlyMethods: Set<String> = [
-        "OpenWorkspaceInFinder"
+        "OpenWorkspaceInFinder",
+        "ReadArtifactFile"
     ]
 
     public init(
@@ -4059,15 +4060,24 @@ public actor AntigravityRPCClient {
 
     // MARK: - Artifacts & Turn Diff RPC (`UE11`, `UE12` + Git VCS)
 
-    public func getArtifactSnapshots(cascadeId: String) async throws -> [ArtifactSnapshot] {
+    public func getArtifactSnapshots(cascadeId: String, instanceUuidOverride: String? = nil) async throws -> [ArtifactSnapshot] {
         let res = try await callUnaryJSON(
             method: "GetArtifactSnapshots",
-            body: ["cascadeId": .string(cascadeId)]
+            body: ["cascadeId": .string(cascadeId)],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 8.0
         )
-        guard let arr = res["artifacts"]?.arrayValue else { return [] }
+        let arr = res["artifacts"]?.arrayValue
+            ?? res["artifactSnapshots"]?.arrayValue
+            ?? res["snapshots"]?.arrayValue
+            ?? []
         return arr.compactMap { item -> ArtifactSnapshot? in
-            guard let obj = item.objectValue,
-                  let path = obj["artifactPath"]?.stringValue else { return nil }
+            guard let obj = item.objectValue else { return nil }
+            let path = obj["artifactPath"]?.stringValue
+                ?? obj["path"]?.stringValue
+                ?? obj["fileUri"]?.stringValue
+                ?? obj["uri"]?.stringValue
+            guard let path, !path.isEmpty else { return nil }
             let kind: ArtifactKind = {
                 if let rawKind = obj["kind"]?.stringValue,
                    let parsed = ArtifactKind(rawValue: rawKind) {
@@ -4082,23 +4092,134 @@ public actor AntigravityRPCClient {
                 if lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") || lower.hasSuffix(".webm") {
                     return .videoAsset
                 }
-                if lower.hasSuffix(".html") { return .generativeUIHTML }
+                if lower.hasSuffix(".html") || lower.hasSuffix(".htm") { return .generativeUIHTML }
                 if lower.hasSuffix(".url.json") { return .urlBookmark }
                 if lower.contains("walkthrough") { return .walkthrough }
                 if lower.contains("task") { return .taskList }
                 return .implementationPlan
             }()
+            let content = obj["content"]?.stringValue
+                ?? obj["textContent"]?.stringValue
+                ?? obj["body"]?.stringValue
+                ?? ""
             return ArtifactSnapshot(
                 artifactPath: path,
                 title: obj["title"]?.stringValue ?? (path as NSString).lastPathComponent,
                 summary: obj["summary"]?.stringValue ?? "",
                 kind: kind,
-                content: obj["content"]?.stringValue ?? "",
+                content: content,
                 requestFeedback: obj["requestFeedback"]?.boolValue ?? false,
                 userFacing: obj["userFacing"]?.boolValue ?? true,
                 version: obj["version"]?.intValue ?? 1
             )
         }
+    }
+
+    /// Resolves a host-local `file:///...` artifact (such as an `<agent-embed src="file:///.../fig4.html">`
+    /// widget or generated image) through Companion Bridge `ReadArtifactFile`, `GetArtifactSnapshots`,
+    /// or `GetRevisionArtifact` across both Direct LAN and Cloud Relay channels.
+    public func fetchRemoteArtifactResource(
+        uri: String,
+        cascadeId: String,
+        instanceUuidOverride: String? = nil
+    ) async -> ResolvedEmbedResource? {
+        let normalizedTarget = ResolvedEmbedResource.normalizePath(uri)
+        let targetBaseName = (normalizedTarget as NSString).lastPathComponent.lowercased()
+        guard !normalizedTarget.isEmpty else { return nil }
+
+        // 1. Companion Bridge / Direct LAN `ReadArtifactFile` (supports HTML, SVG, MD, PNG/JPG/WebP/GIF)
+        if channel == .directHost {
+            if let res = try? await callUnaryJSON(
+                method: "ReadArtifactFile",
+                body: [
+                    "uri": .string(uri),
+                    "path": .string(normalizedTarget),
+                    "cascadeId": .string(cascadeId)
+                ],
+                timeoutInterval: 8.0
+            ), res["ok"]?.boolValue != false,
+               let rawContent = res["content"]?.stringValue,
+               !rawContent.isEmpty {
+                let mime = res["mimeType"]?.stringValue ?? ResolvedEmbedResource.inferredMimeType(for: uri)
+                let encoding = (res["encoding"]?.stringValue ?? "utf-8").lowercased()
+                if encoding == "base64", let data = Data(base64Encoded: rawContent, options: .ignoreUnknownCharacters) {
+                    let text = mime.lowercased().hasPrefix("text/") || mime.lowercased().contains("svg")
+                        ? String(data: data, encoding: .utf8)
+                        : nil
+                    return ResolvedEmbedResource(
+                        uri: uri,
+                        normalizedPath: normalizedTarget,
+                        mimeType: mime,
+                        textContent: text,
+                        binaryData: data,
+                        source: .remoteHost
+                    )
+                } else {
+                    return ResolvedEmbedResource(
+                        uri: uri,
+                        normalizedPath: normalizedTarget,
+                        mimeType: mime,
+                        textContent: rawContent,
+                        binaryData: Data(rawContent.utf8),
+                        source: .remoteHost
+                    )
+                }
+            }
+        }
+
+        // 2. Upstream `LanguageServerService/GetArtifactSnapshots` (works over Direct LAN & Official Cloud Relay!)
+        if !cascadeId.isEmpty,
+           let snapshots = try? await getArtifactSnapshots(cascadeId: cascadeId, instanceUuidOverride: instanceUuidOverride) {
+            if let matched = snapshots.first(where: { snap in
+                let snapNorm = ResolvedEmbedResource.normalizePath(snap.artifactPath)
+                if snapNorm == normalizedTarget { return true }
+                if !targetBaseName.isEmpty && (snapNorm as NSString).lastPathComponent.lowercased() == targetBaseName {
+                    return true
+                }
+                return false
+            }), !matched.content.isEmpty {
+                return ResolvedEmbedResource(
+                    uri: uri,
+                    normalizedPath: normalizedTarget,
+                    mimeType: ResolvedEmbedResource.inferredMimeType(for: uri),
+                    textContent: matched.content,
+                    binaryData: Data(matched.content.utf8),
+                    source: .artifactSnapshot
+                )
+            }
+        }
+
+        // 3. Upstream `LanguageServerService/GetRevisionArtifact` fallback
+        if !cascadeId.isEmpty {
+            let revBodies: [[String: JSONValue]] = [
+                ["cascadeId": .string(cascadeId), "artifactPath": .string(normalizedTarget)],
+                ["trajectoryId": .string(cascadeId), "fileUri": .string(uri)]
+            ]
+            for reqBody in revBodies {
+                if let res = try? await callUnaryJSON(
+                    method: "GetRevisionArtifact",
+                    body: reqBody,
+                    instanceUuidOverride: instanceUuidOverride,
+                    timeoutInterval: 6.0
+                ) {
+                    let content = res["content"]?.stringValue
+                        ?? res["artifact"]?.objectValue?["content"]?.stringValue
+                        ?? res["text"]?.stringValue
+                    if let content, !content.isEmpty {
+                        return ResolvedEmbedResource(
+                            uri: uri,
+                            normalizedPath: normalizedTarget,
+                            mimeType: ResolvedEmbedResource.inferredMimeType(for: uri),
+                            textContent: content,
+                            binaryData: Data(content.utf8),
+                            source: .artifactSnapshot
+                        )
+                    }
+                }
+            }
+        }
+
+        return nil
     }
 
     public func sendPlanReviewComments(cascadeId: String, comments: [PlanInlineComment]) async throws {
@@ -5076,10 +5197,17 @@ public actor AntigravityRPCClient {
            let uri = nonEmptyString(vf["fileUri"]?.stringValue)
             ?? nonEmptyString(vf["absolutePathUri"]?.stringValue)
             ?? nonEmptyString(vf["absolutePath"]?.stringValue) {
+            var capturedViewContent: String? = nil
+            if ResolvedEmbedResource.isEmbeddableTextArtifactPath(uri),
+               let rawContent = nonEmptyString(vf["content"]?.stringValue),
+               rawContent.utf8.count <= 524_288 {
+                capturedViewContent = rawContent
+            }
             viewFilePayload = ViewFilePayload(
                 fileUri: uri,
                 startLine: vf["startLine"]?.intValue ?? 1,
-                endLine: vf["endLine"]?.intValue ?? 120
+                endLine: vf["endLine"]?.intValue ?? 120,
+                fileContent: capturedViewContent
             )
             if stepType == .unspecified { stepType = .viewFile }
         }
@@ -5106,21 +5234,108 @@ public actor AntigravityRPCClient {
             ?? obj["writeToFile"]?.objectValue
         if let ca = caCandidate {
             let actionSpec = ca["actionSpec"]?.objectValue
+            let createFileSpec = actionSpec?["createFile"]?.objectValue
             let uri = nonEmptyString(ca["targetFileUri"]?.stringValue)
                 ?? nonEmptyString(ca["fileUri"]?.stringValue)
                 ?? nonEmptyString(ca["targetFile"]?.stringValue)
-                ?? nonEmptyString(actionSpec?["createFile"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
+                ?? nonEmptyString(createFileSpec?["path"]?.objectValue?["absoluteUri"]?.stringValue)
                 ?? nonEmptyString(actionSpec?["insertBlock"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
             if let uri {
+                let lowerUri = uri.lowercased()
+                let isArtifact = (ca["artifactMetadata"] != nil)
+                    || (ca["isArtifactFile"]?.boolValue == true)
+                    || lowerUri.contains("/.gemini/")
+                    || lowerUri.contains("/brain/")
+                var capturedContent: String? = nil
+                if isArtifact || ResolvedEmbedResource.isEmbeddableTextArtifactPath(uri) {
+                    let directCandidates: [String?] = [
+                        ca["codeContent"]?.stringValue,
+                        ca["content"]?.stringValue,
+                        ca["fileContent"]?.stringValue,
+                        createFileSpec?["codeContent"]?.stringValue,
+                        createFileSpec?["content"]?.stringValue,
+                        createFileSpec?["fileContent"]?.stringValue,
+                        createFileSpec?["instruction"]?.stringValue
+                    ]
+                    for cand in directCandidates {
+                        if let c = nonEmptyString(cand), c.utf8.count <= 524_288 {
+                            capturedContent = c
+                            break
+                        }
+                    }
+                    // Fallback: reconstruct newly created artifact content from `actionResult.edit.diff.unifiedDiff.lines`
+                    if capturedContent == nil,
+                       let diffLines = ca["actionResult"]?.objectValue?["edit"]?.objectValue?["diff"]?.objectValue?["unifiedDiff"]?.objectValue?["lines"]?.arrayValue {
+                        var addedLines: [String] = []
+                        var hasRemoved = false
+                        for lineItem in diffLines {
+                            if let lineObj = lineItem.objectValue {
+                                let lineText = lineObj["text"]?.stringValue ?? ""
+                                let kind = (lineObj["type"]?.stringValue ?? "").uppercased()
+                                if kind.contains("DELETE") || kind.contains("REMOVE") {
+                                    hasRemoved = true
+                                } else {
+                                    addedLines.append(lineText)
+                                }
+                            } else if let rawLine = lineItem.stringValue {
+                                if rawLine.hasPrefix("+") && !rawLine.hasPrefix("+++") {
+                                    addedLines.append(String(rawLine.dropFirst()))
+                                } else if rawLine.hasPrefix("-") && !rawLine.hasPrefix("---") {
+                                    hasRemoved = true
+                                }
+                            }
+                        }
+                        if !hasRemoved && !addedLines.isEmpty {
+                            let joined = addedLines.joined(separator: "\n")
+                            if joined.utf8.count <= 524_288 {
+                                capturedContent = joined
+                            }
+                        }
+                    }
+                }
+
                 codeActionPayload = CodeActionPayload(
                     targetFileUri: uri,
                     description: nonEmptyString(ca["description"]?.stringValue)
                         ?? nonEmptyString(ca["instruction"]?.stringValue)
                         ?? "Updated file",
                     additions: ca["additions"]?.intValue ?? 0,
-                    deletions: ca["deletions"]?.intValue ?? 0
+                    deletions: ca["deletions"]?.intValue ?? 0,
+                    isArtifactFile: isArtifact,
+                    fileContent: capturedContent
                 )
                 if stepType == .unspecified { stepType = .codeAction }
+            }
+        }
+
+        // Decode generateImage / readUrlContent / browserSubagent into lightweight display payloads
+        if plannerPayload == nil {
+            if let genImg = obj["generateImage"]?.objectValue {
+                let imgPath = nonEmptyString(genImg["imagePath"]?.stringValue)
+                    ?? nonEmptyString(genImg["outputPath"]?.stringValue)
+                    ?? nonEmptyString(genImg["savedPath"]?.stringValue)
+                    ?? nonEmptyString(genImg["artifactUri"]?.stringValue)
+                let prompt = nonEmptyString(genImg["prompt"]?.stringValue) ?? "Generated image"
+                if let imgPath {
+                    let fileURI = imgPath.contains("://") ? imgPath : "file://\(imgPath)"
+                    plannerPayload = PlannerResponsePayload(
+                        response: "![\(prompt)](\(fileURI))",
+                        referencedFiles: [fileURI]
+                    )
+                    stepType = .generateImage
+                }
+            } else if let readUrl = obj["readUrlContent"]?.objectValue {
+                let targetUrl = nonEmptyString(readUrl["url"]?.stringValue) ?? nonEmptyString(readUrl["uri"]?.stringValue)
+                if let targetUrl {
+                    plannerPayload = PlannerResponsePayload(response: targetUrl)
+                    stepType = .readUrlContent
+                }
+            } else if let browser = obj["browserSubagent"]?.objectValue {
+                let taskSummary = nonEmptyString(browser["taskName"]?.stringValue)
+                    ?? nonEmptyString(browser["task"]?.stringValue)
+                    ?? "Browser automation task"
+                plannerPayload = PlannerResponsePayload(response: taskSummary)
+                stepType = .browserSubagent
             }
         }
 
@@ -5130,8 +5345,9 @@ public actor AntigravityRPCClient {
                 taskName: nonEmptyString(tb["taskName"]?.stringValue) ?? "Task",
                 taskStatus: nonEmptyString(tb["taskStatus"]?.stringValue) ?? "",
                 taskSummary: nonEmptyString(tb["taskSummary"]?.stringValue) ?? "",
-                completedCount: tb["completedCount"]?.intValue ?? 1,
-                totalCount: tb["totalCount"]?.intValue ?? 4
+                completedCount: tb["completedCount"]?.intValue ?? 0,
+                totalCount: tb["totalCount"]?.intValue ?? 0,
+                elapsedLabel: nonEmptyString(tb["elapsedLabel"]?.stringValue) ?? ""
             )
             if stepType == .unspecified { stepType = .taskBoundary }
         }

@@ -191,6 +191,7 @@ public final class AntigravitySessionStore {
     public var activeTurnGrants: Set<String> = ["ReadOnlyWorkspace", "verification/*"]
     public var activeArtifacts: [ArtifactSnapshot]
     public var selectedArtifactPath: String = "/brain/implementation_plan.md"
+    public var resolvedEmbedCache: [String: ResolvedEmbedResource] = [:]
     public var planChanges: [PlanProposedFileChange]
     public var planComments: [PlanInlineComment]
 
@@ -374,6 +375,10 @@ public final class AntigravitySessionStore {
             host: activeHost,
             csrfToken: "csrf-antigravity-ios-session-token"
         )
+        self.harvestEmbedResources(from: activeArtifacts)
+        for (_, stepList) in mergedSteps {
+            self.harvestEmbedResources(from: stepList)
+        }
     }
 
     // MARK: - Computed Properties for Agents Home & Project Hub (`UE01`, `UE02`, `UE04`)
@@ -2628,12 +2633,13 @@ public final class AntigravitySessionStore {
             }
             if (self?.stepsByCascadeId[cascadeId] ?? []).isEmpty {
                 let cached = await storeRef.loadProjectedSteps(cascadeId: cascadeId)
-                if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
-                    self.stepsByCascadeId[cascadeId] = cached
-                    if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
-                        self.isLoadingSteps = false
+                    if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                        self.stepsByCascadeId[cascadeId] = cached
+                        self.harvestEmbedResources(from: cached)
+                        if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
+                            self.isLoadingSteps = false
+                        }
                     }
-                }
             }
 
             var attempts = 0
@@ -2704,6 +2710,7 @@ public final class AntigravitySessionStore {
                     if !remoteSteps.isEmpty {
                         self.locallyCreatedEmptyCascadeIds.remove(cascadeId)
                         self.stepsByCascadeId[cascadeId] = remoteSteps
+                        self.harvestEmbedResources(from: remoteSteps)
                         await storeRef.saveProjectedSteps(remoteSteps, for: cascadeId)
                         if !self.syncedConfigCascadeIds.contains(cascadeId),
                            let latestCfgStep = remoteSteps.last(where: {
@@ -2862,11 +2869,13 @@ public final class AntigravitySessionStore {
                 )
             }
         }
-        if let cachedSteps = stepsByCascadeId[cascadeId],
-           let latestCfgStep = cachedSteps.last(where: {
-               $0.type == .userInput && ($0.recordedExecutionMode != nil || $0.recordedModelId != nil)
-           }) {
-            applyRecordedConversationConfig(from: latestCfgStep)
+        if let cachedSteps = stepsByCascadeId[cascadeId] {
+            harvestEmbedResources(from: cachedSteps)
+            if let latestCfgStep = cachedSteps.last(where: {
+                $0.type == .userInput && ($0.recordedExecutionMode != nil || $0.recordedModelId != nil)
+            }) {
+                applyRecordedConversationConfig(from: latestCfgStep)
+            }
         }
         activeRoute = .cascadeChat(cascadeId)
         unreadStreamingStepCount = 0
@@ -2888,6 +2897,138 @@ public final class AntigravitySessionStore {
             }
             syncStepsForCascade(cascadeId, pollUntilIdle: true)
         }
+    }
+
+    // MARK: - Embed & Artifact Resource Resolution (`<agent-embed>`, `file:///` Images & HTML Widgets)
+
+    public func harvestEmbedResources(from steps: [CascadeStep]) {
+        for step in steps {
+            if let ca = step.codeAction, let content = ca.fileContent, !content.isEmpty {
+                let norm = ResolvedEmbedResource.normalizePath(ca.targetFileUri)
+                let res = ResolvedEmbedResource(
+                    uri: ca.targetFileUri,
+                    normalizedPath: norm,
+                    mimeType: ResolvedEmbedResource.inferredMimeType(for: ca.targetFileUri),
+                    textContent: content,
+                    binaryData: Data(content.utf8),
+                    source: .trajectoryStep
+                )
+                storeResolvedEmbedInCache(res)
+            }
+            if let vf = step.viewFile, let content = vf.fileContent, !content.isEmpty {
+                let norm = ResolvedEmbedResource.normalizePath(vf.fileUri)
+                let res = ResolvedEmbedResource(
+                    uri: vf.fileUri,
+                    normalizedPath: norm,
+                    mimeType: ResolvedEmbedResource.inferredMimeType(for: vf.fileUri),
+                    textContent: content,
+                    binaryData: Data(content.utf8),
+                    source: .trajectoryStep
+                )
+                storeResolvedEmbedInCache(res)
+            }
+        }
+    }
+
+    public func harvestEmbedResources(from artifacts: [ArtifactSnapshot]) {
+        for artifact in artifacts where !artifact.content.isEmpty {
+            let norm = ResolvedEmbedResource.normalizePath(artifact.artifactPath)
+            let res = ResolvedEmbedResource(
+                uri: artifact.artifactPath,
+                normalizedPath: norm,
+                mimeType: ResolvedEmbedResource.inferredMimeType(for: artifact.artifactPath),
+                textContent: artifact.content,
+                binaryData: Data(artifact.content.utf8),
+                source: .artifactSnapshot
+            )
+            storeResolvedEmbedInCache(res)
+        }
+    }
+
+    private func storeResolvedEmbedInCache(_ resource: ResolvedEmbedResource) {
+        if resolvedEmbedCache.count >= 64, resolvedEmbedCache[resource.normalizedPath] == nil {
+            if let firstKey = resolvedEmbedCache.keys.first {
+                resolvedEmbedCache.removeValue(forKey: firstKey)
+            }
+        }
+        resolvedEmbedCache[resource.normalizedPath] = resource
+    }
+
+    public func cachedEmbedResource(for uri: String) -> ResolvedEmbedResource? {
+        let norm = ResolvedEmbedResource.normalizePath(uri)
+        if let exact = resolvedEmbedCache[norm] {
+            return exact
+        }
+        let targetBase = (norm as NSString).lastPathComponent.lowercased()
+        guard !targetBase.isEmpty else { return nil }
+        // Match `/brain/<id>/<filename>` even if host home directory prefix differs (e.g. `/Users/...` vs `/home/...`)
+        if norm.contains("/brain/") || norm.contains("/.gemini/") {
+            if let byBase = resolvedEmbedCache.values.first(where: {
+                ($0.normalizedPath as NSString).lastPathComponent.lowercased() == targetBase
+            }) {
+                return byBase
+            }
+        }
+        return nil
+    }
+
+    /// 4-tier resolver for `<agent-embed src="...">` HTML widgets, SVGs, and `file:///` images:
+    /// 1. In-memory trajectory & artifact snapshot cache (works offline & over Cloud Relay)
+    /// 2. Inline `data:` URI decoding
+    /// 3. Direct `http://`/`https://` URL pass-through
+    /// 4. Remote host / Companion Bridge / Desktop `GetArtifactSnapshots` / `GetRevisionArtifact` RPC
+    public func resolveEmbedResource(
+        uri: String,
+        cascadeId: String? = nil
+    ) async -> ResolvedEmbedResource? {
+        let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Tier 1: Local trajectory & artifact cache
+        if let cached = cachedEmbedResource(for: trimmed) {
+            return cached
+        }
+
+        // Tier 2: Inline `data:` URI
+        if trimmed.lowercased().hasPrefix("data:"),
+           let decoded = ResolvedEmbedResource.decodeDataURI(trimmed) {
+            storeResolvedEmbedInCache(decoded)
+            return decoded
+        }
+
+        // Tier 3: Direct HTTP(S) URL
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("https://") || lower.hasPrefix("http://") {
+            let direct = ResolvedEmbedResource(
+                uri: trimmed,
+                normalizedPath: trimmed,
+                mimeType: ResolvedEmbedResource.inferredMimeType(for: trimmed),
+                textContent: nil,
+                binaryData: nil,
+                source: .directNetwork
+            )
+            return direct
+        }
+
+        // Tier 4: Live backend RPC fetch (`ReadArtifactFile` -> `GetArtifactSnapshots` -> `GetRevisionArtifact`)
+        guard (hasPairedBackend || isLiveBackendConnected),
+              isDeviceNetworkReachable,
+              !isNetworkingSuspended,
+              let client = rpcClient else {
+            return nil
+        }
+
+        let effectiveCascadeId = cascadeId ?? activeCascadeId
+        let originUuid = summaries.first(where: { $0.cascadeId == effectiveCascadeId })?.originInstanceUuid
+        if let fetched = await client.fetchRemoteArtifactResource(
+            uri: trimmed,
+            cascadeId: effectiveCascadeId,
+            instanceUuidOverride: originUuid
+        ) {
+            storeResolvedEmbedInCache(fetched)
+            return fetched
+        }
+        return nil
     }
 
     public func resetDisplayOptions() {
