@@ -255,23 +255,22 @@ public struct RemotePairingViewController: View {
                         }
 
                         ForEach(store.availableRelayInstances) { inst in
-                            let isSelected = (store.activeHost.instanceId == inst.uuid)
+                            let isSelected: Bool = {
+                                if case let .localHost(filterId, _) = store.hostFilter {
+                                    return filterId == inst.uuid
+                                }
+                                return store.activeHost.instanceId == inst.uuid
+                            }()
                             let isInstOnline = store.isDeviceNetworkReachable && inst.status.isReachable
+                            let isRefreshingThisHost = store.isRefreshingHost(instanceId: inst.uuid, hostname: inst.name)
                             Button {
                                 Task {
-                                    if let cached = await store.loadSavedSessionCookie() {
-                                        let ok = await store.connectCloudRelay(
-                                            relayURLString: "https://antigravity.google.com/r/\(inst.uuid)",
-                                            sessionCookie: cached.cookie,
-                                            authUser: store.activeAuthUser,
-                                            resolvedInstanceUuid: inst.uuid,
-                                            hostName: inst.name,
-                                            focusHostFilterOnConnected: true,
-                                            strictTargetSelection: true
-                                        )
-                                        if ok {
-                                            onConnected?()
-                                        }
+                                    let ok = await store.switchToRelayHost(
+                                        instanceUuid: inst.uuid,
+                                        hostName: inst.name
+                                    )
+                                    if ok {
+                                        onConnected?()
                                     }
                                 }
                             } label: {
@@ -306,7 +305,11 @@ public struct RemotePairingViewController: View {
                                             .foregroundStyle(isInstOnline ? UEChromePalette.textSecondary : AntigravityTheme.statusError)
                                     }
                                     Spacer()
-                                    if isSelected {
+                                    if isRefreshingThisHost {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .tint(AntigravityTheme.accentPeriwinkle)
+                                    } else if isSelected {
                                         Image(systemName: "checkmark.circle.fill")
                                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                     }

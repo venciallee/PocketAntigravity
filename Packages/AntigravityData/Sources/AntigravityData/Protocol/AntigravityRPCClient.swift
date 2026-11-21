@@ -69,6 +69,46 @@ public struct HostReachabilityProbeResult: Sendable, Equatable {
     }
 }
 
+/// Scoped workspace & summary synchronization outcome returned by `fetchScopedWorkspacesAndSummaries(target:)`.
+/// Tracks exactly which local hosts and/or Cloud scope actually succeeded so callers can refresh targeted devices
+/// without discarding cached conversations for offline or unqueried hosts.
+public struct ScopedWorkspaceSyncResult: Sendable {
+    public var workspaces: [WorkspaceInfo]
+    public var summaries: [CascadeSummary]
+    public var cloudProjects: [ProjectWorkspace]
+    public var cloudWarmingUp: Bool
+    public var relayInstances: [RelayInstanceInfo]
+    public var refreshedLocalHostUuids: Set<String>
+    public var refreshedLocalHostNames: Set<String>
+    public var refreshedCloud: Bool
+    public var targetReachable: Bool
+    public var latencyMs: Int?
+
+    public init(
+        workspaces: [WorkspaceInfo] = [],
+        summaries: [CascadeSummary] = [],
+        cloudProjects: [ProjectWorkspace] = [],
+        cloudWarmingUp: Bool = false,
+        relayInstances: [RelayInstanceInfo] = [],
+        refreshedLocalHostUuids: Set<String> = [],
+        refreshedLocalHostNames: Set<String> = [],
+        refreshedCloud: Bool = false,
+        targetReachable: Bool = true,
+        latencyMs: Int? = nil
+    ) {
+        self.workspaces = workspaces
+        self.summaries = summaries
+        self.cloudProjects = cloudProjects
+        self.cloudWarmingUp = cloudWarmingUp
+        self.relayInstances = relayInstances
+        self.refreshedLocalHostUuids = refreshedLocalHostUuids
+        self.refreshedLocalHostNames = refreshedLocalHostNames
+        self.refreshedCloud = refreshedCloud
+        self.targetReachable = targetReachable
+        self.latencyMs = latencyMs
+    }
+}
+
 /// URLSession TLS delegate supporting SHA-256 certificate pinning and local LAN / Tailscale TOFU
 /// for Antigravity Desktop's dynamically generated self-signed `language_server` HTTPS certificate.
 public final class PinnedTLSURLSessionDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
@@ -734,6 +774,321 @@ public actor AntigravityRPCClient {
         cloudWarmingUp: Bool,
         relayInstances: [RelayInstanceInfo]
     ) {
+        let scoped = try await fetchFederatedScopedSyncResult(
+            timeoutInterval: timeoutInterval,
+            lightweightPoll: lightweightPoll
+        )
+        return (
+            scoped.workspaces,
+            scoped.summaries,
+            scoped.cloudProjects,
+            scoped.cloudWarmingUp,
+            scoped.relayInstances
+        )
+    }
+
+    /// Refreshes workspaces & conversation summaries scoped to a single `AgentHostFilter` target:
+    /// - `.localHost(id, name)`: queries ONLY that specific Mac/PC (`allowCrossInstanceFailover: false`) and reconciles its live reachability.
+    /// - `.antigravityCloud`: queries ONLY Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects & sessions.
+    /// - `.allHosts`: runs full multi-host + Cloud federation and reports exactly which local hosts succeeded.
+    public func fetchScopedWorkspacesAndSummaries(
+        target: AgentHostFilter,
+        timeoutInterval: TimeInterval? = nil,
+        lightweightPoll: Bool = false
+    ) async throws -> ScopedWorkspaceSyncResult {
+        switch target {
+        case .allHosts:
+            return try await fetchFederatedScopedSyncResult(
+                timeoutInterval: timeoutInterval,
+                lightweightPoll: lightweightPoll
+            )
+
+        case .antigravityCloud:
+            let start = Date()
+            if channel == .cloudRelay && cachedRelayInstances.isEmpty {
+                if let refreshed = try? await listRelayInstances(timeoutInterval: min(timeoutInterval ?? 8.0, 8.0)),
+                   !refreshed.isEmpty {
+                    self.cachedRelayInstances = refreshed
+                }
+            }
+            let reachableInstances = currentReachableRelayInstances()
+            let preferredCloudUuid = self.preferredCloudInstanceUuid
+            let orderedCloudCandidates: [RelayInstanceInfo] = {
+                guard let preferredCloudUuid,
+                      let prefInst = reachableInstances.first(where: { $0.uuid == preferredCloudUuid }) else {
+                    return reachableInstances
+                }
+                return [prefInst] + reachableInstances.filter { $0.uuid != preferredCloudUuid }
+            }()
+
+            let cloudProjectOutcome = await fetchCloudProjects(
+                candidateInstances: orderedCloudCandidates,
+                timeoutInterval: timeoutInterval
+            )
+            let cloudProjects = cloudProjectOutcome.projects
+
+            var mergedWorkspacesByKey: [String: WorkspaceInfo] = [:]
+            for cp in cloudProjects {
+                mergedWorkspacesByKey["cloud|\(cp.workspaceUri)"] = WorkspaceInfo(
+                    workspaceUri: cp.workspaceUri,
+                    displayName: cp.name,
+                    activeBranch: cp.activeBranch,
+                    isCloud: true,
+                    originInstanceUuid: cp.originInstanceUuid,
+                    originHostName: "Antigravity"
+                )
+            }
+
+            let cloudSummaries: [CascadeSummary]
+            if channel == .cloudRelay {
+                cloudSummaries = orderedCloudCandidates.isEmpty
+                    ? []
+                    : await fetchCloudSummariesAcrossInstances(
+                        candidates: orderedCloudCandidates,
+                        timeoutInterval: timeoutInterval
+                    )
+            } else {
+                cloudSummaries = await fetchJetboxSummariesSnapshot(
+                    cloud: true,
+                    originHostName: "Antigravity",
+                    snapshotTimeout: min(timeoutInterval ?? 4.0, 4.0)
+                )
+            }
+
+            var mergedSummariesById: [String: CascadeSummary] = [:]
+            let updatedCloudProjects = self.cachedCloudProjectsById
+            for s in cloudSummaries {
+                Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: updatedCloudProjects)
+            }
+            Self.reconcileBatchUnreadStates(&mergedSummariesById)
+
+            let sortedSummaries = mergedSummariesById.values.sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return lhs.cascadeId < rhs.cascadeId
+            }
+            let sortedWorkspaces = Array(mergedWorkspacesByKey.values).sorted { $0.displayName < $1.displayName }
+            let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+            let cloudReachable = (channel != .cloudRelay) || !orderedCloudCandidates.isEmpty
+            return ScopedWorkspaceSyncResult(
+                workspaces: sortedWorkspaces,
+                summaries: sortedSummaries,
+                cloudProjects: cloudProjects,
+                cloudWarmingUp: cloudProjectOutcome.warmingUp,
+                relayInstances: cachedRelayInstances,
+                refreshedLocalHostUuids: [],
+                refreshedLocalHostNames: [],
+                refreshedCloud: cloudReachable,
+                targetReachable: cloudReachable,
+                latencyMs: elapsedMs
+            )
+
+        case .localHost(let requestedId, let requestedName):
+            let start = Date()
+            if channel == .cloudRelay {
+                if cachedRelayInstances.isEmpty {
+                    if let refreshed = try? await listRelayInstances(timeoutInterval: min(timeoutInterval ?? 6.0, 6.0)),
+                       !refreshed.isEmpty {
+                        self.cachedRelayInstances = refreshed
+                    }
+                }
+                let matchedInst = cachedRelayInstances.first(where: { $0.uuid == requestedId })
+                    ?? cachedRelayInstances.first(where: { $0.name == requestedName })
+                let resolvedUuid = matchedInst?.uuid ?? requestedId
+                let resolvedName = matchedInst?.name ?? requestedName
+                let perHostTimeout = min(timeoutInterval ?? 8.0, 8.0)
+
+                var instOk = false
+                var authError: AntigravityRPCError? = nil
+                let wsList: [WorkspaceInfo]
+                do {
+                    wsList = try await getWorkspaceInfos(
+                        instanceUuidOverride: resolvedUuid,
+                        originHostName: resolvedName,
+                        timeoutInterval: perHostTimeout,
+                        allowCrossInstanceFailover: false
+                    )
+                    instOk = true
+                } catch let err as AntigravityRPCError {
+                    if case .unauthorized = err {
+                        authError = err
+                    } else if case .httpError(let code, _) = err, code == 404 {
+                        instOk = true
+                    }
+                    wsList = []
+                } catch {
+                    wsList = []
+                }
+
+                if let authError {
+                    throw authError
+                }
+
+                async let memTask = fetchTrajectoriesResult(
+                    instanceUuidOverride: resolvedUuid,
+                    originHostName: resolvedName,
+                    timeoutInterval: perHostTimeout,
+                    allowCrossInstanceFailover: false
+                )
+                async let jbLocalTask = fetchJetboxSummariesSnapshot(
+                    cloud: false,
+                    instanceUuidOverride: resolvedUuid,
+                    originHostName: resolvedName,
+                    snapshotTimeout: min(perHostTimeout, 4.0),
+                    allowCrossInstanceFailover: false
+                )
+
+                let memOutcome = await memTask
+                let jbLocal = await jbLocalTask
+                let memList: [CascadeSummary]
+                switch memOutcome {
+                case .success(let list):
+                    memList = list
+                    instOk = true
+                case .failure(let err):
+                    if case AntigravityRPCError.unauthorized = err {
+                        throw err
+                    }
+                    memList = []
+                }
+                if !jbLocal.isEmpty {
+                    instOk = true
+                }
+
+                if !cachedRelayInstances.isEmpty {
+                    self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
+                        guard inst.uuid == resolvedUuid else { return inst }
+                        if instOk {
+                            return inst.status.isReachable ? inst : inst.withStatus(.connected)
+                        } else {
+                            return inst.status.isReachable ? inst.withStatus(.disconnected) : inst
+                        }
+                    }
+                }
+
+                let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+                guard instOk else {
+                    return ScopedWorkspaceSyncResult(
+                        workspaces: [],
+                        summaries: [],
+                        cloudProjects: [],
+                        cloudWarmingUp: false,
+                        relayInstances: cachedRelayInstances,
+                        refreshedLocalHostUuids: [],
+                        refreshedLocalHostNames: [],
+                        refreshedCloud: false,
+                        targetReachable: false,
+                        latencyMs: elapsedMs
+                    )
+                }
+
+                var mergedWorkspacesByKey: [String: WorkspaceInfo] = [:]
+                for ws in wsList {
+                    let key = ws.isCloud
+                        ? "cloud|\(ws.workspaceUri)"
+                        : "\(ws.originInstanceUuid ?? resolvedUuid)|\(ws.workspaceUri)"
+                    if mergedWorkspacesByKey[key] == nil {
+                        mergedWorkspacesByKey[key] = ws
+                    }
+                }
+                var mergedSummariesById: [String: CascadeSummary] = [:]
+                let cloudProjectsSnapshot = self.cachedCloudProjectsById
+                for s in memList + jbLocal {
+                    Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: cloudProjectsSnapshot)
+                }
+                Self.reconcileBatchUnreadStates(&mergedSummariesById)
+
+                let sortedSummaries = mergedSummariesById.values.sorted { lhs, rhs in
+                    if lhs.updatedAt != rhs.updatedAt {
+                        return lhs.updatedAt > rhs.updatedAt
+                    }
+                    return lhs.cascadeId < rhs.cascadeId
+                }
+                let sortedWorkspaces = Array(mergedWorkspacesByKey.values).sorted { $0.displayName < $1.displayName }
+                return ScopedWorkspaceSyncResult(
+                    workspaces: sortedWorkspaces,
+                    summaries: sortedSummaries,
+                    cloudProjects: [],
+                    cloudWarmingUp: false,
+                    relayInstances: cachedRelayInstances,
+                    refreshedLocalHostUuids: resolvedUuid.isEmpty ? [] : [resolvedUuid],
+                    refreshedLocalHostNames: resolvedName.isEmpty ? [] : [resolvedName],
+                    refreshedCloud: false,
+                    targetReachable: true,
+                    latencyMs: elapsedMs
+                )
+            } else {
+                // Direct LAN / Companion single host
+                async let workspacesTask = getWorkspaceInfosOptional(timeoutInterval: timeoutInterval)
+                async let summariesTask = getAllCascadeTrajectories(
+                    originHostName: requestedName.isEmpty ? nil : requestedName,
+                    timeoutInterval: timeoutInterval
+                )
+                let wsList = try await workspacesTask
+                let sums = try await summariesTask
+                var mergedWorkspacesByKey: [String: WorkspaceInfo] = [:]
+                for w in wsList {
+                    let key = w.isCloud ? "cloud|\(w.workspaceUri)" : "local|\(w.workspaceUri)"
+                    if mergedWorkspacesByKey[key] == nil {
+                        mergedWorkspacesByKey[key] = w
+                    }
+                }
+                var mergedSummariesById: [String: CascadeSummary] = [:]
+                let cloudProjectsSnapshot = self.cachedCloudProjectsById
+                for s in sums {
+                    Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: cloudProjectsSnapshot)
+                }
+                Self.reconcileBatchUnreadStates(&mergedSummariesById)
+                let sortedSummaries = mergedSummariesById.values.sorted { lhs, rhs in
+                    if lhs.updatedAt != rhs.updatedAt {
+                        return lhs.updatedAt > rhs.updatedAt
+                    }
+                    return lhs.cascadeId < rhs.cascadeId
+                }
+                let sortedWorkspaces = Array(mergedWorkspacesByKey.values).sorted { $0.displayName < $1.displayName }
+                let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+                let effectiveId = requestedId.isEmpty ? targetInstanceIdentifier : requestedId
+                return ScopedWorkspaceSyncResult(
+                    workspaces: sortedWorkspaces,
+                    summaries: sortedSummaries,
+                    cloudProjects: [],
+                    cloudWarmingUp: false,
+                    relayInstances: [],
+                    refreshedLocalHostUuids: effectiveId.isEmpty ? [] : [effectiveId],
+                    refreshedLocalHostNames: requestedName.isEmpty ? [] : [requestedName],
+                    refreshedCloud: false,
+                    targetReachable: true,
+                    latencyMs: elapsedMs
+                )
+            }
+        }
+    }
+
+    private func fetchTrajectoriesResult(
+        instanceUuidOverride: String?,
+        originHostName: String?,
+        timeoutInterval: TimeInterval?,
+        allowCrossInstanceFailover: Bool
+    ) async -> Result<[CascadeSummary], Error> {
+        do {
+            let list = try await getAllCascadeTrajectories(
+                instanceUuidOverride: instanceUuidOverride,
+                originHostName: originHostName,
+                timeoutInterval: timeoutInterval,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
+            )
+            return .success(list)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func fetchFederatedScopedSyncResult(
+        timeoutInterval: TimeInterval? = nil,
+        lightweightPoll: Bool = false
+    ) async throws -> ScopedWorkspaceSyncResult {
+        let start = Date()
         if channel == .cloudRelay {
             if let refreshed = try? await listRelayInstances(timeoutInterval: timeoutInterval), !refreshed.isEmpty {
                 self.cachedRelayInstances = refreshed
@@ -772,11 +1127,13 @@ public actor AntigravityRPCClient {
         }
 
         var mergedSummariesById: [String: CascadeSummary] = [:]
+        var verifiedOnlineUuids = Set<String>()
+        var verifiedOnlineNames = Set<String>()
+        var didRefreshCloud = false
 
         if channel == .cloudRelay && !reachableInstances.isEmpty {
             let cloudProjectsSnapshot = self.cachedCloudProjectsById
             var anyInstanceSucceeded = false
-            var verifiedOnlineUuids = Set<String>()
             var failedProbeUuids = Set<String>()
 
             // Order Cloud candidate instances with the instance that served Cloud projects first
@@ -795,7 +1152,7 @@ public actor AntigravityRPCClient {
                 timeoutInterval: timeoutInterval
             )
 
-            await withTaskGroup(of: (String, Bool, [WorkspaceInfo], [CascadeSummary], [CascadeSummary]).self) { group in
+            await withTaskGroup(of: (String, String, Bool, [WorkspaceInfo], [CascadeSummary], [CascadeSummary]).self) { group in
                 for inst in reachableInstances {
                     group.addTask {
                         var instOk = false
@@ -834,14 +1191,17 @@ public actor AntigravityRPCClient {
                         if memResult != nil || !jbLocal.isEmpty {
                             instOk = true
                         }
-                        return (inst.uuid, instOk, ws, memResult ?? [], jbLocal)
+                        return (inst.uuid, inst.name, instOk, ws, memResult ?? [], jbLocal)
                     }
                 }
 
-                for await (instUuid, instOk, wsList, memList, jbLocalList) in group {
+                for await (instUuid, instName, instOk, wsList, memList, jbLocalList) in group {
                     if instOk {
                         anyInstanceSucceeded = true
                         verifiedOnlineUuids.insert(instUuid)
+                        if !instName.isEmpty {
+                            verifiedOnlineNames.insert(instName)
+                        }
                     } else {
                         failedProbeUuids.insert(instUuid)
                     }
@@ -877,6 +1237,7 @@ public actor AntigravityRPCClient {
                     Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: updatedCloudProjects)
                 }
             }
+            didRefreshCloud = !cloudProjects.isEmpty || !cloudSummaries.isEmpty || !verifiedOnlineUuids.isEmpty
 
             if !anyInstanceSucceeded && cloudProjects.isEmpty {
                 let ws = try await getWorkspaceInfosOptional(timeoutInterval: timeoutInterval)
@@ -886,6 +1247,9 @@ public actor AntigravityRPCClient {
                     mergedWorkspacesByKey[key] = w
                 }
                 for s in sums { Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: updatedCloudProjects) }
+                if let fallbackUuid = resolvedInstanceUuid, !fallbackUuid.isEmpty {
+                    verifiedOnlineUuids.insert(fallbackUuid)
+                }
             }
         } else {
             // Direct LAN / Companion / Mock server mode
@@ -908,6 +1272,11 @@ public actor AntigravityRPCClient {
             for s in summaries + cloudSummaries {
                 Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: cloudProjectsSnapshot)
             }
+            let directId = resolvedInstanceUuid ?? targetInstanceIdentifier
+            if !directId.isEmpty {
+                verifiedOnlineUuids.insert(directId)
+            }
+            didRefreshCloud = !cloudProjects.isEmpty || !cloudSummaries.isEmpty
         }
 
         Self.reconcileBatchUnreadStates(&mergedSummariesById)
@@ -919,7 +1288,19 @@ public actor AntigravityRPCClient {
             return lhs.cascadeId < rhs.cascadeId
         }
         let sortedWorkspaces = Array(mergedWorkspacesByKey.values).sorted { $0.displayName < $1.displayName }
-        return (sortedWorkspaces, sortedSummaries, cloudProjects, cloudProjectOutcome.warmingUp, cachedRelayInstances)
+        let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+        return ScopedWorkspaceSyncResult(
+            workspaces: sortedWorkspaces,
+            summaries: sortedSummaries,
+            cloudProjects: cloudProjects,
+            cloudWarmingUp: cloudProjectOutcome.warmingUp,
+            relayInstances: cachedRelayInstances,
+            refreshedLocalHostUuids: verifiedOnlineUuids,
+            refreshedLocalHostNames: verifiedOnlineNames,
+            refreshedCloud: didRefreshCloud,
+            targetReachable: !verifiedOnlineUuids.isEmpty || didRefreshCloud || channel != .cloudRelay,
+            latencyMs: elapsedMs
+        )
     }
 
     private func fetchCloudSummariesAcrossInstances(

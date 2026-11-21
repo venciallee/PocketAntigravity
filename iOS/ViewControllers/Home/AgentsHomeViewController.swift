@@ -227,7 +227,11 @@ public struct AgentsHomeViewController: View {
                 .padding(.bottom, 96)
             }
             .refreshable {
-                await store.reconnectNow(userInitiated: true)
+                if store.hasPairedBackend && store.isLiveBackendConnected && store.isDeviceNetworkReachable {
+                    _ = await store.refreshConversationsForHostFilter(store.hostFilter, forceFullSync: true)
+                } else {
+                    await store.reconnectNow(userInitiated: true)
+                }
             }
 
             // Subtle bottom obsidian gradient behind floating liquid glass chrome
@@ -428,9 +432,16 @@ public struct AgentsHomeViewController: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(hostSwitcherDotColor)
-                        .frame(width: 8, height: 8)
+                    if store.hasPairedBackend && !store.isVerificationMode && store.isRefreshingActiveHostFilter {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(AntigravityTheme.accentPeriwinkle)
+                            .frame(width: 10, height: 10)
+                    } else {
+                        Circle()
+                            .fill(hostSwitcherDotColor)
+                            .frame(width: 8, height: 8)
+                    }
                     Text(hostSwitcherLabelText)
                         .font(.system(size: 14.5, weight: .medium))
                         .foregroundStyle(UEChromePalette.textPrimary)

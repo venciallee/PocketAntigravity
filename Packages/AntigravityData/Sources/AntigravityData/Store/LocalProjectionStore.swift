@@ -265,4 +265,28 @@ public actor LocalProjectionStore {
         persistOutbox()
         return items
     }
+
+    /// Clears persisted conversation summaries, projects, automations, and per-cascade step caches
+    /// (called on explicit sign-out / disconnect so switching accounts never leaks offline host caches).
+    public func clearCachedProjections() {
+        cachedSummaries.removeAll()
+        cachedProjects.removeAll()
+        cachedAutomations.removeAll()
+        cachedStepsByCascade.removeAll()
+
+        let fm = FileManager.default
+        let fixedFiles = [
+            "summaries_projection.json",
+            "projects_projection.json",
+            "automations_projection.json"
+        ]
+        for name in fixedFiles {
+            try? fm.removeItem(at: storageDirectory.appendingPathComponent(name))
+        }
+        if let contents = try? fm.contentsOfDirectory(at: storageDirectory, includingPropertiesForKeys: nil) {
+            for url in contents where url.lastPathComponent.hasPrefix("steps_") && url.pathExtension == "json" {
+                try? fm.removeItem(at: url)
+            }
+        }
+    }
 }
