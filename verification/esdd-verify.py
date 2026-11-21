@@ -1199,7 +1199,12 @@ def main():
                 raise RuntimeError("wsproto is required for Stage 3/4 Headless Chromium CDP verification (pip install wsproto)")
             if run_stage4 and Image is None:
                 raise RuntimeError("Pillow is required for Stage 4 @3x visual audit (pip install pillow)")
-            chromium_bin = shutil.which("chromium") or shutil.which("google-chrome")
+            chromium_bin = (
+                shutil.which("google-chrome")
+                or shutil.which("google-chrome-stable")
+                or shutil.which("chromium")
+                or shutil.which("chromium-browser")
+            )
             if not chromium_bin:
                 raise RuntimeError("Chromium not found for headless E2E & @3x visual verification")
 
