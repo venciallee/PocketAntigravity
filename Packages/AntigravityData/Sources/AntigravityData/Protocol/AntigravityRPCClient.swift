@@ -1855,16 +1855,21 @@ public actor AntigravityRPCClient {
         var repoDisplay: String? = nil
         for resEntry in resources {
             guard let resObj = resEntry.objectValue else { continue }
-            let nestedCandidate = resObj["remoteResource"]?.objectValue
-                ?? resObj["githubRepo"]?.objectValue
-                ?? resObj["githubRepository"]?.objectValue
-                ?? resObj["gitFolder"]?.objectValue
-            if let rr = nestedCandidate {
-                if let dn = nonEmptyString(rr["displayName"]?.stringValue)
-                    ?? nonEmptyString(rr["fullName"]?.stringValue)
-                    ?? nonEmptyString(rr["name"]?.stringValue)
-                    ?? nonEmptyString(rr["uri"]?.stringValue)
-                    ?? nonEmptyString(rr["folderUri"]?.stringValue) {
+            let nestedCandidates: [[String: JSONValue]?] = [
+                resObj["remoteResource"]?.objectValue,
+                resObj["githubRepo"]?.objectValue,
+                resObj["githubRepository"]?.objectValue,
+                resObj["gitFolder"]?.objectValue
+            ]
+            if let rr = nestedCandidates.compactMap({ $0 }).first {
+                let displayNameCandidates: [String?] = [
+                    rr["displayName"]?.stringValue,
+                    rr["fullName"]?.stringValue,
+                    rr["name"]?.stringValue,
+                    rr["uri"]?.stringValue,
+                    rr["folderUri"]?.stringValue
+                ]
+                if let dn = displayNameCandidates.compactMap(nonEmptyString).first {
                     var normalized = dn
                         .replacingOccurrences(of: "https://github.com/", with: "")
                         .replacingOccurrences(of: "http://github.com/", with: "")
@@ -4523,13 +4528,16 @@ public actor AntigravityRPCClient {
             ?? Int(obj["stepCount"]?.stringValue ?? "")
             ?? 0
 
-        let cloudProjectId = Self.nonEmptyString(trajMeta?["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(trajMeta?["project_id"]?.stringValue)
-            ?? Self.nonEmptyString(obj["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(obj["project_id"]?.stringValue)
-            ?? Self.nonEmptyString(annotations?["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(obj["projectEnvConfig"]?.objectValue?["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(obj["metadata"]?.objectValue?["projectId"]?.stringValue)
+        let projectIdCandidates: [String?] = [
+            trajMeta?["projectId"]?.stringValue,
+            trajMeta?["project_id"]?.stringValue,
+            obj["projectId"]?.stringValue,
+            obj["project_id"]?.stringValue,
+            annotations?["projectId"]?.stringValue,
+            obj["projectEnvConfig"]?.objectValue?["projectId"]?.stringValue,
+            obj["metadata"]?.objectValue?["projectId"]?.stringValue
+        ]
+        let cloudProjectId = projectIdCandidates.compactMap(Self.nonEmptyString).first
         let explicitCloudBool = (obj["cloud"]?.boolValue == true)
             || (obj["isCloud"]?.boolValue == true)
             || (trajMeta?["isCloud"]?.boolValue == true)
@@ -4679,30 +4687,34 @@ public actor AntigravityRPCClient {
             )
         ].compactMap { $0 }
         let updatedDate = candidateUpdateDates.max() ?? Self.parseProtoTimestamp(obj["createdTime"])
-        let lastViewedDate = Self.parseProtoTimestamp(
-            annotations?["lastUserViewTime"]
-                ?? annotations?["last_user_view_time"]
-                ?? annotations?["lastViewedTime"]
-                ?? annotations?["lastReadTime"]
-                ?? obj["lastUserViewTime"]
-                ?? obj["last_user_view_time"]
-                ?? obj["lastViewedTime"]
-                ?? trajMeta?["lastUserViewTime"]
-        )
+        let lastViewedCandidates: [JSONValue?] = [
+            annotations?["lastUserViewTime"],
+            annotations?["last_user_view_time"],
+            annotations?["lastViewedTime"],
+            annotations?["lastReadTime"],
+            obj["lastUserViewTime"],
+            obj["last_user_view_time"],
+            obj["lastViewedTime"],
+            trajMeta?["lastUserViewTime"]
+        ]
+        let lastViewedDate = lastViewedCandidates.compactMap { Self.parseProtoTimestamp($0) }.first
         let updatedAt = updatedDate ?? now
         let relativeLabel = Self.formatRelativeTimeLabel(from: updatedDate, now: now)
 
-        let explicitUnread = obj["isUnread"]?.boolValue
-            ?? obj["unread"]?.boolValue
-            ?? obj["hasUnread"]?.boolValue
-            ?? obj["hasUnreadMessages"]?.boolValue
-            ?? obj["hasUnseenUpdates"]?.boolValue
-            ?? obj["unseen"]?.boolValue
-            ?? annotations?["isUnread"]?.boolValue
-            ?? annotations?["unread"]?.boolValue
-            ?? annotations?["hasUnread"]?.boolValue
-            ?? trajMeta?["unread"]?.boolValue
-            ?? trajMeta?["isUnread"]?.boolValue
+        let unreadCandidates: [Bool?] = [
+            obj["isUnread"]?.boolValue,
+            obj["unread"]?.boolValue,
+            obj["hasUnread"]?.boolValue,
+            obj["hasUnreadMessages"]?.boolValue,
+            obj["hasUnseenUpdates"]?.boolValue,
+            obj["unseen"]?.boolValue,
+            annotations?["isUnread"]?.boolValue,
+            annotations?["unread"]?.boolValue,
+            annotations?["hasUnread"]?.boolValue,
+            trajMeta?["unread"]?.boolValue,
+            trajMeta?["isUnread"]?.boolValue
+        ]
+        let explicitUnread: Bool? = unreadCandidates.compactMap { $0 }.first
 
         let isUnread: Bool
         if let explicitUnread {
