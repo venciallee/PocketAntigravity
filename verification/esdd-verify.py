@@ -18,6 +18,7 @@ Executes all 4 automated ESDD gates:
 import argparse
 import base64
 import json
+import os
 import re
 import shutil
 import socket
@@ -191,12 +192,18 @@ class CDPPageDriver:
         stderr_path = Path(self._user_data_dir) / "chrome-stderr.log"
         try:
             self._stderr_handle = open(stderr_path, "wb")
+            child_env = dict(os.environ)
+            child_env.pop("DBUS_SESSION_BUS_ADDRESS", None)
             self.proc = subprocess.Popen(
                 [
                     self.chromium_bin,
                     "--headless=new",
                     "--no-sandbox",
                     "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-background-networking",
+                    "--disable-sync",
+                    "--metrics-recording-only",
                     "--hide-scrollbars",
                     "--disable-dev-shm-usage",
                     "--no-first-run",
@@ -208,15 +215,17 @@ class CDPPageDriver:
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=self._stderr_handle,
+                env=child_env,
             )
             local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             ws_url = None
-            for _ in range(100):
+            deadline = time.monotonic() + 25.0
+            while time.monotonic() < deadline:
                 if self.proc.poll() is not None:
                     break
                 try:
                     with local_opener.open(
-                        f"http://127.0.0.1:{self.debug_port}/json/list", timeout=1
+                        f"http://127.0.0.1:{self.debug_port}/json/list", timeout=1.5
                     ) as resp:
                         targets = json.loads(resp.read())
                     for t in targets:
@@ -226,7 +235,7 @@ class CDPPageDriver:
                     if ws_url:
                         break
                 except Exception:
-                    time.sleep(0.1)
+                    time.sleep(0.15)
             if not ws_url:
                 stderr_tail = ""
                 try:
@@ -1095,10 +1104,13 @@ def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids
         is_release = bool(plan.get("isRelease", False)) or is_release
         is_full = bool(esdd_plan.get("full", False)) or is_release or bool(args.full)
         mode_label = plan.get("mode", "scoped")
+        run_compat_guardrails = bool(plan.get("gates", {}).get("gate0CompatGuardrails", True)) or is_full or is_release
         if not is_full:
             stages = set(esdd_plan.get("stages", [1]))
             selected_tcs = list(esdd_plan.get("testCases", []))
             selected_screens = list(esdd_plan.get("screens", []))
+    else:
+        run_compat_guardrails = True
 
     if args.stages:
         stages = {int(s.strip()) for s in args.stages.split(",") if s.strip()}
@@ -1116,6 +1128,7 @@ def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids
 
     if args.full or args.release:
         is_full = True
+        run_compat_guardrails = True
         stages = {1, 2, 3, 4}
         selected_tcs = list(all_tcs)
         selected_screens = list(all_state_ids)
@@ -1131,6 +1144,7 @@ def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids
         "mode": mode_label,
         "isFull": is_full,
         "isRelease": is_release,
+        "runCompatGuardrails": run_compat_guardrails,
         "stages": sorted(stages),
         "testCases": selected_tcs,
         "screens": selected_screens,
@@ -1169,7 +1183,10 @@ def main():
     )
 
     print("=== [Stage 1/4] ESDD Spec-DAG & Contract Inspection ===")
-    spec_report = inspect_esdd_spec_and_swift_contracts(repo_root)
+    spec_report = inspect_esdd_spec_and_swift_contracts(
+        repo_root,
+        run_compat_guardrails=scope.get("runCompatGuardrails", True),
+    )
     for chk in spec_report["checks"]:
         print(f"  ✓ {chk}")
     if not spec_report["passed"]:

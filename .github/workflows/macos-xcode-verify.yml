@@ -34,6 +34,7 @@ jobs:
       is_release: ${{ steps.plan.outputs.is_release }}
       needs_macos: ${{ steps.plan.outputs.needs_macos }}
       run_gate1: ${{ steps.plan.outputs.run_gate1 }}
+      run_compat_guardrails: ${{ steps.plan.outputs.run_compat_guardrails }}
       run_gate2_live_rpc: ${{ steps.plan.outputs.run_gate2_live_rpc }}
       run_gate2_v233: ${{ steps.plan.outputs.run_gate2_v233 }}
       run_gate3_ios_build: ${{ steps.plan.outputs.run_gate3_ios_build }}
@@ -62,7 +63,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --github-step-summary "$GITHUB_STEP_SUMMARY"
 
-      - name: "[Gate 0] Script Syntax, Doc-Sync Watcher, Compat Guardrails & Impact Planner Self-Test"
+      - name: "[Gate 0] Script Syntax, Doc-Sync Watcher, Impact-Scoped Compat Guardrails & Planner Self-Test"
         run: |
           set -euo pipefail
           python3 -m py_compile \
@@ -81,7 +82,11 @@ jobs:
             verification/esdd-verify.py
           python3 scripts/verify.py --self-test
           python3 scripts/sync-antigravity-docs.py --self-test
-          python3 verification/verify_compat_guardrails.py
+          if [ "${{ steps.plan.outputs.run_compat_guardrails }}" = "true" ] || [ "${{ steps.plan.outputs.is_release }}" = "true" ]; then
+            python3 verification/verify_compat_guardrails.py
+          else
+            echo "[SKIP] Compatibility static guardrails skipped (Protocol/Models/Store/Bridge untouched)."
+          fi
           python3 verification/e2e_impact_planner.py --self-test
 
       - name: "[Gate 2] Live Connect-RPC Flow, v2.33 Capabilities & 3-Version Compat Matrix (Legacy/Current/Future)"
