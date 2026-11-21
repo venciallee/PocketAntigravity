@@ -44,7 +44,7 @@ public struct SavedBackendCredentials: Codable, Sendable, Equatable {
 /// Isolates sensitive Remote Control credentials (Google OAuth session cookie,
 /// `x-codeium-csrf-token`, and TLS certificate SHA-256 pins) in iOS Keychain.
 /// Credentials are never written to `UserDefaults` or App Group shared containers.
-public actor KeychainStore {
+public actor KeychainStore: SecretStore {
     public static let shared = KeychainStore()
     public static let serviceIdentifier = "com.antigravity.ios.remotecontrol"
     private static let activeCredentialsAccount = "active_backend_credentials_v2"

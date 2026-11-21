@@ -3732,6 +3732,86 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertTrue(postClearHosts.isEmpty)
         XCTAssertTrue(postClearSteps.isEmpty)
     }
+
+    @MainActor
+    func testPlatformPortsInjectedIntoSessionStore() async {
+        let secretStore = InMemorySecretStore()
+        let prefs = InMemoryPreferencesStore()
+        let power = StaticPowerStateProvider(isLowPowerModeEnabled: true)
+        let monitor = NoopNetworkReachabilityMonitor()
+
+        let store = AntigravitySessionStore.makeLiveStore(
+            secretStore: secretStore,
+            networkMonitor: monitor,
+            powerStateProvider: power,
+            preferencesStore: prefs
+        )
+
+        // 1. Power state comes from injected PowerStateProviding
+        XCTAssertTrue(store.isLowPowerModeEnabled)
+
+        // 2. Permission presets persist via injected KeyValuePreferencesStore (zero UserDefaults coupling)
+        store.setActivePermissionPreset(.auto, isRemoteOverride: false)
+        store.setActivePermissionPreset(.requestReview, isRemoteOverride: true)
+        XCTAssertEqual(prefs.string(forKey: "antigravity.ios.permissionPreset.local"), AgentPermissionPreset.auto.rawValue)
+        XCTAssertEqual(prefs.string(forKey: "antigravity.ios.permissionPreset.remote"), AgentPermissionPreset.requestReview.rawValue)
+
+        let reloaded = AntigravitySessionStore.makeLiveStore(
+            secretStore: secretStore,
+            networkMonitor: monitor,
+            powerStateProvider: StaticPowerStateProvider(isLowPowerModeEnabled: false),
+            preferencesStore: prefs
+        )
+        XCTAssertEqual(reloaded.localPermissionPreset, .auto)
+        XCTAssertEqual(reloaded.remotePermissionPreset, .requestReview)
+        XCTAssertFalse(reloaded.isLowPowerModeEnabled)
+
+        // 3. Credentials & Relay API keys route via injected SecretStore (zero Keychain coupling)
+        await secretStore.saveRelayWebApiKey("test-relay-key-123", forOrigin: "https://antigravity.google.com/")
+        let cachedRelayKey = await secretStore.loadRelayWebApiKey(forOrigin: "https://antigravity.google.com")
+        XCTAssertEqual(cachedRelayKey, "test-relay-key-123")
+        await secretStore.clearRelayWebApiKey(forOrigin: "https://antigravity.google.com")
+        let clearedRelayKey = await secretStore.loadRelayWebApiKey(forOrigin: "https://antigravity.google.com")
+        XCTAssertNil(clearedRelayKey)
+
+        await secretStore.saveCredentials(
+            SavedBackendCredentials(
+                endpointURLString: "http://127.0.0.1:8787",
+                channel: .directHost,
+                hostname: "Test Mac",
+                csrfToken: "tok-123"
+            )
+        )
+        let savedBefore = await secretStore.loadCredentials()
+        XCTAssertEqual(savedBefore?.hostname, "Test Mac")
+        await store.disconnectBackendAndClearKeychain()
+        let savedAfter = await secretStore.loadCredentials()
+        XCTAssertNil(savedAfter)
+    }
+
+    func testSemanticIconDecouplingAcrossDataModels() {
+        XCTAssertEqual(Set(MarkdownAlertKind.allCases.map(\.semanticIcon)).count, MarkdownAlertKind.allCases.count)
+        XCTAssertEqual(
+            Set([
+                MarkdownEmbedKind.htmlWidget, .image, .svg, .markdown, .webURL, .sidecar, .generic
+            ].map(\.semanticIcon)).count,
+            7
+        )
+        XCTAssertEqual(Set(AgentPermissionPreset.allCases.map(\.semanticIcon)).count, AgentPermissionPreset.allCases.count)
+        XCTAssertFalse(SlashCommandItem.allCommands.isEmpty)
+        XCTAssertEqual(
+            SlashCommandItem.allCommands.first(where: { $0.command == "/plan" })?.icon,
+            .commandPlan
+        )
+        let customCmds = SlashCommandItem.commands(
+            isRemoteAgent: false,
+            customSkills: [SkillSummary(name: "deploy-kmp", description: "Build KMP", isEnabled: true)]
+        )
+        XCTAssertEqual(
+            customCmds.first(where: { $0.command == "/deploy-kmp" })?.icon,
+            .commandCustomSkill
+        )
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {

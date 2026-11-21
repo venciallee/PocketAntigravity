@@ -84,7 +84,7 @@ public struct PermissionsPresetListCard: View {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(isSelected ? accentColor.opacity(0.18) : Color.white.opacity(0.06))
                         .frame(width: 30, height: 30)
-                    Image(systemName: preset.symbolName)
+                    Image(systemName: preset.semanticIcon.sfSymbolName)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(isSelected ? accentColor : AntigravityTheme.inkSecondary)
                 }

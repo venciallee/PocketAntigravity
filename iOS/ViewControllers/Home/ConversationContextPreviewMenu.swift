@@ -70,7 +70,7 @@ public struct ConversationContextPreviewMenu: View {
                         .foregroundStyle(Color.white)
                     Text("ledger-svc · Gemini 3.1 Pro · 8m")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                 }
 
                 Spacer()
@@ -79,7 +79,7 @@ public struct ConversationContextPreviewMenu: View {
             Text("The flake comes from a shared fake clock across parallel subtests in settlement_test.go. I wrote a plan to isolate it per test — review it before I change anything?")
                 .font(.system(size: 15, weight: .regular))
                 .lineSpacing(3.5)
-                .foregroundStyle(UEChromePalette.textBody)
+                .foregroundStyle(AntigravityTheme.textBody)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 10) {
@@ -89,10 +89,10 @@ public struct ConversationContextPreviewMenu: View {
                     HStack(spacing: 7) {
                         Image(systemName: "doc.text")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textBody)
+                            .foregroundStyle(AntigravityTheme.textBody)
                         Text("Implementation Plan")
                             .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textPrimary)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
                     }
                     .padding(.horizontal, 12)
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -155,7 +155,7 @@ public struct ConversationContextPreviewMenu: View {
                 isPinned.toggle()
             }
 
-            Divider().overlay(UEChromePalette.subtleDivider)
+            Divider().overlay(AntigravityTheme.subtleDivider)
 
             menuRowButton(
                 title: isUnread ? "Mark as Read" : "Mark as Unread",
@@ -167,7 +167,7 @@ public struct ConversationContextPreviewMenu: View {
                 isUnread.toggle()
             }
 
-            Divider().overlay(UEChromePalette.subtleDivider)
+            Divider().overlay(AntigravityTheme.subtleDivider)
 
             menuRowButton(
                 title: "Rename",
@@ -179,7 +179,7 @@ public struct ConversationContextPreviewMenu: View {
                 onDismiss?()
             }
 
-            Divider().overlay(UEChromePalette.subtleDivider)
+            Divider().overlay(AntigravityTheme.subtleDivider)
 
             menuRowButton(
                 title: "Move to Project",
@@ -205,7 +205,7 @@ public struct ConversationContextPreviewMenu: View {
                 onDismiss?()
             }
 
-            Divider().overlay(UEChromePalette.subtleDivider)
+            Divider().overlay(AntigravityTheme.subtleDivider)
 
             menuRowButton(
                 title: "Delete",
@@ -220,7 +220,7 @@ public struct ConversationContextPreviewMenu: View {
         .frame(width: 260)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(UEChromePalette.surfacePopover)
+                .fill(AntigravityTheme.surfacePopover)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -264,7 +264,7 @@ public struct ConversationContextPreviewMenu: View {
             Text("SWIPE SHORTCUT")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
 
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -274,7 +274,7 @@ public struct ConversationContextPreviewMenu: View {
                         .lineLimit(1)
                     Text(swipeTargetArchived ? "Archived · 1h" : "Done · 1h")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                 }
                 .padding(.horizontal, 14)
                 .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
@@ -289,7 +289,7 @@ public struct ConversationContextPreviewMenu: View {
                         Text(swipeTargetPinned ? "Pinned" : "Pin")
                             .font(.system(size: 13, weight: .bold))
                     }
-                    .foregroundStyle(UEChromePalette.inkOnPrimaryCTA)
+                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .frame(width: 78, height: 66)
                     .background(AntigravityTheme.accentPeriwinkle)
                 }
@@ -315,7 +315,7 @@ public struct ConversationContextPreviewMenu: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
         }
         .padding(.top, 2)

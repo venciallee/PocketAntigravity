@@ -131,7 +131,7 @@ public struct CreateProjectSheetView: View {
                     topTrailingRadius: 28,
                     style: .continuous
                 )
-                .fill(UEChromePalette.surfaceSheet)
+                .fill(AntigravityTheme.surfaceSheet)
             )
             .overlay(
                 UnevenRoundedRectangle(
@@ -141,7 +141,7 @@ public struct CreateProjectSheetView: View {
                     topTrailingRadius: 28,
                     style: .continuous
                 )
-                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .padding(.top, 14)
         }
@@ -184,7 +184,7 @@ public struct CreateProjectSheetView: View {
             Text("RUNS ON")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
 
             HStack(spacing: 4) {
                 runsOnSegmentButton(
@@ -201,7 +201,7 @@ public struct CreateProjectSheetView: View {
             .padding(4)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(UEChromePalette.surfaceSheetGroup)
+                    .fill(AntigravityTheme.surfaceSheetGroup)
             )
 
             Text(
@@ -210,7 +210,7 @@ public struct CreateProjectSheetView: View {
                     : "Runs directly in a local workspace or git worktree on MacBook Pro."
             )
             .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(UEChromePalette.textSecondary)
+            .foregroundStyle(AntigravityTheme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -233,7 +233,7 @@ public struct CreateProjectSheetView: View {
                 Text(target.rawValue)
                     .font(.system(size: 14.5, weight: isSelected ? .semibold : .medium))
             }
-            .foregroundStyle(isSelected ? Color.white : UEChromePalette.textSecondary)
+            .foregroundStyle(isSelected ? Color.white : AntigravityTheme.textSecondary)
             .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
             .background(
                 Group {
@@ -256,7 +256,7 @@ public struct CreateProjectSheetView: View {
             Text("SOURCE")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
 
             HStack(spacing: 10) {
                 sourceCardButton(
@@ -285,7 +285,7 @@ public struct CreateProjectSheetView: View {
             VStack(alignment: .leading, spacing: 9) {
                 Image(systemName: symbol)
                     .font(.system(size: 16.5, weight: .semibold))
-                    .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : UEChromePalette.textSecondary)
+                    .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.textSecondary)
                 Text(kind.rawValue)
                     .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(Color.white)
@@ -299,7 +299,7 @@ public struct CreateProjectSheetView: View {
                     .fill(
                         isSelected
                             ? Color(red: 0x1F / 255.0, green: 0x24 / 255.0, blue: 0x30 / 255.0)
-                            : UEChromePalette.surfaceSheetGroup
+                            : AntigravityTheme.surfaceSheetGroup
                     )
             )
             .overlay(
@@ -321,17 +321,17 @@ public struct CreateProjectSheetView: View {
         HStack(spacing: 9) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14.5, weight: .medium))
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
             TextField("Search repositories", text: $repoSearchQuery)
                 .font(.system(size: 15.5, weight: .regular))
-                .foregroundStyle(UEChromePalette.textPrimary)
+                .foregroundStyle(AntigravityTheme.textPrimary)
                 .tint(AntigravityTheme.accentPeriwinkle)
         }
         .padding(.horizontal, 13)
         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
         .background(
             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(UEChromePalette.surfaceSheetGroup)
+                .fill(AntigravityTheme.surfaceSheetGroup)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 13, style: .continuous)
@@ -352,7 +352,7 @@ public struct CreateProjectSheetView: View {
             if visibleRepos.isEmpty {
                 Text("No repositories synced yet — enter a project name below.")
                     .font(.system(size: 13.5, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textSecondary)
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                     .padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
             } else {
@@ -369,7 +369,7 @@ public struct CreateProjectSheetView: View {
                                     .foregroundStyle(Color.white)
                                 Text(repo.metadata)
                                     .font(.system(size: 12.5, weight: .regular))
-                                    .foregroundStyle(UEChromePalette.textSecondary)
+                                    .foregroundStyle(AntigravityTheme.textSecondary)
                             }
                             Spacer()
                             if isSelected {
@@ -387,14 +387,14 @@ public struct CreateProjectSheetView: View {
 
                     if index < visibleRepos.count - 1 {
                         Divider()
-                            .overlay(UEChromePalette.subtleDivider)
+                            .overlay(AntigravityTheme.subtleDivider)
                     }
                 }
             }
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(UEChromePalette.surfaceSheetGroup)
+                .fill(AntigravityTheme.surfaceSheetGroup)
         )
     }
 
@@ -431,10 +431,10 @@ public struct CreateProjectSheetView: View {
                     HStack(spacing: 5) {
                         Text(branchWorktreeLabel)
                             .font(.system(size: 14.5, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                     }
                 }
                 .padding(.horizontal, 14)
@@ -444,7 +444,7 @@ public struct CreateProjectSheetView: View {
             .buttonStyle(.plain)
 
             Divider()
-                .overlay(UEChromePalette.subtleDivider)
+                .overlay(AntigravityTheme.subtleDivider)
 
             HStack {
                 Text("Name")
@@ -453,7 +453,7 @@ public struct CreateProjectSheetView: View {
                 Spacer()
                 TextField("Project name", text: $projectName)
                     .font(.system(size: 14.5, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textBody)
+                    .foregroundStyle(AntigravityTheme.textBody)
                     .multilineTextAlignment(.trailing)
                     .tint(AntigravityTheme.accentPeriwinkle)
             }
@@ -462,7 +462,7 @@ public struct CreateProjectSheetView: View {
 
             if !store.isVerificationMode {
                 Divider()
-                    .overlay(UEChromePalette.subtleDivider)
+                    .overlay(AntigravityTheme.subtleDivider)
 
                 HStack {
                     Text("Drive URL")
@@ -477,7 +477,7 @@ public struct CreateProjectSheetView: View {
                         }
                     ))
                     .font(.system(size: 13.5))
-                    .foregroundStyle(UEChromePalette.textBody)
+                    .foregroundStyle(AntigravityTheme.textBody)
                     .multilineTextAlignment(.trailing)
                     .tint(AntigravityTheme.accentPeriwinkle)
                 }
@@ -485,15 +485,15 @@ public struct CreateProjectSheetView: View {
                 .frame(minHeight: 44)
 
                 Divider()
-                    .overlay(UEChromePalette.subtleDivider)
+                    .overlay(AntigravityTheme.subtleDivider)
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Environment Setup (`env-setup.sh`)")
                         .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                     TextField("e.g. npm ci && go mod download", text: $store.newProjectDraft.envSetupScript)
                         .font(.system(size: 12.5, design: .monospaced))
-                        .foregroundStyle(UEChromePalette.textBody)
+                        .foregroundStyle(AntigravityTheme.textBody)
                         .tint(AntigravityTheme.accentPeriwinkle)
                 }
                 .padding(.horizontal, 14)
@@ -502,7 +502,7 @@ public struct CreateProjectSheetView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(UEChromePalette.surfaceSheetGroup)
+                .fill(AntigravityTheme.surfaceSheetGroup)
         )
     }
 
@@ -526,7 +526,7 @@ public struct CreateProjectSheetView: View {
         } label: {
             Text("Create Project")
                 .font(.system(size: 16.5, weight: .semibold))
-                .foregroundStyle(UEChromePalette.inkOnPrimaryCTA)
+                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                 .frame(maxWidth: .infinity, minHeight: 52)
                 .background(
                     Capsule()

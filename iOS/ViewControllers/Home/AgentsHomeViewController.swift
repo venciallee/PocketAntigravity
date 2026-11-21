@@ -476,21 +476,21 @@ public struct AgentsHomeViewController: View {
                     }
                     Text(hostSwitcherLabelText)
                         .font(.system(size: 14.5, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                 }
                 .padding(.horizontal, 14)
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 .background(
                     Capsule()
-                        .fill(UEChromePalette.surfacePill)
+                        .fill(AntigravityTheme.surfacePill)
                 )
                 .overlay(
                     Capsule()
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
             }
             .accessibilityIdentifier("host-switcher-pill")
@@ -506,15 +506,15 @@ public struct AgentsHomeViewController: View {
             } label: {
                 Image(systemName: "line.3.horizontal.decrease")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                     .background(
                         Circle()
-                            .fill(UEChromePalette.surfacePill)
+                            .fill(AntigravityTheme.surfacePill)
                     )
                     .overlay(
                         Circle()
-                            .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
             }
             .buttonStyle(.plain)
@@ -529,15 +529,15 @@ public struct AgentsHomeViewController: View {
             } label: {
                 Image(systemName: "folder.badge.plus")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                     .background(
                         Circle()
-                            .fill(UEChromePalette.surfacePill)
+                            .fill(AntigravityTheme.surfacePill)
                     )
                     .overlay(
                         Circle()
-                            .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
             }
             .buttonStyle(.plain)
@@ -557,11 +557,11 @@ public struct AgentsHomeViewController: View {
             HStack(spacing: 9) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(UEChromePalette.textMuted)
+                    .foregroundStyle(AntigravityTheme.textMuted)
 
                 TextField("Search conversations", text: $searchText)
                     .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .tint(AntigravityTheme.accentPeriwinkle)
                     .onChange(of: searchText) { _, newValue in
                         if usesLiveStoreData {
@@ -579,7 +579,7 @@ public struct AgentsHomeViewController: View {
                         }
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -588,7 +588,7 @@ public struct AgentsHomeViewController: View {
             .frame(minHeight: AntigravityTheme.minTouchTargetPt)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(UEChromePalette.surfacePill)
+                    .fill(AntigravityTheme.surfacePill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -655,18 +655,18 @@ public struct AgentsHomeViewController: View {
                 }
                 Text(label)
                     .font(.system(size: 13.5, weight: isActive ? .semibold : .medium))
-                    .foregroundStyle(isActive ? AntigravityTheme.canvasObsidian : UEChromePalette.textBody)
+                    .foregroundStyle(isActive ? AntigravityTheme.canvasObsidian : AntigravityTheme.textBody)
                     .lineLimit(1)
             }
             .padding(.horizontal, 11.5)
             .frame(minWidth: 44, minHeight: AntigravityTheme.minTouchTargetPt)
             .background(
                 Capsule()
-                    .fill(isActive ? Color.white : UEChromePalette.surfacePill)
+                    .fill(isActive ? Color.white : AntigravityTheme.surfacePill)
             )
             .overlay(
                 Capsule()
-                    .strokeBorder(isActive ? Color.clear : UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(isActive ? Color.clear : AntigravityTheme.cardBorder, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -680,11 +680,11 @@ public struct AgentsHomeViewController: View {
             HStack(spacing: 5) {
                 Image(systemName: "pin")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textMuted)
+                    .foregroundStyle(AntigravityTheme.textMuted)
                 Text("PINNED")
                     .font(.system(size: 11.5, weight: .semibold))
                     .tracking(0.8)
-                    .foregroundStyle(UEChromePalette.textMuted)
+                    .foregroundStyle(AntigravityTheme.textMuted)
             }
             .padding(.leading, 4)
             .padding(.top, 2)
@@ -694,7 +694,7 @@ public struct AgentsHomeViewController: View {
                     conversationRow(item: item, showProjectSlug: true)
                     if index < filteredPinnedItems.count - 1 {
                         Divider()
-                            .overlay(UEChromePalette.subtleDivider)
+                            .overlay(AntigravityTheme.subtleDivider)
                             .padding(.leading, 44)
                     }
                 }
@@ -703,7 +703,7 @@ public struct AgentsHomeViewController: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("pinned-section-card")
@@ -733,25 +733,25 @@ public struct AgentsHomeViewController: View {
                 } label: {
                     HStack(spacing: 10) {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(UEChromePalette.surfacePill)
+                            .fill(AntigravityTheme.surfacePill)
                             .frame(width: 34, height: 34)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                             )
                             .overlay(
                                 Image(systemName: headerIcon)
                                     .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(UEChromePalette.textBody)
+                                    .foregroundStyle(AntigravityTheme.textBody)
                             )
 
                         VStack(alignment: .leading, spacing: 1) {
                             Text(project.slug)
                                 .font(.system(size: 16.5, weight: .semibold))
-                                .foregroundStyle(UEChromePalette.textPrimary)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                             Text(displayedSubtitle)
                                 .font(.system(size: 12.5, weight: .regular))
-                                .foregroundStyle(UEChromePalette.textMuted)
+                                .foregroundStyle(AntigravityTheme.textMuted)
                         }
                     }
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -767,7 +767,7 @@ public struct AgentsHomeViewController: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textBody)
+                        .foregroundStyle(AntigravityTheme.textBody)
                         .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                         .contentShape(Rectangle())
                 }
@@ -787,7 +787,7 @@ public struct AgentsHomeViewController: View {
                 } label: {
                     Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                         .contentShape(Rectangle())
                 }
@@ -807,7 +807,7 @@ public struct AgentsHomeViewController: View {
                                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                 Text(isNoProj ? "No unassigned conversations yet · Start one" : "No conversations yet · Start one in \(project.slug)")
                                     .font(.system(size: 14, weight: .regular))
-                                    .foregroundStyle(UEChromePalette.textSecondary)
+                                    .foregroundStyle(AntigravityTheme.textSecondary)
                                 Spacer()
                             }
                             .padding(.horizontal, 14)
@@ -820,7 +820,7 @@ public struct AgentsHomeViewController: View {
                             conversationRow(item: item, showProjectSlug: false)
                             if index < project.conversations.count - 1 {
                                 Divider()
-                                    .overlay(UEChromePalette.subtleDivider)
+                                    .overlay(AntigravityTheme.subtleDivider)
                                     .padding(.leading, 44)
                             }
                         }
@@ -830,7 +830,7 @@ public struct AgentsHomeViewController: View {
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
             }
         }
@@ -927,7 +927,7 @@ public struct AgentsHomeViewController: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(item.title)
                                 .font(.system(size: 15.5, weight: .semibold))
-                                .foregroundStyle(UEChromePalette.textPrimary)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                                 .lineLimit(1)
                             Spacer(minLength: 6)
                             if item.indicator == .runningArc {
@@ -938,7 +938,7 @@ public struct AgentsHomeViewController: View {
                             } else {
                                 Text(item.timestampLabel)
                                     .font(.system(size: 12.5, weight: .regular))
-                                    .foregroundStyle(UEChromePalette.textMuted)
+                                    .foregroundStyle(AntigravityTheme.textMuted)
                             }
                         }
 
@@ -965,7 +965,7 @@ public struct AgentsHomeViewController: View {
                                 : cleanSlug
                             Text(displaySlug)
                                 .font(.system(size: 12.5, weight: .regular))
-                                .foregroundStyle(UEChromePalette.textMuted)
+                                .foregroundStyle(AntigravityTheme.textMuted)
                         }
                     }
                 }
@@ -973,7 +973,7 @@ public struct AgentsHomeViewController: View {
                 if store.isLiveBackendConnected && item.indicator != .runningArc {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textMuted.opacity(0.65))
+                        .foregroundStyle(AntigravityTheme.textMuted.opacity(0.65))
                 }
             }
             .padding(.horizontal, 14)
@@ -1054,7 +1054,7 @@ public struct AgentsHomeViewController: View {
         switch tone {
         case .running: return AntigravityTheme.statusRunning
         case .waiting: return AntigravityTheme.statusWaiting
-        case .neutral: return UEChromePalette.textSecondary
+        case .neutral: return AntigravityTheme.textSecondary
         }
     }
 
@@ -1078,7 +1078,7 @@ public struct AgentsHomeViewController: View {
                     .tint(AntigravityTheme.accentPeriwinkle)
                 Text(syncingStatusMessage)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(UEChromePalette.textSecondary)
+                .foregroundStyle(AntigravityTheme.textSecondary)
             } else if selectedHost == .antigravityCloud && searchText.isEmpty && selectedFilter == .all {
                 Image(systemName: "cloud")
                     .font(.system(size: 28, weight: .light))
@@ -1092,7 +1092,7 @@ public struct AgentsHomeViewController: View {
                         : "Create a Cloud project connected to GitHub or start a Cloud Agent session from Antigravity."
                 )
                 .font(.system(size: 13.5, weight: .regular))
-                .foregroundStyle(UEChromePalette.textSecondary)
+                .foregroundStyle(AntigravityTheme.textSecondary)
                 .multilineTextAlignment(.center)
 
                 Button {
@@ -1126,7 +1126,7 @@ public struct AgentsHomeViewController: View {
                     .foregroundStyle(Color.white)
                 Text("Ensure Antigravity Desktop with Remote Control is running on \(selectedHostDisplayName), or choose another host above.")
                     .font(.system(size: 13.5, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textSecondary)
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                     .multilineTextAlignment(.center)
 
                 Button {
@@ -1151,7 +1151,7 @@ public struct AgentsHomeViewController: View {
             } else {
                 Image(systemName: searchText.isEmpty && selectedFilter == .all ? "bubble.left.and.bubble.right" : "magnifyingglass")
                     .font(.system(size: 28, weight: .light))
-                    .foregroundStyle(UEChromePalette.textMuted)
+                    .foregroundStyle(AntigravityTheme.textMuted)
                 Text(
                     searchText.isEmpty && selectedFilter == .all
                         ? "No conversations yet"
@@ -1165,7 +1165,7 @@ public struct AgentsHomeViewController: View {
                         : "Try clearing your search or switching filters."
                 )
                 .font(.system(size: 13.5, weight: .regular))
-                .foregroundStyle(UEChromePalette.textSecondary)
+                .foregroundStyle(AntigravityTheme.textSecondary)
                 .multilineTextAlignment(.center)
             }
         }
@@ -1178,7 +1178,7 @@ public struct AgentsHomeViewController: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
         )
         .padding(.top, 8)
         .accessibilityIdentifier("agents-empty-state")

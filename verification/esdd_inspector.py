@@ -225,8 +225,8 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
     # 7. Zero Hardcoded Google API Key Secret Hygiene
     google_key_re = re.compile(r"(?<![0-9A-Za-z_-])" + "AI" + "za" + r"[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")
     secret_hits = []
-    scan_dirs = ["Packages", "iOS", "Shared", "Extensions", "verification", "scripts"]
-    scan_exts = {".swift", ".py", ".sh", ".yml", ".yaml", ".json", ".plist"}
+    scan_dirs = ["Packages", "iOS", "Shared", "Extensions", "shared", "verification", "scripts"]
+    scan_exts = {".swift", ".kt", ".py", ".sh", ".yml", ".yaml", ".json", ".plist"}
     for d in scan_dirs:
         base_d = repo_root / d
         if not base_d.exists():

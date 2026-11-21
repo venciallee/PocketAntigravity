@@ -38,7 +38,7 @@ public struct RemoteControlQRScannerSheet: View {
                 } label: {
                     Text("Cancel")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 }
                 .buttonStyle(.plain)
@@ -105,13 +105,13 @@ public struct RemoteControlQRScannerSheet: View {
             .frame(height: (isCameraAvailable && !showManualEntry) ? 360 : 260)
             .overlay(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .padding(.horizontal, 16)
 
             Text("Open Antigravity on Mac/PC → click **Remote Control** and point your camera at the QR code.")
                 .font(.system(size: 13.5, weight: .regular))
-                .foregroundStyle(UEChromePalette.textSecondary)
+                .foregroundStyle(AntigravityTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
 
@@ -132,7 +132,7 @@ public struct RemoteControlQRScannerSheet: View {
                     Text("Choose QR from Photos")
                         .font(.system(size: 15, weight: .semibold))
                 }
-                .foregroundStyle(UEChromePalette.textPrimary)
+                .foregroundStyle(AntigravityTheme.textPrimary)
                 .frame(maxWidth: .infinity, minHeight: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -140,7 +140,7 @@ public struct RemoteControlQRScannerSheet: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
@@ -157,7 +157,7 @@ public struct RemoteControlQRScannerSheet: View {
                 HStack(spacing: 8) {
                     TextField("https://antigravity.google.com/r/... or device ID", text: $manualLinkDraft)
                         .font(.system(size: 13, weight: .regular, design: .monospaced))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .padding(.horizontal, 12)
@@ -170,7 +170,7 @@ public struct RemoteControlQRScannerSheet: View {
                     } label: {
                         Text("Connect")
                             .font(.system(size: 14.5, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.inkOnPrimaryCTA)
+                            .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                             .padding(.horizontal, 16)
                             .frame(minHeight: 46)
                             .background(
@@ -211,7 +211,7 @@ public struct RemoteControlQRScannerSheet: View {
                 .foregroundStyle(Color.white)
             Text("Choose a QR screenshot from Photos or paste the https://antigravity.google.com/r/... link below.")
                 .font(.system(size: 12.5, weight: .regular))
-                .foregroundStyle(UEChromePalette.textSecondary)
+                .foregroundStyle(AntigravityTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 28)
         }

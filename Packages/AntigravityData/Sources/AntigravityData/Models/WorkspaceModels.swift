@@ -1254,18 +1254,18 @@ public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIte
         }
     }
 
-    public var symbolName: String {
+    public var semanticIcon: SemanticIcon {
         switch self {
         case .requestReview:
-            return "eye"
+            return .permissionReview
         case .defaultPolicy:
-            return "lock"
+            return .permissionSandbox
         case .auto:
-            return "checkmark.shield"
+            return .permissionAuto
         case .turbo:
-            return "exclamationmark.shield"
+            return .permissionTurbo
         case .inheritGlobal:
-            return "slider.horizontal.3"
+            return .permissionInheritGlobal
         }
     }
 
@@ -1637,7 +1637,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
     public var command: String
     public var title: String
     public var summary: String
-    public var iconName: String
+    public var icon: SemanticIcon
     public var category: SlashCommandCategory
     public var availableInRemoteAgent: Bool
     public var requiresPaidPlan: Bool
@@ -1646,7 +1646,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
         command: String,
         title: String,
         summary: String,
-        iconName: String,
+        icon: SemanticIcon,
         category: SlashCommandCategory = .featured,
         availableInRemoteAgent: Bool = true,
         requiresPaidPlan: Bool = false
@@ -1654,7 +1654,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
         self.command = command
         self.title = title
         self.summary = summary
-        self.iconName = iconName
+        self.icon = icon
         self.category = category
         self.availableInRemoteAgent = availableInRemoteAgent
         self.requiresPaidPlan = requiresPaidPlan
@@ -1666,28 +1666,28 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             command: "/plan",
             title: "Implementation Plan",
             summary: "Draft a reviewable step-by-step architecture & verification plan before coding",
-            iconName: "doc.text.magnifyingglass",
+            icon: .commandPlan,
             category: .featured
         ),
         SlashCommandItem(
             command: "/grill-me",
             title: "Design Alignment Interview",
             summary: "Clarify ambiguous trade-offs via structured interactive question cards",
-            iconName: "questionmark.bubble.fill",
+            icon: .commandGrillMe,
             category: .featured
         ),
         SlashCommandItem(
             command: "/goal",
             title: "Autonomous Goal Loop",
             summary: "Run thorough multi-turn execution until all acceptance criteria pass",
-            iconName: "flag.checkered.2.crossed",
+            icon: .commandGoal,
             category: .featured
         ),
         SlashCommandItem(
             command: "/boost",
             title: "Deep Reasoning Boost",
             summary: "Iterative multi-agent deep reasoning & adversarial verification pass",
-            iconName: "bolt.fill",
+            icon: .commandBoost,
             category: .featured,
             requiresPaidPlan: true
         ),
@@ -1695,7 +1695,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             command: "/swarm",
             title: "Agent Swarm Board",
             summary: "Coordinate named parallel workers & a verifier over a shared message board",
-            iconName: "hexagon.fill",
+            icon: .commandSwarm,
             category: .featured,
             requiresPaidPlan: true
         ),
@@ -1703,7 +1703,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             command: "/teamwork",
             title: "Collaborative Agent Team",
             summary: "Multi-milestone agent team with scoping interview, Orchestrator & Auditor gates",
-            iconName: "person.3.sequence.fill",
+            icon: .commandTeamwork,
             category: .featured,
             requiresPaidPlan: true
         ),
@@ -1711,7 +1711,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             command: "/run-workflow",
             title: "Dynamic Python Workflow",
             summary: "Generate & approve a Python script orchestrating parallel() / pipeline() agents",
-            iconName: "flowchart.fill",
+            icon: .commandWorkflow,
             category: .featured,
             requiresPaidPlan: true
         ),
@@ -1719,7 +1719,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             command: "/btw",
             title: "Side Question Tab",
             summary: "Ask a multi-turn read-only side question without interrupting the main thread",
-            iconName: "bubble.left.and.text.bubble.right.fill",
+            icon: .commandSideQuestion,
             category: .appAndCLI,
             availableInRemoteAgent: false
         ),
@@ -1727,14 +1727,14 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             command: "/schedule",
             title: "In-Conversation Schedule",
             summary: "Set a timer or recurring cron check-in inside the active conversation",
-            iconName: "clock.badge.checkmark",
+            icon: .commandSchedule,
             category: .appAndCLI
         ),
         SlashCommandItem(
             command: "/browser",
             title: "Browser Subagent",
             summary: "Launch a browser subagent to playtest pages, inspect console/network & capture screenshots",
-            iconName: "safari.fill",
+            icon: .commandBrowser,
             category: .appAndCLI,
             availableInRemoteAgent: false
         ),
@@ -1742,42 +1742,42 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             command: "/learn",
             title: "Learn Rules & Skills",
             summary: "Capture corrections from this session into persistent rules and skills",
-            iconName: "sparkles",
+            icon: .commandLearn,
             category: .appAndCLI
         ),
         SlashCommandItem(
             command: "/agy-customizations",
             title: "Manage Customizations",
             summary: "Inspect and author rules, skills, plugins, hooks, and MCP servers",
-            iconName: "slider.horizontal.3",
+            icon: .commandCustomizations,
             category: .appAndCLI
         ),
         SlashCommandItem(
             command: "/antigravity-guide",
             title: "Antigravity Guide",
             summary: "Interactive built-in guide to Antigravity 2.0 features and workflows",
-            iconName: "book.fill",
+            icon: .commandGuide,
             category: .appAndCLI
         ),
         SlashCommandItem(
             command: "/automation",
             title: "Create Automation",
             summary: "Walk through creating a recurring scheduled automation across projects",
-            iconName: "clock.arrow.circlepath",
+            icon: .commandAutomation,
             category: .appOnly
         ),
         SlashCommandItem(
             command: "/generative_ui",
             title: "Interactive Generative UI",
             summary: "Render rich interactive HTML charts, diagrams, and control widgets inline",
-            iconName: "wand.and.stars",
+            icon: .commandGenerativeUI,
             category: .appOnly
         ),
         SlashCommandItem(
             command: "/voice",
             title: "Voice Mode",
             summary: "Start Gemini Live interactive voice session with your agent",
-            iconName: "waveform.circle",
+            icon: .commandVoice,
             category: .appOnly,
             availableInRemoteAgent: true
         )
@@ -1793,7 +1793,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
                         command: cmd,
                         title: skill.name,
                         summary: skill.description,
-                        iconName: "cube",
+                        icon: .commandCustomSkill,
                         category: .customSkill
                     )
                 )

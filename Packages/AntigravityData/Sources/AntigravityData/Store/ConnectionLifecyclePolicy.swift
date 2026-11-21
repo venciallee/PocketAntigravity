@@ -178,7 +178,7 @@ public enum ConnectionPowerPolicy: Sendable {
 
 /// Pure Swift 6 `NWPathMonitor` wrapper (zero `UIKit` dependency) for detecting iPhone network loss
 /// and Wi-Fi ↔ 5G interface handoffs.
-public final class NetworkPathObserver: @unchecked Sendable {
+public final class NetworkPathObserver: NetworkReachabilityMonitoring, @unchecked Sendable {
     #if canImport(Network)
     private let queue = DispatchQueue(label: "dev.antigravity.ios.network-path-observer", qos: .utility)
     private var monitor: NWPathMonitor?
