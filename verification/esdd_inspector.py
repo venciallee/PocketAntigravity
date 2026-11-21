@@ -137,7 +137,7 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
         checks.append("All 13 UE states covered by executable acceptance claims (CLAIM-01..CLAIM-13)")
 
     # 5. Non-blocking Swift 6 Source Tree Inspection
-    swift_dirs = ["Packages", "iOS", "Shared", "Extensions"]
+    swift_dirs = ["apps/ios/Packages", "apps/ios/App", "apps/ios/SharedUI", "apps/ios/Extensions"]
     swift_files = []
     for d in swift_dirs:
         p = repo_root / d
@@ -168,8 +168,8 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
             f"Swift source scan completed ({len(swift_files)} Swift files; {len(matched_controllers)}/{len(states_list)} v2 controllers present)"
         )
 
-    # Enforce AGENTS.md Rule 1: Packages/AntigravityData never imports UIKit, WebKit, or AVFoundation
-    pkg_dir = repo_root / "Packages" / "AntigravityData"
+    # Enforce AGENTS.md Rule 1: apps/ios/Packages/AntigravityData never imports UIKit, WebKit, or AVFoundation
+    pkg_dir = repo_root / "apps" / "ios" / "Packages" / "AntigravityData"
     forbidden_pkg_imports = []
     for pf in pkg_dir.rglob("*.swift"):
         txt = pf.read_text(encoding="utf-8", errors="ignore")
@@ -178,14 +178,14 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
             if stripped in ("import UIKit", "import WebKit", "import AVFoundation"):
                 forbidden_pkg_imports.append(f"{pf.relative_to(repo_root)}:{stripped}")
     if forbidden_pkg_imports:
-        errors.append(f"Packages/AntigravityData violated pure-Swift rule: {forbidden_pkg_imports}")
+        errors.append(f"apps/ios/Packages/AntigravityData violated pure-Swift rule: {forbidden_pkg_imports}")
     else:
         checks.append(
             "Pure Swift 6 AntigravityData isolation verified (zero UIKit/WebKit/AVFoundation imports; Official Cloud Relay + QR Scanner grounded)"
         )
 
     # 6. Validate Original AppIcon (1024x1024 opaque RGB) & App Store 5.2.2 Companion Compliance
-    appicon_dir = repo_root / "iOS" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
+    appicon_dir = repo_root / "apps" / "ios" / "App" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
     expected_icons = ["AppIcon.png", "AppIcon-Dark.png", "AppIcon-Tinted.png"]
     missing_icons = [name for name in expected_icons if not (appicon_dir / name).exists()]
     if missing_icons:
@@ -225,7 +225,7 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
     # 7. Zero Hardcoded Google API Key Secret Hygiene
     google_key_re = re.compile(r"(?<![0-9A-Za-z_-])" + "AI" + "za" + r"[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")
     secret_hits = []
-    scan_dirs = ["Packages", "iOS", "Shared", "Extensions", "shared", "verification", "scripts"]
+    scan_dirs = ["apps", "shared", "tests", "verification", "scripts"]
     scan_exts = {".swift", ".kt", ".py", ".sh", ".yml", ".yaml", ".json", ".plist"}
     for d in scan_dirs:
         base_d = repo_root / d
