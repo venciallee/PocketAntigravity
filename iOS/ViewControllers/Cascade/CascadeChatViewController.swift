@@ -96,7 +96,7 @@ public struct CascadeChatViewController: View {
             fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
         )
         if store.hasPairedBackend && !isActiveSessionHostOnline {
-            return "\(hostTitle) · Offline"
+            return "Offline · \(hostTitle)"
         }
         return hostTitle
     }
@@ -381,7 +381,23 @@ public struct CascadeChatViewController: View {
                 Button {
                     if !store.isDeviceNetworkReachable || !isActiveSessionHostOnline {
                         Task {
-                            await store.reconnectNow(userInitiated: true)
+                            if !isActiveSessionCloud,
+                               let originId = store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid,
+                               !originId.isEmpty {
+                                let hostLabel = store.resolvedHostName(
+                                    forInstanceUuid: originId,
+                                    fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
+                                )
+                                let hostReachable = await store.refreshConversationsForHostScope(
+                                    .localHost(id: originId, name: hostLabel),
+                                    forceFullSync: true
+                                )
+                                if hostReachable {
+                                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                                }
+                            } else {
+                                await store.reconnectNow(userInitiated: true)
+                            }
                         }
                     } else {
                         store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)

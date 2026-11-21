@@ -226,7 +226,11 @@ public struct AgentsHomeViewController: View {
                 .padding(.bottom, 96)
             }
             .refreshable {
-                await store.reconnectNow(userInitiated: true)
+                if store.hasPairedBackend && store.isDeviceNetworkReachable && isSelectedHostOnline {
+                    _ = await store.refreshConversationsForHostScope(store.selectedHostScope, forceFullSync: true)
+                } else {
+                    await store.reconnectNow(userInitiated: true)
+                }
             }
 
             // Subtle bottom obsidian gradient behind floating liquid glass chrome
@@ -397,7 +401,11 @@ public struct AgentsHomeViewController: View {
                     if store.hasPairedBackend {
                         Button {
                             Task {
-                                await store.reconnectNow(userInitiated: true)
+                                if isSelectedHostOnline {
+                                    _ = await store.refreshConversationsForHostScope(selectedHost, forceFullSync: true)
+                                } else {
+                                    await store.reconnectNow(userInitiated: true)
+                                }
                             }
                         } label: {
                             Label(
@@ -457,9 +465,15 @@ public struct AgentsHomeViewController: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(hostSwitcherDotColor)
-                        .frame(width: 8, height: 8)
+                    if store.isRefreshingSelectedHost || store.isSwitchingHost {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(AntigravityTheme.accentPeriwinkle)
+                    } else {
+                        Circle()
+                            .fill(hostSwitcherDotColor)
+                            .frame(width: 8, height: 8)
+                    }
                     Text(hostSwitcherLabelText)
                         .font(.system(size: 14.5, weight: .medium))
                         .foregroundStyle(UEChromePalette.textPrimary)

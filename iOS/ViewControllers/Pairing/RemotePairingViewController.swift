@@ -230,17 +230,49 @@ public struct RemotePairingViewController: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("btn-open-customizations-settings")
 
-                // Multi-instance switcher (shown only when >1 Desktop instance is online on the signed-in Google account)
+                // Multi-instance switcher (shown only when >1 Desktop instance is paired on the signed-in Google account)
                 if store.availableRelayInstances.count > 1 {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("AVAILABLE HOSTS")
-                            .font(.system(size: 11, weight: .semibold))
-                            .tracking(0.7)
-                            .foregroundStyle(UEChromePalette.textMuted)
+                        HStack {
+                            Text("AVAILABLE HOSTS")
+                                .font(.system(size: 11, weight: .semibold))
+                                .tracking(0.7)
+                                .foregroundStyle(UEChromePalette.textMuted)
+                            Spacer()
+                            Button {
+                                Task {
+                                    await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    if store.isRefreshingRelayHosts {
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                            .tint(AntigravityTheme.accentPeriwinkle)
+                                        Text("Probing...")
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                            .font(.system(size: 10.5, weight: .semibold))
+                                        Text("Refresh")
+                                    }
+                                }
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(store.isRefreshingRelayHosts)
+                            .accessibilityIdentifier("btn-refresh-hosts")
+                        }
 
                         ForEach(store.availableRelayInstances) { inst in
-                            let isSelected = (store.activeHost.instanceId == inst.uuid)
+                            let isSelected: Bool = {
+                                if case let .localHost(filterId, _) = store.selectedHostScope {
+                                    return filterId == inst.uuid
+                                }
+                                return store.activeHost.instanceId == inst.uuid
+                            }()
                             let isInstOnline = store.isDeviceNetworkReachable && inst.status.isReachable
+                            let isRefreshingThisHost = store.isRefreshingHost(instanceId: inst.uuid, hostname: inst.name)
                             Button {
                                 Task {
                                     let connected = await store.switchToRelayInstance(inst)
@@ -277,10 +309,14 @@ public struct RemotePairingViewController: View {
                                             .foregroundStyle(isInstOnline ? Color.white : UEChromePalette.textSecondary)
                                         Text("\(isInstOnline ? inst.status.badgeText : "Offline") · \(inst.version)")
                                             .font(.system(size: 11.5, weight: .regular, design: .monospaced))
-                                            .foregroundStyle(UEChromePalette.textSecondary)
+                                            .foregroundStyle(isInstOnline ? UEChromePalette.textSecondary : AntigravityTheme.statusError)
                                     }
                                     Spacer()
-                                    if isSelected {
+                                    if isRefreshingThisHost {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .tint(AntigravityTheme.accentPeriwinkle)
+                                    } else if isSelected {
                                         Image(systemName: "checkmark.circle.fill")
                                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                     }
@@ -328,9 +364,17 @@ public struct RemotePairingViewController: View {
             .padding(.bottom, 24)
         }
         .refreshable {
+            if store.hasPairedBackend && !store.isVerificationMode {
+                await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+            }
             await store.reconnectNow(userInitiated: true)
         }
         .background(AntigravityTheme.canvasObsidian)
+        .task {
+            if store.hasPairedBackend && !store.isVerificationMode && store.activeHost.channel == .cloudRelay {
+                await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+            }
+        }
         .onChange(of: externalScannerTrigger?.wrappedValue ?? false) { _, triggered in
             if triggered {
                 isShowingQRScanner = true
