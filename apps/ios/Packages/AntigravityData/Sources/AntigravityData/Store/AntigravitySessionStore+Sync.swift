@@ -1010,7 +1010,9 @@ extension AntigravitySessionStore {
         // Confirmed-offline peer Mac (while another Mac is online), iPhone no-network, or pre-handshake cold start:
         // serve persisted steps immediately from disk without issuing cross-host failover RPCs against another online Mac.
         guard isDeviceNetworkReachable, !isConfirmedOfflinePeerHost, let client = rpcClient else {
-            let isActivelyConnecting = isConnectingToBackend || connectionLifecyclePhase == .connecting
+            let isActivelyConnecting = !isConfirmedOfflinePeerHost
+                && !isLiveBackendConnected
+                && (isConnectingToBackend || connectionLifecyclePhase == .connecting)
             let offlineHostLabel = initialSummary?.originHostName ?? activeHost.hostname
             let shouldNoteUncachedOffline = isKnownOfflineLocal && !isBrandNewEmptySession && !isActivelyConnecting
             if (stepsByCascadeId[cascadeId] ?? []).isEmpty {
@@ -1035,8 +1037,12 @@ extension AntigravitySessionStore {
                     } else if shouldNoteUncachedOffline && self.activeCascadeId == cascadeId {
                         self.isLoadingSteps = false
                         self.stepLoadErrorText = "\(offlineHostLabel) is currently offline and this conversation has not been cached on this device yet."
-                    } else if !self.isConnectingToBackend && self.connectionLifecyclePhase != .connecting && self.activeCascadeId == cascadeId {
-                        self.isLoadingSteps = false
+                    } else {
+                        let stillConnecting = !self.isLiveBackendConnected
+                            && (self.isConnectingToBackend || self.connectionLifecyclePhase == .connecting)
+                        if !stillConnecting && self.activeCascadeId == cascadeId {
+                            self.isLoadingSteps = false
+                        }
                     }
                 }
             } else {

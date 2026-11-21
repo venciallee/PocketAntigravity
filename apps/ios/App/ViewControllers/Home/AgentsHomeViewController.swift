@@ -360,6 +360,7 @@ public struct AgentsHomeViewController: View {
         !store.isVerificationMode
             && store.hasPairedBackend
             && store.isDeviceNetworkReachable
+            && !store.isLiveBackendConnected
             && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting)
     }
 

@@ -96,7 +96,7 @@ public struct CascadeChatViewController: View {
             fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
         )
         if store.hasPairedBackend && !isActiveSessionHostOnline {
-            if store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting {
+            if !store.isLiveBackendConnected && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting) {
                 return "Connecting · \(hostTitle)"
             }
             return "Offline · \(hostTitle)"
@@ -341,7 +341,8 @@ public struct CascadeChatViewController: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat-pending-draft-card")
         } else if (store.hasPairedBackend || store.isLiveBackendConnected)
-            && (store.isLoadingSteps || store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting) {
+            && (store.isLoadingSteps
+                || (!store.isLiveBackendConnected && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting))) {
             HStack(spacing: 12) {
                 AntigravityFourDotLoadingView(
                     isAnimated: shouldAnimateLive,
@@ -354,7 +355,7 @@ public struct CascadeChatViewController: View {
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                     Text(
-                        store.isConnectingToBackend
+                        (!store.isLiveBackendConnected && store.isConnectingToBackend)
                             ? "Connecting to \(effectiveHeaderHostLabel)..."
                             : "Syncing trajectory steps from \(effectiveHeaderHostLabel)"
                     )
