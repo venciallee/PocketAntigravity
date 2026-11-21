@@ -58,12 +58,14 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --github-step-summary "$GITHUB_STEP_SUMMARY"
 
-      - name: "[Gate 0] Script Syntax, Doc-Sync Watcher, Compat Guardrails & Impact Planner Self-Test"
+      - name: "[Gate 0] Script Syntax, Doc-Sync Watcher, Compat Guardrails, CR Agent & Impact Planner Self-Test"
         run: |
           set -euo pipefail
           python3 -m py_compile \
             scripts/sync-antigravity-docs.py \
             scripts/run-doc-sync-agent.py \
+            scripts/run-cr-agent.py \
+            scripts/cr_agent/*.py \
             scripts/mac-companion-bridge.py \
             verification/mock_language_server.py \
             verification/verify-live-rpc-flow.py \
@@ -76,6 +78,7 @@ jobs:
             verification/esdd-verify.py
           python3 scripts/sync-antigravity-docs.py --self-test
           python3 verification/verify_compat_guardrails.py
+          python3 scripts/run-cr-agent.py --validate-config --self-test
           python3 verification/e2e_impact_planner.py --self-test
 
       - name: "[Gate 2] Live Connect-RPC Flow, v2.33 Capabilities & 3-Version Compat Matrix (Legacy/Current/Future)"

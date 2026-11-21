@@ -1,0 +1,291 @@
+name: Client & Security Compliance CR Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Review mode (shadow = artifacts only, comment = Sticky + Inline comments, enforce = block on P0)"
+        required: false
+        default: "shadow"
+        type: choice
+        options:
+          - shadow
+          - comment
+          - enforce
+
+permissions: {}
+
+concurrency:
+  group: cr-agent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gatekeeper:
+    name: "[Stage 0] Config Validation, Eval Suite & Rebase Gate"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      should_review: ${{ steps.gate.outputs.should_review }}
+      is_fork: ${{ steps.gate.outputs.is_fork }}
+      effective_mode: ${{ steps.gate.outputs.effective_mode }}
+      base_sha: ${{ steps.gate.outputs.base_sha }}
+      head_sha: ${{ steps.gate.outputs.head_sha }}
+
+    steps:
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate CR Agent Config & Run Offline Eval Regression Suite
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/run-cr-agent.py scripts/cr_agent/*.py
+          python3 scripts/run-cr-agent.py --validate-config --self-test
+
+      - name: Evaluate Fork Isolation, Mode & Pure-Rebase Skip (git patch-id)
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+          REPO_MODE: ${{ vars.CR_AGENT_MODE || 'comment' }}
+          DISPATCH_MODE: ${{ inputs.mode || 'shadow' }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          is_fork="false"
+          should_review="true"
+          effective_mode="${REPO_MODE}"
+          base_sha="${BASE_SHA}"
+          head_sha="${HEAD_SHA}"
+
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            effective_mode="${DISPATCH_MODE}"
+            base_sha="$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD~1)"
+            head_sha="$(git rev-parse HEAD)"
+          else
+            if [ -n "${HEAD_REPO}" ] && [ "${HEAD_REPO}" != "${BASE_REPO}" ]; then
+              is_fork="true"
+            fi
+
+            if [ "${IS_DRAFT}" = "true" ]; then
+              echo "PR is Draft; skipping automated AI review."
+              should_review="false"
+            fi
+
+            if [ "${REPO_MODE}" = "label" ]; then
+              effective_mode="comment"
+              if [[ ",${PR_LABELS}," != *",ai-review,"* ]]; then
+                echo "CR_AGENT_MODE=label and 'ai-review' label not present; skipping AI review."
+                should_review="false"
+              fi
+            fi
+
+            if [ "${should_review}" = "true" ] && [ "${EVENT_ACTION}" = "synchronize" ] && [ -n "${BEFORE_SHA}" ] && [ -n "${AFTER_SHA}" ]; then
+              python3 scripts/run-cr-agent.py \
+                --check-rebase \
+                --base-ref "origin/${BASE_REF}" \
+                --before "${BEFORE_SHA}" \
+                --after "${AFTER_SHA}" \
+                --github-output "$GITHUB_OUTPUT"
+              if grep -q "^pure_rebase=true$" "$GITHUB_OUTPUT" 2>/dev/null; then
+                echo "Pure rebase detected via git patch-id; skipping redundant review."
+                should_review="false"
+              fi
+            fi
+          fi
+
+          {
+            echo "should_review=${should_review}"
+            echo "is_fork=${is_fork}"
+            echo "effective_mode=${effective_mode}"
+            echo "base_sha=${base_sha}"
+            echo "head_sha=${head_sha}"
+          } >> "$GITHUB_OUTPUT"
+
+  deterministic-security-gate:
+    name: "[Stage 1] Deterministic Security, Secrets, License & Guardrails Gate"
+    needs: gatekeeper
+    if: needs.gatekeeper.outputs.should_review == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Secret Scan (Gitleaks)
+        if: github.event_name == 'pull_request'
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dependency CVE & Copyleft License Compliance
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0, SSPL-1.0
+
+      - name: Run Deterministic Layer 1 Mobile Security & Compliance Scan
+        id: layer1
+        env:
+          BASE_SHA: ${{ needs.gatekeeper.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.gatekeeper.outputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+        run: |
+          set -euo pipefail
+          mkdir -p cr-agent-out
+          python3 scripts/run-cr-agent.py \
+            --layer1-only \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}" \
+            --pr "${PR_NUMBER}" \
+            --json-out cr-agent-out/static-findings.json \
+            --sarif-out cr-agent-out/cr-agent.sarif \
+            --summary-md-out cr-agent-out/layer1-summary.md \
+            --fail-on none
+
+      - name: Upload Layer 1 SARIF to GitHub Code Scanning
+        if: always() && needs.gatekeeper.outputs.is_fork != 'true' && hashFiles('cr-agent-out/cr-agent.sarif') != ''
+        uses: github/codeql-action/upload-sarif@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3
+        with:
+          sarif_file: cr-agent-out/cr-agent.sarif
+          category: client-security-cr-agent
+
+      - name: Upload Layer 1 Artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cr-agent-static-findings
+          path: cr-agent-out/
+          retention-days: 14
+
+      - name: Enforce Layer 1 Deterministic P0 Hard Gate
+        run: |
+          set -euo pipefail
+          python3 -c '
+          import json, sys
+          data = json.load(open("cr-agent-out/static-findings.json", encoding="utf-8"))
+          p0 = [f for f in data.get("findings", []) if f.get("severity") == "P0"]
+          if p0:
+              print(f"Layer 1 Hard Gate FAILED: {len(p0)} deterministic P0 finding(s).", file=sys.stderr)
+              for f in p0:
+                  print(f"  - [{f[\"rule_id\"]}] {f[\"file\"]}:{f[\"line\"]} {f[\"title\"]}", file=sys.stderr)
+              sys.exit(1)
+          print("Layer 1 Deterministic P0 Hard Gate PASSED.")
+          '
+
+  ai-review-agent:
+    name: "[Stage 2-4] Multi-Agent Client & Security Review + Sticky Summary"
+    needs: [gatekeeper, deterministic-security-gate]
+    if: always() && needs.gatekeeper.result == 'success' && needs.gatekeeper.outputs.should_review == 'true' && needs.gatekeeper.outputs.is_fork != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Download Layer 1 Static Findings
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cr-agent-static-findings
+          path: cr-agent-out
+
+      - name: "[SEC-CI-002] Assert Zero Write Credentials in Workspace Before LLM"
+        run: |
+          set -euo pipefail
+          leaks="$(grep -rlE 'PRIVATE KEY|x-access-token|extraheader' .git/config "$HOME/.gitconfig" 2>/dev/null || true)"
+          if [ -n "${leaks}" ]; then
+            echo "::error::[SEC-CI-002] Credential material readable before LLM execution: ${leaks}"
+            exit 1
+          fi
+          echo "Credential hygiene check PASSED."
+
+      - name: Run Multi-Agent Client + Security/Compliance Review & Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CR_AGENT_PROVIDER: ${{ vars.CR_AGENT_PROVIDER || '' }}
+          CR_AGENT_MODEL: ${{ vars.CR_AGENT_MODEL || '' }}
+          BASE_SHA: ${{ needs.gatekeeper.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.gatekeeper.outputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          PR_TITLE: ${{ github.event.pull_request.title || '' }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          EFFECTIVE_MODE: ${{ needs.gatekeeper.outputs.effective_mode }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PUBLISH_ARGS=()
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${EFFECTIVE_MODE}" != "shadow" ]; then
+            PUBLISH_ARGS+=(--publish)
+          fi
+          FAIL_ON="none"
+          if [ "${EFFECTIVE_MODE}" = "enforce" ]; then
+            FAIL_ON="P0"
+          fi
+
+          python3 scripts/run-cr-agent.py \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}" \
+            --pr "${PR_NUMBER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --static-findings-in cr-agent-out/static-findings.json \
+            --mode "${EFFECTIVE_MODE}" \
+            --json-out cr-agent-out/full-review-report.json \
+            --summary-md-out cr-agent-out/sticky-summary.md \
+            --github-step-summary "$GITHUB_STEP_SUMMARY" \
+            --fail-on "${FAIL_ON}" \
+            "${PUBLISH_ARGS[@]}"
+
+      - name: Upload CR Agent Review Report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cr-agent-review-report
+          path: cr-agent-out/
+          retention-days: 14

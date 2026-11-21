@@ -1,0 +1,41 @@
+name: GitHub Actions Security Audit (zizmor)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - ".github/zizmor.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".github/zizmor.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: zizmor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: Audit CR & Security Workflows with zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Audit Security & CR Workflows strictly with zizmor
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          inputs: ".github/workflows/cr-agent.yml .github/workflows/zizmor.yml"
+          persona: regular
+          advanced-security: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}

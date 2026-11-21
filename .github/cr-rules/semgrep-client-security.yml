@@ -1,0 +1,120 @@
+rules:
+  - id: SEC-DATA-002-ios-userdefaults-secret
+    languages: [swift]
+    severity: ERROR
+    message: "[SEC-DATA-002] Sensitive credential/token must not be stored in UserDefaults; use KeychainStore with *ThisDeviceOnly."
+    metadata:
+      rule_id: SEC-DATA-002
+      category: security
+      severity_level: P0
+    pattern-regex: 'UserDefaults\.(standard|init\([^)]*\))\.set\([^,\n]+,\s*forKey:\s*"[^"]*(token|secret|password|passwd|pin|apikey|api_key|privateKey|csrf|authKey|credential)[^"]*"'
+    paths:
+      exclude:
+        - "**/Tests/**"
+        - "**/iOSUITests/**"
+
+  - id: SEC-DATA-002-android-sharedprefs-secret
+    languages: [kotlin]
+    severity: ERROR
+    message: "[SEC-DATA-002] Sensitive credential/token must not be stored in plaintext SharedPreferences; use EncryptedSharedPreferences or AndroidKeyStore."
+    metadata:
+      rule_id: SEC-DATA-002
+      category: security
+      severity_level: P0
+    pattern-regex: 'putString\(\s*"[^"]*(token|secret|password|passwd|pin|apikey|api_key|private_key|csrf|credential)[^"]*"'
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/commonTest/**"
+        - "**/src/jvmTest/**"
+        - "**/src/androidTest/**"
+
+  - id: SEC-DATA-003-ios-keychain-always-accessible
+    languages: [swift]
+    severity: ERROR
+    message: "[SEC-DATA-003] Over-permissive Keychain accessibility kSecAttrAccessibleAlways* allows reading secrets while locked or across backups."
+    metadata:
+      rule_id: SEC-DATA-003
+      category: security
+      severity_level: P0
+    pattern-regex: 'kSecAttrAccessibleAlways(ThisDeviceOnly)?'
+
+  - id: SEC-DATA-004-swift-sensitive-log
+    languages: [swift]
+    severity: ERROR
+    message: "[SEC-DATA-004] Avoid logging secrets, tokens, or credentials via print/NSLog/os_log."
+    metadata:
+      rule_id: SEC-DATA-004
+      category: security
+      severity_level: P0
+    pattern-regex: '(print|debugPrint|NSLog)\([^)\n]*\\\(\s*[^)\n]*(password|secret|csrfToken|authToken|apiKey|privateKey|bearerToken)[^)\n]*\)'
+    paths:
+      exclude:
+        - "**/Tests/**"
+        - "**/iOSUITests/**"
+
+  - id: SEC-NET-001-ios-tls-bypass
+    languages: [swift]
+    severity: ERROR
+    message: "[SEC-NET-001] Unconditional TLS server trust acceptance bypasses certificate verification."
+    metadata:
+      rule_id: SEC-NET-001
+      category: security
+      severity_level: P0
+    pattern-regex: 'completionHandler\(\s*\.useCredential\s*,\s*URLCredential\(\s*trust:\s*challenge\.protectionSpace\.serverTrust!'
+
+  - id: SEC-NET-003-weak-crypto-swift
+    languages: [swift]
+    severity: ERROR
+    message: "[SEC-NET-003] Weak cryptographic primitive (Insecure.MD5 / Insecure.SHA1 / CC_MD5 / kCCOptionECBMode) detected."
+    metadata:
+      rule_id: SEC-NET-003
+      category: security
+      severity_level: P0
+    pattern-regex: '(Insecure\.(MD5|SHA1)|CC_MD5|CC_SHA1|kCCOptionECBMode)'
+    paths:
+      exclude:
+        - "**/Tests/**"
+
+  - id: SEC-NET-003-weak-crypto-kotlin
+    languages: [kotlin]
+    severity: ERROR
+    message: "[SEC-NET-003] Weak cryptographic algorithm (MD5/SHA-1/DES/ECB) detected."
+    metadata:
+      rule_id: SEC-NET-003
+      category: security
+      severity_level: P0
+    pattern-regex: '(MessageDigest\.getInstance\(\s*"(MD5|SHA-?1)"\s*\)|Cipher\.getInstance\(\s*"[^"]*(DES|RC4|ECB)[^"]*"\s*\))'
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/commonTest/**"
+
+  - id: CLI-IOS-004-production-try-bang
+    languages: [swift]
+    severity: WARNING
+    message: "[CLI-IOS-004] Avoid `try!` in production Swift code; handle errors explicitly to prevent runtime crashes."
+    metadata:
+      rule_id: CLI-IOS-004
+      category: client
+      severity_level: P1
+    pattern-regex: '\btry!\s+'
+    paths:
+      exclude:
+        - "**/Tests/**"
+        - "**/iOSUITests/**"
+        - "**/Fixtures/**"
+
+  - id: CLI-AND-001-global-scope
+    languages: [kotlin]
+    severity: WARNING
+    message: "[CLI-AND-001] Avoid GlobalScope in production Kotlin code; bind coroutines to a structured lifecycle scope."
+    metadata:
+      rule_id: CLI-AND-001
+      category: client
+      severity_level: P1
+    pattern-regex: '\bGlobalScope\.(launch|async)\b'
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/commonTest/**"

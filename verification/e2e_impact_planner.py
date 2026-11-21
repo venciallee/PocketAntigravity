@@ -131,6 +131,21 @@ def classify_file(path: str) -> dict[str, Any]:
         res["gate2_v233"] = True
         return res
 
+    # 4b. Client + Security/Compliance CR Agent & CI workflow security audit
+    if (
+        norm in {
+            "scripts/run-cr-agent.py",
+            ".github/review-context.toml",
+            ".github/CODEOWNERS",
+            ".github/zizmor.yml",
+            ".github/workflows/cr-agent.yml",
+            ".github/workflows/zizmor.yml",
+        }
+        or norm.startswith("scripts/cr_agent/")
+        or norm.startswith(".github/cr-rules/")
+    ):
+        return _empty_impact("cr-agent", "Client & Security CR Agent script, rulebook, or security workflow changed")
+
     # 5. Companion Bridge / Mock Server / Live RPC & Compat Matrix verifiers (Python backend & protocol harness)
     if norm in {
         "scripts/mac-companion-bridge.py",

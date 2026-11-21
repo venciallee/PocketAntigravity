@@ -1,0 +1,93 @@
+version = 1
+
+[high_risk_paths]
+# Touching any of these paths elevates the PR Risk Brief and adds a mandatory
+# human verification checklist to the Sticky Summary comment.
+patterns = [
+  "Packages/AntigravityData/Sources/AntigravityData/Protocol/PinnedTLSURLSessionDelegate.swift",
+  "Packages/AntigravityData/Sources/AntigravityData/Store/KeychainStore.swift",
+  "Packages/AntigravityData/Sources/AntigravityData/Store/SharedAppGroupBridge.swift",
+  "Packages/AntigravityData/Sources/AntigravityData/Protocol/CloudRelayProtocol.swift",
+  "Packages/AntigravityData/Sources/AntigravityData/Protocol/InteractionBuilder.swift",
+  "Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore+ChatAndInteractions.swift",
+  "iOS/Application/AntigravityApp.swift",
+  "Extensions/LiveActivity/**",
+  "Extensions/Share/**",
+  "Shared/LiveActivity/**",
+  "project.yml",
+  "**/Info.plist",
+  "**/PrivacyInfo.xcprivacy",
+  "**/AndroidManifest.xml",
+  "**/network_security_config.xml",
+  ".github/workflows/**",
+  ".github/cr-rules/**",
+  ".github/review-context.toml",
+]
+
+[[rules]]
+name = "iOS Swift 6 Concurrency, Lifecycle & UI Safety"
+specialist = "client"
+when = { any_file = { include = ["iOS/**", "Packages/AntigravityData/**", "Shared/**"], ext = [".swift"] } }
+load = [
+  { type = "file", path = ".github/cr-rules/client-ios.md" },
+]
+
+[[rules]]
+name = "iOS App Extensions Memory, Sandbox & Lock Screen Privacy"
+specialist = "both"
+when = { any_file = { include = ["Extensions/**", "Shared/LiveActivity/**"] } }
+load = [
+  { type = "file", path = ".github/cr-rules/client-ios.md" },
+  { type = "file", path = ".github/cr-rules/security-compliance.md" },
+]
+
+[[rules]]
+name = "TLS Pinning, Keychain, Auth, Deeplink & Protocol Security"
+specialist = "security"
+when = { any_file = { include = [
+  "Packages/AntigravityData/Sources/AntigravityData/Protocol/**",
+  "Packages/AntigravityData/Sources/AntigravityData/Store/KeychainStore.swift",
+  "Packages/AntigravityData/Sources/AntigravityData/Store/SharedAppGroupBridge.swift",
+  "Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore+ChatAndInteractions.swift",
+  "iOS/Application/AntigravityApp.swift",
+  "iOS/Services/**",
+  "scripts/mac-companion-bridge.py",
+] } }
+load = [
+  { type = "file", path = ".github/cr-rules/security-compliance.md" },
+]
+
+[[rules]]
+name = "KMP & Android Coroutines, Bridge & Contract Parity"
+specialist = "client"
+when = { any_file = { include = ["shared/**", "iOS/Bridge/**", "android/**"], ext = [".kt", ".kts", ".swift", ".java"] } }
+load = [
+  { type = "file", path = ".github/cr-rules/client-kmp.md" },
+]
+
+[[rules]]
+name = "Privacy Manifest, Permissions, ATS, Store & License Compliance"
+specialist = "security"
+when = { any_file = { include = [
+  "project.yml",
+  "**/Info.plist",
+  "**/PrivacyInfo.xcprivacy",
+  "**/AndroidManifest.xml",
+  "**/network_security_config.xml",
+  "Packages/AntigravityData/Package.swift",
+  "gradle/libs.versions.toml",
+  "**/*.gradle.kts",
+  "NOTICE",
+  "LICENSE",
+] } }
+load = [
+  { type = "file", path = ".github/cr-rules/security-compliance.md" },
+]
+
+[[rules]]
+name = "CI Workflows & CR Agent Supply-Chain Hardening"
+specialist = "security"
+when = { any_file = { include = [".github/workflows/**", "scripts/cr_agent/**", "scripts/run-cr-agent.py"] } }
+load = [
+  { type = "file", path = ".github/cr-rules/security-compliance.md" },
+]
