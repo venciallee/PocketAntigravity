@@ -34,7 +34,7 @@ EXPECTED_COLORS = {
 EXPECTED_TIERS = ["Reading", "Evidence", "Process", "Metadata", "Chrome"]
 
 
-def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
+def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails: bool = True) -> dict:
     ir_path = repo_root / "specs" / "esdd-ir.json"
     ir = json.loads(ir_path.read_text(encoding="utf-8"))
 
@@ -244,12 +244,15 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
     else:
         checks.append("Secret hygiene verified: zero hardcoded Google API key literals across source tree")
 
-    # 8. Automated Bidirectional Compatibility Static Guardrails
-    from verify_compat_guardrails import inspect_compatibility_guardrails
+    # 8. Automated Bidirectional Compatibility Static Guardrails (impact-scoped or full/release)
+    if run_compat_guardrails:
+        from verify_compat_guardrails import inspect_compatibility_guardrails
 
-    compat_res = inspect_compatibility_guardrails(repo_root)
-    checks.extend(compat_res["checks"])
-    errors.extend(compat_res["errors"])
+        compat_res = inspect_compatibility_guardrails(repo_root)
+        checks.extend(compat_res["checks"])
+        errors.extend(compat_res["errors"])
+    else:
+        checks.append("Compatibility static guardrails skipped (Protocol/Models/Store/Bridge untouched)")
 
     return {
         "passed": len(errors) == 0,
