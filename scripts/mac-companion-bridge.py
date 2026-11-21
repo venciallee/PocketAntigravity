@@ -1487,23 +1487,132 @@ def create_bridge_server(
                 return
 
             if method == "GetTurnDiff":
+                req_obj = self._parse_json(raw_body)
+                compare_mode = str(req_obj.get("compareMode") or "Per Turn")
                 files = []
                 try:
-                    diff_out = subprocess.check_output(
-                        ["git", "diff", "--numstat"],
+                    status_out = subprocess.check_output(
+                        ["git", "status", "--porcelain"],
                         cwd=state.workspace_root,
                         text=True,
                         stderr=subprocess.DEVNULL,
                     )
-                    for row in diff_out.splitlines():
-                        parts = row.split("\t")
-                        if len(parts) == 3:
-                            add_c = int(parts[0]) if parts[0].isdigit() else 0
-                            del_c = int(parts[1]) if parts[1].isdigit() else 0
-                            files.append({"filePath": parts[2], "additions": add_c, "deletions": del_c})
+                    for row in status_out.splitlines():
+                        if len(row) < 4:
+                            continue
+                        x_flag = row[0]
+                        y_flag = row[1]
+                        file_path = row[3:].strip()
+                        if not file_path:
+                            continue
+                        is_staged = x_flag not in (" ", "?")
+                        letter = "U" if (x_flag == "?" and y_flag == "?") else (x_flag if x_flag not in (" ", "?") else y_flag)
+                        diff_args = ["git", "diff", "-U3"]
+                        if is_staged and y_flag == " ":
+                            diff_args.append("--cached")
+                        diff_args.extend(["--", file_path])
+                        try:
+                            patch_text = subprocess.check_output(
+                                diff_args,
+                                cwd=state.workspace_root,
+                                text=True,
+                                stderr=subprocess.DEVNULL,
+                            )
+                        except Exception:
+                            patch_text = ""
+                        add_c = sum(1 for l in patch_text.splitlines() if l.startswith("+") and not l.startswith("+++"))
+                        del_c = sum(1 for l in patch_text.splitlines() if l.startswith("-") and not l.startswith("---"))
+                        files.append(
+                            {
+                                "turnNumber": req_obj.get("turnNumber") or 1,
+                                "filePath": file_path,
+                                "additions": add_c,
+                                "deletions": del_c,
+                                "statusLetter": letter if letter in ("M", "A", "U", "D", "R") else "M",
+                                "isStaged": is_staged,
+                                "compareScope": compare_mode,
+                                "patch": patch_text,
+                            }
+                        )
                 except Exception:
                     pass
-                self._write_json(200, {"files": files})
+                self._write_json(200, {"files": files, "compareMode": compare_mode})
+                return
+
+            if method in ("GitStageFile", "GitUnstageFile", "GitDiscardFile"):
+                req_obj = self._parse_json(raw_body)
+                rel_path = str(req_obj.get("filePath") or "").strip()
+                if not rel_path or rel_path.startswith("/") or ".." in Path(rel_path).parts:
+                    self._write_json(400, {"ok": False, "error": "Invalid workspace-relative filePath"})
+                    return
+                cmd_map = {
+                    "GitStageFile": ["git", "add", "--", rel_path],
+                    "GitUnstageFile": ["git", "reset", "HEAD", "--", rel_path],
+                    "GitDiscardFile": ["git", "checkout", "--", rel_path],
+                }
+                try:
+                    subprocess.check_call(cmd_map[method], cwd=state.workspace_root, stderr=subprocess.DEVNULL)
+                    self._write_json(200, {"ok": True, "filePath": rel_path})
+                except Exception as exc:
+                    self._write_json(500, {"ok": False, "error": str(exc)})
+                return
+
+            if method == "GitCommit":
+                req_obj = self._parse_json(raw_body)
+                msg = str(req_obj.get("message") or "").strip()
+                if not msg:
+                    self._write_json(400, {"ok": False, "error": "Commit message is required"})
+                    return
+                try:
+                    if req_obj.get("includeUnstaged"):
+                        subprocess.check_call(["git", "add", "-A"], cwd=state.workspace_root, stderr=subprocess.DEVNULL)
+                    args = ["git", "commit", "-m", msg]
+                    if req_obj.get("amend"):
+                        args.append("--amend")
+                    subprocess.check_call(args, cwd=state.workspace_root, stderr=subprocess.DEVNULL)
+                    sha = subprocess.check_output(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        cwd=state.workspace_root,
+                        text=True,
+                    ).strip()
+                    branch = subprocess.check_output(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=state.workspace_root,
+                        text=True,
+                    ).strip()
+                    self._write_json(200, {"ok": True, "commitSha": sha, "commitMessage": msg, "branchName": branch, "pushed": False})
+                except Exception as exc:
+                    self._write_json(500, {"ok": False, "error": str(exc)})
+                return
+
+            if method == "GitPush":
+                req_obj = self._parse_json(raw_body)
+                branch = str(req_obj.get("branchName") or "").strip()
+                try:
+                    args = ["git", "push", "origin", branch] if branch else ["git", "push"]
+                    subprocess.check_call(args, cwd=state.workspace_root, stderr=subprocess.DEVNULL)
+                    self._write_json(200, {"ok": True, "pushed": True, "branchName": branch})
+                except Exception as exc:
+                    self._write_json(500, {"ok": False, "error": str(exc)})
+                return
+
+            if method == "GetCustomizationsCatalog":
+                skills_dir = Path(state.workspace_root) / ".agents" / "skills"
+                skills = []
+                if skills_dir.is_dir():
+                    for p in sorted(skills_dir.glob("*/SKILL.md")):
+                        skills.append({"name": p.parent.name, "description": "Workspace project skill", "scope": "Workspace", "isEnabled": True})
+                self._write_json(
+                    200,
+                    {
+                        "skills": skills,
+                        "rules": [{"name": "AGENTS.md", "scope": "Workspace", "preview": "Workspace engineering rules", "isActive": True}],
+                        "customAgents": ["Default"],
+                        "mcpServers": [],
+                        "plugins": [],
+                        "hooks": [],
+                    },
+                )
                 return
 
             if method == "ListAutomations":
@@ -2314,6 +2423,109 @@ def create_bridge_server(
                     if cid in state.trajectories:
                         state.trajectories[cid]["status"] = "CORTEX_STEP_STATUS_CANCELLED"
                 self._write_json(200, {"ok": True, "cascadeId": cid})
+                return
+
+            if method == "GetSidecars":
+                with state.lock:
+                    sidecars = []
+                    for a in state.automations:
+                        cron_expr = a.get("cronExpression") or "0 9 * * 1-5"
+                        prompt_text = a.get("prompt") or a.get("title") or "Scheduled Automation"
+                        enabled = a.get("section", "SCHEDULED") != "PAUSED"
+                        sidecars.append(
+                            {
+                                "sidecarId": a["id"],
+                                "status": "SIDECAR_STATUS_RUNNING" if enabled else "SIDECAR_STATUS_STOPPED",
+                                "config": {
+                                    "builtin": "schedule",
+                                    "restartPolicy": "always",
+                                    "displayName": a.get("title", a["id"]),
+                                    "description": a.get("descriptionText", ""),
+                                    "args": [cron_expr, "agentapi", "new-conversation", "--", prompt_text],
+                                },
+                                "userConfig": {
+                                    "enabled": enabled,
+                                    "projectId": a.get("projectSlug", ""),
+                                    "allProjects": bool(a.get("allProjects", False)),
+                                },
+                            }
+                        )
+                self._write_json(200, {"sidecars": sidecars})
+                return
+
+            if method == "GetSidecarEvents":
+                sid = req_obj.get("sidecarId", "")
+                events = []
+                with state.lock:
+                    for a in state.automations:
+                        if a["id"] == sid and a.get("lastRunCascadeId"):
+                            events.append(
+                                {
+                                    "timestampMs": str(int(time.time() * 1000)),
+                                    "payload": {
+                                        "newConversation": {
+                                            "conversationId": a["lastRunCascadeId"],
+                                            "prompt": a.get("prompt") or a.get("title") or "",
+                                        }
+                                    },
+                                }
+                            )
+                self._write_json(200, {"events": events})
+                return
+
+            if method == "ManageSidecar":
+                sid = req_obj.get("sidecarId") or f"auto-{uuid.uuid4().hex[:8]}"
+                action = str(req_obj.get("action", "")).upper()
+                cfg = req_obj.get("config") or {}
+                args = cfg.get("args") or []
+                cron_expr = args[0] if args else "0 9 * * 1-5"
+                prompt_text = args[-1] if args else cfg.get("displayName", "Scheduled Automation")
+                with state.lock:
+                    existing = next((a for a in state.automations if a["id"] == sid), None)
+                    if action == "SIDECAR_ACTION_CREATE":
+                        proj_slug = req_obj.get("projectId") or ("All projects" if req_obj.get("allProjects") else "This Computer")
+                        item = {
+                            "id": sid,
+                            "title": cfg.get("displayName") or prompt_text,
+                            "projectSlug": proj_slug,
+                            "scheduleSummary": f"{proj_slug} · Scheduled · Flash",
+                            "section": "SCHEDULED",
+                            "nextRunText": "Tomorrow, 09:00",
+                            "lastRunText": "Created just now",
+                            "cronExpression": cron_expr,
+                            "prompt": prompt_text,
+                            "descriptionText": cfg.get("description", ""),
+                            "allProjects": bool(req_obj.get("allProjects", False)),
+                        }
+                        state.automations = [a for a in state.automations if a["id"] != sid]
+                        state.automations.insert(0, item)
+                    elif action == "SIDECAR_ACTION_UPDATE" and existing is not None:
+                        existing["title"] = cfg.get("displayName") or existing["title"]
+                        existing["cronExpression"] = cron_expr
+                        existing["prompt"] = prompt_text
+                        existing["descriptionText"] = cfg.get("description", existing.get("descriptionText", ""))
+                    elif action == "SIDECAR_ACTION_SET_PROJECT" and existing is not None:
+                        existing["projectSlug"] = req_obj.get("projectId") or existing["projectSlug"]
+                        existing["allProjects"] = False
+                    elif action == "SIDECAR_ACTION_SET_ALL_PROJECTS" and existing is not None:
+                        existing["allProjects"] = bool(req_obj.get("allProjects", True))
+                        if existing["allProjects"]:
+                            existing["projectSlug"] = "All projects"
+                    elif action == "SIDECAR_ACTION_DISABLE" and existing is not None:
+                        existing["section"] = "PAUSED"
+                        existing["lastRunText"] = "Paused"
+                    elif action == "SIDECAR_ACTION_ENABLE" and existing is not None:
+                        existing["section"] = "SCHEDULED"
+                        existing["lastRunText"] = "Resumed · just now"
+                    elif action == "SIDECAR_ACTION_DELETE":
+                        state.automations = [a for a in state.automations if a["id"] != sid]
+                    elif action == "SIDECAR_ACTION_RUN_NOW" and existing is not None:
+                        existing["isRunningNow"] = True
+                        existing["lastRunText"] = "Running now..."
+                        first_cid = next(iter(state.trajectories.keys()), None)
+                        if first_cid:
+                            existing["lastRunCascadeId"] = first_cid
+                self._write_json(200, {"sidecarId": sid, "ok": True})
                 return
 
             self._write_json(200, {"ok": True, "method": method})

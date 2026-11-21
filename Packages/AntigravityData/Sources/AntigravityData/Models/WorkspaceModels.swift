@@ -178,6 +178,9 @@ public struct NewProjectDraft: Codable, Sendable, Equatable {
     public var selectedRepo: GitHubRepoItem?
     public var branchWorktree: String
     public var projectName: String
+    public var driveResourceLinks: [String]
+    public var uploadedFilePaths: [String]
+    public var envSetupScript: String
 
     public init(
         runsOn: ProjectRuntimeTarget = .cloud,
@@ -185,7 +188,10 @@ public struct NewProjectDraft: Codable, Sendable, Equatable {
         repoSearchQuery: String = "",
         selectedRepo: GitHubRepoItem? = GitHubRepoItem.sampleCatalog.first,
         branchWorktree: String = "main · New worktree",
-        projectName: String = "ledger-svc-cloud"
+        projectName: String = "ledger-svc-cloud",
+        driveResourceLinks: [String] = [],
+        uploadedFilePaths: [String] = [],
+        envSetupScript: String = ""
     ) {
         self.runsOn = runsOn
         self.source = source
@@ -193,6 +199,9 @@ public struct NewProjectDraft: Codable, Sendable, Equatable {
         self.selectedRepo = selectedRepo
         self.branchWorktree = branchWorktree
         self.projectName = projectName
+        self.driveResourceLinks = driveResourceLinks
+        self.uploadedFilePaths = uploadedFilePaths
+        self.envSetupScript = envSetupScript
     }
 }
 
@@ -1123,14 +1132,34 @@ public enum SessionFilterCategory: String, Codable, Sendable, CaseIterable, Iden
     public var id: String { rawValue }
 }
 
-// MARK: - Model, Mode & Agent Configuration (UE09)
+// MARK: - Model, Mode & Agent Configuration (UE09 + v2.31-v2.33)
 
 public enum ThinkingEffortLevel: String, Codable, Sendable, CaseIterable, Identifiable {
     case low = "Low"
     case medium = "Medium"
     case high = "High"
+    case extra = "Extra"
 
     public var id: String { rawValue }
+
+    /// CLI / wire identifier (`low`, `medium`, `high`, `xhigh` per v2.33 Gemini 4 Neon/Hydrogen docs).
+    public var cliValue: String {
+        switch self {
+        case .low: return "low"
+        case .medium: return "medium"
+        case .high: return "high"
+        case .extra: return "xhigh"
+        }
+    }
+
+    public var protoWireValue: String {
+        switch self {
+        case .low: return "LOW"
+        case .medium: return "MEDIUM"
+        case .high: return "HIGH"
+        case .extra: return "XHIGH"
+        }
+    }
 }
 
 public enum CascadeExecutionMode: String, Codable, Sendable, CaseIterable, Identifiable {
@@ -1156,6 +1185,10 @@ public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIte
     case defaultPolicy = "default"
     case auto = "auto"
     case turbo = "turbo"
+    case inheritGlobal = "inherit_global"
+
+    /// Source-compatibility alias for `.defaultPolicy` (sandboxed Default preset).
+    public static var defaultSandbox: AgentPermissionPreset { .defaultPolicy }
 
     public var id: String { rawValue }
 
@@ -1169,6 +1202,8 @@ public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIte
             return "Auto"
         case .turbo:
             return "Turbo"
+        case .inheritGlobal:
+            return "Use Global Settings"
         }
     }
 
@@ -1182,6 +1217,23 @@ public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIte
             return "Automatically decide if commands run."
         case .turbo:
             return "Run all commands without restrictions."
+        case .inheritGlobal:
+            return "Follow your global workstation or remote agent preset."
+        }
+    }
+
+    public var shortDescription: String {
+        switch self {
+        case .requestReview:
+            return "Always ask before terminal commands; workspace file access only."
+        case .defaultPolicy:
+            return "Commands run in isolated Terminal sandbox; ask before leaving sandbox."
+        case .auto:
+            return "Sandboxed by default; safe outside-sandbox commands auto-evaluated."
+        case .turbo:
+            return "Unrestricted local commands and file access (sensitive browser gates remain)."
+        case .inheritGlobal:
+            return "Follow your global workstation or remote agent preset."
         }
     }
 
@@ -1195,7 +1247,27 @@ public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIte
             return "checkmark.shield"
         case .turbo:
             return "exclamationmark.shield"
+        case .inheritGlobal:
+            return "slider.horizontal.3"
         }
+    }
+
+    public var wireValue: String {
+        switch self {
+        case .requestReview: return "PERMISSION_PRESET_REQUEST_REVIEW"
+        case .defaultPolicy: return "PERMISSION_PRESET_DEFAULT"
+        case .auto: return "PERMISSION_PRESET_AUTO"
+        case .turbo: return "PERMISSION_PRESET_TURBO"
+        case .inheritGlobal: return "PERMISSION_PRESET_INHERIT_GLOBAL"
+        }
+    }
+
+    public var usesTerminalSandbox: Bool {
+        self == .defaultPolicy || self == .auto
+    }
+
+    public static var concretePresets: [AgentPermissionPreset] {
+        [.requestReview, .defaultPolicy, .auto, .turbo]
     }
 
     /// Presets offered in Remote/Cloud (`Remote Permissions`) vs Local Desktop (`Permissions`).
@@ -1211,7 +1283,7 @@ public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIte
     }
 }
 
-/// Model, execution mode, and custom agent persona configuration (`UE07`, `UE09`).
+/// Model, execution mode, and custom agent persona configuration (`UE07`, `UE09`, v2.33 Gemini 4 & Orchestrator).
 public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
     public var id: String { modelId }
     public var modelId: String
@@ -1224,6 +1296,11 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
     public var effort: ThinkingEffortLevel
     public var isModelAlias: Bool
     public var badgeTitle: String?
+    public var isOrchestrator: Bool
+    public var plannerModelName: String?
+    public var executorModelName: String?
+    public var supportedEfforts: [ThinkingEffortLevel]
+    public var isNewBadge: Bool
 
     public init(
         modelId: String,
@@ -1235,7 +1312,12 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         agentPersona: String = "Default",
         effort: ThinkingEffortLevel = .high,
         isModelAlias: Bool = false,
-        badgeTitle: String? = nil
+        badgeTitle: String? = nil,
+        isOrchestrator: Bool = false,
+        plannerModelName: String? = nil,
+        executorModelName: String? = nil,
+        supportedEfforts: [ThinkingEffortLevel] = [.low, .medium, .high],
+        isNewBadge: Bool = false
     ) {
         self.modelId = modelId
         self.displayName = displayName
@@ -1246,7 +1328,12 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         self.agentPersona = agentPersona
         self.effort = effort
         self.isModelAlias = isModelAlias
-        self.badgeTitle = badgeTitle
+        self.badgeTitle = badgeTitle ?? (isNewBadge ? "New" : nil)
+        self.isOrchestrator = isOrchestrator
+        self.plannerModelName = plannerModelName
+        self.executorModelName = executorModelName
+        self.supportedEfforts = isOrchestrator ? [] : supportedEfforts
+        self.isNewBadge = isNewBadge || (badgeTitle?.caseInsensitiveCompare("New") == .orderedSame)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1260,6 +1347,11 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         case effort
         case isModelAlias
         case badgeTitle
+        case isOrchestrator
+        case plannerModelName
+        case executorModelName
+        case supportedEfforts
+        case isNewBadge
     }
 
     public init(from decoder: Decoder) throws {
@@ -1274,10 +1366,19 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         self.effort = try container.decodeIfPresent(ThinkingEffortLevel.self, forKey: .effort) ?? .high
         self.isModelAlias = try container.decodeIfPresent(Bool.self, forKey: .isModelAlias) ?? false
         self.badgeTitle = try container.decodeIfPresent(String.self, forKey: .badgeTitle)
+        let orchestrator = try container.decodeIfPresent(Bool.self, forKey: .isOrchestrator)
+            ?? self.displayName.lowercased().contains("orchestrator")
+        self.isOrchestrator = orchestrator
+        self.plannerModelName = try container.decodeIfPresent(String.self, forKey: .plannerModelName)
+        self.executorModelName = try container.decodeIfPresent(String.self, forKey: .executorModelName)
+        self.supportedEfforts = try container.decodeIfPresent([ThinkingEffortLevel].self, forKey: .supportedEfforts)
+            ?? (orchestrator ? [] : [.low, .medium, .high])
+        self.isNewBadge = try container.decodeIfPresent(Bool.self, forKey: .isNewBadge) ?? false
     }
 
     public var supportsThinkingBadge: Bool { hasThinkingBadge }
     public var requiresProBadge: Bool { requiresUpgradeNote != nil }
+    public var supportsEffortAdjustment: Bool { !isOrchestrator && !supportedEfforts.isEmpty }
 
     /// Returns `true` when a short label (e.g. `"New"`, `"Beta"`, `"Preview"`) is a pill tag rather than a description.
     public static func isGenericBadgeLabel(_ text: String) -> Bool {
@@ -1326,57 +1427,132 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         "release-captain"
     ]
 
-    /// Live Antigravity 2.x default model list used before `GetAvailableModels` / `GetCascadeModelConfigs` resolves.
+    /// Live Antigravity 2.33+ default model list (Gemini 4 Neon default, Carbon, Argon, Hydrogen & Orchestrator)
+    /// used before `GetAvailableModels` / `GetCascadeModelConfigs` resolves.
     public static let liveDefaultCatalog: [CascadeModelConfig] = [
         CascadeModelConfig(
-            modelId: "MODEL_PLACEHOLDER_M37",
-            displayName: "Gemini 3.1 Pro (High)",
-            subtitle: "Deep reasoning for complex multi-step tasks",
+            modelId: "MODEL_GOOGLE_GEMINI_4_NEON",
+            displayName: "Gemini 4 Neon",
+            subtitle: "Default frontier reasoning · 512K context · 4 thinking levels",
             hasThinkingBadge: true,
-            requiresUpgradeNote: nil,
             mode: .planning,
-            agentPersona: "Default",
-            effort: .high
+            effort: .high,
+            supportedEfforts: [.low, .medium, .high, .extra],
+            isNewBadge: true
         ),
         CascadeModelConfig(
-            modelId: "MODEL_PLACEHOLDER_M36",
-            displayName: "Gemini 3.1 Pro (Low)",
-            subtitle: "Faster Pro reasoning for everyday coding",
-            hasThinkingBadge: false,
-            requiresUpgradeNote: nil,
+            modelId: "MODEL_ORCHESTRATOR_NEON",
+            displayName: "Orchestrator (Neon)",
+            subtitle: "Plans with Gemini 4 Neon · implements with Gemini 4 Hydrogen",
+            hasThinkingBadge: true,
             mode: .planning,
-            agentPersona: "Default",
-            effort: .low
+            effort: .high,
+            isModelAlias: true,
+            isOrchestrator: true,
+            plannerModelName: "Gemini 4 Neon",
+            executorModelName: "Gemini 4 Hydrogen",
+            supportedEfforts: [],
+            isNewBadge: true
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_ORCHESTRATOR_CARBON",
+            displayName: "Orchestrator (Carbon)",
+            subtitle: "Plans with Gemini 4 Carbon · implements with Gemini 4 Hydrogen",
+            hasThinkingBadge: true,
+            requiresUpgradeNote: "Google AI Ultra",
+            mode: .planning,
+            effort: .high,
+            isModelAlias: true,
+            isOrchestrator: true,
+            plannerModelName: "Gemini 4 Carbon",
+            executorModelName: "Gemini 4 Hydrogen",
+            supportedEfforts: [],
+            isNewBadge: true
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_ORCHESTRATOR_ARGON",
+            displayName: "Orchestrator (Argon)",
+            subtitle: "Plans with Gemini 4 Argon · implements with Gemini 4 Hydrogen",
+            hasThinkingBadge: true,
+            mode: .planning,
+            effort: .high,
+            isModelAlias: true,
+            isOrchestrator: true,
+            plannerModelName: "Gemini 4 Argon",
+            executorModelName: "Gemini 4 Hydrogen",
+            supportedEfforts: [],
+            isNewBadge: true
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_GOOGLE_GEMINI_4_CARBON",
+            displayName: "Gemini 4 Carbon",
+            subtitle: "Strongest long-horizon SWE, scientific & security reasoning",
+            hasThinkingBadge: true,
+            requiresUpgradeNote: "Google AI Ultra",
+            mode: .planning,
+            effort: .high,
+            supportedEfforts: [.low, .medium, .high],
+            isNewBadge: true
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_GOOGLE_GEMINI_4_ARGON",
+            displayName: "Gemini 4 Argon",
+            subtitle: "High-depth architecture & multi-file debugging",
+            hasThinkingBadge: true,
+            mode: .planning,
+            effort: .high,
+            supportedEfforts: [.low, .medium, .high],
+            isNewBadge: true
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_GOOGLE_GEMINI_4_HYDROGEN",
+            displayName: "Gemini 4 Hydrogen",
+            subtitle: "Fast, dependable coding & agentic execution · 4 thinking levels",
+            hasThinkingBadge: true,
+            mode: .fast,
+            effort: .high,
+            supportedEfforts: [.low, .medium, .high, .extra],
+            isNewBadge: true
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_GOOGLE_GEMINI_3_8_FLASH",
+            displayName: "Gemini 3.8 Flash",
+            subtitle: "Fastest responses across all plans",
+            hasThinkingBadge: false,
+            mode: .fast,
+            effort: .medium,
+            supportedEfforts: [.low, .medium, .high]
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_CLAUDE_5_5_OPUS_THINKING",
+            displayName: "Claude Opus 5.5 (Thinking)",
+            subtitle: "Frontier Anthropic reasoning for complex architecture",
+            hasThinkingBadge: true,
+            requiresUpgradeNote: "Google AI Pro or Ultra",
+            mode: .planning,
+            effort: .high,
+            supportedEfforts: [.low, .medium, .high],
+            isNewBadge: true
+        ),
+        CascadeModelConfig(
+            modelId: "MODEL_CLAUDE_5_5_SONNET_THINKING",
+            displayName: "Claude Sonnet 5.5 (Thinking)",
+            subtitle: "Balanced Anthropic coding & extended thinking",
+            hasThinkingBadge: true,
+            requiresUpgradeNote: "Google AI Pro or Ultra",
+            mode: .planning,
+            effort: .high,
+            supportedEfforts: [.low, .medium, .high],
+            isNewBadge: true
         ),
         CascadeModelConfig(
             modelId: "MODEL_PLACEHOLDER_M18",
             displayName: "Gemini 3 Flash",
-            subtitle: "Fastest responses and lightweight edits",
+            subtitle: "Legacy Gemini 3 fast execution model",
             hasThinkingBadge: false,
-            requiresUpgradeNote: nil,
-            mode: .planning,
-            agentPersona: "Default",
-            effort: .medium
-        ),
-        CascadeModelConfig(
-            modelId: "MODEL_PLACEHOLDER_M35",
-            displayName: "Claude Sonnet 4.6 (Thinking)",
-            subtitle: "Anthropic extended thinking for code & architecture",
-            hasThinkingBadge: true,
-            requiresUpgradeNote: nil,
-            mode: .planning,
-            agentPersona: "Default",
-            effort: .high
-        ),
-        CascadeModelConfig(
-            modelId: "MODEL_PLACEHOLDER_M26",
-            displayName: "Claude Opus 4.6 (Thinking)",
-            subtitle: "Frontier Anthropic reasoning for hard tasks",
-            hasThinkingBadge: true,
-            requiresUpgradeNote: nil,
-            mode: .planning,
-            agentPersona: "Default",
-            effort: .high
+            mode: .fast,
+            effort: .medium,
+            supportedEfforts: [.low, .medium, .high]
         )
     ]
 
@@ -1390,7 +1566,8 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
             requiresUpgradeNote: nil,
             mode: .planning,
             agentPersona: "Default",
-            effort: .high
+            effort: .high,
+            supportedEfforts: [.low, .high]
         ),
         CascadeModelConfig(
             modelId: "gemini-3-8-flash",
@@ -1400,7 +1577,8 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
             requiresUpgradeNote: nil,
             mode: .planning,
             agentPersona: "Default",
-            effort: .medium
+            effort: .medium,
+            supportedEfforts: [.low, .medium, .high]
         ),
         CascadeModelConfig(
             modelId: "claude-opus-5-5",
@@ -1410,7 +1588,8 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
             requiresUpgradeNote: "Requires Google AI Pro or Ultra",
             mode: .planning,
             agentPersona: "Default",
-            effort: .high
+            effort: .high,
+            supportedEfforts: [.low, .medium, .high]
         ),
         CascadeModelConfig(
             modelId: "claude-sonnet-5-5",
@@ -1420,12 +1599,20 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
             requiresUpgradeNote: "Requires Google AI Pro or Ultra",
             mode: .planning,
             agentPersona: "Default",
-            effort: .high
+            effort: .high,
+            supportedEfforts: [.low, .medium, .high]
         )
     ]
 }
 
-// MARK: - Composer Slash Commands & Attachment Chips (UE07, UE08)
+// MARK: - Composer Slash Commands & Attachment Chips (UE07, UE08, v2.33)
+
+public enum SlashCommandCategory: String, Codable, Sendable, CaseIterable {
+    case featured = "Featured"
+    case appAndCLI = "App & CLI"
+    case appOnly = "App Only"
+    case customSkill = "Skill"
+}
 
 /// Represents a `/slash` workflow command available in `ChatComposerView`.
 public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
@@ -1434,49 +1621,172 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
     public var title: String
     public var summary: String
     public var iconName: String
+    public var category: SlashCommandCategory
+    public var availableInRemoteAgent: Bool
+    public var requiresPaidPlan: Bool
 
-    public init(command: String, title: String, summary: String, iconName: String) {
+    public init(
+        command: String,
+        title: String,
+        summary: String,
+        iconName: String,
+        category: SlashCommandCategory = .featured,
+        availableInRemoteAgent: Bool = true,
+        requiresPaidPlan: Bool = false
+    ) {
         self.command = command
         self.title = title
         self.summary = summary
         self.iconName = iconName
+        self.category = category
+        self.availableInRemoteAgent = availableInRemoteAgent
+        self.requiresPaidPlan = requiresPaidPlan
     }
 
+    /// Complete catalog of all 15 official Antigravity 2.0 App slash commands (v2.33.0).
     public static let allCommands: [SlashCommandItem] = [
         SlashCommandItem(
             command: "/plan",
             title: "Implementation Plan",
-            summary: "Draft a step-by-step architecture & verification plan before coding",
-            iconName: "doc.text.magnifyingglass"
+            summary: "Draft a reviewable step-by-step architecture & verification plan before coding",
+            iconName: "doc.text.magnifyingglass",
+            category: .featured
         ),
         SlashCommandItem(
-            command: "/boost",
-            title: "Extra Multi-Agent Reasoning Pass",
-            summary: "Action · extra multi-agent reasoning pass",
-            iconName: "bolt.fill"
+            command: "/grill-me",
+            title: "Design Alignment Interview",
+            summary: "Clarify ambiguous trade-offs via structured interactive question cards",
+            iconName: "questionmark.bubble.fill",
+            category: .featured
         ),
         SlashCommandItem(
             command: "/goal",
             title: "Autonomous Goal Loop",
-            summary: "Run thorough multi-step execution until all ESDD acceptance criteria pass",
-            iconName: "flag.checkered.2.crossed"
+            summary: "Run thorough multi-turn execution until all acceptance criteria pass",
+            iconName: "flag.checkered.2.crossed",
+            category: .featured
         ),
         SlashCommandItem(
-            command: "/grill-me",
-            title: "Interactive Design Alignment",
-            summary: "Clarify ambiguous trade-offs via structured ask_question cards",
-            iconName: "questionmark.bubble.fill"
+            command: "/boost",
+            title: "Deep Reasoning Boost",
+            summary: "Iterative multi-agent deep reasoning & adversarial verification pass",
+            iconName: "bolt.fill",
+            category: .featured,
+            requiresPaidPlan: true
+        ),
+        SlashCommandItem(
+            command: "/swarm",
+            title: "Agent Swarm Board",
+            summary: "Coordinate named parallel workers & a verifier over a shared message board",
+            iconName: "hexagon.fill",
+            category: .featured,
+            requiresPaidPlan: true
         ),
         SlashCommandItem(
             command: "/teamwork",
-            title: "Multi-Agent Swarm",
-            summary: "Spawn parallel subagents for research, implementation, and verification",
-            iconName: "person.3.sequence.fill"
+            title: "Collaborative Agent Team",
+            summary: "Multi-milestone agent team with scoping interview, Orchestrator & Auditor gates",
+            iconName: "person.3.sequence.fill",
+            category: .featured,
+            requiresPaidPlan: true
+        ),
+        SlashCommandItem(
+            command: "/run-workflow",
+            title: "Dynamic Python Workflow",
+            summary: "Generate & approve a Python script orchestrating parallel() / pipeline() agents",
+            iconName: "flowchart.fill",
+            category: .featured,
+            requiresPaidPlan: true
+        ),
+        SlashCommandItem(
+            command: "/btw",
+            title: "Side Question Tab",
+            summary: "Ask a multi-turn read-only side question without interrupting the main thread",
+            iconName: "bubble.left.and.text.bubble.right.fill",
+            category: .appAndCLI,
+            availableInRemoteAgent: false
+        ),
+        SlashCommandItem(
+            command: "/schedule",
+            title: "In-Conversation Schedule",
+            summary: "Set a timer or recurring cron check-in inside the active conversation",
+            iconName: "clock.badge.checkmark",
+            category: .appAndCLI
+        ),
+        SlashCommandItem(
+            command: "/browser",
+            title: "Browser Subagent",
+            summary: "Launch a browser subagent to playtest pages, inspect console/network & capture screenshots",
+            iconName: "safari.fill",
+            category: .appAndCLI,
+            availableInRemoteAgent: false
+        ),
+        SlashCommandItem(
+            command: "/learn",
+            title: "Learn Rules & Skills",
+            summary: "Capture corrections from this session into persistent rules and skills",
+            iconName: "sparkles",
+            category: .appAndCLI
+        ),
+        SlashCommandItem(
+            command: "/agy-customizations",
+            title: "Manage Customizations",
+            summary: "Inspect and author rules, skills, plugins, hooks, and MCP servers",
+            iconName: "slider.horizontal.3",
+            category: .appAndCLI
+        ),
+        SlashCommandItem(
+            command: "/antigravity-guide",
+            title: "Antigravity Guide",
+            summary: "Interactive built-in guide to Antigravity 2.0 features and workflows",
+            iconName: "book.fill",
+            category: .appAndCLI
+        ),
+        SlashCommandItem(
+            command: "/automation",
+            title: "Create Automation",
+            summary: "Walk through creating a recurring scheduled automation across projects",
+            iconName: "clock.arrow.circlepath",
+            category: .appOnly
+        ),
+        SlashCommandItem(
+            command: "/generative_ui",
+            title: "Interactive Generative UI",
+            summary: "Render rich interactive HTML charts, diagrams, and control widgets inline",
+            iconName: "wand.and.stars",
+            category: .appOnly
+        ),
+        SlashCommandItem(
+            command: "/voice",
+            title: "Voice Mode",
+            summary: "Start Gemini Live interactive voice session with your agent",
+            iconName: "waveform.circle",
+            category: .appOnly,
+            availableInRemoteAgent: true
         )
     ]
+
+    public static func commands(isRemoteAgent: Bool, customSkills: [SkillSummary] = []) -> [SlashCommandItem] {
+        var list = allCommands.filter { !isRemoteAgent || $0.availableInRemoteAgent }
+        for skill in customSkills where skill.isEnabled {
+            let cmd = "/\(skill.name)"
+            if !list.contains(where: { $0.command.caseInsensitiveCompare(cmd) == .orderedSame }) {
+                list.append(
+                    SlashCommandItem(
+                        command: cmd,
+                        title: skill.name,
+                        summary: skill.description,
+                        iconName: "cube",
+                        category: .customSkill
+                    )
+                )
+            }
+        }
+        return list
+    }
 }
 
-/// Represents a context chip attached to the Composer Input Box (`@ratelimit.go`, skill, mention, etc.).
+/// Represents a context chip attached to the Composer Input Box (`@ratelimit.go`, skill, audio, PDF, quote, etc.).
 public struct ComposerAttachmentChip: Codable, Sendable, Equatable, Identifiable {
     public enum Kind: String, Codable, Sendable {
         case fileMention
@@ -1486,17 +1796,64 @@ public struct ComposerAttachmentChip: Codable, Sendable, Equatable, Identifiable
         case terminalLog
         case action
         case skill
+        case genericFile
+        case pdfDocument
+        case archiveZip
+        case audioRecording
+        case videoClip
+        case codeQuote
+        case pluginMention
     }
 
     public var id: String
     public var kind: Kind
     public var label: String
     public var targetUri: String
+    public var mimeType: String?
+    public var byteSize: Int?
+    public var inlineBase64Data: String?
 
-    public init(id: String = UUID().uuidString, kind: Kind, label: String, targetUri: String) {
+    public init(
+        id: String = UUID().uuidString,
+        kind: Kind,
+        label: String,
+        targetUri: String,
+        mimeType: String? = nil,
+        byteSize: Int? = nil,
+        inlineBase64Data: String? = nil
+    ) {
         self.id = id
         self.kind = kind
         self.label = label
         self.targetUri = targetUri
+        self.mimeType = mimeType
+        self.byteSize = byteSize
+        self.inlineBase64Data = inlineBase64Data
     }
 }
+
+/// Represents an unsent draft conversation (such as Automations "Create with Prompt").
+/// Stays purely client-side until the user taps Send — navigating back discards it without
+/// invoking `StartCascade` or polluting `summaries`.
+public struct PendingDraftConversation: Codable, Sendable, Equatable {
+    public var title: String
+    public var projectSlug: String
+    public var isCloud: Bool
+    public var workflowCommand: String?
+    public var defaultGuidedPrompt: String?
+
+    public init(
+        title: String = "New Conversation",
+        projectSlug: String = AntigravityCloudDetector.noProjectDisplayName,
+        isCloud: Bool = false,
+        workflowCommand: String? = nil,
+        defaultGuidedPrompt: String? = nil
+    ) {
+        self.title = title
+        self.projectSlug = projectSlug
+        self.isCloud = isCloud
+        self.workflowCommand = workflowCommand
+        self.defaultGuidedPrompt = defaultGuidedPrompt
+    }
+}
+

@@ -356,16 +356,45 @@ public enum CloudRelayJSPBCodec: Sendable {
     public static func decodeBase64Flexible(_ raw: String) -> Data? {
         let cleaned = raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: "")
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         if cleaned.isEmpty {
             return Data()
         }
         let remainder = cleaned.count % 4
+        if remainder == 1 {
+            return nil
+        }
         let padded = remainder == 0
             ? cleaned
             : cleaned + String(repeating: "=", count: 4 - remainder)
         return Data(base64Encoded: padded, options: [.ignoreUnknownCharacters])
+    }
+
+    /// Validates that a JSON string token contains only Base64 / Base64URL characters
+    /// (with optional CR/LF line wrapping) and a structurally valid Base64 length.
+    public static func isPlausibleBase64Payload(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else { return false }
+        var b64Count = 0
+        for byte in trimmed.utf8 {
+            switch byte {
+            case UInt8(ascii: "A")...UInt8(ascii: "Z"),
+                 UInt8(ascii: "a")...UInt8(ascii: "z"),
+                 UInt8(ascii: "0")...UInt8(ascii: "9"),
+                 UInt8(ascii: "+"), UInt8(ascii: "/"),
+                 UInt8(ascii: "-"), UInt8(ascii: "_"),
+                 UInt8(ascii: "="):
+                b64Count += 1
+            case UInt8(ascii: "\r"), UInt8(ascii: "\n"):
+                continue
+            default:
+                return false
+            }
+        }
+        return b64Count >= 2 && (b64Count % 4) != 1
     }
 
     /// Unwraps `X-Goog-Safety-Encoding: base64` / `Content-Transfer-Encoding: base64`
@@ -493,41 +522,58 @@ public enum CloudRelayJSPBCodec: Sendable {
         return try JSONEncoder().encode(jspb)
     }
 
-    /// Transparently gunzips RFC 1952 `gzip` payloads (`0x1f 0x8b 0x08`) returned inside Cloud Relay `ProxyCommand` frames.
+    /// Transparently decompresses RFC 1952 `gzip` (`0x1f 0x8b 0x08`) and RFC 1950 `zlib` (`0x78 ...`)
+    /// payloads returned inside Cloud Relay `ProxyCommand` / `StreamProxyCommand` and Connect-RPC frames.
     public static func decompressPayloadIfNeeded(_ data: Data) -> Data {
         let bytes = Array(data)
-        guard bytes.count >= 18,
-              bytes[0] == 0x1f,
-              bytes[1] == 0x8b,
-              bytes[2] == 0x08 else {
+        #if os(iOS) || os(macOS) || os(tvOS) || os(watchOS) || os(visionOS)
+        // 1. RFC 1952 GZIP (`0x1f 0x8b 0x08`)
+        if bytes.count >= 18,
+           bytes[0] == 0x1f,
+           bytes[1] == 0x8b,
+           bytes[2] == 0x08 {
+            let flags = bytes[3]
+            var headerEnd = 10
+            let payloadLimit = bytes.count - 8
+
+            if (flags & 0x04) != 0 {
+                guard headerEnd + 2 <= payloadLimit else { return data }
+                let xlen = Int(bytes[headerEnd]) | (Int(bytes[headerEnd + 1]) << 8)
+                headerEnd += 2 + xlen
+            }
+            if (flags & 0x08) != 0 {
+                while headerEnd < payloadLimit && bytes[headerEnd] != 0 { headerEnd += 1 }
+                headerEnd += 1
+            }
+            if (flags & 0x10) != 0 {
+                while headerEnd < payloadLimit && bytes[headerEnd] != 0 { headerEnd += 1 }
+                headerEnd += 1
+            }
+            if (flags & 0x02) != 0 {
+                headerEnd += 2
+            }
+            guard headerEnd <= payloadLimit else { return data }
+
+            let deflateSlice = Data(bytes[headerEnd..<payloadLimit])
+            if let decompressed = try? (deflateSlice as NSData).decompressed(using: .zlib) {
+                return Data(referencing: decompressed)
+            }
             return data
         }
-        let flags = bytes[3]
-        var headerEnd = 10
-        let payloadLimit = bytes.count - 8
 
-        if (flags & 0x04) != 0 {
-            guard headerEnd + 2 <= payloadLimit else { return data }
-            let xlen = Int(bytes[headerEnd]) | (Int(bytes[headerEnd + 1]) << 8)
-            headerEnd += 2 + xlen
-        }
-        if (flags & 0x08) != 0 {
-            while headerEnd < payloadLimit && bytes[headerEnd] != 0 { headerEnd += 1 }
-            headerEnd += 1
-        }
-        if (flags & 0x10) != 0 {
-            while headerEnd < payloadLimit && bytes[headerEnd] != 0 { headerEnd += 1 }
-            headerEnd += 1
-        }
-        if (flags & 0x02) != 0 {
-            headerEnd += 2
-        }
-        guard headerEnd <= payloadLimit else { return data }
-
-        #if os(iOS) || os(macOS) || os(tvOS) || os(watchOS) || os(visionOS)
-        let deflateSlice = Data(bytes[headerEnd..<payloadLimit])
-        if let decompressed = try? (deflateSlice as NSData).decompressed(using: .zlib) {
-            return Data(referencing: decompressed)
+        // 2. RFC 1950 ZLIB (`CM == 8`, `(CMF*256 + FLG) % 31 == 0`)
+        if bytes.count >= 6,
+           (bytes[0] & 0x0f) == 0x08,
+           (bytes[0] >> 4) <= 7,
+           ((Int(bytes[0]) << 8) | Int(bytes[1])) % 31 == 0 {
+            let headerEnd = (bytes[1] & 0x20) != 0 ? 6 : 2
+            let payloadLimit = bytes.count - 4
+            if headerEnd <= payloadLimit {
+                let deflateSlice = Data(bytes[headerEnd..<payloadLimit])
+                if let decompressed = try? (deflateSlice as NSData).decompressed(using: .zlib) {
+                    return Data(referencing: decompressed)
+                }
+            }
         }
         #endif
         return data
@@ -650,14 +696,111 @@ public enum CloudRelayJSPBCodec: Sendable {
     }
 }
 
-/// Incremental byte-level parser for Google Boq `StreamProxyCommand` JSPB streams.
-/// Emits decoded inner payload bytes as soon as each top-level `[...]` JSPB array closes,
-/// without waiting for trailing `\n` delimiters on infinite server streams.
+/// Incremental Base64 / Base64URL byte decoder for Google Boq responses carrying
+/// `X-Goog-Safety-Encoding: base64` or `Content-Transfer-Encoding: base64` on streaming RPCs.
+public struct StreamingBase64Decoder: Sendable {
+    private var quartet: [UInt8] = []
+
+    public init() {
+        quartet.reserveCapacity(4)
+    }
+
+    public mutating func feedByte(_ byte: UInt8) -> Data? {
+        let normalized: UInt8
+        switch byte {
+        case UInt8(ascii: "A")...UInt8(ascii: "Z"),
+             UInt8(ascii: "a")...UInt8(ascii: "z"),
+             UInt8(ascii: "0")...UInt8(ascii: "9"),
+             UInt8(ascii: "+"), UInt8(ascii: "/"), UInt8(ascii: "="):
+            normalized = byte
+        case UInt8(ascii: "-"):
+            normalized = UInt8(ascii: "+")
+        case UInt8(ascii: "_"):
+            normalized = UInt8(ascii: "/")
+        default:
+            return nil
+        }
+        quartet.append(normalized)
+        guard quartet.count == 4 else { return nil }
+        let chunk = Data(quartet)
+        quartet.removeAll(keepingCapacity: true)
+        return Data(base64Encoded: chunk)
+    }
+
+    public mutating func feed(_ bytes: Data) -> Data {
+        var out = Data()
+        for byte in bytes {
+            if let decoded = feedByte(byte) {
+                out.append(decoded)
+            }
+        }
+        return out
+    }
+
+    public mutating func flush() -> Data {
+        guard quartet.count >= 2 else {
+            quartet.removeAll(keepingCapacity: true)
+            return Data()
+        }
+        while quartet.count < 4 {
+            quartet.append(UInt8(ascii: "="))
+        }
+        let chunk = Data(quartet)
+        quartet.removeAll(keepingCapacity: true)
+        return Data(base64Encoded: chunk) ?? Data()
+    }
+}
+
+/// Incremental O(1)-memory byte-level parser for Google Boq `StreamProxyCommand` JSPB streams.
+///
+/// Google Boq server-streaming `application/json+protobuf` responses wrap all messages inside a
+/// single **open** outer JSON array (e.g. `[[["<b64>",[["content-type","application/connect+json"]]]],[["<b64_2>"]],...`)
+/// whose outermost `[` never closes for the lifetime of long-lived streams like `JetboxSubscribeToSummaries`.
+///
+/// This parser tracks a lightweight array stack and immediately emits every `ProxyCommandResponse`
+/// payload tuple (`["<b64>"]`, `["<b64>", headers]`, or `["<b64>", null]`) on its closing `]`
+/// without waiting for the outer array to close, while cleanly ignoring HTTP header pairs
+/// (`[key, value]`), JSON objects (`{...}`), and Boq error trailers (`[null, [code, msg]]`).
 public struct CloudRelayJSPBStreamParser: Sendable {
-    private var currentArrayBytes: [UInt8] = []
-    private var depth: Int = 0
+    private enum ElementKind: Sendable, Equatable {
+        case string
+        case array
+        case null
+        case other
+    }
+
+    private struct ArrayFrame: Sendable {
+        var elementCount: Int = 0
+        var firstElement: ElementKind? = nil
+        var secondElement: ElementKind? = nil
+        var firstString: String? = nil
+        var firstInt: Int? = nil
+        var secondString: String? = nil
+
+        mutating func append(_ kind: ElementKind, stringValue: String? = nil, intValue: Int? = nil) {
+            if elementCount == 0 {
+                firstElement = kind
+                firstString = stringValue
+                firstInt = intValue
+            } else if elementCount == 1 {
+                secondElement = kind
+                secondString = stringValue
+            }
+            elementCount += 1
+        }
+    }
+
+    private var stack: [ArrayFrame] = []
+    private var objectDepth: Int = 0
     private var inString: Bool = false
     private var isEscaped: Bool = false
+    private var stringHasEscape: Bool = false
+    private var captureCurrentString: Bool = false
+    private var stringBytes: [UInt8] = []
+    private var tokenBytes: [UInt8] = []
+
+    /// Captures the last Boq error trailer (`[null, [code, message]]`) observed on the stream, if any.
+    public private(set) var lastErrorTrailer: String? = nil
 
     public init() {}
 
@@ -671,49 +814,139 @@ public struct CloudRelayJSPBStreamParser: Sendable {
         return emitted
     }
 
-    public mutating func feedByte(_ byte: UInt8) -> [Data]? {
-        if depth == 0 {
-            if byte == UInt8(ascii: "[") {
-                depth = 1
-                inString = false
-                isEscaped = false
-                currentArrayBytes.removeAll(keepingCapacity: true)
-                currentArrayBytes.append(byte)
-            }
-            return nil
+    private mutating func flushPendingToken() {
+        guard !tokenBytes.isEmpty else { return }
+        let token = String(decoding: tokenBytes, as: UTF8.self)
+        tokenBytes.removeAll(keepingCapacity: true)
+        guard !stack.isEmpty else { return }
+        if token == "null" {
+            stack[stack.count - 1].append(.null)
+        } else if let intVal = Int(token) {
+            stack[stack.count - 1].append(.other, intValue: intVal)
+        } else {
+            stack[stack.count - 1].append(.other)
         }
+    }
 
-        currentArrayBytes.append(byte)
-
+    public mutating func feedByte(_ byte: UInt8) -> [Data]? {
         if inString {
+            if captureCurrentString {
+                stringBytes.append(byte)
+            }
             if isEscaped {
                 isEscaped = false
             } else if byte == UInt8(ascii: "\\") {
                 isEscaped = true
+                if captureCurrentString {
+                    stringHasEscape = true
+                }
             } else if byte == UInt8(ascii: "\"") {
                 inString = false
+                if objectDepth == 0, !stack.isEmpty {
+                    let decoded: String?
+                    if captureCurrentString, stringBytes.count >= 2 {
+                        if !stringHasEscape {
+                            decoded = String(decoding: stringBytes[1..<(stringBytes.count - 1)], as: UTF8.self)
+                        } else {
+                            decoded = (try? JSONDecoder().decode(String.self, from: Data(stringBytes)))
+                                ?? String(decoding: stringBytes[1..<(stringBytes.count - 1)], as: UTF8.self)
+                        }
+                    } else {
+                        decoded = nil
+                    }
+                    let keepCap = stringBytes.count <= 65_536
+                    stringBytes.removeAll(keepingCapacity: keepCap)
+                    stringHasEscape = false
+                    captureCurrentString = false
+                    stack[stack.count - 1].append(.string, stringValue: decoded)
+                }
             }
             return nil
         }
 
-        if byte == UInt8(ascii: "\"") {
-            inString = true
-        } else if byte == UInt8(ascii: "[") {
-            depth += 1
-        } else if byte == UInt8(ascii: "]") {
-            depth -= 1
-            if depth == 0 {
-                let completedData = Data(currentArrayBytes)
-                currentArrayBytes.removeAll(keepingCapacity: true)
-                if let root = try? JSONDecoder().decode(JSONValue.self, from: completedData),
-                   let arr = root.arrayValue {
-                    let extracted = CloudRelayJSPBCodec.extractPayloadsFromJSPBArray(arr)
-                    if !extracted.isEmpty {
-                        return extracted
-                    }
+        if objectDepth > 0 {
+            if byte == UInt8(ascii: "\"") {
+                inString = true
+                isEscaped = false
+                captureCurrentString = false
+            } else if byte == UInt8(ascii: "{") {
+                objectDepth += 1
+            } else if byte == UInt8(ascii: "}") {
+                objectDepth -= 1
+                if objectDepth == 0, !stack.isEmpty {
+                    stack[stack.count - 1].append(.other)
                 }
             }
+            return nil
         }
-        return nil
+
+        if stack.isEmpty {
+            if byte == UInt8(ascii: "[") {
+                stack.append(ArrayFrame())
+                tokenBytes.removeAll(keepingCapacity: true)
+            }
+            return nil
+        }
+
+        switch byte {
+        case UInt8(ascii: "\""):
+            flushPendingToken()
+            inString = true
+            isEscaped = false
+            stringHasEscape = false
+            captureCurrentString = (stack[stack.count - 1].elementCount <= 1)
+            stringBytes.removeAll(keepingCapacity: true)
+            if captureCurrentString {
+                stringBytes.append(byte)
+            }
+            return nil
+
+        case UInt8(ascii: "{"):
+            flushPendingToken()
+            objectDepth = 1
+            return nil
+
+        case UInt8(ascii: "["):
+            flushPendingToken()
+            stack.append(ArrayFrame())
+            return nil
+
+        case UInt8(ascii: ","),
+             UInt8(ascii: " "),
+             UInt8(ascii: "\t"),
+             UInt8(ascii: "\n"),
+             UInt8(ascii: "\r"):
+            flushPendingToken()
+            return nil
+
+        case UInt8(ascii: "]"):
+            flushPendingToken()
+            let closed = stack.removeLast()
+            let insideErrorTrailer = stack.contains { $0.firstElement == .null || $0.firstElement == .other }
+            if !stack.isEmpty {
+                stack[stack.count - 1].append(.array)
+            }
+            if insideErrorTrailer {
+                if let code = closed.firstInt, code != 0,
+                   let msg = closed.secondString, !msg.isEmpty {
+                    lastErrorTrailer = "Boq status \(code): \(msg)"
+                }
+                return nil
+            }
+            if closed.firstElement == .string,
+               closed.elementCount >= 1 && closed.elementCount <= 3,
+               (closed.elementCount == 1 || closed.secondElement == .array || closed.secondElement == .null),
+               let b64 = closed.firstString,
+               CloudRelayJSPBCodec.isPlausibleBase64Payload(b64),
+               let decoded = CloudRelayJSPBCodec.decodeBase64Flexible(b64),
+               !decoded.isEmpty {
+                return [decoded]
+            }
+            return nil
+
+        default:
+            tokenBytes.append(byte)
+            return nil
+        }
     }
 }

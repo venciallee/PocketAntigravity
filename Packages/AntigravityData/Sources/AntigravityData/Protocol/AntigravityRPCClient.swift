@@ -151,41 +151,41 @@ public actor AntigravityRPCClient {
     private var authUser: String
     private var targetInstanceIdentifier: String
     private var resolvedInstanceUuid: String?
+    private var preferredCloudInstanceUuid: String? = nil
     private var cachedRelayInstances: [RelayInstanceInfo] = []
     private var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
+    private var cachedLocalProjectNameById: [String: String] = [:]
+    private var cachedLocalProjectIdByName: [String: String] = [:]
+    private var lastLocalProjectFetchAt: Date? = nil
     private var wokenInstanceCascadeKeys: Set<String> = []
     private var cachedValidUpstreamModels: Set<String>?
     private var cachedDefaultUpstreamModel: String?
     private let urlSession: URLSession
+    private let streamingURLSession: URLSession
 
     public struct LiveModelCatalogResult: Sendable, Equatable {
         public let models: [CascadeModelConfig]
         public let defaultModelId: String?
         public let agents: [String]
+        public let usageQuota: ModelUsageQuota?
 
         public init(
             models: [CascadeModelConfig],
             defaultModelId: String? = nil,
-            agents: [String] = ["Default"]
+            agents: [String] = ["Default"],
+            usageQuota: ModelUsageQuota? = nil
         ) {
             self.models = models
             self.defaultModelId = defaultModelId
             self.agents = agents
+            self.usageQuota = usageQuota
         }
     }
 
-    private static let companionOnlyMethods: Set<String> = [
-        "ListAutomations",
-        "CreateAutomation",
-        "TriggerAutomationNow",
-        "SetAutomationPaused",
-        "OpenWorkspaceInFinder",
-        "CreateProjectWorkspace",
-        "GetTurnDiff",
-        "GetArtifactSnapshots",
-        "SendPlanReviewComments",
-        "RevertDiffHunk",
-        "SendDiffReviewComments"
+    /// Only true local-OS-only desktop commands (like revealing a local folder in macOS Finder)
+    /// are unsupported over Antigravity Cloud Relay; all data & review RPCs forward to upstream.
+    private static let localDesktopOnlyMethods: Set<String> = [
+        "OpenWorkspaceInFinder"
     ]
 
     public init(
@@ -212,11 +212,21 @@ public actor AntigravityRPCClient {
         self.sessionCookie = sessionCookie
         if let urlSession {
             self.urlSession = urlSession
+            self.streamingURLSession = urlSession
         } else {
             self.urlSession = Self.makeDefaultURLSession(
                 for: host.endpointURL,
                 pinnedFingerprintSHA256: pinnedFingerprintSHA256,
-                allowLocalSelfSignedTOFU: host.channel == .directHost
+                allowLocalSelfSignedTOFU: host.channel == .directHost,
+                requestTimeout: 20,
+                resourceTimeout: 300
+            )
+            self.streamingURLSession = Self.makeDefaultURLSession(
+                for: host.endpointURL,
+                pinnedFingerprintSHA256: pinnedFingerprintSHA256,
+                allowLocalSelfSignedTOFU: host.channel == .directHost,
+                requestTimeout: 300,
+                resourceTimeout: 3600
             )
         }
     }
@@ -244,11 +254,21 @@ public actor AntigravityRPCClient {
         self.sessionCookie = sessionCookie
         if let urlSession {
             self.urlSession = urlSession
+            self.streamingURLSession = urlSession
         } else {
             self.urlSession = Self.makeDefaultURLSession(
                 for: baseURL,
                 pinnedFingerprintSHA256: pinnedFingerprintSHA256,
-                allowLocalSelfSignedTOFU: true
+                allowLocalSelfSignedTOFU: true,
+                requestTimeout: 20,
+                resourceTimeout: 300
+            )
+            self.streamingURLSession = Self.makeDefaultURLSession(
+                for: baseURL,
+                pinnedFingerprintSHA256: pinnedFingerprintSHA256,
+                allowLocalSelfSignedTOFU: true,
+                requestTimeout: 300,
+                resourceTimeout: 3600
             )
         }
     }
@@ -256,11 +276,13 @@ public actor AntigravityRPCClient {
     nonisolated private static func makeDefaultURLSession(
         for endpointURL: URL,
         pinnedFingerprintSHA256: String?,
-        allowLocalSelfSignedTOFU: Bool
+        allowLocalSelfSignedTOFU: Bool,
+        requestTimeout: TimeInterval = 20,
+        resourceTimeout: TimeInterval = 300
     ) -> URLSession {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 20
-        config.timeoutIntervalForResource = 300
+        config.timeoutIntervalForRequest = requestTimeout
+        config.timeoutIntervalForResource = resourceTimeout
         let host = (endpointURL.host ?? "").lowercased()
         let isLocalOrPrivateHost =
             host == "localhost" ||
@@ -339,6 +361,11 @@ public actor AntigravityRPCClient {
         cachedRelayInstances
     }
 
+    /// Returns the latest Cloud Relay instance list observed from `ApiService/ListInstances`.
+    public func currentCachedRelayInstances() -> [RelayInstanceInfo] {
+        cachedRelayInstances
+    }
+
     /// Updates the preferred active Cloud Relay target UUID/name when the user selects a specific online host.
     public func setPreferredRelayInstance(uuid: String, name: String) {
         let trimmedUuid = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -352,7 +379,6 @@ public actor AntigravityRPCClient {
             self.targetInstanceIdentifier = trimmedUuid
         }
     }
-
     /// Resolves a scanned Remote Control device slug (`lt74xt6l0m-golden-star`) or UUID (`0f5819ac-...-v2`)
     /// to an online `RelayInstanceInfo`, automatically failing over across open windows on the same Mac/account
     /// and probing `X-Goog-AuthUser` `0..4` for multi-account sessions.
@@ -670,6 +696,30 @@ public actor AntigravityRPCClient {
         return HostReachabilityProbeResult(latencyMs: elapsedMs)
     }
 
+    /// Returns all currently reachable Cloud Relay Desktop instances (falling back to the resolved instance).
+    public func currentReachableRelayInstances() -> [RelayInstanceInfo] {
+        guard channel == .cloudRelay else { return [] }
+        let reachable = cachedRelayInstances.filter(\.status.isReachable)
+        if !reachable.isEmpty {
+            return reachable
+        }
+        if let uuid = resolvedInstanceUuid, !uuid.isEmpty {
+            return [RelayInstanceInfo(uuid: uuid, name: targetInstanceIdentifier.isEmpty ? "Mac" : targetInstanceIdentifier, status: .connected)]
+        }
+        return []
+    }
+
+    /// Returns the reachable Cloud Relay instance that most recently served Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) RPCs.
+    public func currentPreferredCloudInstanceUuid() -> String? {
+        if let pref = preferredCloudInstanceUuid, !pref.isEmpty {
+            if cachedRelayInstances.isEmpty
+                || cachedRelayInstances.contains(where: { $0.uuid == pref && $0.status.isReachable }) {
+                return pref
+            }
+        }
+        return selectReachableRelayUuid(preferred: resolvedInstanceUuid)
+    }
+
     /// Refreshes `ListInstances` (when on `.cloudRelay`), federates local workspaces & summaries across all
     /// reachable instances on the signed-in Google account without cross-host spoofing, reconciles each instance's
     /// live end-to-end reachability status, and queries Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects & sessions.
@@ -694,15 +744,7 @@ public actor AntigravityRPCClient {
             }
         }
 
-        let reachableInstances: [RelayInstanceInfo] = {
-            guard channel == .cloudRelay else { return [] }
-            let reachable = cachedRelayInstances.filter { $0.status.isReachable }
-            if !reachable.isEmpty { return reachable }
-            if let uuid = resolvedInstanceUuid {
-                return [RelayInstanceInfo(uuid: uuid, name: targetInstanceIdentifier.isEmpty ? "Mac" : targetInstanceIdentifier, status: .connected)]
-            }
-            return []
-        }()
+        let reachableInstances = currentReachableRelayInstances()
 
         // 1. Fetch Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects (reuse cache on lightweight periodic ticks)
         let cloudProjectOutcome: (projects: [ProjectWorkspace], warmingUp: Bool)
@@ -736,6 +778,22 @@ public actor AntigravityRPCClient {
             var verifiedOnlineUuids = Set<String>()
             var failedProbeUuids = Set<String>()
 
+            // Order Cloud candidate instances with the instance that served Cloud projects first
+            let preferredCloudUuid = self.preferredCloudInstanceUuid
+            let orderedCloudCandidates: [RelayInstanceInfo] = {
+                guard let preferredCloudUuid,
+                      let prefInst = reachableInstances.first(where: { $0.uuid == preferredCloudUuid }) else {
+                    return reachableInstances
+                }
+                return [prefInst] + reachableInstances.filter { $0.uuid != preferredCloudUuid }
+            }()
+
+            // Run Cloud (`BACKEND_TYPE_REMOTE_AICODE`) summary fetch concurrently with Local per-instance federation
+            async let cloudSummariesTask: [CascadeSummary] = self.fetchCloudSummariesAcrossInstances(
+                candidates: orderedCloudCandidates,
+                timeoutInterval: timeoutInterval
+            )
+
             await withTaskGroup(of: (String, Bool, [WorkspaceInfo], [CascadeSummary], [CascadeSummary]).self) { group in
                 for inst in reachableInstances {
                     group.addTask {
@@ -756,28 +814,26 @@ public actor AntigravityRPCClient {
                             ws = []
                         }
 
-                        let mem: [CascadeSummary]
-                        do {
-                            mem = try await self.getAllCascadeTrajectories(
-                                instanceUuidOverride: inst.uuid,
-                                originHostName: inst.name,
-                                timeoutInterval: timeoutInterval,
-                                allowCrossInstanceFailover: false
-                            )
-                            instOk = true
-                        } catch {
-                            mem = []
-                        }
-
-                        let jbLocal = await self.fetchJetboxSummariesSnapshot(
+                        async let memTask = self.getAllCascadeTrajectories(
+                            instanceUuidOverride: inst.uuid,
+                            originHostName: inst.name,
+                            timeoutInterval: timeoutInterval,
+                            allowCrossInstanceFailover: false
+                        )
+                        async let jbLocalTask = self.fetchJetboxSummariesSnapshot(
                             cloud: false,
                             instanceUuidOverride: inst.uuid,
                             originHostName: inst.name,
-                            snapshotTimeout: 3.5,
+                            snapshotTimeout: 4.0,
                             allowCrossInstanceFailover: false
                         )
-                        if !jbLocal.isEmpty { instOk = true }
-                        return (inst.uuid, instOk, ws, mem, jbLocal)
+
+                        let memResult = try? await memTask
+                        let jbLocal = await jbLocalTask
+                        if memResult != nil || !jbLocal.isEmpty {
+                            instOk = true
+                        }
+                        return (inst.uuid, instOk, ws, memResult ?? [], jbLocal)
                     }
                 }
 
@@ -812,23 +868,12 @@ public actor AntigravityRPCClient {
                 }
             }
 
-            // Query Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) summaries across verified-online instances first.
+            let cloudSummaries = await cloudSummariesTask
             let updatedCloudProjects = self.cachedCloudProjectsById
-            let cloudQueryCandidates = reachableInstances.filter { verifiedOnlineUuids.contains($0.uuid) }
-            for inst in (cloudQueryCandidates.isEmpty ? reachableInstances : cloudQueryCandidates) {
-                let cloudSummaries = await fetchJetboxSummariesSnapshot(
-                    cloud: true,
-                    instanceUuidOverride: inst.uuid,
-                    originHostName: "Antigravity",
-                    snapshotTimeout: 4.5,
-                    allowCrossInstanceFailover: false
-                )
-                if !cloudSummaries.isEmpty {
-                    anyInstanceSucceeded = true
-                    for s in cloudSummaries {
-                        Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: updatedCloudProjects)
-                    }
-                    break
+            if !cloudSummaries.isEmpty {
+                anyInstanceSucceeded = true
+                for s in cloudSummaries {
+                    Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: updatedCloudProjects)
                 }
             }
 
@@ -864,6 +909,8 @@ public actor AntigravityRPCClient {
             }
         }
 
+        Self.reconcileBatchUnreadStates(&mergedSummariesById)
+
         let sortedSummaries = mergedSummariesById.values.sorted { lhs, rhs in
             if lhs.updatedAt != rhs.updatedAt {
                 return lhs.updatedAt > rhs.updatedAt
@@ -874,47 +921,321 @@ public actor AntigravityRPCClient {
         return (sortedWorkspaces, sortedSummaries, cloudProjects, cloudProjectOutcome.warmingUp, cachedRelayInstances)
     }
 
-    private static func mergeSummaryEntry(
+    private func fetchCloudSummariesAcrossInstances(
+        candidates: [RelayInstanceInfo],
+        timeoutInterval: TimeInterval?
+    ) async -> [CascadeSummary] {
+        let cloudProjectsSnapshot = self.cachedCloudProjectsById
+        for inst in candidates {
+            async let jbTask = fetchJetboxSummariesSnapshot(
+                cloud: true,
+                instanceUuidOverride: inst.uuid,
+                originHostName: "Antigravity",
+                snapshotTimeout: 4.5
+            )
+            async let unaryTask = getAllCascadeTrajectoriesCloud(
+                instanceUuidOverride: inst.uuid,
+                timeoutInterval: timeoutInterval ?? 8.0
+            )
+            let jbCloud = await jbTask
+            let unaryCloud = await unaryTask
+            var combined: [String: CascadeSummary] = [:]
+            for s in unaryCloud + jbCloud {
+                Self.mergeSummaryEntry(s, into: &combined, cloudProjectsById: cloudProjectsSnapshot)
+            }
+            if !combined.isEmpty {
+                self.preferredCloudInstanceUuid = inst.uuid
+                return Array(combined.values)
+            }
+        }
+        return []
+    }
+
+    /// Resolves the canonical Antigravity Cloud `ProjectWorkspace` matching `summary` by:
+    /// 1. Exact or `projects/`-normalized `cloudProjectId`,
+    /// 2. Case-insensitive `workspaceUri` (`cloud://owner/repo`),
+    /// 3. Normalized Cloud location label (`owner/repo`), or
+    /// 4. Unique repo short-name suffix when `summary.isCloud == true`.
+    internal static func matchCloudProject(
+        for summary: CascadeSummary,
+        cloudProjects: [ProjectWorkspace]
+    ) -> ProjectWorkspace? {
+        guard !cloudProjects.isEmpty else { return nil }
+
+        func normalizeProjectId(_ raw: String) -> String {
+            var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if trimmed.hasPrefix("projects/") {
+                trimmed = String(trimmed.dropFirst("projects/".count))
+            }
+            return trimmed
+        }
+
+        if let rawCpid = summary.cloudProjectId, !rawCpid.isEmpty {
+            let normCpid = normalizeProjectId(rawCpid)
+            if let exact = cloudProjects.first(where: { cp in
+                let cpId = cp.cloudProjectId ?? cp.id
+                return cpId == rawCpid || cp.id == rawCpid
+                    || normalizeProjectId(cpId) == normCpid
+                    || normalizeProjectId(cp.id) == normCpid
+            }) {
+                return exact
+            }
+        }
+
+        if !summary.workspaceUri.isEmpty {
+            if let byUri = cloudProjects.first(where: {
+                !$0.workspaceUri.isEmpty
+                    && $0.workspaceUri.caseInsensitiveCompare(summary.workspaceUri) == .orderedSame
+            }) {
+                return byUri
+            }
+            if let summaryLabel = AntigravityCloudDetector.extractCloudLocationLabel(summary.workspaceUri) {
+                if let byLabel = cloudProjects.first(where: { cp in
+                    if let cpLabel = AntigravityCloudDetector.extractCloudLocationLabel(cp.workspaceUri),
+                       cpLabel.caseInsensitiveCompare(summaryLabel) == .orderedSame {
+                        return true
+                    }
+                    return cp.name.caseInsensitiveCompare(summaryLabel) == .orderedSame
+                }) {
+                    return byLabel
+                }
+            }
+        }
+
+        if summary.isCloud && !AntigravityCloudDetector.isNoProjectSlug(summary.projectSlug) {
+            let cleanSlug = summary.projectSlug.lowercased().hasPrefix("cloud:")
+                ? String(summary.projectSlug.dropFirst("cloud:".count))
+                : summary.projectSlug
+            if let exactName = cloudProjects.first(where: {
+                $0.name.caseInsensitiveCompare(cleanSlug) == .orderedSame
+            }) {
+                return exactName
+            }
+            let suffixMatches = cloudProjects.filter { cp in
+                let repoFromName = cp.name.split(separator: "/").last.map(String.init) ?? cp.name
+                let repoFromUri = AntigravityCloudDetector.extractCloudLocationLabel(cp.workspaceUri)?
+                    .split(separator: "/").last.map(String.init)
+                return repoFromName.caseInsensitiveCompare(cleanSlug) == .orderedSame
+                    || (repoFromUri?.caseInsensitiveCompare(cleanSlug) == .orderedSame)
+            }
+            if suffixMatches.count == 1 {
+                return suffixMatches[0]
+            }
+        }
+
+        return nil
+    }
+
+    private static func summaryStatusPriority(_ status: CortexStepStatus) -> Int {
+        switch status {
+        case .waiting, .blocked: return 4
+        case .inProgress, .pending: return 3
+        case .error, .cancelled: return 2
+        case .done: return 1
+        case .unspecified: return 0
+        }
+    }
+
+    internal static func mergeSummaryEntry(
         _ incoming: CascadeSummary,
         into map: inout [String: CascadeSummary],
         cloudProjectsById: [String: ProjectWorkspace]
     ) {
+        let allCloudProjects = Array(cloudProjectsById.values)
         var resolved = incoming
-        if let cpid = resolved.cloudProjectId, !cpid.isEmpty, let cp = cloudProjectsById[cpid] {
+        if let cp = matchCloudProject(for: resolved, cloudProjects: allCloudProjects) {
             resolved.isCloud = true
+            resolved.cloudProjectId = cp.cloudProjectId ?? cp.id
             resolved.projectSlug = cp.name
             resolved.workspaceUri = cp.workspaceUri
             resolved.originHostName = "Antigravity"
         }
-        if let existing = map[resolved.cascadeId] {
-            if existing.title != "New Conversation" && resolved.title == "New Conversation" {
-                resolved.title = existing.title
+
+        guard let existing = map[resolved.cascadeId] else {
+            map[resolved.cascadeId] = resolved
+            return
+        }
+
+        var merged = resolved.stepCount >= existing.stepCount && resolved.updatedAt >= existing.updatedAt
+            ? resolved
+            : existing
+
+        // 1. Title: never let default placeholder overwrite a real title
+        if existing.title != "New Conversation" && resolved.title == "New Conversation" {
+            merged.title = existing.title
+        } else if resolved.title != "New Conversation" && existing.title == "New Conversation" {
+            merged.title = resolved.title
+        } else if resolved.title != "New Conversation" && resolved.updatedAt >= existing.updatedAt {
+            merged.title = resolved.title
+        } else {
+            merged.title = existing.title
+        }
+
+        // 2. Cloud identity & canonical project binding
+        merged.isCloud = existing.isCloud || resolved.isCloud
+        merged.cloudProjectId = nonEmptyString(resolved.cloudProjectId) ?? nonEmptyString(existing.cloudProjectId)
+        if merged.isCloud {
+            merged.originHostName = "Antigravity"
+        }
+        if !AntigravityCloudDetector.isNoProjectSlug(existing.projectSlug)
+            && AntigravityCloudDetector.isNoProjectSlug(merged.projectSlug) {
+            merged.projectSlug = existing.projectSlug
+            if merged.workspaceUri.isEmpty {
+                merged.workspaceUri = existing.workspaceUri
             }
-            if existing.isCloud && !resolved.isCloud {
-                resolved.isCloud = true
-                resolved.originHostName = "Antigravity"
+        }
+        if !AntigravityCloudDetector.isNoProjectSlug(resolved.projectSlug)
+            && AntigravityCloudDetector.isNoProjectSlug(merged.projectSlug) {
+            merged.projectSlug = resolved.projectSlug
+            if merged.workspaceUri.isEmpty {
+                merged.workspaceUri = resolved.workspaceUri
             }
-            if let existingCpid = existing.cloudProjectId, !existingCpid.isEmpty, (resolved.cloudProjectId ?? "").isEmpty {
-                resolved.cloudProjectId = existingCpid
+        }
+        if let cp = matchCloudProject(for: merged, cloudProjects: allCloudProjects) {
+            merged.isCloud = true
+            merged.cloudProjectId = cp.cloudProjectId ?? cp.id
+            merged.projectSlug = cp.name
+            merged.workspaceUri = cp.workspaceUri
+            merged.originHostName = "Antigravity"
+        }
+
+        // 3. Step count & timestamps
+        merged.stepCount = max(existing.stepCount, resolved.stepCount)
+        merged.currentStepIndex = max(1, merged.stepCount)
+        merged.totalSteps = max(1, merged.stepCount)
+        if resolved.updatedAt >= existing.updatedAt {
+            merged.updatedAt = resolved.updatedAt
+            merged.relativeTimeLabel = resolved.relativeTimeLabel
+        } else {
+            merged.updatedAt = existing.updatedAt
+            merged.relativeTimeLabel = existing.relativeTimeLabel
+        }
+
+        // 4. Status: prioritize live RUNNING / WAITING over stale IDLE across multi-window & Jetbox merges
+        let chosenStatus: CortexStepStatus
+        if resolved.stepCount > existing.stepCount {
+            if resolved.status == .unspecified
+                && (existing.status == .waiting || existing.status == .blocked)
+                && resolved.updatedAt <= existing.updatedAt {
+                chosenStatus = existing.status
+            } else {
+                chosenStatus = resolved.status
             }
-            if !AntigravityCloudDetector.isNoProjectSlug(existing.projectSlug)
-                && AntigravityCloudDetector.isNoProjectSlug(resolved.projectSlug) {
-                resolved.projectSlug = existing.projectSlug
-                if resolved.workspaceUri.isEmpty {
-                    resolved.workspaceUri = existing.workspaceUri
-                }
-            }
-            if existing.originInstanceUuid != nil && resolved.originInstanceUuid == nil {
-                resolved.originInstanceUuid = existing.originInstanceUuid
-                if !resolved.isCloud {
-                    resolved.originHostName = existing.originHostName
-                }
-            }
-            if resolved.stepCount >= existing.stepCount || resolved.updatedAt >= existing.updatedAt {
-                map[resolved.cascadeId] = resolved
+        } else if existing.stepCount > resolved.stepCount {
+            if existing.status == .unspecified
+                && (resolved.status == .waiting || resolved.status == .blocked)
+                && resolved.updatedAt >= existing.updatedAt {
+                chosenStatus = resolved.status
+            } else {
+                chosenStatus = existing.status
             }
         } else {
-            map[resolved.cascadeId] = resolved
+            let pResolved = summaryStatusPriority(resolved.status)
+            let pExisting = summaryStatusPriority(existing.status)
+            if pResolved > pExisting {
+                if (resolved.status == .inProgress || resolved.status == .pending)
+                    && existing.updatedAt > resolved.updatedAt.addingTimeInterval(2.0) {
+                    chosenStatus = existing.status
+                } else {
+                    chosenStatus = resolved.status
+                }
+            } else if pExisting > pResolved {
+                if (existing.status == .waiting || existing.status == .blocked
+                    || existing.status == .inProgress || existing.status == .pending)
+                    && resolved.updatedAt <= existing.updatedAt.addingTimeInterval(2.0) {
+                    chosenStatus = existing.status
+                } else {
+                    chosenStatus = resolved.updatedAt >= existing.updatedAt ? resolved.status : existing.status
+                }
+            } else {
+                chosenStatus = resolved.updatedAt >= existing.updatedAt ? resolved.status : existing.status
+            }
+        }
+        merged.status = chosenStatus
+
+        // 5. Route origin instance to whichever peer owns the active run or higher step count
+        if !merged.isCloud {
+            let resolvedIsMoreActive = summaryStatusPriority(resolved.status) > summaryStatusPriority(existing.status)
+                || resolved.stepCount > existing.stepCount
+            if resolvedIsMoreActive, let rUuid = resolved.originInstanceUuid, !rUuid.isEmpty {
+                merged.originInstanceUuid = rUuid
+                merged.originHostName = resolved.originHostName ?? existing.originHostName
+            } else if let eUuid = existing.originInstanceUuid, !eUuid.isEmpty,
+                      (summaryStatusPriority(existing.status) > summaryStatusPriority(resolved.status)
+                       || existing.stepCount > resolved.stepCount
+                       || resolved.originInstanceUuid == nil) {
+                merged.originInstanceUuid = eUuid
+                merged.originHostName = existing.originHostName ?? resolved.originHostName
+            } else {
+                merged.originInstanceUuid = resolved.originInstanceUuid ?? existing.originInstanceUuid
+                merged.originHostName = resolved.originHostName ?? existing.originHostName
+            }
+        } else {
+            merged.originInstanceUuid = resolved.originInstanceUuid ?? existing.originInstanceUuid
+            merged.originHostName = "Antigravity"
+        }
+
+        // 6. Annotations (`isPinned`, `isArchived`, `lastUserViewTime`, `isUnread`)
+        merged.isPinned = existing.isPinned || resolved.isPinned
+        merged.isArchived = existing.isArchived || resolved.isArchived
+        let latestViewed = [existing.lastUserViewTime, resolved.lastUserViewTime].compactMap { $0 }.max()
+        merged.lastUserViewTime = latestViewed
+
+        if merged.status == .inProgress || merged.status == .pending {
+            merged.isUnread = false
+        } else if let latestViewed {
+            merged.isUnread = merged.updatedAt.timeIntervalSince(latestViewed) > 0.5
+                || merged.status == .waiting
+                || merged.status == .blocked
+        } else {
+            merged.isUnread = existing.isUnread || resolved.isUnread
+                || merged.status == .waiting
+                || merged.status == .blocked
+        }
+
+        merged.statusSubtitle = Self.buildLiveStatusSubtitle(
+            status: merged.status,
+            stepCount: merged.stepCount,
+            isUnread: merged.isUnread
+        )
+        map[resolved.cascadeId] = merged
+    }
+
+    /// Reconciles unread flags per host/cloud bucket when Desktop emits `lastUserViewTime` on viewed
+    /// conversations and omits `lastUserViewTime` on newly completed conversations never opened yet.
+    internal static func reconcileBatchUnreadStates(
+        _ map: inout [String: CascadeSummary],
+        now: Date = Date()
+    ) {
+        var buckets: [String: [String]] = [:]
+        for (cid, summary) in map {
+            let bucketKey = summary.isCloud ? "__cloud__" : (summary.originInstanceUuid ?? "__local__")
+            buckets[bucketKey, default: []].append(cid)
+        }
+        let maxInferredUnreadAgeSeconds: TimeInterval = 7 * 86_400
+        for (_, cids) in buckets {
+            let bucketTracksViewTime = cids.contains { map[$0]?.lastUserViewTime != nil }
+            guard bucketTracksViewTime else { continue }
+            for cid in cids {
+                guard var s = map[cid] else { continue }
+                guard s.lastUserViewTime == nil,
+                      !s.isUnread,
+                      !s.isArchived,
+                      s.stepCount > 0,
+                      s.status != .inProgress,
+                      s.status != .pending,
+                      s.status != .cancelled,
+                      now.timeIntervalSince(s.updatedAt) <= maxInferredUnreadAgeSeconds else {
+                    continue
+                }
+                s.isUnread = true
+                s.statusSubtitle = Self.buildLiveStatusSubtitle(
+                    status: s.status,
+                    stepCount: s.stepCount,
+                    isUnread: true
+                )
+                map[cid] = s
+            }
         }
     }
 
@@ -990,23 +1311,18 @@ public actor AntigravityRPCClient {
         body: [String: JSONValue],
         instanceUuidOverride: String? = nil,
         timeoutInterval: TimeInterval? = nil,
-        allowCrossInstanceFailover: Bool = true
+        allowCrossInstanceFailover: Bool = true,
+        allowStripUnknownFields: Bool = true
     ) async throws -> [String: JSONValue] {
-        if Self.companionOnlyMethods.contains(method) {
-            if method == "ListAutomations" {
-                return ["automations": .array([])]
-            }
-            if method == "GetArtifactSnapshots" {
-                return ["artifacts": .array([])]
-            }
-            if method == "GetTurnDiff" {
-                return ["files": .array([])]
-            }
-            return ["ok": .bool(true)]
+        if Self.localDesktopOnlyMethods.contains(method) {
+            throw AntigravityRPCError.httpError(
+                statusCode: 501,
+                body: "\(method) is only available when connected directly to a local desktop workspace."
+            )
         }
 
         var workingBody = try await sanitizeCloudRelayPayload(method: method, body: body)
-        for attempt in 1...3 {
+        for attempt in 1...4 {
             let encodedPayload = workingBody.isEmpty ? Data("{}".utf8) : try JSONEncoder().encode(workingBody)
             let (rawRespData, _) = try await callCloudRelayProxyCommand(
                 method: method,
@@ -1024,17 +1340,27 @@ public actor AntigravityRPCClient {
                 if let code = decoded["code"]?.stringValue,
                    let message = decoded["message"]?.stringValue,
                    decoded.count <= 3 {
-                    if attempt < 3, let unknownField = Self.extractUnknownProtoFieldName(from: message),
-                       workingBody[unknownField] != nil {
-                        workingBody.removeValue(forKey: unknownField)
-                        continue
+                    if allowStripUnknownFields, attempt < 4, let unknownField = Self.extractUnknownProtoFieldName(from: message) {
+                        if workingBody[unknownField] != nil {
+                            workingBody.removeValue(forKey: unknownField)
+                            continue
+                        }
+                        if var cascadeCfg = workingBody["cascadeConfig"]?.objectValue,
+                           var plannerCfg = cascadeCfg["plannerConfig"]?.objectValue,
+                           plannerCfg[unknownField] != nil {
+                            plannerCfg.removeValue(forKey: unknownField)
+                            cascadeCfg["plannerConfig"] = .object(plannerCfg)
+                            workingBody["cascadeConfig"] = .object(cascadeCfg)
+                            continue
+                        }
                     }
                     throw AntigravityRPCError.httpError(statusCode: 400, body: "\(code): \(message)")
                 }
                 return decoded
             }
             let rawText = String(data: respData, encoding: .utf8) ?? ""
-            if attempt < 3, let unknownField = Self.extractUnknownProtoFieldName(from: rawText),
+            if allowStripUnknownFields, attempt < 4,
+               let unknownField = Self.extractUnknownProtoFieldName(from: rawText),
                workingBody[unknownField] != nil {
                 workingBody.removeValue(forKey: unknownField)
                 continue
@@ -1134,7 +1460,7 @@ public actor AntigravityRPCClient {
         let currentAuthUser = authUser
         let session = urlSession
 
-        func sendOnce(to targetUuid: String) async throws -> (payload: Data, headers: [String: String]) {
+        func sendOnce(to targetUuid: String, authUserOverride: String? = nil) async throws -> (payload: Data, headers: [String: String]) {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             if let timeoutInterval {
@@ -1144,7 +1470,7 @@ public actor AntigravityRPCClient {
                 to: &request,
                 cookieHeader: currentCookie,
                 origin: originStr,
-                authUser: currentAuthUser,
+                authUser: authUserOverride ?? currentAuthUser,
                 isStreaming: false
             )
             request.httpBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
@@ -1176,6 +1502,12 @@ public actor AntigravityRPCClient {
         do {
             return try await sendOnce(to: initialTargetUuid)
         } catch let AntigravityRPCError.unauthorized(msg) {
+            if let resolved = try? await resolveCloudRelayInstance(
+                preferredIdentifier: targetInstanceIdentifier,
+                timeoutInterval: 6.0
+            ), (resolved.matchedAuthUser != currentAuthUser || resolved.selected.uuid != initialTargetUuid) {
+                return try await sendOnce(to: resolved.selected.uuid, authUserOverride: resolved.matchedAuthUser)
+            }
             throw AntigravityRPCError.unauthorized(msg)
         } catch {
             let shouldFailover: Bool = {
@@ -1204,7 +1536,7 @@ public actor AntigravityRPCClient {
         }
     }
 
-    private func sanitizeCloudRelayPayload(
+    internal func sanitizeCloudRelayPayload(
         method: String,
         body: [String: JSONValue]
     ) async throws -> [String: JSONValue] {
@@ -1240,15 +1572,23 @@ public actor AntigravityRPCClient {
                     guard let obj = entry.objectValue else { continue }
                     if let text = obj["text"]?.stringValue {
                         cleanItems.append(.object(["text": .string(text)]))
-                    } else if let absUri = obj["item"]?.objectValue?["file"]?.objectValue?["absoluteUri"]?.stringValue,
-                              absUri.hasPrefix("file://") {
-                        cleanItems.append(
-                            .object([
-                                "item": .object([
-                                    "file": .object(["absoluteUri": .string(absUri)])
-                                ])
-                            ])
-                        )
+                    } else {
+                        let itemObj = obj["item"]?.objectValue ?? obj
+                        if let fileObj = itemObj["file"]?.objectValue,
+                           let absUri = fileObj["absoluteUri"]?.stringValue ?? fileObj["absolutePathUri"]?.stringValue,
+                           !absUri.isEmpty {
+                            var cleanFile: [String: JSONValue] = ["absoluteUri": .string(absUri)]
+                            if let label = fileObj["label"]?.stringValue, !label.isEmpty {
+                                cleanFile["label"] = .string(label)
+                            }
+                            cleanItems.append(.object(["item": .object(["file": .object(cleanFile)])]))
+                        } else if let mediaObj = itemObj["media"]?.objectValue {
+                            cleanItems.append(.object(["item": .object(["media": .object(mediaObj)])]))
+                        } else if let quoteObj = itemObj["codeQuote"]?.objectValue {
+                            cleanItems.append(.object(["item": .object(["codeQuote": .object(quoteObj)])]))
+                        } else if let mentionObj = itemObj["mention"]?.objectValue {
+                            cleanItems.append(.object(["item": .object(["mention": .object(mentionObj)])]))
+                        }
                     }
                 }
             }
@@ -1271,6 +1611,20 @@ public actor AntigravityRPCClient {
                         convObj["plannerMode"] = .string("CONVERSATIONAL_PLANNER_MODE_DEFAULT")
                     }
                     plannerCfg["conversational"] = .object(convObj)
+                }
+
+                // Preserve thinkingEffort, agentPersona, and permissionPreset on Cloud Relay
+                if let modelCfgObj = body["modelConfig"]?.objectValue {
+                    if let effort = modelCfgObj["thinkingEffort"]?.stringValue, !effort.isEmpty {
+                        plannerCfg["thinkingEffort"] = .string(effort)
+                    }
+                    if let persona = modelCfgObj["agentPersona"]?.stringValue,
+                       !persona.isEmpty, persona != "Default" {
+                        plannerCfg["agentPersona"] = .string(persona)
+                    }
+                    if let permPreset = modelCfgObj["permissionPreset"]?.stringValue, !permPreset.isEmpty {
+                        plannerCfg["permissionPreset"] = .string(permPreset)
+                    }
                 }
 
                 let reqModelObj = plannerCfg["requestedModel"]?.objectValue
@@ -1331,14 +1685,21 @@ public actor AntigravityRPCClient {
         return (result.defaultModelId, ids)
     }
 
-    /// Queries the connected `language_server` / `agy` daemon for its live model & custom agent catalog
-    /// via `GetCascadeModelConfigs`, `GetCascadeModelConfigData`, `GetAvailableModels`, and `GetAllCustomAgentConfigs`.
-    public func fetchModelCatalog() async -> LiveModelCatalogResult {
+    /// Queries the connected `language_server` / `agy` daemon for its live model, custom agent catalog,
+    /// and dual-pool usage quota via `GetCascadeModelConfigs`, `GetCascadeModelConfigData`, `GetAvailableModels`,
+    /// and `GetAllCustomAgentConfigs`.
+    public func fetchModelCatalog(forceRefresh: Bool = false) async -> LiveModelCatalogResult {
+        if forceRefresh {
+            self.cachedValidUpstreamModels = nil
+            self.cachedDefaultUpstreamModel = nil
+        }
         var parsedModels: [CascadeModelConfig] = []
         var validIds = Set<String>()
         var defaultModelId: String? = nil
+        var parsedQuota: ModelUsageQuota? = nil
 
         let metaReq: [String: JSONValue] = [
+            "forceRefresh": .bool(forceRefresh),
             "metadata": .object([
                 "ideName": .string("antigravity"),
                 "extensionName": .string("antigravity"),
@@ -1349,6 +1710,9 @@ public actor AntigravityRPCClient {
             if let obj = try? await callUnaryJSON(method: method, body: metaReq, timeoutInterval: 8.0),
                let configs = obj["clientModelConfigs"]?.arrayValue,
                !configs.isEmpty {
+                if let quotaObj = obj["usageQuota"]?.objectValue ?? obj["quotaSummary"]?.objectValue {
+                    parsedQuota = Self.parseUsageQuota(quotaObj)
+                }
                 for entry in configs {
                     guard let cfg = entry.objectValue else { continue }
                     if cfg["disabled"]?.boolValue == true { continue }
@@ -1367,12 +1731,35 @@ public actor AntigravityRPCClient {
                     validIds.insert(modelId)
 
                     let lowerLabel = label.lowercased()
+                    let isOrchestrator = (cfg["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
                     let supportsThinking = (cfg["supportsThoughtCirculation"]?.boolValue ?? false)
                         || (cfg["supportsThinking"]?.boolValue ?? false)
                         || lowerLabel.contains("thinking")
+                        || lowerLabel.contains("neon")
+                        || lowerLabel.contains("carbon")
+                        || lowerLabel.contains("argon")
+                        || lowerLabel.contains("hydrogen")
                         || lowerLabel.contains("pro")
                         || lowerLabel.contains("opus")
+                    let supportedEfforts: [ThinkingEffortLevel] = {
+                        if let rawEfforts = cfg["supportedEfforts"]?.arrayValue {
+                            let mapped = rawEfforts.compactMap { val -> ThinkingEffortLevel? in
+                                guard let s = val.stringValue?.lowercased() else { return nil }
+                                if s == "xhigh" || s == "extra" { return .extra }
+                                return ThinkingEffortLevel.allCases.first { $0.rawValue.lowercased() == s }
+                            }
+                            if !mapped.isEmpty { return mapped }
+                        }
+                        if isOrchestrator { return [.high] }
+                        if lowerLabel.contains("neon") || lowerLabel.contains("hydrogen") {
+                            return [.low, .medium, .high, .extra]
+                        }
+                        return [.low, .medium, .high]
+                    }()
                     let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
+                            return .extra
+                        }
                         if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
                             return .low
                         }
@@ -1404,12 +1791,17 @@ public actor AntigravityRPCClient {
                             displayName: label,
                             subtitle: desc,
                             hasThinkingBadge: supportsThinking,
-                            requiresUpgradeNote: nil,
+                            requiresUpgradeNote: Self.nonEmptyString(cfg["upgradeNote"]?.stringValue),
                             mode: .planning,
                             agentPersona: "Default",
                             effort: effort,
                             isModelAlias: isAlias,
-                            badgeTitle: badgeTitle
+                            badgeTitle: badgeTitle,
+                            isOrchestrator: isOrchestrator,
+                            plannerModelName: Self.nonEmptyString(cfg["plannerModelName"]?.stringValue),
+                            executorModelName: Self.nonEmptyString(cfg["executorModelName"]?.stringValue),
+                            supportedEfforts: supportedEfforts,
+                            isNewBadge: (cfg["isNew"]?.boolValue ?? false) || lowerLabel.contains("gemini 4") || isOrchestrator
                         )
                     )
                     if cfg["isRecommended"]?.boolValue == true && defaultModelId == nil {
@@ -1431,10 +1823,13 @@ public actor AntigravityRPCClient {
         if parsedModels.isEmpty,
            let availWrapper = try? await callUnaryJSON(
                method: "GetAvailableModels",
-               body: ["forceRefresh": .bool(false)],
+               body: ["forceRefresh": .bool(forceRefresh)],
                timeoutInterval: 8.0
            ) {
             let resp = availWrapper["response"]?.objectValue ?? availWrapper
+            if parsedQuota == nil, let quotaObj = resp["usageQuota"]?.objectValue {
+                parsedQuota = Self.parseUsageQuota(quotaObj)
+            }
             if let modelsMap = resp["models"]?.objectValue, !modelsMap.isEmpty {
                 var orderedKeys: [String] = []
                 let sorts = resp["agentModelSorts"]?.arrayValue ?? resp["battleModeModelSorts"]?.arrayValue ?? []
@@ -1462,9 +1857,14 @@ public actor AntigravityRPCClient {
                     validIds.insert(modelId)
 
                     let lowerLabel = displayName.lowercased()
+                    let isOrchestrator = (details["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
                     let supportsThinking = (details["supportsThinking"]?.boolValue ?? false)
                         || lowerLabel.contains("thinking")
+                        || lowerLabel.contains("neon")
                     let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
+                            return .extra
+                        }
                         if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
                             return .low
                         }
@@ -1494,7 +1894,11 @@ public actor AntigravityRPCClient {
                             agentPersona: "Default",
                             effort: effort,
                             isModelAlias: !modelId.hasPrefix("MODEL_"),
-                            badgeTitle: badgeTitle
+                            badgeTitle: badgeTitle,
+                            isOrchestrator: isOrchestrator,
+                            supportedEfforts: (lowerLabel.contains("neon") || lowerLabel.contains("hydrogen"))
+                                ? [.low, .medium, .high, .extra] : [.low, .medium, .high],
+                            isNewBadge: lowerLabel.contains("gemini 4") || isOrchestrator
                         )
                     )
                 }
@@ -1529,7 +1933,19 @@ public actor AntigravityRPCClient {
         return LiveModelCatalogResult(
             models: finalModels,
             defaultModelId: defaultModelId ?? finalModels.first?.modelId,
-            agents: agents
+            agents: agents,
+            usageQuota: parsedQuota
+        )
+    }
+
+    private static func parseUsageQuota(_ obj: [String: JSONValue]) -> ModelUsageQuota {
+        ModelUsageQuota(
+            geminiWeeklyRemaining: obj["geminiWeeklyRemaining"]?.doubleValue ?? 0.85,
+            geminiFiveHourRemaining: obj["geminiFiveHourRemaining"]?.doubleValue ?? 0.92,
+            partnerWeeklyRemaining: obj["partnerWeeklyRemaining"]?.doubleValue ?? 0.70,
+            partnerFiveHourRemaining: obj["partnerFiveHourRemaining"]?.doubleValue ?? 0.80,
+            aiCreditOveragesEnabled: obj["aiCreditOveragesEnabled"]?.boolValue ?? obj["hasExtraCredits"]?.boolValue ?? false,
+            planDisplayName: obj["planDisplayName"]?.stringValue ?? obj["planTier"]?.stringValue ?? "Google AI Ultra"
         )
     }
 
@@ -1546,6 +1962,11 @@ public actor AntigravityRPCClient {
     ) async -> (projects: [ProjectWorkspace], warmingUp: Bool) {
         let targetUuids: [String?] = {
             if channel == .cloudRelay && !candidateInstances.isEmpty {
+                if let pref = preferredCloudInstanceUuid,
+                   candidateInstances.contains(where: { $0.uuid == pref }) {
+                    let rest = candidateInstances.filter { $0.uuid != pref }.map { Optional($0.uuid) }
+                    return [Optional(pref)] + rest
+                }
                 return candidateInstances.map { Optional($0.uuid) }
             }
             return [nil]
@@ -1578,6 +1999,9 @@ public actor AntigravityRPCClient {
                     }
                 }
                 if !loaded.isEmpty {
+                    if let effectiveUuid = targetUuid ?? resolvedInstanceUuid, !effectiveUuid.isEmpty {
+                        self.preferredCloudInstanceUuid = effectiveUuid
+                    }
                     return (loaded, false)
                 }
             } catch let AntigravityRPCError.httpError(_, body) {
@@ -1602,15 +2026,43 @@ public actor AntigravityRPCClient {
         let resources = projObj["projectResources"]?.objectValue?["resources"]?.arrayValue ?? []
         var repoDisplay: String? = nil
         for resEntry in resources {
-            if let rr = resEntry.objectValue?["remoteResource"]?.objectValue {
-                if let dn = nonEmptyString(rr["displayName"]?.stringValue)
-                    ?? nonEmptyString(rr["name"]?.stringValue)
-                    ?? nonEmptyString(rr["uri"]?.stringValue) {
-                    repoDisplay = dn
+            guard let resObj = resEntry.objectValue else { continue }
+            let nestedCandidates: [[String: JSONValue]?] = [
+                resObj["remoteResource"]?.objectValue,
+                resObj["githubRepo"]?.objectValue,
+                resObj["githubRepository"]?.objectValue,
+                resObj["gitFolder"]?.objectValue
+            ]
+            if let rr = nestedCandidates.compactMap({ $0 }).first {
+                let displayNameCandidates: [String?] = [
+                    rr["displayName"]?.stringValue,
+                    rr["fullName"]?.stringValue,
+                    rr["name"]?.stringValue,
+                    rr["uri"]?.stringValue,
+                    rr["folderUri"]?.stringValue
+                ]
+                if let dn = displayNameCandidates.compactMap(nonEmptyString).first {
+                    var normalized = dn
                         .replacingOccurrences(of: "https://github.com/", with: "")
+                        .replacingOccurrences(of: "http://github.com/", with: "")
+                        .replacingOccurrences(of: "cloud://", with: "")
                         .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                    break
+                    if normalized.hasSuffix(".git") {
+                        normalized = String(normalized.dropLast(4))
+                    }
+                    if !normalized.isEmpty {
+                        repoDisplay = normalized
+                        break
+                    }
                 }
+            }
+        }
+        if repoDisplay == nil {
+            if let fallbackRepo = nonEmptyString(projObj["repository"]?.stringValue)
+                ?? nonEmptyString(projObj["repo"]?.stringValue) {
+                repoDisplay = fallbackRepo
+                    .replacingOccurrences(of: "https://github.com/", with: "")
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             }
         }
         let cloudSlug = repoDisplay ?? name
@@ -1657,8 +2109,158 @@ public actor AntigravityRPCClient {
         }
     }
 
-    /// Reads the initial snapshot frame emitted by `JetboxSubscribeToSummaries` (either local or `BACKEND_TYPE_REMOTE_AICODE` Cloud)
-    /// and closes the temporary stream immediately.
+    private actor JetboxSnapshotAccumulator {
+        private var byId: [String: CascadeSummary] = [:]
+        private var finished: Bool = false
+        private var recordedError: Error? = nil
+
+        func merge(_ items: [CascadeSummary], cloudProjectsById: [String: ProjectWorkspace]) {
+            for item in items {
+                AntigravityRPCClient.mergeSummaryEntry(item, into: &byId, cloudProjectsById: cloudProjectsById)
+            }
+        }
+
+        func markFinished(error: Error? = nil) {
+            finished = true
+            if let error, recordedError == nil {
+                recordedError = error
+            }
+        }
+
+        func status() -> (hasEntries: Bool, isFinished: Bool, error: Error?) {
+            (!byId.isEmpty, finished, recordedError)
+        }
+
+        func values() -> [CascadeSummary] {
+            Array(byId.values)
+        }
+    }
+
+    /// Unary Cloud companion query (`GetAllCascadeTrajectories` with `BACKEND_TYPE_REMOTE_AICODE`).
+    /// Never silently strips `backend` so local-only trajectories cannot leak into Cloud results.
+    private func getAllCascadeTrajectoriesCloud(
+        instanceUuidOverride: String? = nil,
+        timeoutInterval: TimeInterval? = nil
+    ) async -> [CascadeSummary] {
+        let candidatePayloads: [[String: JSONValue]] = [
+            ["backend": .string("BACKEND_TYPE_REMOTE_AICODE")],
+            ["backendType": .string("BACKEND_TYPE_REMOTE_AICODE")]
+        ]
+        let cloudProjectsSnapshot = self.cachedCloudProjectsById
+        let allCloudProjects = Array(cloudProjectsSnapshot.values)
+        let effectiveUuid = instanceUuidOverride ?? resolvedInstanceUuid
+
+        for (idx, payload) in candidatePayloads.enumerated() {
+            do {
+                let res: [String: JSONValue]
+                if channel == .cloudRelay {
+                    res = try await callCloudRelayUnaryJSON(
+                        method: "GetAllCascadeTrajectories",
+                        body: payload,
+                        instanceUuidOverride: instanceUuidOverride,
+                        timeoutInterval: timeoutInterval ?? 8.0,
+                        allowStripUnknownFields: false
+                    )
+                } else {
+                    res = try await callUnaryJSON(
+                        method: "GetAllCascadeTrajectories",
+                        body: payload,
+                        instanceUuidOverride: instanceUuidOverride,
+                        timeoutInterval: timeoutInterval ?? 4.0
+                    )
+                }
+                let decoded = Self.decodeJetboxSummariesEvent(
+                    res,
+                    forceCloud: true,
+                    originInstanceUuid: effectiveUuid,
+                    originHostName: "Antigravity",
+                    cloudProjectsById: cloudProjectsSnapshot
+                ).upserts.map { item -> CascadeSummary in
+                    var copy = item
+                    if let cp = Self.matchCloudProject(for: copy, cloudProjects: allCloudProjects) {
+                        copy.isCloud = true
+                        copy.cloudProjectId = cp.cloudProjectId ?? cp.id
+                        copy.projectSlug = cp.name
+                        copy.workspaceUri = cp.workspaceUri
+                        copy.originHostName = "Antigravity"
+                    }
+                    return copy
+                }
+                return decoded
+            } catch let AntigravityRPCError.httpError(_, body) {
+                if idx == 0 && body.lowercased().contains("unknown field \"backend\"") {
+                    continue
+                }
+                return []
+            } catch {
+                return []
+            }
+        }
+        return []
+    }
+
+    private func readJetboxSnapshotOnce(
+        requestPayload: [String: JSONValue],
+        cloud: Bool,
+        instanceUuidOverride: String?,
+        originHostName: String?,
+        snapshotTimeout: TimeInterval,
+        cloudProjectsSnapshot: [String: ProjectWorkspace],
+        allowCrossInstanceFailover: Bool = true
+    ) async throws -> [CascadeSummary] {
+        let stream = try subscribeEnvelopeStream(
+            method: "JetboxSubscribeToSummaries",
+            requestPayload: requestPayload,
+            instanceUuidOverride: instanceUuidOverride,
+            allowCrossInstanceFailover: allowCrossInstanceFailover
+        )
+        let accumulator = JetboxSnapshotAccumulator()
+        let readerTask = Task {
+            do {
+                for try await event in stream {
+                    let parsed = Self.decodeJetboxSummariesEvent(
+                        event,
+                        forceCloud: cloud,
+                        originInstanceUuid: instanceUuidOverride,
+                        originHostName: originHostName,
+                        cloudProjectsById: cloudProjectsSnapshot
+                    )
+                    if !parsed.upserts.isEmpty {
+                        await accumulator.merge(parsed.upserts, cloudProjectsById: cloudProjectsSnapshot)
+                    }
+                }
+                await accumulator.markFinished()
+            } catch {
+                await accumulator.markFinished(error: error)
+            }
+        }
+        defer { readerTask.cancel() }
+
+        let deadline = Date().addingTimeInterval(max(0.5, snapshotTimeout))
+        while Date() < deadline {
+            let st = await accumulator.status()
+            if st.hasEntries {
+                // Allow a brief settle window so any back-to-back initial snapshot frames arrive together
+                let remaining = deadline.timeIntervalSinceNow
+                if !st.isFinished && remaining > 0.05 {
+                    let settleSeconds = min(0.22, remaining)
+                    try? await Task.sleep(nanoseconds: UInt64(settleSeconds * 1_000_000_000))
+                }
+                return await accumulator.values()
+            }
+            if st.isFinished {
+                if let err = st.error {
+                    throw err
+                }
+                return await accumulator.values()
+            }
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+        return await accumulator.values()
+    }
+
+    /// Reads the initial snapshot frame(s) emitted by `JetboxSubscribeToSummaries` (either local or `BACKEND_TYPE_REMOTE_AICODE` Cloud),
+    /// skipping empty initial ack frames and retrying `backendType` if the server rejects `"backend"`, then closes the temporary stream.
     public func fetchJetboxSummariesSnapshot(
         cloud: Bool,
         instanceUuidOverride: String? = nil,
@@ -1666,47 +2268,42 @@ public actor AntigravityRPCClient {
         snapshotTimeout: TimeInterval = 4.0,
         allowCrossInstanceFailover: Bool = true
     ) async -> [CascadeSummary] {
-        let reqPayload: [String: JSONValue] = cloud
+        let cloudProjectsSnapshot = self.cachedCloudProjectsById
+        let primaryPayload: [String: JSONValue] = cloud
             ? ["backend": .string("BACKEND_TYPE_REMOTE_AICODE")]
             : [:]
-        guard let stream = try? subscribeEnvelopeStream(
-            method: "JetboxSubscribeToSummaries",
-            requestPayload: reqPayload,
-            instanceUuidOverride: instanceUuidOverride,
-            allowCrossInstanceFailover: allowCrossInstanceFailover
-        ) else {
+        do {
+            let primary = try await readJetboxSnapshotOnce(
+                requestPayload: primaryPayload,
+                cloud: cloud,
+                instanceUuidOverride: instanceUuidOverride,
+                originHostName: originHostName,
+                snapshotTimeout: snapshotTimeout,
+                cloudProjectsSnapshot: cloudProjectsSnapshot,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
+            )
+            if !primary.isEmpty || !cloud {
+                return primary
+            }
+        } catch let AntigravityRPCError.httpError(_, body) where cloud && body.lowercased().contains("unknown field \"backend\"") {
+            if let fallback = try? await readJetboxSnapshotOnce(
+                requestPayload: ["backendType": .string("BACKEND_TYPE_REMOTE_AICODE")],
+                cloud: true,
+                instanceUuidOverride: instanceUuidOverride,
+                originHostName: originHostName,
+                snapshotTimeout: snapshotTimeout,
+                cloudProjectsSnapshot: cloudProjectsSnapshot,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
+            ) {
+                return fallback
+            }
+        } catch {
             return []
         }
-
-        let cloudProjectsSnapshot = self.cachedCloudProjectsById
-        return await withTaskGroup(of: [CascadeSummary]?.self) { group in
-            group.addTask {
-                do {
-                    for try await event in stream {
-                        let parsed = Self.decodeJetboxSummariesEvent(
-                            event,
-                            forceCloud: cloud,
-                            originInstanceUuid: instanceUuidOverride,
-                            originHostName: originHostName,
-                            cloudProjectsById: cloudProjectsSnapshot
-                        )
-                        return parsed.upserts
-                    }
-                } catch {}
-                return []
-            }
-            group.addTask {
-                let ns = UInt64(max(0.5, snapshotTimeout) * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: ns)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? []
-        }
+        return []
     }
 
-    /// Decodes a `JetboxSubscribeToSummariesResponse` (`updates` map + `deletes` array, or mock `summaries` / `delta`).
+    /// Decodes a `JetboxSubscribeToSummariesResponse` (`updates` map + `deletes` array, `trajectorySummaries` map, or mock `summaries` array).
     public static func decodeJetboxSummariesEvent(
         _ event: [String: JSONValue],
         forceCloud: Bool = false,
@@ -1717,67 +2314,61 @@ public actor AntigravityRPCClient {
         let now = Date()
         var upserts: [CascadeSummary] = []
         let deletes = event["deletes"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        let allCloudProjects = Array(cloudProjectsById.values)
 
-        if let updatesMap = event["updates"]?.objectValue {
+        func finalizeDecodedSummary(_ rawSummary: CascadeSummary) -> CascadeSummary? {
+            var summary = rawSummary
+            if forceCloud {
+                // Ignore local `file://` workspaces echoed by older/mock servers that do not filter by `backend`,
+                // while keeping Cloud `No Project` sessions (`summary.workspaceUri.isEmpty`).
+                if !summary.workspaceUri.isEmpty
+                    && !AntigravityCloudDetector.isPlaygroundScratchURI(summary.workspaceUri)
+                    && !summary.isCloud
+                    && (summary.cloudProjectId ?? "").isEmpty {
+                    return nil
+                }
+                summary.isCloud = true
+                summary.originHostName = "Antigravity"
+            } else if !summary.isCloud {
+                summary.originHostName = originHostName
+            }
+            summary.originInstanceUuid = originInstanceUuid
+            if let cp = Self.matchCloudProject(for: summary, cloudProjects: allCloudProjects) {
+                summary.isCloud = true
+                summary.cloudProjectId = cp.cloudProjectId ?? cp.id
+                summary.projectSlug = cp.name
+                summary.workspaceUri = cp.workspaceUri
+                summary.originHostName = "Antigravity"
+            }
+            return summary
+        }
+
+        if let updatesMap = event["updates"]?.objectValue ?? event["trajectorySummaries"]?.objectValue {
             for (cid, val) in updatesMap {
                 if let obj = val.objectValue,
                    obj["killed"]?.boolValue == true,
                    (obj["status"]?.stringValue ?? "").contains("UNSPECIFIED") {
                     continue
                 }
-                if var summary = Self.decodeTrajectorySummaryEntry(
+                if let decoded = Self.decodeTrajectorySummaryEntry(
                     cascadeId: cid,
                     value: val,
                     now: now,
                     forceCloud: forceCloud
-                ) {
-                    if forceCloud {
-                        // Ignore local `file://` workspaces echoed by older/mock servers that do not filter by `backendType`,
-                        // while keeping Cloud `No Project` sessions (`summary.workspaceUri.isEmpty`).
-                        if !summary.workspaceUri.isEmpty
-                            && !AntigravityCloudDetector.isPlaygroundScratchURI(summary.workspaceUri)
-                            && !summary.isCloud
-                            && (summary.cloudProjectId ?? "").isEmpty {
-                            continue
-                        }
-                        summary.isCloud = true
-                        summary.originHostName = "Antigravity"
-                    } else if !summary.isCloud {
-                        summary.originHostName = originHostName
-                    }
-                    summary.originInstanceUuid = originInstanceUuid
-                    if let cpid = summary.cloudProjectId, let cp = cloudProjectsById[cpid] {
-                        summary.isCloud = true
-                        summary.projectSlug = cp.name
-                        summary.workspaceUri = cp.workspaceUri
-                        summary.originHostName = "Antigravity"
-                    }
-                    upserts.append(summary)
+                ), let finalized = finalizeDecodedSummary(decoded) {
+                    upserts.append(finalized)
                 }
             }
-        } else if let summariesArr = event["summaries"]?.arrayValue {
+        } else if let summariesArr = event["summaries"]?.arrayValue ?? event["trajectories"]?.arrayValue {
             for val in summariesArr {
                 guard let cid = val.objectValue?["cascadeId"]?.stringValue else { continue }
-                if var summary = Self.decodeTrajectorySummaryEntry(
+                if let decoded = Self.decodeTrajectorySummaryEntry(
                     cascadeId: cid,
                     value: val,
                     now: now,
                     forceCloud: forceCloud
-                ) {
-                    if forceCloud {
-                        if !summary.workspaceUri.isEmpty
-                            && !AntigravityCloudDetector.isPlaygroundScratchURI(summary.workspaceUri)
-                            && !summary.isCloud
-                            && (summary.cloudProjectId ?? "").isEmpty {
-                            continue
-                        }
-                        summary.isCloud = true
-                        summary.originHostName = "Antigravity"
-                    } else if !summary.isCloud {
-                        summary.originHostName = originHostName
-                    }
-                    summary.originInstanceUuid = originInstanceUuid
-                    upserts.append(summary)
+                ), let finalized = finalizeDecodedSummary(decoded) {
+                    upserts.append(finalized)
                 }
             }
         }
@@ -2251,18 +2842,34 @@ public actor AntigravityRPCClient {
                 "name": .string(draft.projectName),
                 "backendType": .string("BACKEND_TYPE_REMOTE_AICODE")
             ]
+            var resourceEntries: [JSONValue] = []
             if let repo = draft.selectedRepo {
-                projectObj["projectResources"] = .object([
-                    "resources": .array([
-                        .object([
-                            "remoteResource": .object([
-                                "type": .string("github"),
-                                "name": .string(repo.fullName),
-                                "displayName": .string(repo.fullName)
-                            ])
+                resourceEntries.append(
+                    .object([
+                        "remoteResource": .object([
+                            "type": .string("github"),
+                            "name": .string(repo.fullName),
+                            "displayName": .string(repo.fullName)
                         ])
                     ])
-                ])
+                )
+            }
+            for link in draft.driveResourceLinks where !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                resourceEntries.append(
+                    .object([
+                        "remoteResource": .object([
+                            "type": .string("google_drive"),
+                            "name": .string(link),
+                            "displayName": .string(link)
+                        ])
+                    ])
+                )
+            }
+            if !resourceEntries.isEmpty {
+                projectObj["projectResources"] = .object(["resources": .array(resourceEntries)])
+            }
+            if !draft.envSetupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                projectObj["envSetupScript"] = .string(draft.envSetupScript)
             }
             let res = try await callUnaryJSON(
                 method: "CreateProject",
@@ -2290,15 +2897,25 @@ public actor AntigravityRPCClient {
             return created
         }
 
+        var body: [String: JSONValue] = [
+            "name": .string(draft.projectName),
+            "runtime": .string(draft.runsOn.rawValue),
+            "source": .string(draft.source.rawValue),
+            "repository": .string(repoName),
+            "branchWorktree": .string(draft.branchWorktree)
+        ]
+        if !draft.driveResourceLinks.isEmpty {
+            body["googleDriveLinks"] = .array(draft.driveResourceLinks.map(JSONValue.string))
+        }
+        if !draft.uploadedFilePaths.isEmpty {
+            body["uploadedFilePaths"] = .array(draft.uploadedFilePaths.map(JSONValue.string))
+        }
+        if !draft.envSetupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["envSetupScript"] = .string(draft.envSetupScript)
+        }
         let res = try await callUnaryJSON(
             method: "CreateProjectWorkspace",
-            body: [
-                "name": .string(draft.projectName),
-                "runtime": .string(draft.runsOn.rawValue),
-                "source": .string(draft.source.rawValue),
-                "repository": .string(repoName),
-                "branchWorktree": .string(draft.branchWorktree)
-            ]
+            body: body
         )
         let workspaceUri = res["workspaceUri"]?.stringValue
             ?? (draft.runsOn == .cloud ? "cloud://\(repoName)" : "file:///Users/wl/code/\(draft.projectName)")
@@ -2337,7 +2954,7 @@ public actor AntigravityRPCClient {
             allowCrossInstanceFailover: allowCrossInstanceFailover
         )
         let now = Date()
-        let cloudMap = self.cachedCloudProjectsById
+        let allCloudProjects = Array(self.cachedCloudProjectsById.values)
         let effectiveUuid = instanceUuidOverride ?? resolvedInstanceUuid
 
         // Format A: Native Desktop `language_server` map `{"trajectorySummaries": {"<cascadeId>": {...}}}`
@@ -2348,8 +2965,9 @@ public actor AntigravityRPCClient {
                 }
                 s.originInstanceUuid = effectiveUuid
                 s.originHostName = s.isCloud ? "Antigravity" : originHostName
-                if let cpid = s.cloudProjectId, let cp = cloudMap[cpid] {
+                if let cp = Self.matchCloudProject(for: s, cloudProjects: allCloudProjects) {
                     s.isCloud = true
+                    s.cloudProjectId = cp.cloudProjectId ?? cp.id
                     s.projectSlug = cp.name
                     s.workspaceUri = cp.workspaceUri
                     s.originHostName = "Antigravity"
@@ -2425,6 +3043,15 @@ public actor AntigravityRPCClient {
             return trimmed
         }
         let lower = trimmed.lowercased()
+        if lower.contains("orchestrator") {
+            if lower.contains("carbon") { return "MODEL_ORCHESTRATOR_CARBON" }
+            if lower.contains("argon") { return "MODEL_ORCHESTRATOR_ARGON" }
+            return "MODEL_ORCHESTRATOR_NEON"
+        }
+        if lower.contains("neon") { return "MODEL_GOOGLE_GEMINI_4_NEON" }
+        if lower.contains("carbon") { return "MODEL_GOOGLE_GEMINI_4_CARBON" }
+        if lower.contains("argon") { return "MODEL_GOOGLE_GEMINI_4_ARGON" }
+        if lower.contains("hydrogen") { return "MODEL_GOOGLE_GEMINI_4_HYDROGEN" }
         if lower.contains("flash") {
             return "MODEL_PLACEHOLDER_M18"
         }
@@ -2488,7 +3115,7 @@ public actor AntigravityRPCClient {
         return clientCid
     }
 
-    /// Sends a user prompt + `@file` context items + model/mode/permission config (`SendUserCascadeMessage`).
+    /// Sends a user prompt + rich multimodal/context items + model/mode/effort/permission config (`SendUserCascadeMessage`).
     /// Encodes `Planning` vs `Fast` via `conversational.agenticMode` (`CONVERSATIONAL_PLANNER_MODE_DEFAULT`),
     /// applies the selected `AgentPermissionPreset` via `plannerConfig.toolConfig`,
     /// and sets `planModel` alongside `requestedModel` for Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) sessions.
@@ -2507,16 +3134,69 @@ public actor AntigravityRPCClient {
     ) async throws {
         var items: [JSONValue] = [.object(["text": .string(message)])]
         for chip in attachments {
-            items.append(
-                .object([
-                    "item": .object([
-                        "file": .object([
-                            "absoluteUri": .string(chip.targetUri),
-                            "label": .string(chip.label)
+            switch chip.kind {
+            case .imageScreenshot, .audioRecording, .videoClip, .pdfDocument, .archiveZip, .genericFile:
+                if let b64 = chip.inlineBase64Data, !b64.isEmpty {
+                    items.append(
+                        .object([
+                            "item": .object([
+                                "media": .object([
+                                    "uri": .string(chip.targetUri),
+                                    "label": .string(chip.label),
+                                    "mimeType": .string(chip.mimeType ?? "application/octet-stream"),
+                                    "inlineBase64Data": .string(b64),
+                                    "kind": .string(chip.kind.rawValue)
+                                ])
+                            ])
+                        ])
+                    )
+                } else {
+                    items.append(
+                        .object([
+                            "item": .object([
+                                "file": .object([
+                                    "absoluteUri": .string(chip.targetUri),
+                                    "label": .string(chip.label)
+                                ])
+                            ])
+                        ])
+                    )
+                }
+            case .codeQuote:
+                items.append(
+                    .object([
+                        "item": .object([
+                            "codeQuote": .object([
+                                "uri": .string(chip.targetUri),
+                                "label": .string(chip.label)
+                            ])
                         ])
                     ])
-                ])
-            )
+                )
+            case .pluginMention, .skill, .conversationMention, .action:
+                items.append(
+                    .object([
+                        "item": .object([
+                            "mention": .object([
+                                "kind": .string(chip.kind.rawValue),
+                                "targetUri": .string(chip.targetUri),
+                                "label": .string(chip.label)
+                            ])
+                        ])
+                    ])
+                )
+            case .fileMention, .folder, .terminalLog:
+                items.append(
+                    .object([
+                        "item": .object([
+                            "file": .object([
+                                "absoluteUri": .string(chip.targetUri),
+                                "label": .string(chip.label)
+                            ])
+                        ])
+                    ])
+                )
+            }
         }
 
         let protoModel = Self.normalizeProtoModelEnum(modelId)
@@ -2524,7 +3204,12 @@ public actor AntigravityRPCClient {
             ? .object(["alias": .string(modelId)])
             : .object(["model": .string(protoModel)])
 
-        let effectivePermission = permissionPreset ?? AgentPermissionPreset.defaultPreset(isRemote: isCloud || cascadeId.hasPrefix("v1/"))
+        let effectivePermission: AgentPermissionPreset = {
+            if let preset = permissionPreset, preset != .inheritGlobal {
+                return preset
+            }
+            return AgentPermissionPreset.defaultPreset(isRemote: isCloud || cascadeId.hasPrefix("v1/"))
+        }()
         var toolConfig: [String: JSONValue] = [
             "code": .object(["allowEditGitignore": .bool(true)]),
             "viewFile": .object(["allowViewGitignore": .bool(true)]),
@@ -2540,7 +3225,7 @@ public actor AntigravityRPCClient {
             toolConfig["notifyUser"] = .object([
                 "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_ALWAYS")
             ])
-        case .defaultPolicy, .auto:
+        case .defaultPolicy, .auto, .inheritGlobal:
             toolConfig["notifyUser"] = .object([
                 "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_AUTO")
             ])
@@ -2561,11 +3246,24 @@ public actor AntigravityRPCClient {
                 "agenticMode": .bool(mode == .planning)
             ]),
             "toolConfig": .object(toolConfig),
-            "requestedModel": requestedModelPayload
+            "requestedModel": requestedModelPayload,
+            "thinkingEffort": .string(effort.protoWireValue)
         ]
+        if agentPersona != "Default" && !agentPersona.isEmpty {
+            plannerConfig["agentPersona"] = .string(agentPersona)
+        }
+        plannerConfig["permissionPreset"] = .string(effectivePermission.rawValue)
         if (isCloud || cascadeId.hasPrefix("v1/")) && !isModelAlias && protoModel.hasPrefix("MODEL_") {
             plannerConfig["planModel"] = .string(protoModel)
         }
+
+        let modelCfgObj: [String: JSONValue] = [
+            "modelId": .string(modelId),
+            "thinkingEffort": .string(effort.protoWireValue),
+            "mode": .string(mode.rawValue.uppercased()),
+            "agentPersona": .string(agentPersona),
+            "permissionPreset": .string(effectivePermission.rawValue)
+        ]
 
         _ = try await callUnaryJSON(
             method: "SendUserCascadeMessage",
@@ -2575,18 +3273,12 @@ public actor AntigravityRPCClient {
                 "userResponse": .string(message),
                 "metadata": .object([
                     "ideName": .string("antigravity-ios"),
-                    "ideVersion": .string("2.0.0")
+                    "ideVersion": .string("2.33.0")
                 ]),
                 "cascadeConfig": .object([
                     "plannerConfig": .object(plannerConfig)
                 ]),
-                "modelConfig": .object([
-                    "modelId": .string(modelId),
-                    "thinkingEffort": .string(effort.rawValue.uppercased()),
-                    "mode": .string(mode.rawValue.uppercased()),
-                    "agentPersona": .string(agentPersona),
-                    "permissionPreset": .string(effectivePermission.rawValue)
-                ])
+                "modelConfig": .object(modelCfgObj)
             ],
             instanceUuidOverride: instanceUuidOverride,
             timeoutInterval: 300.0
@@ -2612,6 +3304,7 @@ public actor AntigravityRPCClient {
         } else if let perm = payload.permission {
             interactionObj["permission"] = .object([
                 "allow": .bool(perm.allow),
+                "scope": .string(perm.scope),
                 "turnGrants": .object([
                     "allow": .array(perm.grantPatterns.map(JSONValue.string)),
                     "deny": .array([])
@@ -2635,7 +3328,11 @@ public actor AntigravityRPCClient {
             }
             interactionObj["askQuestion"] = .object(qaObj)
         } else if let confirm = payload.genericConfirm {
-            interactionObj[payload.kind.rawValue] = .object(["confirm": .bool(confirm)])
+            var genericObj: [String: JSONValue] = ["confirm": .bool(confirm)]
+            if let scope = payload.approvalScope {
+                genericObj["scope"] = .string(scope)
+            }
+            interactionObj[payload.kind.rawValue] = .object(genericObj)
         }
 
         _ = try await callUnaryJSON(
@@ -2782,9 +3479,430 @@ public actor AntigravityRPCClient {
         )
     }
 
-    // MARK: - Automations RPC (`UE06`)
+    /// Updates `annotations.lastUserViewTime` on Antigravity Desktop (`UpdateConversationAnnotations`)
+    /// so opening or marking a conversation as read on iOS clears the unread indicator on Desktop too.
+    public func markCascadeViewed(
+        cascadeId: String,
+        viewedAt: Date = Date(),
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        guard !cascadeId.isEmpty else { return }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestamp = formatter.string(from: viewedAt)
+        _ = try await callUnaryJSON(
+            method: "UpdateConversationAnnotations",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "annotations": .object(["lastUserViewTime": .string(timestamp)]),
+                "mergeAnnotations": .bool(true)
+            ],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 6.0
+        )
+    }
 
-    public func listAutomations() async throws -> [AutomationItem] {
+    // MARK: - Automations RPC (`UE06` — Native Antigravity 2.0 Sidecars)
+
+    private static func isMethodUnimplementedError(_ error: Error) -> Bool {
+        guard case let AntigravityRPCError.httpError(code, body) = error else { return false }
+        if code == 404 || code == 501 { return true }
+        let lower = body.lowercased()
+        return lower.contains("unimplemented") || lower.contains("unknown method") || lower.contains("method not found")
+    }
+
+    public static func parseInt64Millis(_ value: JSONValue?) -> Int64? {
+        guard let value else { return nil }
+        switch value {
+        case .int(let i):
+            return Int64(i)
+        case .double(let d):
+            return Int64(d)
+        case .string(let s):
+            return Int64(s.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizeSidecarStatus(_ value: JSONValue?) -> String {
+        guard let value else { return "UNSPECIFIED" }
+        if let raw = value.stringValue?.uppercased() {
+            if raw.contains("RUNNING") { return "RUNNING" }
+            if raw.contains("STOPPED") { return "STOPPED" }
+            if raw.contains("ERROR") { return "ERRORED" }
+            if raw.contains("BACKOFF") { return "BACKOFF" }
+            if raw.contains("STARTING") { return "STARTING" }
+            return raw
+        }
+        if let code = value.intValue {
+            switch code {
+            case 1: return "RUNNING"
+            case 2: return "STOPPED"
+            case 3: return "ERRORED"
+            case 4: return "BACKOFF"
+            case 5: return "STARTING"
+            default: return "UNSPECIFIED"
+            }
+        }
+        return "UNSPECIFIED"
+    }
+
+    /// Refreshes local Antigravity Desktop `Project.id <-> Project.name` mapping via `ListProjects({})` + `ReadProject`.
+    private func ensureLocalProjectIndex(forceRefresh: Bool = false) async {
+        if !forceRefresh,
+           let last = lastLocalProjectFetchAt,
+           Date().timeIntervalSince(last) < 30.0,
+           !cachedLocalProjectNameById.isEmpty {
+            return
+        }
+        lastLocalProjectFetchAt = Date()
+        guard let listResp = try? await callUnaryJSON(method: "ListProjects", body: [:], timeoutInterval: 6.0),
+              let ids = (listResp["projectIds"] ?? listResp["project_ids"])?.arrayValue?.compactMap(\.stringValue).filter({ !$0.isEmpty }),
+              !ids.isEmpty else {
+            return
+        }
+        for pid in ids.prefix(32) {
+            guard let readResp = try? await callUnaryJSON(method: "ReadProject", body: ["id": .string(pid)], timeoutInterval: 5.0),
+                  let projObj = readResp["project"]?.objectValue else {
+                continue
+            }
+            let resolvedId = Self.nonEmptyString(projObj["id"]?.stringValue) ?? pid
+            let name = Self.nonEmptyString(projObj["name"]?.stringValue) ?? resolvedId
+            cachedLocalProjectNameById[resolvedId] = name
+            cachedLocalProjectIdByName[name.lowercased()] = resolvedId
+        }
+    }
+
+    /// Decodes a single `exa.cortex_pb.SidecarStatusInfo` JSON object into an `AutomationItem`.
+    /// Returns `nil` for pure auxiliary Web UI panel sidecars (`hasWebUi: true`) or bundled non-schedule sidecars.
+    public static func decodeSidecarStatusInfo(
+        _ obj: [String: JSONValue],
+        projectNameById: [String: String] = [:],
+        originInstanceUuid: String? = nil,
+        now: Date = Date()
+    ) -> AutomationItem? {
+        guard let sidecarId = nonEmptyString(obj["sidecarId"]?.stringValue)
+            ?? nonEmptyString(obj["sidecar_id"]?.stringValue)
+            ?? nonEmptyString(obj["id"]?.stringValue) else {
+            return nil
+        }
+
+        let cfg = obj["config"]?.objectValue ?? [:]
+        let uiCfg = obj["uiConfig"]?.objectValue ?? obj["ui_config"]?.objectValue
+            ?? cfg["uiConfig"]?.objectValue ?? cfg["ui_config"]?.objectValue
+        let uiViews = uiCfg?["views"]?.arrayValue ?? []
+        let hasWebUI = (cfg["hasWebUi"]?.boolValue ?? cfg["has_web_ui"]?.boolValue ?? false) || !uiViews.isEmpty
+        let isBundled = obj["isBundled"]?.boolValue ?? obj["is_bundled"]?.boolValue ?? false
+
+        let builtin = (nonEmptyString(cfg["builtin"]?.stringValue) ?? nonEmptyString(obj["builtin"]?.stringValue) ?? "").lowercased()
+        let command = nonEmptyString(cfg["command"]?.stringValue) ?? ""
+        let args = cfg["args"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        let invokesAgentApi = args.count >= 3 && args.contains("agentapi") && args.contains("new-conversation")
+        let isSchedule = (builtin == "schedule") || invokesAgentApi
+
+        // Exclude Auxiliary Pane Web UI widgets and internal bundled daemons unless they are scheduled automations.
+        if !isSchedule && (hasWebUI || isBundled) {
+            return nil
+        }
+
+        let displayName = nonEmptyString(cfg["displayName"]?.stringValue)
+            ?? nonEmptyString(cfg["display_name"]?.stringValue)
+            ?? nonEmptyString(obj["name"]?.stringValue)
+            ?? sidecarId
+        let descriptionText = nonEmptyString(cfg["description"]?.stringValue)
+            ?? nonEmptyString(obj["description"]?.stringValue)
+            ?? ""
+
+        let statusNorm = normalizeSidecarStatus(obj["status"])
+        let lastError = nonEmptyString(obj["lastError"]?.stringValue) ?? nonEmptyString(obj["last_error"]?.stringValue)
+
+        let userCfg = obj["userConfig"]?.objectValue ?? obj["user_config"]?.objectValue
+        let userProjectId = nonEmptyString(userCfg?["projectId"]?.stringValue) ?? nonEmptyString(userCfg?["project_id"]?.stringValue)
+        let allProjects = userCfg?["allProjects"]?.boolValue ?? userCfg?["all_projects"]?.boolValue ?? false
+        let configDisabled = cfg["disabled"]?.boolValue ?? false
+
+        // Proto3 JSON omits scalar `bool enabled = false`, so combine explicit `userConfig.enabled` with runtime `status`.
+        let isEnabled: Bool = {
+            if let explicitEnabled = userCfg?["enabled"]?.boolValue {
+                return explicitEnabled
+            }
+            if configDisabled {
+                return false
+            }
+            if statusNorm == "RUNNING" || statusNorm == "STARTING" {
+                return true
+            }
+            if userCfg != nil {
+                return false
+            }
+            return statusNorm != "STOPPED"
+        }()
+
+        let section: AutomationSectionKind = {
+            if !isEnabled { return .paused }
+            return isSchedule ? .scheduled : .alwaysOn
+        }()
+
+        let parsedArgs: (cron: String, prompt: String, modelLabel: String?) = isSchedule
+            ? AutomationScheduleCodec.parseScheduleArgs(args)
+            : (cron: "", prompt: "", modelLabel: nil)
+        let cronExpr = parsedArgs.cron
+        let promptText = parsedArgs.prompt.isEmpty ? (descriptionText.isEmpty ? displayName : descriptionText) : parsedArgs.prompt
+        let modelBadge = parsedArgs.modelLabel ?? (isSchedule ? "Flash" : nil)
+
+        // Resolve human-readable project label from `projectId`, `agentPermissions.workspaceUris`, or `allProjects`.
+        let agentPerms = cfg["agentPermissions"]?.objectValue ?? cfg["agent_permissions"]?.objectValue
+        let permWorkspaceUris = (agentPerms?["workspaceUris"] ?? agentPerms?["workspace_uris"])?.arrayValue?.compactMap(\.stringValue) ?? []
+        let projectSlug: String = {
+            if let pid = userProjectId, !pid.isEmpty {
+                if let resolved = projectNameById[pid], !resolved.isEmpty {
+                    return resolved
+                }
+                return pid
+            }
+            if let firstUri = permWorkspaceUris.first, !firstUri.isEmpty {
+                let cleaned = firstUri.replacingOccurrences(of: "file://", with: "")
+                let base = (cleaned as NSString).lastPathComponent
+                if !base.isEmpty && base != "/" {
+                    return base
+                }
+            }
+            return allProjects ? "All projects" : "This Computer"
+        }()
+
+        let humanSchedule = isSchedule
+            ? AutomationScheduleCodec.humanReadableSchedule(from: cronExpr)
+            : (command.isEmpty ? "Background listener" : (command as NSString).lastPathComponent)
+
+        let scheduleSummary: String = {
+            if isSchedule {
+                return "\(projectSlug) · \(humanSchedule) · \(modelBadge ?? "Flash")"
+            }
+            return "\(projectSlug) · Always On · \(humanSchedule)"
+        }()
+
+        let nextRunText: String = {
+            if section == .paused { return "Paused" }
+            if isSchedule {
+                return AutomationScheduleCodec.nextFireDescription(from: cronExpr, after: now)
+            }
+            switch statusNorm {
+            case "RUNNING": return "Listening"
+            case "STARTING": return "Starting..."
+            case "ERRORED", "BACKOFF": return "Error"
+            default: return "Active"
+            }
+        }()
+
+        let hasRuntimeError = (statusNorm == "ERRORED" || statusNorm == "BACKOFF") || (lastError != nil)
+        let lastRunText: String = {
+            if let lastError, !lastError.isEmpty {
+                return "Error · \(String(lastError.prefix(28)))"
+            }
+            if statusNorm == "ERRORED" || statusNorm == "BACKOFF" {
+                return "Failed · Needs review"
+            }
+            if section == .paused {
+                return "Paused"
+            }
+            if let startMs = parseInt64Millis(obj["startTimeMs"] ?? obj["start_time_ms"]), startMs > 0 {
+                return isSchedule ? "Scheduled · Ready" : "Running · \(AutomationScheduleCodec.relativeTimeLabel(from: startMs, now: now))"
+            }
+            return isSchedule ? "Scheduled · Ready" : "Active"
+        }()
+
+        return AutomationItem(
+            id: sidecarId,
+            title: displayName,
+            projectSlug: projectSlug,
+            scheduleSummary: scheduleSummary,
+            section: section,
+            nextRunText: nextRunText,
+            lastRunText: lastRunText,
+            needsReview: hasRuntimeError,
+            isRunningNow: false,
+            descriptionText: descriptionText,
+            prompt: promptText,
+            cronExpression: cronExpr,
+            projectId: userProjectId,
+            allProjects: allProjects,
+            modelLabel: modelBadge,
+            lastRunCascadeId: nil,
+            lastError: lastError,
+            isEnabled: isEnabled,
+            isScheduleBuiltin: isSchedule,
+            originInstanceUuid: originInstanceUuid
+        )
+    }
+
+    public static func decodeSidecarEvent(_ obj: [String: JSONValue]) -> SidecarRunEvent? {
+        let ts = parseInt64Millis(obj["timestampMs"] ?? obj["timestamp_ms"])
+            ?? parseInt64Millis(obj["commandInvocationTimestampMs"] ?? obj["command_invocation_timestamp_ms"])
+            ?? 0
+        let err = nonEmptyString(obj["error"]?.stringValue)
+        let payload = obj["payload"]?.objectValue
+        let newConv = payload?["newConversation"]?.objectValue ?? payload?["new_conversation"]?.objectValue
+        let convId = nonEmptyString(newConv?["conversationId"]?.stringValue)
+            ?? nonEmptyString(newConv?["conversation_id"]?.stringValue)
+        let prompt = nonEmptyString(newConv?["prompt"]?.stringValue)
+        guard ts > 0 || convId != nil || err != nil else { return nil }
+        return SidecarRunEvent(
+            timestampMs: ts,
+            error: err,
+            conversationId: convId,
+            prompt: prompt
+        )
+    }
+
+    /// Builds a native `ManageSidecarRequest` (`SIDECAR_ACTION_CREATE` or `SIDECAR_ACTION_UPDATE`) JSON body.
+    public static func buildManageSidecarConfigBody(
+        sidecarId: String,
+        action: SidecarManageAction,
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        description: String = "",
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil
+    ) -> [String: JSONValue] {
+        let args = AutomationScheduleCodec.buildScheduleArgs(
+            cron: cronExpression,
+            prompt: prompt,
+            modelArg: modelArg
+        )
+        var configObj: [String: JSONValue] = [
+            "builtin": .string("schedule"),
+            "restartPolicy": .string("always"),
+            "displayName": .string(displayName),
+            "args": .array(args.map { .string($0) })
+        ]
+        if !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            configObj["description"] = .string(description.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        var body: [String: JSONValue] = [
+            "sidecarId": .string(sidecarId),
+            "action": .string(action.rawValue),
+            "config": .object(configObj)
+        ]
+        if let projectId = nonEmptyString(projectId) {
+            body["projectId"] = .string(projectId)
+        } else if allProjects {
+            body["allProjects"] = .bool(true)
+        }
+        return body
+    }
+
+    public func getSidecarEvents(
+        sidecarId: String,
+        instanceUuidOverride: String? = nil,
+        timeoutInterval: TimeInterval = 5.0
+    ) async throws -> [SidecarRunEvent] {
+        let res = try await callUnaryJSON(
+            method: "GetSidecarEvents",
+            body: ["sidecarId": .string(sidecarId)],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: timeoutInterval
+        )
+        guard let arr = res["events"]?.arrayValue else { return [] }
+        return arr.compactMap { entry -> SidecarRunEvent? in
+            guard let obj = entry.objectValue else { return nil }
+            return Self.decodeSidecarEvent(obj)
+        }
+        .sorted { $0.timestampMs > $1.timestampMs }
+    }
+
+    public func listAutomations(timeoutInterval: TimeInterval? = nil) async throws -> [AutomationItem] {
+        await ensureLocalProjectIndex()
+        var projectNameById = cachedLocalProjectNameById
+        for (pid, proj) in cachedCloudProjectsById where projectNameById[pid] == nil {
+            projectNameById[pid] = proj.name
+        }
+
+        do {
+            let res = try await callUnaryJSON(
+                method: "GetSidecars",
+                body: [:],
+                timeoutInterval: timeoutInterval ?? 10.0
+            )
+            let activeOrigin = resolvedInstanceUuid
+            let rawSidecars = res["sidecars"]?.arrayValue ?? []
+            var items: [AutomationItem] = rawSidecars.compactMap { entry in
+                guard let obj = entry.objectValue else { return nil }
+                return Self.decodeSidecarStatusInfo(
+                    obj,
+                    projectNameById: projectNameById,
+                    originInstanceUuid: activeOrigin
+                )
+            }
+
+            // Enrich top automations with real run history (`lastRunText` & `lastRunCascadeId`) via `GetSidecarEvents`.
+            if !items.isEmpty {
+                let targetIds = items.prefix(20).map(\.id)
+                let eventsById: [String: SidecarRunEvent] = await withTaskGroup(of: (String, SidecarRunEvent?).self) { group in
+                    for sid in targetIds {
+                        group.addTask {
+                            let events = (try? await self.getSidecarEvents(
+                                sidecarId: sid,
+                                instanceUuidOverride: activeOrigin,
+                                timeoutInterval: 4.5
+                            )) ?? []
+                            return (sid, events.first)
+                        }
+                    }
+                    var map: [String: SidecarRunEvent] = [:]
+                    for await (sid, latest) in group {
+                        if let latest {
+                            map[sid] = latest
+                        }
+                    }
+                    return map
+                }
+
+                let now = Date()
+                for idx in items.indices {
+                    guard let latest = eventsById[items[idx].id] else { continue }
+                    if let cid = latest.conversationId, !cid.isEmpty {
+                        items[idx].lastRunCascadeId = cid
+                    }
+                    let rel = latest.timestampMs > 0
+                        ? AutomationScheduleCodec.relativeTimeLabel(from: latest.timestampMs, now: now)
+                        : "recently"
+                    if let err = latest.error, !err.isEmpty {
+                        items[idx].lastError = err
+                        items[idx].needsReview = true
+                        items[idx].lastRunText = "Failed · \(rel)"
+                    } else if items[idx].lastError == nil {
+                        items[idx].lastRunText = "Succeeded · \(rel)"
+                    }
+                }
+            }
+
+            items.sort { lhs, rhs in
+                if lhs.section != rhs.section {
+                    let rank: (AutomationSectionKind) -> Int = { s in
+                        switch s {
+                        case .scheduled: return 0
+                        case .alwaysOn: return 1
+                        case .paused: return 2
+                        }
+                    }
+                    return rank(lhs.section) < rank(rhs.section)
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+            return items
+        } catch {
+            // Only fall back to legacy `ListAutomations` on direct LAN mock/sandbox servers that don't expose `GetSidecars`.
+            if channel == .directHost && Self.isMethodUnimplementedError(error) {
+                return try await listLegacyCompanionAutomations()
+            }
+            throw error
+        }
+    }
+
+    private func listLegacyCompanionAutomations() async throws -> [AutomationItem] {
         let res = try await callUnaryJSON(method: "ListAutomations")
         guard let arr = res["automations"]?.arrayValue else { return [] }
         return arr.compactMap { item -> AutomationItem? in
@@ -2810,43 +3928,303 @@ public actor AntigravityRPCClient {
     }
 
     public func createAutomation(prompt: String, projectSlug: String) async throws -> AutomationItem {
-        let res = try await callUnaryJSON(
-            method: "CreateAutomation",
-            body: [
-                "prompt": .string(prompt),
-                "projectSlug": .string(projectSlug)
-            ]
-        )
-        let id = res["id"]?.stringValue ?? "auto-\(UUID().uuidString.prefix(8).lowercased())"
-        return AutomationItem(
-            id: id,
-            title: prompt,
+        let parsed = AutomationScheduleCodec.parseNaturalLanguagePrompt(prompt)
+        return try await createAutomation(
+            displayName: parsed.displayName,
+            prompt: parsed.prompt,
+            cronExpression: parsed.cronExpression,
             projectSlug: projectSlug,
-            scheduleSummary: "\(projectSlug) · Custom schedule · Flash",
-            section: .scheduled,
-            nextRunText: "Tomorrow, 09:00",
-            lastRunText: "Created just now"
+            projectId: nil,
+            allProjects: projectSlug.isEmpty || projectSlug == "All projects",
+            modelArg: nil,
+            description: "\(parsed.humanScheduleLabel): \(parsed.prompt)",
+            enableImmediately: true
         )
     }
 
-    public func triggerAutomationNow(automationId: String) async throws {
-        _ = try await callUnaryJSON(
-            method: "TriggerAutomationNow",
-            body: ["automationId": .string(automationId)]
+    public func createAutomation(
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        projectSlug: String,
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil,
+        description: String = "",
+        enableImmediately: Bool = true
+    ) async throws -> AutomationItem {
+        await ensureLocalProjectIndex()
+        let resolvedLocalProjectId: String? = {
+            if let explicit = Self.nonEmptyString(projectId),
+               cachedLocalProjectNameById[explicit] != nil || !explicit.hasPrefix("projects/") {
+                return explicit
+            }
+            let normalizedSlug = projectSlug
+                .replacingOccurrences(of: "cloud:", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if !normalizedSlug.isEmpty, let match = cachedLocalProjectIdByName[normalizedSlug] {
+                return match
+            }
+            return nil
+        }()
+
+        let sidecarId = AutomationScheduleCodec.makeSidecarId(from: displayName)
+        let createBody = Self.buildManageSidecarConfigBody(
+            sidecarId: sidecarId,
+            action: .create,
+            displayName: displayName,
+            prompt: prompt,
+            cronExpression: cronExpression,
+            description: description,
+            projectId: resolvedLocalProjectId,
+            allProjects: resolvedLocalProjectId == nil && allProjects,
+            modelArg: modelArg
         )
+
+        do {
+            let createResp = try await callUnaryJSON(
+                method: "ManageSidecar",
+                body: createBody,
+                timeoutInterval: 15.0
+            )
+            let createdId = Self.nonEmptyString(createResp["sidecarId"]?.stringValue)
+                ?? Self.nonEmptyString(createResp["sidecar_id"]?.stringValue)
+                ?? sidecarId
+
+            // Bind target project explicitly via `SIDECAR_ACTION_SET_PROJECT` so Desktop honors it even when
+            // `jetski-sidecar-declared-permissions` omits project binding on initial CREATE.
+            if let pid = resolvedLocalProjectId, !pid.isEmpty {
+                _ = try? await callUnaryJSON(
+                    method: "ManageSidecar",
+                    body: [
+                        "sidecarId": .string(createdId),
+                        "action": .string(SidecarManageAction.setProject.rawValue),
+                        "projectId": .string(pid)
+                    ],
+                    timeoutInterval: 10.0
+                )
+            } else if allProjects {
+                _ = try? await callUnaryJSON(
+                    method: "ManageSidecar",
+                    body: [
+                        "sidecarId": .string(createdId),
+                        "action": .string(SidecarManageAction.setAllProjects.rawValue),
+                        "allProjects": .bool(true)
+                    ],
+                    timeoutInterval: 10.0
+                )
+            }
+
+            if enableImmediately {
+                _ = try? await callUnaryJSON(
+                    method: "ManageSidecar",
+                    body: [
+                        "sidecarId": .string(createdId),
+                        "action": .string(SidecarManageAction.enable.rawValue)
+                    ],
+                    timeoutInterval: 10.0
+                )
+            }
+
+            let humanSched = AutomationScheduleCodec.humanReadableSchedule(from: cronExpression)
+            let modelBadge = AutomationScheduleCodec.formatModelBadge(modelArg ?? "Flash")
+            let slugLabel = projectSlug.isEmpty ? (allProjects ? "All projects" : "This Computer") : projectSlug
+            return AutomationItem(
+                id: createdId,
+                title: displayName,
+                projectSlug: slugLabel,
+                scheduleSummary: "\(slugLabel) · \(humanSched) · \(modelBadge)",
+                section: enableImmediately ? .scheduled : .paused,
+                nextRunText: enableImmediately ? AutomationScheduleCodec.nextFireDescription(from: cronExpression) : "Paused",
+                lastRunText: enableImmediately ? "Created just now" : "Paused · New",
+                needsReview: false,
+                isRunningNow: false,
+                descriptionText: description,
+                prompt: prompt,
+                cronExpression: cronExpression,
+                projectId: resolvedLocalProjectId,
+                allProjects: resolvedLocalProjectId == nil && allProjects,
+                modelLabel: modelBadge,
+                isEnabled: enableImmediately,
+                isScheduleBuiltin: true,
+                originInstanceUuid: resolvedInstanceUuid
+            )
+        } catch {
+            if channel == .directHost && Self.isMethodUnimplementedError(error) {
+                let res = try await callUnaryJSON(
+                    method: "CreateAutomation",
+                    body: [
+                        "prompt": .string(prompt),
+                        "projectSlug": .string(projectSlug)
+                    ]
+                )
+                let id = res["id"]?.stringValue ?? sidecarId
+                return AutomationItem(
+                    id: id,
+                    title: displayName,
+                    projectSlug: projectSlug,
+                    scheduleSummary: "\(projectSlug) · \(AutomationScheduleCodec.humanReadableSchedule(from: cronExpression)) · Flash",
+                    section: .scheduled,
+                    nextRunText: AutomationScheduleCodec.nextFireDescription(from: cronExpression),
+                    lastRunText: "Created just now",
+                    prompt: prompt,
+                    cronExpression: cronExpression
+                )
+            }
+            throw error
+        }
     }
 
-    public func setAutomationPaused(automationId: String, isPaused: Bool) async throws {
+    public func updateAutomation(
+        automationId: String,
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        projectSlug: String,
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil,
+        description: String = "",
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        await ensureLocalProjectIndex()
+        let resolvedLocalProjectId: String? = {
+            if let explicit = Self.nonEmptyString(projectId) { return explicit }
+            let key = projectSlug.replacingOccurrences(of: "cloud:", with: "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return cachedLocalProjectIdByName[key]
+        }()
+
+        let body = Self.buildManageSidecarConfigBody(
+            sidecarId: automationId,
+            action: .update,
+            displayName: displayName,
+            prompt: prompt,
+            cronExpression: cronExpression,
+            description: description,
+            projectId: resolvedLocalProjectId,
+            allProjects: resolvedLocalProjectId == nil && allProjects,
+            modelArg: modelArg
+        )
         _ = try await callUnaryJSON(
-            method: "SetAutomationPaused",
+            method: "ManageSidecar",
+            body: body,
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 15.0
+        )
+        if let pid = resolvedLocalProjectId, !pid.isEmpty {
+            _ = try? await callUnaryJSON(
+                method: "ManageSidecar",
+                body: [
+                    "sidecarId": .string(automationId),
+                    "action": .string(SidecarManageAction.setProject.rawValue),
+                    "projectId": .string(pid)
+                ],
+                instanceUuidOverride: instanceUuidOverride,
+                timeoutInterval: 10.0
+            )
+        } else if allProjects {
+            _ = try? await callUnaryJSON(
+                method: "ManageSidecar",
+                body: [
+                    "sidecarId": .string(automationId),
+                    "action": .string(SidecarManageAction.setAllProjects.rawValue),
+                    "allProjects": .bool(true)
+                ],
+                instanceUuidOverride: instanceUuidOverride,
+                timeoutInterval: 10.0
+            )
+        }
+    }
+
+    public func triggerAutomationNow(
+        automationId: String,
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        do {
+            _ = try await callUnaryJSON(
+                method: "ManageSidecar",
+                body: [
+                    "sidecarId": .string(automationId),
+                    "action": .string(SidecarManageAction.runNow.rawValue)
+                ],
+                instanceUuidOverride: instanceUuidOverride,
+                timeoutInterval: 15.0
+            )
+        } catch {
+            if channel == .directHost && Self.isMethodUnimplementedError(error) {
+                _ = try await callUnaryJSON(
+                    method: "TriggerAutomationNow",
+                    body: ["automationId": .string(automationId)]
+                )
+                return
+            }
+            throw error
+        }
+    }
+
+    public func setAutomationPaused(
+        automationId: String,
+        isPaused: Bool,
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        let action: SidecarManageAction = isPaused ? .disable : .enable
+        do {
+            _ = try await callUnaryJSON(
+                method: "ManageSidecar",
+                body: [
+                    "sidecarId": .string(automationId),
+                    "action": .string(action.rawValue)
+                ],
+                instanceUuidOverride: instanceUuidOverride,
+                timeoutInterval: 12.0
+            )
+        } catch {
+            if channel == .directHost && Self.isMethodUnimplementedError(error) {
+                _ = try await callUnaryJSON(
+                    method: "SetAutomationPaused",
+                    body: [
+                        "automationId": .string(automationId),
+                        "isPaused": .bool(isPaused)
+                    ]
+                )
+                return
+            }
+            throw error
+        }
+    }
+
+    public func deleteAutomation(
+        automationId: String,
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        _ = try await callUnaryJSON(
+            method: "ManageSidecar",
             body: [
-                "automationId": .string(automationId),
-                "isPaused": .bool(isPaused)
-            ]
+                "sidecarId": .string(automationId),
+                "action": .string(SidecarManageAction.delete.rawValue)
+            ],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 12.0
         )
     }
 
-    // MARK: - Artifacts & Turn Diff RPC (`UE11`, `UE12`)
+    public func restartAutomation(
+        automationId: String,
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        _ = try await callUnaryJSON(
+            method: "ManageSidecar",
+            body: [
+                "sidecarId": .string(automationId),
+                "action": .string(SidecarManageAction.restart.rawValue)
+            ],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 12.0
+        )
+    }
+
+    // MARK: - Artifacts & Turn Diff RPC (`UE11`, `UE12` + Git VCS)
 
     public func getArtifactSnapshots(cascadeId: String) async throws -> [ArtifactSnapshot] {
         let res = try await callUnaryJSON(
@@ -2857,13 +4235,35 @@ public actor AntigravityRPCClient {
         return arr.compactMap { item -> ArtifactSnapshot? in
             guard let obj = item.objectValue,
                   let path = obj["artifactPath"]?.stringValue else { return nil }
+            let kind: ArtifactKind = {
+                if let rawKind = obj["kind"]?.stringValue,
+                   let parsed = ArtifactKind(rawValue: rawKind) {
+                    return parsed
+                }
+                let lower = path.lowercased()
+                if lower.hasSuffix(".pdf") { return .pdfDocument }
+                if lower.hasSuffix(".ipynb") { return .jupyterNotebook }
+                if lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".webp") {
+                    return .imageAsset
+                }
+                if lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") || lower.hasSuffix(".webm") {
+                    return .videoAsset
+                }
+                if lower.hasSuffix(".html") { return .generativeUIHTML }
+                if lower.hasSuffix(".url.json") { return .urlBookmark }
+                if lower.contains("walkthrough") { return .walkthrough }
+                if lower.contains("task") { return .taskList }
+                return .implementationPlan
+            }()
             return ArtifactSnapshot(
                 artifactPath: path,
-                title: obj["title"]?.stringValue ?? "Artifact",
+                title: obj["title"]?.stringValue ?? (path as NSString).lastPathComponent,
                 summary: obj["summary"]?.stringValue ?? "",
-                kind: .implementationPlan,
+                kind: kind,
                 content: obj["content"]?.stringValue ?? "",
-                requestFeedback: obj["requestFeedback"]?.boolValue ?? false
+                requestFeedback: obj["requestFeedback"]?.boolValue ?? false,
+                userFacing: obj["userFacing"]?.boolValue ?? true,
+                version: obj["version"]?.intValue ?? 1
             )
         }
     }
@@ -2886,13 +4286,136 @@ public actor AntigravityRPCClient {
         )
     }
 
-    public func getTurnDiff(cascadeId: String, turnNumber: Int?) async throws -> [FilePatchDiff] {
-        var body: [String: JSONValue] = ["cascadeId": .string(cascadeId)]
+    public func getTurnDiff(
+        cascadeId: String,
+        turnNumber: Int?,
+        compareMode: DiffCompareMode = .turn
+    ) async throws -> [FilePatchDiff] {
+        var body: [String: JSONValue] = [
+            "cascadeId": .string(cascadeId),
+            "compareMode": .string(compareMode.rawValue)
+        ]
         if let turnNumber {
             body["turnNumber"] = .int(turnNumber)
         }
-        _ = try await callUnaryJSON(method: "GetTurnDiff", body: body)
-        return []
+        let res = try await callUnaryJSON(method: "GetTurnDiff", body: body)
+        return Self.parseFilePatchDiffs(from: res, defaultTurn: turnNumber ?? 1, defaultScope: compareMode)
+    }
+
+    internal static func parseFilePatchDiffs(
+        from response: [String: JSONValue],
+        defaultTurn: Int = 1,
+        defaultScope: DiffCompareMode = .turn
+    ) -> [FilePatchDiff] {
+        guard let rawFiles = response["files"]?.arrayValue ?? response["diffs"]?.arrayValue else {
+            return []
+        }
+        return rawFiles.compactMap { entry -> FilePatchDiff? in
+            guard let obj = entry.objectValue,
+                  let path = nonEmptyString(obj["filePath"]?.stringValue ?? obj["path"]?.stringValue) else {
+                return nil
+            }
+            let turn = obj["turnNumber"]?.intValue ?? defaultTurn
+            let statusLetter = GitFileStatusLetter(
+                rawValue: (obj["statusLetter"]?.stringValue ?? obj["status"]?.stringValue ?? "M").uppercased()
+            ) ?? .modified
+            let isStaged = obj["isStaged"]?.boolValue ?? false
+            let isReviewed = obj["isReviewed"]?.boolValue ?? false
+            let scope = DiffCompareMode(rawValue: obj["compareScope"]?.stringValue ?? "") ?? defaultScope
+            let hunkHeader = obj["hunkHeader"]?.stringValue ?? "@@ -1,1 +1,1 @@"
+
+            var parsedLines: [DiffLine] = []
+            if let rawLines = obj["lines"]?.arrayValue {
+                for (idx, lineVal) in rawLines.enumerated() {
+                    guard let lObj = lineVal.objectValue else { continue }
+                    let kindStr = (lObj["kind"]?.stringValue ?? "context").lowercased()
+                    let lineKind: DiffLine.Kind
+                    switch kindStr {
+                    case "addition", "add", "+": lineKind = .addition
+                    case "deletion", "del", "-": lineKind = .deletion
+                    case "hunkheader", "hunk": lineKind = .hunkHeader
+                    default: lineKind = .context
+                    }
+                    parsedLines.append(
+                        DiffLine(
+                            id: lObj["id"]?.intValue ?? idx,
+                            kind: lineKind,
+                            oldLineNumber: lObj["oldLineNumber"]?.intValue,
+                            newLineNumber: lObj["newLineNumber"]?.intValue,
+                            text: lObj["text"]?.stringValue ?? "",
+                            wordHighlightRange: lObj["wordHighlightRange"]?.stringValue
+                        )
+                    )
+                }
+            } else if let rawHunks = obj["hunks"]?.arrayValue {
+                var runningId = 0
+                for hVal in rawHunks {
+                    guard let hObj = hVal.objectValue else { continue }
+                    if let hdr = nonEmptyString(hObj["header"]?.stringValue) {
+                        parsedLines.append(DiffLine(id: runningId, kind: .hunkHeader, text: hdr))
+                        runningId += 1
+                    }
+                    for lineVal in hObj["lines"]?.arrayValue ?? [] {
+                        guard let lObj = lineVal.objectValue else { continue }
+                        let kindStr = (lObj["kind"]?.stringValue ?? "context").lowercased()
+                        let lineKind: DiffLine.Kind = (kindStr == "addition" || kindStr == "+")
+                            ? .addition
+                            : ((kindStr == "deletion" || kindStr == "-") ? .deletion : .context)
+                        parsedLines.append(
+                            DiffLine(
+                                id: runningId,
+                                kind: lineKind,
+                                oldLineNumber: lObj["oldLineNumber"]?.intValue,
+                                newLineNumber: lObj["newLineNumber"]?.intValue,
+                                text: lObj["text"]?.stringValue ?? ""
+                            )
+                        )
+                        runningId += 1
+                    }
+                }
+            } else if let rawPatch = obj["patch"]?.stringValue ?? obj["unifiedDiff"]?.stringValue {
+                parsedLines = parseUnifiedDiffText(rawPatch)
+            }
+
+            let additions = obj["additions"]?.intValue ?? parsedLines.filter { $0.kind == .addition }.count
+            let deletions = obj["deletions"]?.intValue ?? parsedLines.filter { $0.kind == .deletion }.count
+
+            return FilePatchDiff(
+                turnNumber: turn,
+                filePath: path,
+                additions: additions,
+                deletions: deletions,
+                hunkHeader: hunkHeader,
+                isReviewed: isReviewed,
+                statusLetter: statusLetter,
+                isStaged: isStaged,
+                compareScope: scope,
+                lines: parsedLines
+            )
+        }
+    }
+
+    internal static func parseUnifiedDiffText(_ unifiedDiff: String) -> [DiffLine] {
+        var result: [DiffLine] = []
+        var oldNum = 1
+        var newNum = 1
+        for (idx, rawLine) in unifiedDiff.components(separatedBy: "\n").enumerated() {
+            if rawLine.hasPrefix("@@") {
+                result.append(DiffLine(id: idx, kind: .hunkHeader, text: rawLine))
+            } else if rawLine.hasPrefix("+") && !rawLine.hasPrefix("+++") {
+                result.append(DiffLine(id: idx, kind: .addition, oldLineNumber: nil, newLineNumber: newNum, text: String(rawLine.dropFirst())))
+                newNum += 1
+            } else if rawLine.hasPrefix("-") && !rawLine.hasPrefix("---") {
+                result.append(DiffLine(id: idx, kind: .deletion, oldLineNumber: oldNum, newLineNumber: nil, text: String(rawLine.dropFirst())))
+                oldNum += 1
+            } else if !rawLine.hasPrefix("---") && !rawLine.hasPrefix("+++") {
+                let content = rawLine.hasPrefix(" ") ? String(rawLine.dropFirst()) : rawLine
+                result.append(DiffLine(id: idx, kind: .context, oldLineNumber: oldNum, newLineNumber: newNum, text: content))
+                oldNum += 1
+                newNum += 1
+            }
+        }
+        return result
     }
 
     public func revertDiffHunk(cascadeId: String, filePath: String, hunkHeader: String? = nil) async throws {
@@ -2924,7 +4447,333 @@ public actor AntigravityRPCClient {
         )
     }
 
+    // MARK: - Antigravity 2.0 (v2.33) Git VCS, Overview, Side Question, Permissions & Customizations RPCs
+
+    public func gitStageFile(cascadeId: String, filePath: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "GitStageFile",
+            body: ["cascadeId": .string(cascadeId), "filePath": .string(filePath)]
+        )
+    }
+
+    public func gitUnstageFile(cascadeId: String, filePath: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "GitUnstageFile",
+            body: ["cascadeId": .string(cascadeId), "filePath": .string(filePath)]
+        )
+    }
+
+    public func gitDiscardFile(cascadeId: String, filePath: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "GitDiscardFile",
+            body: ["cascadeId": .string(cascadeId), "filePath": .string(filePath)]
+        )
+    }
+
+    public func gitCommitChanges(cascadeId: String, draft: GitCommitDraft) async throws -> GitCommitResult {
+        let res = try await callUnaryJSON(
+            method: "GitCommit",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "message": .string(draft.message),
+                "includeUnstaged": .bool(draft.includeUnstaged),
+                "amend": .bool(draft.amend)
+            ]
+        )
+        return GitCommitResult(
+            commitSha: res["commitSha"]?.stringValue ?? String(UUID().uuidString.prefix(7)).lowercased(),
+            commitMessage: res["commitMessage"]?.stringValue ?? draft.message,
+            branchName: res["branchName"]?.stringValue ?? "main",
+            pushed: res["pushed"]?.boolValue ?? false
+        )
+    }
+
+    public func gitPushBranch(cascadeId: String, branchName: String) async throws -> Bool {
+        let res = try await callUnaryJSON(
+            method: "GitPush",
+            body: ["cascadeId": .string(cascadeId), "branchName": .string(branchName)]
+        )
+        return res["pushed"]?.boolValue ?? res["ok"]?.boolValue ?? true
+    }
+
+    public func fetchConversationOverview(cascadeId: String) async throws -> ConversationOverviewSnapshot {
+        let res = try await callUnaryJSON(
+            method: "GetConversationOverview",
+            body: ["cascadeId": .string(cascadeId)]
+        )
+        let subagents: [SubagentPayload] = (res["subagents"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue else { return nil }
+            return SubagentPayload(
+                subagentId: obj["subagentId"]?.stringValue ?? obj["id"]?.stringValue ?? UUID().uuidString,
+                role: obj["role"]?.stringValue ?? "Subagent",
+                typeName: obj["typeName"]?.stringValue ?? "self",
+                modelLabel: obj["modelLabel"]?.stringValue ?? "Gemini 4 Hydrogen",
+                status: CortexStepStatus.from(jsonName: obj["status"]?.stringValue ?? "IN_PROGRESS"),
+                summary: obj["summary"]?.stringValue ?? "",
+                waitingApprovalTitle: obj["waitingApprovalTitle"]?.stringValue
+            )
+        }
+        let bgTasks: [BackgroundTaskItem] = (res["backgroundTasks"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue else { return nil }
+            return BackgroundTaskItem(
+                id: obj["id"]?.stringValue ?? UUID().uuidString,
+                title: obj["title"]?.stringValue ?? "Background Task",
+                commandSummary: obj["commandSummary"]?.stringValue ?? "",
+                status: CortexStepStatus.from(jsonName: obj["status"]?.stringValue ?? "IN_PROGRESS"),
+                elapsedLabel: obj["elapsedLabel"]?.stringValue ?? "running",
+                canCancel: obj["canCancel"]?.boolValue ?? true
+            )
+        }
+        let goals: [ConversationGoalItem] = (res["goals"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue else { return nil }
+            return ConversationGoalItem(
+                id: obj["id"]?.stringValue ?? UUID().uuidString,
+                title: obj["title"]?.stringValue ?? "Goal",
+                status: CortexStepStatus.from(jsonName: obj["status"]?.stringValue ?? "IN_PROGRESS"),
+                progressText: obj["progressText"]?.stringValue ?? "Active"
+            )
+        }
+        let prs: [GitHubPullRequestInfo] = (res["pullRequests"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue,
+                  let repo = obj["ownerRepo"]?.stringValue,
+                  let num = obj["number"]?.intValue else { return nil }
+            return GitHubPullRequestInfo(
+                ownerRepo: repo,
+                number: num,
+                title: obj["title"]?.stringValue ?? "PR #\(num)",
+                state: GitHubPullRequestInfo.PRState(rawValue: (obj["state"]?.stringValue ?? "open").lowercased()) ?? .open,
+                checksSummary: obj["checksSummary"]?.stringValue ?? "Checks passing",
+                url: obj["url"]?.stringValue ?? "https://github.com/\(repo)/pull/\(num)",
+                additions: obj["additions"]?.intValue ?? 0,
+                deletions: obj["deletions"]?.intValue ?? 0
+            )
+        }
+        let modifiedFiles = (res["modifiedFiles"]?.arrayValue ?? []).compactMap(\.stringValue)
+        let docLinks = (res["documentLinks"]?.arrayValue ?? []).compactMap(\.stringValue)
+
+        return ConversationOverviewSnapshot(
+            reviewAdditions: res["reviewAdditions"]?.intValue ?? 0,
+            reviewDeletions: res["reviewDeletions"]?.intValue ?? 0,
+            modifiedFiles: modifiedFiles,
+            subagents: subagents,
+            backgroundTasks: bgTasks,
+            goals: goals,
+            artifacts: [],
+            documentLinks: docLinks,
+            pullRequests: prs
+        )
+    }
+
+    public func cancelBackgroundTask(cascadeId: String, taskId: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "CancelBackgroundTask",
+            body: ["cascadeId": .string(cascadeId), "taskId": .string(taskId)]
+        )
+    }
+
+    public func stopSubagent(cascadeId: String, subagentId: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "StopSubagent",
+            body: ["cascadeId": .string(cascadeId), "subagentId": .string(subagentId)]
+        )
+    }
+
+    public func sendSideQuestion(
+        cascadeId: String,
+        question: String,
+        threadId: String
+    ) async throws -> SideQuestionMessage {
+        let res = try await callUnaryJSON(
+            method: "SendSideQuestion",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "threadId": .string(threadId),
+                "question": .string(question)
+            ]
+        )
+        let answer = Self.nonEmptyString(res["answer"]?.stringValue)
+            ?? Self.nonEmptyString(res["response"]?.stringValue)
+            ?? "Read-only side answer for: \(question)"
+        return SideQuestionMessage(isUser: false, text: answer)
+    }
+
+    public func revertConversationToStep(cascadeId: String, stepIndex: Int) async throws {
+        _ = try await callUnaryJSON(
+            method: "RevertConversationToStep",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "stepIndex": .int(stepIndex)
+            ]
+        )
+    }
+
+    public func setConversationPermissionPreset(cascadeId: String, preset: AgentPermissionPreset) async throws {
+        _ = try await callUnaryJSON(
+            method: "SetPermissionPreset",
+            body: [
+                "cascadeId": .string(cascadeId),
+                "preset": .string(preset.wireValue),
+                "label": .string(preset.rawValue)
+            ]
+        )
+    }
+
+    public func fetchCustomizationsCatalog() async throws -> CustomizationsCatalog {
+        let res = try await callUnaryJSON(method: "GetCustomizationsCatalog", body: [:])
+        let skills: [SkillSummary] = (res["skills"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue, let name = obj["name"]?.stringValue else { return nil }
+            return SkillSummary(
+                name: name,
+                description: obj["description"]?.stringValue ?? "",
+                scope: obj["scope"]?.stringValue ?? "Workspace",
+                isEnabled: obj["isEnabled"]?.boolValue ?? true
+            )
+        }
+        let rules: [RuleSummary] = (res["rules"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue, let name = obj["name"]?.stringValue else { return nil }
+            return RuleSummary(
+                name: name,
+                scope: obj["scope"]?.stringValue ?? "Workspace",
+                preview: obj["preview"]?.stringValue ?? "",
+                isActive: obj["isActive"]?.boolValue ?? true
+            )
+        }
+        let agents = (res["customAgents"]?.arrayValue ?? []).compactMap(\.stringValue)
+        let servers: [McpServerStatusItem] = (res["mcpServers"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue, let name = obj["name"]?.stringValue else { return nil }
+            let state = McpServerStatusItem.ConnectionState(rawValue: (obj["state"]?.stringValue ?? "connected").lowercased()) ?? .connected
+            return McpServerStatusItem(
+                name: name,
+                transport: obj["transport"]?.stringValue ?? "stdio",
+                state: state,
+                toolCount: obj["toolCount"]?.intValue ?? 0,
+                errorMessage: obj["errorMessage"]?.stringValue,
+                missingCommandHint: obj["missingCommandHint"]?.stringValue,
+                oauthConnected: obj["oauthConnected"]?.boolValue ?? true
+            )
+        }
+        let plugins: [PluginCatalogItem] = (res["plugins"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue,
+                  let id = obj["id"]?.stringValue,
+                  let name = obj["name"]?.stringValue else { return nil }
+            return PluginCatalogItem(
+                id: id,
+                name: name,
+                provider: obj["provider"]?.stringValue ?? name,
+                description: obj["description"]?.stringValue ?? "",
+                isInstalled: obj["isInstalled"]?.boolValue ?? false,
+                isEnabled: obj["isEnabled"]?.boolValue ?? true,
+                isFeaturedPartner: obj["isFeaturedPartner"]?.boolValue ?? false,
+                accountSignedIn: obj["accountSignedIn"]?.boolValue ?? false,
+                mcpStartupError: obj["mcpStartupError"]?.stringValue,
+                suggestedPrompts: (obj["suggestedPrompts"]?.arrayValue ?? []).compactMap(\.stringValue)
+            )
+        }
+        let hooks: [LifecycleHookItem] = (res["hooks"]?.arrayValue ?? []).compactMap { val in
+            guard let obj = val.objectValue,
+                  let eventName = obj["eventName"]?.stringValue,
+                  let cmd = obj["command"]?.stringValue else { return nil }
+            return LifecycleHookItem(
+                id: obj["id"]?.stringValue ?? UUID().uuidString,
+                eventName: eventName,
+                matcher: obj["matcher"]?.stringValue ?? "*",
+                command: cmd,
+                timeoutSeconds: obj["timeoutSeconds"]?.intValue ?? 60,
+                isValid: obj["isValid"]?.boolValue ?? true
+            )
+        }
+        if skills.isEmpty && rules.isEmpty && servers.isEmpty && plugins.isEmpty {
+            return CustomizationsCatalog.defaultCatalog
+        }
+        return CustomizationsCatalog(
+            skills: skills,
+            rules: rules,
+            customAgents: agents.isEmpty ? ["Default"] : agents,
+            mcpServers: servers,
+            plugins: plugins,
+            hooks: hooks
+        )
+    }
+
+    public func restartMcpServer(serverName: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "RestartMcpServer",
+            body: ["serverName": .string(serverName)]
+        )
+    }
+
+    public func togglePlugin(pluginId: String, isEnabled: Bool) async throws {
+        _ = try await callUnaryJSON(
+            method: "TogglePlugin",
+            body: ["pluginId": .string(pluginId), "isEnabled": .bool(isEnabled)]
+        )
+    }
+
+    public func installMarketplacePlugin(pluginId: String) async throws {
+        _ = try await callUnaryJSON(
+            method: "InstallPlugin",
+            body: ["pluginId": .string(pluginId)]
+        )
+    }
+
+    public func searchAllConversations(query: String) async throws -> [CascadeSummary] {
+        let res = try await callUnaryJSON(
+            method: "SearchAllConversations",
+            body: ["query": .string(query)]
+        )
+        guard let list = res["trajectories"]?.arrayValue ?? res["results"]?.arrayValue else {
+            return []
+        }
+        let now = Date()
+        return list.compactMap { item -> CascadeSummary? in
+            guard let obj = item.objectValue,
+                  let id = obj["cascadeId"]?.stringValue,
+                  let title = obj["title"]?.stringValue else { return nil }
+            return CascadeSummary(
+                cascadeId: id,
+                title: title,
+                projectSlug: obj["projectSlug"]?.stringValue ?? "workspace",
+                workspaceUri: obj["workspaceUri"]?.stringValue ?? "",
+                branchName: obj["branchName"]?.stringValue ?? "main",
+                status: CortexStepStatus.from(jsonName: obj["status"]?.stringValue ?? "DONE"),
+                stepCount: obj["stepCount"]?.intValue ?? 0,
+                updatedAt: now,
+                relativeTimeLabel: obj["relativeTimeLabel"]?.stringValue ?? "now",
+                statusSubtitle: obj["snippet"]?.stringValue ?? obj["statusSubtitle"]?.stringValue ?? ""
+            )
+        }
+    }
+
     // MARK: - Server-Streaming Envelope Subscription
+
+    private static func hasBase64TransferHeader(_ headers: [AnyHashable: Any]) -> Bool {
+        headers.contains { key, val in
+            let lowerKey = String(describing: key).lowercased()
+            guard lowerKey == "x-goog-safety-encoding" || lowerKey == "content-transfer-encoding" else {
+                return false
+            }
+            return String(describing: val).lowercased().contains("base64")
+        }
+    }
+
+    private static func extractConnectEndStreamError(from data: Data, decoder: JSONDecoder) -> String? {
+        guard !data.isEmpty,
+              let obj = try? decoder.decode([String: JSONValue].self, from: data) else {
+            return nil
+        }
+        if let errObj = obj["error"]?.objectValue {
+            let code = nonEmptyString(errObj["code"]?.stringValue)
+            let msg = nonEmptyString(errObj["message"]?.stringValue)
+            if code != nil || msg != nil {
+                return [code, msg].compactMap { $0 }.joined(separator: ": ")
+            }
+        }
+        if let code = nonEmptyString(obj["code"]?.stringValue),
+           let msg = nonEmptyString(obj["message"]?.stringValue) {
+            return "\(code): \(msg)"
+        }
+        return nil
+    }
 
     /// Subscribes to a Connect-RPC server-streaming method (`JetboxSubscribeToSummaries`, `StreamCascadeReactiveUpdates`, etc.)
     public func subscribeEnvelopeStream(
@@ -2963,6 +4812,7 @@ public actor AntigravityRPCClient {
             }
             var relayRequest = URLRequest(url: relayURL)
             relayRequest.httpMethod = "POST"
+            relayRequest.timeoutInterval = 300
             SAPISIDHashGenerator.applyApiServiceHeaders(
                 to: &relayRequest,
                 cookieHeader: sessionCookie ?? "",
@@ -2978,38 +4828,126 @@ public actor AntigravityRPCClient {
                 isStreaming: true
             )
 
-            let session = self.urlSession
+            let session = self.streamingURLSession
             let immutableRelayReq = relayRequest
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {
                         let (bytes, response) = try await session.bytes(for: immutableRelayReq)
-                        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                            continuation.finish()
-                            return
+                        guard let http = response as? HTTPURLResponse else {
+                            throw AntigravityRPCError.invalidEndpoint
                         }
+                        if http.statusCode == 401 || http.statusCode == 403 {
+                            throw AntigravityRPCError.unauthorized("StreamProxyCommand HTTP \(http.statusCode)")
+                        }
+                        guard (200..<300).contains(http.statusCode) else {
+                            throw AntigravityRPCError.httpError(
+                                statusCode: http.statusCode,
+                                body: "StreamProxyCommand HTTP \(http.statusCode)"
+                            )
+                        }
+
                         let decoder = JSONDecoder()
                         var jspbStreamParser = CloudRelayJSPBStreamParser()
                         var connectParser = ConnectStreamParser()
-                        for try await byte in bytes {
-                            if let chunks = jspbStreamParser.feedByte(byte) {
-                                for chunkData in chunks {
-                                    if chunkData.first == UInt8(ascii: "{"),
-                                       let obj = try? decoder.decode([String: JSONValue].self, from: chunkData) {
-                                        continuation.yield(obj)
-                                    } else {
-                                        for frame in connectParser.feed(chunkData) {
-                                            if frame.flags.contains(.endStream) {
-                                                continuation.finish()
-                                                return
+                        var outerB64Decoder = StreamingBase64Decoder()
+                        // 0 = auto-detect outer base64 vs raw UTF-8 JSPB, 1 = raw, 2 = base64
+                        var outerMode: Int = Self.hasBase64TransferHeader(http.allHeaderFields) ? 2 : 0
+                        var sniffBuffer: [UInt8] = []
+                        var yieldedAny = false
+
+                        func processStreamByte(_ decodedByte: UInt8) throws -> Bool {
+                            guard let chunks = jspbStreamParser.feedByte(decodedByte) else {
+                                return true
+                            }
+                            for rawChunk in chunks {
+                                let chunkData = CloudRelayJSPBCodec.decompressPayloadIfNeeded(rawChunk)
+                                if !connectParser.hasBufferedBytes,
+                                   chunkData.first == UInt8(ascii: "{"),
+                                   let obj = try? decoder.decode([String: JSONValue].self, from: chunkData) {
+                                    yieldedAny = true
+                                    continuation.yield(obj)
+                                } else {
+                                    for frame in connectParser.feed(chunkData) {
+                                        let frameBytes = frame.isCompressed
+                                            ? CloudRelayJSPBCodec.decompressPayloadIfNeeded(frame.payload)
+                                            : frame.payload
+                                        if frame.flags.contains(.endStream) {
+                                            if let errMsg = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
+                                                throw AntigravityRPCError.httpError(statusCode: 400, body: errMsg)
                                             }
-                                            if let obj = try? decoder.decode([String: JSONValue].self, from: frame.payload) {
-                                                continuation.yield(obj)
-                                            }
+                                            continuation.finish()
+                                            return false
+                                        }
+                                        if let obj = try? decoder.decode([String: JSONValue].self, from: frameBytes) {
+                                            yieldedAny = true
+                                            continuation.yield(obj)
                                         }
                                     }
                                 }
                             }
+                            return true
+                        }
+
+                        for try await byte in bytes {
+                            if outerMode == 1 {
+                                if !(try processStreamByte(byte)) { return }
+                            } else if outerMode == 2 {
+                                if let decodedChunk = outerB64Decoder.feedByte(byte) {
+                                    for db in decodedChunk {
+                                        if !(try processStreamByte(db)) { return }
+                                    }
+                                }
+                            } else {
+                                if sniffBuffer.isEmpty,
+                                   byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\t")
+                                    || byte == UInt8(ascii: "\r") || byte == UInt8(ascii: "\n") {
+                                    continue
+                                }
+                                if sniffBuffer.isEmpty,
+                                   byte == UInt8(ascii: "[") || byte == UInt8(ascii: "{")
+                                    || byte == UInt8(ascii: ")") || byte == UInt8(ascii: "(")
+                                    || (byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")) {
+                                    outerMode = 1
+                                    if !(try processStreamByte(byte)) { return }
+                                } else {
+                                    sniffBuffer.append(byte)
+                                    if sniffBuffer.count == 4 {
+                                        let candidateStr = String(decoding: sniffBuffer, as: UTF8.self)
+                                        if let decodedPrefix = CloudRelayJSPBCodec.decodeBase64Flexible(candidateStr),
+                                           let firstByte = decodedPrefix.first,
+                                           firstByte == UInt8(ascii: ")") || firstByte == UInt8(ascii: "[")
+                                            || firstByte == UInt8(ascii: "{") || firstByte == UInt8(ascii: " ")
+                                            || firstByte == UInt8(ascii: "\n") {
+                                            outerMode = 2
+                                            for db in decodedPrefix {
+                                                if !(try processStreamByte(db)) { return }
+                                            }
+                                        } else {
+                                            outerMode = 1
+                                            for rb in sniffBuffer {
+                                                if !(try processStreamByte(rb)) { return }
+                                            }
+                                        }
+                                        sniffBuffer.removeAll(keepingCapacity: false)
+                                    }
+                                }
+                            }
+                        }
+
+                        if outerMode == 2 {
+                            let trailing = outerB64Decoder.flush()
+                            for db in trailing {
+                                if !(try processStreamByte(db)) { return }
+                            }
+                        } else if !sniffBuffer.isEmpty {
+                            for rb in sniffBuffer {
+                                if !(try processStreamByte(rb)) { return }
+                            }
+                        }
+
+                        if !yieldedAny, let boqErr = jspbStreamParser.lastErrorTrailer {
+                            throw AntigravityRPCError.httpError(statusCode: 502, body: boqErr)
                         }
                         continuation.finish()
                     } catch {
@@ -3023,41 +4961,45 @@ public actor AntigravityRPCClient {
         let url = endpointURL.appendingPathComponent("\(Self.servicePrefix)/\(method)")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 300
         request.setValue("application/connect+json", forHTTPHeaderField: "Content-Type")
         request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
         applyAuthHeaders(to: &request)
         request.httpBody = framedPayload
 
-        let session = self.urlSession
+        let session = self.streamingURLSession
         let immutableRequest = request
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let (bytes, response) = try await session.bytes(for: immutableRequest)
-                    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    guard let http = response as? HTTPURLResponse else {
                         throw AntigravityRPCError.invalidEndpoint
                     }
+                    if http.statusCode == 401 || http.statusCode == 403 {
+                        throw AntigravityRPCError.unauthorized("Stream HTTP \(http.statusCode)")
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        throw AntigravityRPCError.httpError(
+                            statusCode: http.statusCode,
+                            body: "Stream HTTP \(http.statusCode)"
+                        )
+                    }
                     var parser = ConnectStreamParser()
-                    var chunkBuffer = Data()
                     let decoder = JSONDecoder()
                     for try await byte in bytes {
-                        chunkBuffer.append(byte)
-                        if chunkBuffer.count >= 16 {
-                            for frame in parser.feed(chunkBuffer) {
-                                if frame.flags.contains(.endStream) {
-                                    continuation.finish()
-                                    return
+                        if let frame = parser.feedByte(byte) {
+                            let frameBytes = frame.isCompressed
+                                ? CloudRelayJSPBCodec.decompressPayloadIfNeeded(frame.payload)
+                                : frame.payload
+                            if frame.flags.contains(.endStream) {
+                                if let errMsg = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
+                                    throw AntigravityRPCError.httpError(statusCode: 400, body: errMsg)
                                 }
-                                if let obj = try? decoder.decode([String: JSONValue].self, from: frame.payload) {
-                                    continuation.yield(obj)
-                                }
+                                continuation.finish()
+                                return
                             }
-                            chunkBuffer.removeAll(keepingCapacity: true)
-                        }
-                    }
-                    if !chunkBuffer.isEmpty {
-                        for frame in parser.feed(chunkBuffer) where !frame.flags.contains(.endStream) {
-                            if let obj = try? decoder.decode([String: JSONValue].self, from: frame.payload) {
+                            if let obj = try? decoder.decode([String: JSONValue].self, from: frameBytes) {
                                 continuation.yield(obj)
                             }
                         }
@@ -3402,7 +5344,7 @@ public actor AntigravityRPCClient {
         forceCloud: Bool = false
     ) -> CascadeSummary? {
         guard let obj = value.objectValue else { return nil }
-        let annotations = obj["annotations"]?.objectValue
+        let annotations = obj["annotations"]?.objectValue ?? obj["conversationAnnotations"]?.objectValue
         let trajMeta = obj["trajectoryMetadata"]?.objectValue
 
         let candidateTitles: [String?] = [
@@ -3427,14 +5369,37 @@ public actor AntigravityRPCClient {
             ?? Int(obj["stepCount"]?.stringValue ?? "")
             ?? 0
 
-        let cloudProjectId = Self.nonEmptyString(trajMeta?["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(obj["projectId"]?.stringValue)
+        let projectIdCandidates: [String?] = [
+            trajMeta?["projectId"]?.stringValue,
+            trajMeta?["project_id"]?.stringValue,
+            obj["projectId"]?.stringValue,
+            obj["project_id"]?.stringValue,
+            annotations?["projectId"]?.stringValue,
+            obj["projectEnvConfig"]?.objectValue?["projectId"]?.stringValue,
+            obj["metadata"]?.objectValue?["projectId"]?.stringValue
+        ]
+        let cloudProjectId = projectIdCandidates.compactMap(Self.nonEmptyString).first
         let explicitCloudBool = (obj["cloud"]?.boolValue == true)
             || (obj["isCloud"]?.boolValue == true)
             || (trajMeta?["isCloud"]?.boolValue == true)
 
-        let statusRaw = obj["status"]?.stringValue ?? "CASCADE_RUN_STATUS_IDLE"
-        let status = CortexStepStatus.from(jsonName: statusRaw)
+        let statusValue = obj["status"] ?? obj["runStatus"] ?? obj["cascadeRunStatus"]
+        let statusRaw = statusValue?.stringValue ?? "CASCADE_RUN_STATUS_IDLE"
+        var status: CortexStepStatus
+        if let statusCode = statusValue?.intValue {
+            status = CortexStepStatus.from(cascadeRunStatusCode: statusCode)
+        } else {
+            status = CortexStepStatus.from(jsonName: statusRaw)
+        }
+        if status == .unspecified {
+            if obj["waitingForUser"]?.boolValue == true
+                || obj["hasPendingInteraction"]?.boolValue == true
+                || obj["needsUserAction"]?.boolValue == true {
+                status = .waiting
+            } else if obj["isRunning"]?.boolValue == true || obj["running"]?.boolValue == true {
+                status = .inProgress
+            }
+        }
         let isActiveRun = status == .inProgress || status == .pending || status == .waiting
 
         // Antigravity Desktop keeps unused 0-step local New Chat placeholders in `trajectorySummaries`
@@ -3480,8 +5445,17 @@ public actor AntigravityRPCClient {
             .compactMap { $0 }
             .joined(separator: " ")
 
+        let isForceCloudContainerPath: Bool = {
+            guard forceCloud else { return false }
+            let lowerRaw = (rawUri.removingPercentEncoding ?? rawUri).lowercased()
+            return lowerRaw.hasPrefix("file:///workspace/")
+                || lowerRaw.hasPrefix("file:///workspaces/")
+                || lowerRaw.hasPrefix("file:///root/")
+        }()
+
         let isCloud = explicitCloudBool
             || hasCloudWorkspaceEntry
+            || isForceCloudContainerPath
             || AntigravityCloudDetector.isCloudWorkspaceURI(rawUri, cascadeId: cascadeId, sourceHint: sourceHint)
 
         let isScratchPlayground = AntigravityCloudDetector.isPlaygroundScratchURI(rawUri)
@@ -3541,24 +5515,57 @@ public actor AntigravityRPCClient {
                 ?? "main"
         }
 
-        let updatedDate = Self.parseProtoTimestamp(
-            obj["lastModifiedTime"]
-                ?? obj["updatedAt"]
-                ?? obj["lastStepTime"]
-                ?? obj["createdTime"]
-        )
-        let lastViewedDate = Self.parseProtoTimestamp(
-            annotations?["lastUserViewTime"] ?? obj["lastUserViewTime"]
-        )
+        let candidateUpdateDates: [Date] = [
+            Self.parseProtoTimestamp(obj["lastModifiedTime"]),
+            Self.parseProtoTimestamp(obj["updatedAt"]),
+            Self.parseProtoTimestamp(obj["lastStepTime"]),
+            Self.parseProtoTimestamp(obj["lastAgentReplyTime"]),
+            Self.parseProtoTimestamp(
+                obj["latestNotifyUserStep"]?.objectValue?["step"]?.objectValue?["metadata"]?.objectValue?["createdAt"]
+            ),
+            Self.parseProtoTimestamp(
+                obj["latestTaskBoundaryStep"]?.objectValue?["step"]?.objectValue?["metadata"]?.objectValue?["createdAt"]
+            )
+        ].compactMap { $0 }
+        let updatedDate = candidateUpdateDates.max() ?? Self.parseProtoTimestamp(obj["createdTime"])
+        let lastViewedCandidates: [JSONValue?] = [
+            annotations?["lastUserViewTime"],
+            annotations?["last_user_view_time"],
+            annotations?["lastViewedTime"],
+            annotations?["lastReadTime"],
+            obj["lastUserViewTime"],
+            obj["last_user_view_time"],
+            obj["lastViewedTime"],
+            trajMeta?["lastUserViewTime"]
+        ]
+        let lastViewedDate = lastViewedCandidates.compactMap { Self.parseProtoTimestamp($0) }.first
         let updatedAt = updatedDate ?? now
         let relativeLabel = Self.formatRelativeTimeLabel(from: updatedDate, now: now)
 
+        let unreadCandidates: [Bool?] = [
+            obj["isUnread"]?.boolValue,
+            obj["unread"]?.boolValue,
+            obj["hasUnread"]?.boolValue,
+            obj["hasUnreadMessages"]?.boolValue,
+            obj["hasUnseenUpdates"]?.boolValue,
+            obj["unseen"]?.boolValue,
+            annotations?["isUnread"]?.boolValue,
+            annotations?["unread"]?.boolValue,
+            annotations?["hasUnread"]?.boolValue,
+            trajMeta?["unread"]?.boolValue,
+            trajMeta?["isUnread"]?.boolValue
+        ]
+        let explicitUnread: Bool? = unreadCandidates.compactMap { $0 }.first
+
         let isUnread: Bool
-        if let explicitUnread = obj["isUnread"]?.boolValue ?? annotations?["unread"]?.boolValue {
+        if let explicitUnread {
             isUnread = explicitUnread
+        } else if status == .inProgress || status == .pending {
+            isUnread = false
         } else if let updatedDate, let lastViewedDate {
-            isUnread = updatedDate.timeIntervalSince(lastViewedDate) > 1.0
+            isUnread = updatedDate.timeIntervalSince(lastViewedDate) > 0.5
                 || statusRaw.uppercased() == "CASCADE_RUN_STATUS_DONE"
+                || status == .waiting
         } else {
             isUnread = statusRaw.uppercased() == "CASCADE_RUN_STATUS_DONE" || status == .waiting
         }
@@ -3598,7 +5605,8 @@ public actor AntigravityRPCClient {
             isUnread: isUnread,
             isCloud: isCloud,
             cloudProjectId: cloudProjectId,
-            originHostName: isCloud ? "Antigravity" : nil
+            originHostName: isCloud ? "Antigravity" : nil,
+            lastUserViewTime: lastViewedDate
         )
     }
 
@@ -3717,6 +5725,9 @@ public actor AntigravityRPCClient {
             }
             return stepCount > 0 ? "Done · \(stepCount) steps" : "Done"
         case .unspecified:
+            if isUnread {
+                return stepCount > 0 ? "New reply · \(stepCount) steps" : "New reply"
+            }
             return stepCount > 0 ? "Idle · \(stepCount) steps" : "Idle"
         }
     }

@@ -32,7 +32,21 @@ public struct CascadeChatViewController: View {
             && store.activeSteps.count == 6
     }
 
+    private var activePendingDraft: PendingDraftConversation? {
+        store.activeCascadeId.isEmpty ? store.pendingDraftConversation : nil
+    }
+
+    private var localSelectableProjects: [ProjectWorkspace] {
+        store.projects.filter { $0.runtime != .cloud && !$0.isNoProject }
+    }
+
     private var activeProjectWorkspace: ProjectWorkspace? {
+        if let draft = activePendingDraft {
+            if AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug) {
+                return nil
+            }
+            return store.projects.first(where: { $0.id == draft.projectSlug || $0.name == draft.projectSlug })
+        }
         if let slug = store.activeSummary?.projectSlug {
             return store.projects.first(where: { $0.id == slug || $0.name == slug })
         }
@@ -40,7 +54,10 @@ public struct CascadeChatViewController: View {
     }
 
     private var isActiveSessionCloud: Bool {
-        store.activeSummary?.isCloud == true || activeProjectWorkspace?.runtime == .cloud
+        if let draft = activePendingDraft {
+            return draft.isCloud
+        }
+        return store.activeSummary?.isCloud == true || activeProjectWorkspace?.runtime == .cloud
     }
 
     private var effectiveHeaderHostLabel: String {
@@ -85,6 +102,21 @@ public struct CascadeChatViewController: View {
                                 switch item {
                                 case .single(let step):
                                     CascadeStepCellView(store: store, step: step)
+                                        .id("step-\(step.stepIndex)")
+                                        .contextMenu {
+                                            if let text = step.plannerResponse?.response ?? step.userInput, !text.isEmpty {
+                                                Button {
+                                                    store.composerDraftText += (store.composerDraftText.isEmpty ? "" : "\n") + "> \(String(text.prefix(240)))\n"
+                                                } label: {
+                                                    Label("Quote in Reply", systemImage: "text.quote")
+                                                }
+                                            }
+                                            Button(role: .destructive) {
+                                                store.revertConversationToStep(step.stepIndex)
+                                            } label: {
+                                                Label("Revert to This Step", systemImage: "arrow.uturn.backward")
+                                            }
+                                        }
                                 case .evidenceGroup(let groupId, let groupedSteps):
                                     CascadeEvidenceGroupCardView(
                                         store: store,
@@ -92,6 +124,36 @@ public struct CascadeChatViewController: View {
                                         steps: groupedSteps
                                     )
                                 }
+                            }
+
+                            if !store.isVerificationMode,
+                               let waiting = store.pendingWaitingStep,
+                               waiting.requestedInteraction?.kind == .askQuestion {
+                                Button {
+                                    store.syncActiveLiveQuestionFromSteps()
+                                    store.presentedSheet = .askQuestion(stepIndex: waiting.stepIndex)
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "list.bullet.rectangle.portrait.fill")
+                                            .foregroundStyle(Self.warmAmber)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Structured Question Pending")
+                                                .font(.system(size: 13.5, weight: .bold))
+                                                .foregroundStyle(AntigravityTheme.inkReading)
+                                            Text(waiting.requestedInteraction?.askQuestion?.question ?? "Tap to answer agent question")
+                                                .font(.system(size: 12.5))
+                                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                                                .lineLimit(2)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .foregroundStyle(Self.warmAmber)
+                                    }
+                                    .padding(12)
+                                    .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
+                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Self.warmAmber.opacity(0.45), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
                             }
 
                             if store.isCascadeStreaming || store.activeSummary?.status == .inProgress || store.activeSummary?.status == .pending {
@@ -122,10 +184,16 @@ public struct CascadeChatViewController: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                 }
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: streamingFollowSignature) { _, _ in
                     guard !isStaticESDDFixtureView, store.isAutoScrollPinnedToBottom else { return }
                     withAnimation(.easeOut(duration: 0.2)) {
                         scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                    }
+                }
+                .onChange(of: store.isCascadeStreaming) { wasStreaming, nowStreaming in
+                    if wasStreaming && !nowStreaming {
+                        store.flushNextQueuedMessageIfIdle()
                     }
                 }
             }
@@ -156,10 +224,17 @@ public struct CascadeChatViewController: View {
             }
 
             // Above-Composer Status Strip
-            if isStaticESDDFixtureView || store.isCascadeStreaming || store.pendingWaitingStep != nil || store.activeSummary?.status == .inProgress {
+            if isStaticESDDFixtureView || (activePendingDraft == nil && (store.isCascadeStreaming || store.pendingWaitingStep != nil || store.activeSummary?.status == .inProgress)) {
                 waitingStatusStrip
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
+            }
+
+            if let draft = activePendingDraft {
+                draftTargetSelectorBar(draft: draft)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 6)
+                    .padding(.bottom, 2)
             }
 
             // Pinned Composer Card
@@ -178,6 +253,7 @@ public struct CascadeChatViewController: View {
             isTurnStopped = false
             if (store.hasPairedBackend || store.isLiveBackendConnected) && !store.activeCascadeId.isEmpty {
                 store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                await store.loadLiveArtifactsAndDiffs(for: store.activeCascadeId)
             }
         }
     }
@@ -215,7 +291,38 @@ public struct CascadeChatViewController: View {
 
     @ViewBuilder
     private var emptyOrLoadingSessionCard: some View {
-        if (store.hasPairedBackend || store.isLiveBackendConnected) && store.isLoadingSteps {
+        if let draft = activePendingDraft {
+            let isAutomationDraft = (draft.workflowCommand?.lowercased() == "/automation")
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: isAutomationDraft ? "sparkles" : "bubble.left.and.bubble.right")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(Self.periwinkle)
+                    Text(isAutomationDraft ? "Create Automation with Prompt" : "New Conversation")
+                        .font(.system(size: 14.5, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                }
+                Text(
+                    isAutomationDraft
+                        ? "Review or edit the prompt below, then tap Send. Antigravity on \(effectiveHeaderHostLabel) will guide you through setting up the schedule and instructions."
+                        : "Draft ready on \(effectiveHeaderHostLabel). Edit your message below and tap Send to start."
+                )
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .lineSpacing(2)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AntigravityTheme.surfaceCard)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.top, 12)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chat-pending-draft-card")
+        } else if (store.hasPairedBackend || store.isLiveBackendConnected) && store.isLoadingSteps {
             HStack(spacing: 12) {
                 AntigravityFourDotLoadingView(
                     isAnimated: shouldAnimateLive,
@@ -325,18 +432,88 @@ public struct CascadeChatViewController: View {
         }
     }
 
+    private func draftTargetSelectorBar(draft: PendingDraftConversation) -> some View {
+        let isNoProj = AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug)
+        let currentLabel = isNoProj
+            ? AntigravityCloudDetector.noProjectDisplayName
+            : (activeProjectWorkspace?.name ?? draft.projectSlug)
+
+        return HStack(spacing: 8) {
+            Menu {
+                Button {
+                    store.updatePendingDraftProject(AntigravityCloudDetector.noProjectDisplayName)
+                } label: {
+                    if isNoProj {
+                        Label(AntigravityCloudDetector.noProjectDisplayName, systemImage: "checkmark")
+                    } else {
+                        Text(AntigravityCloudDetector.noProjectDisplayName)
+                    }
+                }
+                if !localSelectableProjects.isEmpty {
+                    Divider()
+                    ForEach(localSelectableProjects) { proj in
+                        Button {
+                            store.updatePendingDraftProject(proj.id)
+                        } label: {
+                            if !isNoProj && (draft.projectSlug == proj.id || draft.projectSlug == proj.name) {
+                                Label(proj.name, systemImage: "checkmark")
+                            } else {
+                                Text(proj.name)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(currentLabel)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                }
+                .padding(.horizontal, 11)
+                .frame(minHeight: 32)
+                .background(Self.pillBg)
+                .overlay(
+                    Capsule()
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .clipShape(Capsule())
+            }
+            .accessibilityIdentifier("draft-project-selector")
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 5) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                Text(store.activeHost.hostname)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+    }
+
     // MARK: - Top Navigation Bar
 
     private var chatTopNavigationBar: some View {
         let isLiveOrPaired = store.hasPairedBackend || store.isLiveBackendConnected
-        let navTitle = store.activeSummary?.title ?? (isLiveOrPaired ? "Conversation" : "Add rate limiter to /transfers")
+        let navTitle = activePendingDraft?.title
+            ?? store.activeSummary?.title
+            ?? (isLiveOrPaired ? "Conversation" : "Add rate limiter to /transfers")
         let rawProjectLabel = activeProjectWorkspace?.name
+            ?? activePendingDraft?.projectSlug
             ?? store.activeSummary?.projectSlug
             ?? (isLiveOrPaired ? AntigravityCloudDetector.noProjectDisplayName : "ledger-svc")
         let strippedProjectLabel = rawProjectLabel.hasPrefix("cloud:")
             ? String(rawProjectLabel.dropFirst("cloud:".count))
             : rawProjectLabel
-        let isNoProjChat = isLiveOrPaired
+        let isNoProjChat = (activePendingDraft != nil || isLiveOrPaired)
             && ((activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(strippedProjectLabel))
         let projectLabel = isNoProjChat ? AntigravityCloudDetector.noProjectDisplayName : strippedProjectLabel
         let branchLabel: String = {
@@ -346,10 +523,11 @@ public struct CascadeChatViewController: View {
         let subtitleLine = branchLabel.isEmpty
             ? "\(projectLabel) · \(effectiveHeaderHostLabel)"
             : "\(projectLabel) · \(branchLabel) · \(effectiveHeaderHostLabel)"
-        let showDiffPill = !isLiveOrPaired || store.totalDiffAdditions > 0 || store.totalDiffDeletions > 0
+        let showDiffPill = activePendingDraft == nil && (!isLiveOrPaired || store.totalDiffAdditions > 0 || store.totalDiffDeletions > 0)
 
         return HStack(spacing: 8) {
             Button {
+                store.discardPendingDraftConversation()
                 if let onBack {
                     onBack()
                 } else {
@@ -407,11 +585,32 @@ public struct CascadeChatViewController: View {
 
             // `•••` Overflow Menu
             Menu {
+                Button {
+                    store.presentedSheet = .conversationOverview
+                } label: {
+                    Label("Conversation Overview", systemImage: "sidebar.right")
+                }
+                Button {
+                    store.openSideQuestion()
+                } label: {
+                    Label("/btw Side Question", systemImage: "questionmark.bubble")
+                }
+                Button {
+                    store.startVoiceMode()
+                } label: {
+                    Label("Start Voice Mode", systemImage: "waveform")
+                }
+                Divider()
                 Button("Open Implementation Plan") {
                     store.currentRoute = .planReview
                 }
                 Button("Review Turn Changes") {
                     store.currentRoute = .turnDiffReview
+                }
+                Button {
+                    store.presentedSheet = .customizationsSettings
+                } label: {
+                    Label("Permissions & Customizations", systemImage: "shield.lefthalf.filled")
                 }
                 Button("Refresh Trajectory Steps") {
                     store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)

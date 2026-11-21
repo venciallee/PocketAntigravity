@@ -87,8 +87,24 @@ public struct StructuredQuestionCardView: View {
         self.store = store
     }
 
+    private var displayedSteps: [QuestionStepModel] {
+        if !store.isVerificationMode && !store.questionSteps.isEmpty {
+            return store.questionSteps.enumerated().map { idx, item in
+                QuestionStepModel(
+                    index: idx,
+                    pillLabel: "\(item.stepNumber) \(item.shortTabTitle)",
+                    pillTestId: "q-step-\(idx + 1)",
+                    prompt: item.questionTitle,
+                    options: item.options.enumerated().map { oIdx, opt in (opt, "q-opt-live-\(idx)-\(oIdx)") }
+                )
+            }
+        }
+        return steps
+    }
+
     private var activeStep: QuestionStepModel {
-        steps[min(max(0, currentStepIndex), steps.count - 1)]
+        let list = displayedSteps
+        return list[min(max(0, currentStepIndex), max(0, list.count - 1))]
     }
 
     public var body: some View {
@@ -107,7 +123,11 @@ public struct StructuredQuestionCardView: View {
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                             .padding(.top, 4)
 
-                        Text("Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words.")
+                        Text(
+                            (!store.isVerificationMode && !store.questionSteps.isEmpty)
+                                ? "Agent needs your clarification before continuing. Tap options below or reply in your own words."
+                                : "Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words."
+                        )
                             .font(.system(size: 15))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .lineSpacing(3)
@@ -127,13 +147,27 @@ public struct StructuredQuestionCardView: View {
                 .padding(.vertical, 10)
         }
         .background(AntigravityTheme.canvasObsidian)
+        .task {
+            if !store.isVerificationMode {
+                store.syncActiveLiveQuestionFromSteps()
+                if !store.questionSteps.isEmpty {
+                    currentStepIndex = 0
+                }
+            }
+        }
     }
 
     // MARK: - Top Navigation Bar
 
     private var topNavigationBar: some View {
-        HStack(spacing: 8) {
+        let navTitle = (!store.isVerificationMode ? store.activeSummary?.title : nil) ?? "Audit log for admin actions"
+        let navSub = !store.isVerificationMode
+            ? "\(store.activeSummary?.projectSlug ?? "workspace") · \(store.selectedModelConfig.mode.rawValue) · \(store.selectedModelConfig.displayName)"
+            : "ledger-svc · Planning · Gemini 3.1 Pro"
+
+        return HStack(spacing: 8) {
             Button {
+                store.presentedSheet = nil
                 store.currentRoute = .chatAndComposer
             } label: {
                 Image(systemName: "chevron.left")
@@ -145,11 +179,11 @@ public struct StructuredQuestionCardView: View {
             .accessibilityIdentifier("btn-back-from-question")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Audit log for admin actions")
+                Text(navTitle)
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .lineLimit(1)
-                Text("ledger-svc · Planning · Gemini 3.1 Pro")
+                Text(navSub)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .lineLimit(1)
@@ -158,6 +192,7 @@ public struct StructuredQuestionCardView: View {
             Spacer()
 
             Button {
+                store.presentedSheet = nil
                 store.currentRoute = .chatAndComposer
             } label: {
                 Image(systemName: "ellipsis")
@@ -174,10 +209,11 @@ public struct StructuredQuestionCardView: View {
     // MARK: - Interactive Question Wizard Card
 
     private var questionWizardCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // 3-Step Pills (`✓ 1 Storage`, `2 Actions`, `3 Retention`)
+        let activeList = displayedSteps
+        return VStack(alignment: .leading, spacing: 12) {
+            // Step Pills (`✓ 1 Storage`, `2 Actions`, `3 Retention` or live steps)
             HStack(spacing: 8) {
-                ForEach(steps) { step in
+                ForEach(activeList) { step in
                     let isActive = step.index == currentStepIndex
                     let isDone = completedSteps.contains(step.index) && !isActive
                     Button {
@@ -209,7 +245,7 @@ public struct StructuredQuestionCardView: View {
 
             // Question Metadata & Heading
             VStack(alignment: .leading, spacing: 4) {
-                Text("Question \(currentStepIndex + 1) of \(steps.count) · Select all that apply")
+                Text("Question \(currentStepIndex + 1) of \(max(1, activeList.count)) · Select all that apply")
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
 
@@ -267,13 +303,13 @@ public struct StructuredQuestionCardView: View {
 
                 Button {
                     completedSteps.insert(currentStepIndex)
-                    if currentStepIndex < steps.count - 1 {
+                    if currentStepIndex < activeList.count - 1 {
                         currentStepIndex += 1
                     } else {
                         submitStructuredAnswers()
                     }
                 } label: {
-                    Text(currentStepIndex < steps.count - 1 ? "Next" : "Submit")
+                    Text(currentStepIndex < activeList.count - 1 ? "Next" : "Submit")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(Self.inkOnCTA)
                         .frame(maxWidth: .infinity, minHeight: 48)

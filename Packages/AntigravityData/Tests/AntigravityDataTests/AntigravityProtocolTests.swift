@@ -1569,6 +1569,318 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertEqual(remaining.map(\.id), [entry2.id])
     }
 
+    @MainActor
+    func testNativeSidecarAutomationsProtocolAndCodec() async throws {
+        // 1. Schedule ID & args roundtrip (with model flag & legacy positional fallback)
+        let generatedId = AutomationScheduleCodec.makeSidecarId(from: "Nightly Dependency Audit!", suffix: "abc123")
+        XCTAssertEqual(generatedId, "nightly-dependency-audit-abc123")
+        let fallbackId = AutomationScheduleCodec.makeSidecarId(from: "每天巡检依赖", suffix: "ff0011")
+        XCTAssertEqual(fallbackId, "auto-ff0011")
+
+        let args = AutomationScheduleCodec.buildScheduleArgs(
+            cron: "CRON_TZ=Asia/Shanghai 0 2 * * *",
+            prompt: "Audit dependencies and open PR if outdated",
+            modelArg: "gemini-3.1-pro"
+        )
+        XCTAssertEqual(
+            args,
+            [
+                "CRON_TZ=Asia/Shanghai 0 2 * * *",
+                "agentapi",
+                "new-conversation",
+                "--model=gemini-3.1-pro",
+                "--",
+                "Audit dependencies and open PR if outdated"
+            ]
+        )
+        let parsedArgs = AutomationScheduleCodec.parseScheduleArgs(args)
+        XCTAssertEqual(parsedArgs.cron, "CRON_TZ=Asia/Shanghai 0 2 * * *")
+        XCTAssertEqual(parsedArgs.prompt, "Audit dependencies and open PR if outdated")
+        XCTAssertEqual(parsedArgs.modelLabel, "Pro")
+
+        let legacyParsed = AutomationScheduleCodec.parseScheduleArgs([
+            "0 9 * * 1-5",
+            "agentapi",
+            "new-conversation",
+            "Summarize open pull requests"
+        ])
+        XCTAssertEqual(legacyParsed.cron, "0 9 * * 1-5")
+        XCTAssertEqual(legacyParsed.prompt, "Summarize open pull requests")
+        XCTAssertNil(legacyParsed.modelLabel)
+
+        // 2. Human-readable cadence & deterministic nextFireDate calculation
+        XCTAssertEqual(AutomationScheduleCodec.humanReadableSchedule(from: "CRON_TZ=UTC 0 2 * * *"), "Daily at 02:00")
+        XCTAssertEqual(AutomationScheduleCodec.humanReadableSchedule(from: "0 9 * * 1-5"), "Weekdays at 09:00")
+        XCTAssertEqual(AutomationScheduleCodec.humanReadableSchedule(from: "0 9 * * 1"), "Mondays at 09:00")
+        XCTAssertEqual(AutomationScheduleCodec.humanReadableSchedule(from: "0 * * * *"), "Hourly")
+        XCTAssertEqual(AutomationScheduleCodec.humanReadableSchedule(from: "*/15 * * * *"), "Every 15m")
+
+        let iso = ISO8601DateFormatter()
+        let fixedNow = try XCTUnwrap(iso.date(from: "2026-11-20T08:30:00Z")) // Friday 08:30 UTC
+        let nextWeekday = try XCTUnwrap(AutomationScheduleCodec.nextFireDate(from: "CRON_TZ=UTC 0 9 * * 1-5", after: fixedNow))
+        XCTAssertEqual(nextWeekday, try XCTUnwrap(iso.date(from: "2026-11-20T09:00:00Z")))
+        XCTAssertEqual(
+            AutomationScheduleCodec.nextFireDescription(from: "CRON_TZ=UTC 0 9 * * 1-5", after: fixedNow),
+            "In 30m"
+        )
+
+        // 3. Natural-language schedule parsing (English & Chinese)
+        let enNL = AutomationScheduleCodec.parseNaturalLanguagePrompt(
+            "Every weekday at 9, summarize open PRs",
+            timeZoneId: "America/Los_Angeles"
+        )
+        XCTAssertEqual(enNL.cronExpression, "CRON_TZ=America/Los_Angeles 0 9 * * 1-5")
+        XCTAssertEqual(enNL.humanScheduleLabel, "Weekdays at 09:00")
+        XCTAssertTrue(enNL.prompt.lowercased().contains("summarize open prs"))
+
+        let zhNL = AutomationScheduleCodec.parseNaturalLanguagePrompt(
+            "每天早上8点检查依赖更新",
+            timeZoneId: "Asia/Shanghai"
+        )
+        XCTAssertEqual(zhNL.cronExpression, "CRON_TZ=Asia/Shanghai 0 8 * * *")
+        XCTAssertEqual(zhNL.humanScheduleLabel, "Daily at 08:00")
+
+        // 4. Native `SidecarStatusInfo` decoding (enabled, proto3 omitted false/paused, always-on, web UI filtered)
+        let enabledSidecarObj: [String: JSONValue] = [
+            "sidecarId": .string("nightly-audit"),
+            "status": .string("SIDECAR_STATUS_RUNNING"),
+            "config": .object([
+                "builtin": .string("schedule"),
+                "displayName": .string("Nightly Audit"),
+                "description": .string("Check outdated deps"),
+                "args": .array([
+                    .string("CRON_TZ=UTC 0 2 * * *"),
+                    .string("agentapi"),
+                    .string("new-conversation"),
+                    .string("--model=gemini-3.1-pro"),
+                    .string("--"),
+                    .string("Run dependency audit")
+                ])
+            ]),
+            "userConfig": .object([
+                "enabled": .bool(true),
+                "projectId": .string("proj-123")
+            ])
+        ]
+        let decodedEnabled = try XCTUnwrap(
+            AntigravityRPCClient.decodeSidecarStatusInfo(
+                enabledSidecarObj,
+                projectNameById: ["proj-123": "ledger-svc"],
+                now: fixedNow
+            )
+        )
+        XCTAssertEqual(decodedEnabled.id, "nightly-audit")
+        XCTAssertEqual(decodedEnabled.title, "Nightly Audit")
+        XCTAssertEqual(decodedEnabled.projectSlug, "ledger-svc")
+        XCTAssertEqual(decodedEnabled.section, .scheduled)
+        XCTAssertEqual(decodedEnabled.modelLabel, "Pro")
+        XCTAssertTrue(decodedEnabled.isEnabled)
+        XCTAssertTrue(decodedEnabled.isScheduleBuiltin)
+
+        // Proto3 omits `"enabled": false` in JSON; stopped status + userConfig without enabled must decode as `.paused`.
+        let pausedSidecarObj: [String: JSONValue] = [
+            "sidecarId": .string("bundle-watch"),
+            "status": .string("SIDECAR_STATUS_STOPPED"),
+            "config": .object([
+                "builtin": .string("schedule"),
+                "displayName": .string("Bundle size watch"),
+                "args": .array([
+                    .string("CRON_TZ=UTC 0 8 * * *"),
+                    .string("agentapi"),
+                    .string("new-conversation"),
+                    .string("--"),
+                    .string("Check bundle size")
+                ])
+            ]),
+            "userConfig": .object([
+                "projectId": .string("proj-123")
+            ])
+        ]
+        let decodedPaused = try XCTUnwrap(
+            AntigravityRPCClient.decodeSidecarStatusInfo(
+                pausedSidecarObj,
+                projectNameById: ["proj-123": "ledger-svc"],
+                now: fixedNow
+            )
+        )
+        XCTAssertEqual(decodedPaused.section, .paused)
+        XCTAssertFalse(decodedPaused.isEnabled)
+        XCTAssertEqual(decodedPaused.nextRunText, "Paused")
+
+        // Pure Web UI sidecar panel must be excluded from Automations list.
+        let webUiSidecarObj: [String: JSONValue] = [
+            "sidecarId": .string("canvas-preview"),
+            "status": .string("SIDECAR_STATUS_RUNNING"),
+            "config": .object([
+                "displayName": .string("Canvas Preview"),
+                "hasWebUi": .bool(true)
+            ])
+        ]
+        XCTAssertNil(AntigravityRPCClient.decodeSidecarStatusInfo(webUiSidecarObj, now: fixedNow))
+
+        // Always-on custom non-UI sidecar decodes into `.alwaysOn`.
+        let alwaysOnObj: [String: JSONValue] = [
+            "sidecarId": .string("pr-triage-daemon"),
+            "status": .string("SIDECAR_STATUS_RUNNING"),
+            "config": .object([
+                "displayName": .string("PR Triage Listener"),
+                "command": .string("/usr/local/bin/pr-triage")
+            ]),
+            "userConfig": .object([
+                "enabled": .bool(true),
+                "allProjects": .bool(true)
+            ])
+        ]
+        let decodedAlwaysOn = try XCTUnwrap(
+            AntigravityRPCClient.decodeSidecarStatusInfo(alwaysOnObj, now: fixedNow)
+        )
+        XCTAssertEqual(decodedAlwaysOn.section, .alwaysOn)
+        XCTAssertFalse(decodedAlwaysOn.isScheduleBuiltin)
+        XCTAssertEqual(decodedAlwaysOn.projectSlug, "All projects")
+
+        // 5. `GetSidecarEvents` decoding & `ManageSidecar` payload building
+        let eventObj: [String: JSONValue] = [
+            "timestampMs": .string("1763625600000"),
+            "payload": .object([
+                "newConversation": .object([
+                    "conversationId": .string("cas-auto-run-99"),
+                    "prompt": .string("Run dependency audit")
+                ])
+            ])
+        ]
+        let decodedEvent = try XCTUnwrap(AntigravityRPCClient.decodeSidecarEvent(eventObj))
+        XCTAssertEqual(decodedEvent.timestampMs, 1_763_625_600_000)
+        XCTAssertEqual(decodedEvent.conversationId, "cas-auto-run-99")
+        XCTAssertNil(decodedEvent.error)
+
+        let manageBody = AntigravityRPCClient.buildManageSidecarConfigBody(
+            sidecarId: "nightly-audit-a1",
+            action: .create,
+            displayName: "Nightly Audit",
+            prompt: "Audit dependencies",
+            cronExpression: "CRON_TZ=UTC 0 2 * * *",
+            description: "Daily check",
+            projectId: "proj-123",
+            allProjects: false,
+            modelArg: "gemini-3-flash"
+        )
+        XCTAssertEqual(manageBody["sidecarId"]?.stringValue, "nightly-audit-a1")
+        XCTAssertEqual(manageBody["action"]?.stringValue, "SIDECAR_ACTION_CREATE")
+        XCTAssertEqual(manageBody["projectId"]?.stringValue, "proj-123")
+        XCTAssertEqual(manageBody["config"]?.objectValue?["builtin"]?.stringValue, "schedule")
+
+        // 6. Store reconciliation & offline CRUD actions (create / update / pause / resume / delete)
+        var linkedAuto = decodedEnabled
+        linkedAuto.lastRunCascadeId = "cas-auto-run-99"
+        let runningSummary = CascadeSummary(
+            cascadeId: "cas-auto-run-99",
+            title: "Nightly Audit",
+            projectSlug: "ledger-svc",
+            workspaceUri: "file:///Users/dev/ledger-svc",
+            status: .inProgress,
+            stepCount: 3,
+            relativeTimeLabel: "1m ago"
+        )
+        let reconciled = AntigravitySessionStore.reconcileAutomations([linkedAuto], with: [runningSummary])
+        XCTAssertTrue(reconciled[0].isRunningNow)
+        XCTAssertEqual(reconciled[0].lastRunText, "Running · 1m ago")
+
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        let createdOk = await store.createAutomation(
+            displayName: "Morning Digest",
+            prompt: "Summarize overnight commits",
+            cronExpression: "CRON_TZ=UTC 0 9 * * 1-5",
+            projectSlug: "ledger-svc",
+            modelArg: "gemini-3-flash",
+            enableImmediately: true
+        )
+        XCTAssertTrue(createdOk)
+        let digest = try XCTUnwrap(store.automations.first(where: { $0.title == "Morning Digest" }))
+        let updatedOk = await store.updateAutomation(
+            automationId: digest.id,
+            displayName: "Morning Digest v2",
+            prompt: "Summarize overnight commits and CI failures",
+            cronExpression: "CRON_TZ=UTC 30 8 * * *",
+            projectSlug: "ledger-svc",
+            modelArg: "gemini-3.1-pro"
+        )
+        XCTAssertTrue(updatedOk)
+        XCTAssertEqual(store.automations.first(where: { $0.id == digest.id })?.title, "Morning Digest v2")
+
+        store.pauseAutomation(digest.id)
+        XCTAssertEqual(store.automations.first(where: { $0.id == digest.id })?.section, .paused)
+
+        store.resumeAutomation(digest.id)
+        XCTAssertEqual(store.automations.first(where: { $0.id == digest.id })?.section, .scheduled)
+
+        store.deleteAutomation(digest.id)
+        XCTAssertNil(store.automations.first(where: { $0.id == digest.id }))
+    }
+
+    @MainActor
+    func testAutomationPromptDraftDoesNotAutoCreateUntilSent() throws {
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        let initialSummaryCount = store.summaries.count
+
+        // 1. Tapping "Create with Prompt" opens an unsent draft without adding a summary or streaming
+        store.openAutomationPromptDraft()
+        XCTAssertEqual(store.summaries.count, initialSummaryCount)
+        XCTAssertEqual(store.activeCascadeId, "")
+        XCTAssertEqual(store.activeRoute, .cascadeChat(""))
+        XCTAssertFalse(store.isCascadeStreaming)
+        XCTAssertTrue(store.activeSteps.isEmpty)
+        XCTAssertEqual(store.composerWorkflowCommand, "/automation")
+        XCTAssertEqual(store.composerDraftText, AntigravitySessionStore.defaultAutomationGuidedPrompt)
+        XCTAssertTrue(store.canSendCurrentDraft)
+
+        let draft = try XCTUnwrap(store.pendingDraftConversation)
+        XCTAssertEqual(draft.title, "New Automation")
+        XCTAssertEqual(draft.projectSlug, AntigravityCloudDetector.noProjectDisplayName)
+        XCTAssertEqual(draft.workflowCommand, "/automation")
+
+        // 2. Navigating back before sending discards the draft cleanly with zero orphan conversations
+        store.discardPendingDraftConversation()
+        XCTAssertNil(store.pendingDraftConversation)
+        XCTAssertNil(store.composerWorkflowCommand)
+        XCTAssertEqual(store.composerDraftText, "")
+        XCTAssertEqual(store.summaries.count, initialSummaryCount)
+
+        // 3. Re-opening with a `/automation ...` seed strips duplicate prefix, allows switching project,
+        //    and materializes the conversation only when the user taps Send.
+        store.createAutomationWithAgent(prompt: "/automation Summarize open PRs every weekday at 9am")
+        XCTAssertEqual(store.summaries.count, initialSummaryCount)
+        XCTAssertEqual(store.composerWorkflowCommand, "/automation")
+        XCTAssertEqual(store.composerDraftText, "Summarize open PRs every weekday at 9am")
+
+        store.updatePendingDraftProject("ledger-svc")
+        XCTAssertEqual(store.pendingDraftConversation?.projectSlug, "ledger-svc")
+
+        store.sendCurrentDraft()
+        XCTAssertNil(store.pendingDraftConversation)
+        XCTAssertNil(store.composerWorkflowCommand)
+        XCTAssertEqual(store.composerDraftText, "")
+        XCTAssertEqual(store.summaries.count, initialSummaryCount + 1)
+        XCTAssertFalse(store.activeCascadeId.isEmpty)
+
+        let createdSummary = try XCTUnwrap(store.summaries.first(where: { $0.cascadeId == store.activeCascadeId }))
+        XCTAssertEqual(createdSummary.projectSlug, "ledger-svc")
+        XCTAssertEqual(createdSummary.title, "Summarize open PRs every weekday at 9am")
+
+        let firstUserStep = try XCTUnwrap(store.activeSteps.first(where: { $0.type == .userInput }))
+        XCTAssertEqual(firstUserStep.userInput, "/automation Summarize open PRs every weekday at 9am")
+
+        // 4. Sending the default guided prompt with No Project preserves "New Automation" title and sends full command
+        store.openAutomationPromptDraft()
+        XCTAssertEqual(store.summaries.count, initialSummaryCount + 1)
+        store.sendCurrentDraft()
+        XCTAssertEqual(store.summaries.count, initialSummaryCount + 2)
+        let guidedSummary = try XCTUnwrap(store.summaries.first(where: { $0.cascadeId == store.activeCascadeId }))
+        XCTAssertEqual(guidedSummary.projectSlug, AntigravityCloudDetector.noProjectDisplayName)
+        XCTAssertEqual(guidedSummary.title, "New Automation")
+        let guidedStep = try XCTUnwrap(store.activeSteps.first(where: { $0.type == .userInput }))
+        XCTAssertEqual(guidedStep.userInput, "/automation Guide me through creating an automated task")
+    }
+
     func testModelConfigBadgeTitleAndDescriptiveSubtitles() throws {
         XCTAssertTrue(CascadeModelConfig.isGenericBadgeLabel("New"))
         XCTAssertTrue(CascadeModelConfig.isGenericBadgeLabel("  beta "))
@@ -1800,6 +2112,267 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertFalse(store.projectMatchesHostFilter(gameLoopProj))
         XCTAssertFalse(store.projectMatchesHostFilter(dshProj))
         XCTAssertEqual(store.hostScopedUnreadCount, 1)
+    }
+
+    @MainActor
+    func testOpenBoqStreamingParserCloudSyncStatusPriorityAndUnreadReconciliation() throws {
+        // 1. Google Boq open infinite outer array (`[[["<b64>", headers]],[["<b64_2>"]],` with NO outer closing `]`)
+        let cloudFrame1 = ConnectEnvelope.encode(
+            payload: Data(#"{"updates":{"v1/default/jetski_remote_agents_3p/aaa":{"summary":"Cloud Build Fix","stepCount":12,"status":"CASCADE_RUN_STATUS_RUNNING","workspaces":[{"workspaceFolderAbsoluteUri":"file:///home/antigravity/venciallee/iOSAntigravity"}]}}}"#.utf8)
+        )
+        let cloudFrame2 = ConnectEnvelope.encode(
+            payload: Data(#"{"updates":{"v1/default/jetski_remote_agents_3p/bbb":{"summary":"Cloud Diff Audit","stepCount":4,"status":2}}}"#.utf8)
+        )
+        let b64OneEscaped = cloudFrame1.base64EncodedString()
+            .replacingOccurrences(of: "/", with: "\\/")
+            .replacingOccurrences(of: "=", with: "\\u003d")
+        let b64Two = cloudFrame2.base64EncodedString()
+
+        var boqParser = CloudRelayJSPBStreamParser()
+        var connectParser = ConnectStreamParser()
+
+        // First network delivery opens outer `[` + sends header-only frame + first Cloud payload, outer `[` stays OPEN!
+        let openChunk1 = Data(
+            ")]}'\n[[[null,[[\"content-type\",\"application/connect+json\"]]]],[[\"\(b64OneEscaped)\",[[\"content-type\",\"application/connect+json\"]]]]"
+                .utf8
+        )
+        let emittedA = boqParser.feed(openChunk1)
+        XCTAssertEqual(emittedA.count, 1, "Must emit first Boq payload immediately even though outer `[` is still open")
+        let decodedFramesA = connectParser.feed(emittedA[0])
+        XCTAssertEqual(decodedFramesA.count, 1)
+        let eventA = try JSONDecoder().decode([String: JSONValue].self, from: decodedFramesA[0].payload)
+        XCTAssertNotNil(eventA["updates"]?.objectValue?["v1/default/jetski_remote_agents_3p/aaa"])
+
+        // Second network delivery arrives later on the same open outer array
+        let openChunk2 = Data(",[[\"\(b64Two)\"]]".utf8)
+        let emittedB = boqParser.feed(openChunk2)
+        XCTAssertEqual(emittedB.count, 1, "Must emit subsequent Boq payloads immediately while outer `[` remains open")
+        let decodedFramesB = connectParser.feed(emittedB[0])
+        XCTAssertEqual(decodedFramesB.count, 1)
+        let eventB = try JSONDecoder().decode([String: JSONValue].self, from: decodedFramesB[0].payload)
+        let batchB = AntigravityRPCClient.decodeJetboxSummariesEvent(eventB, forceCloud: true)
+        XCTAssertEqual(batchB.upserts.count, 1)
+        XCTAssertEqual(batchB.upserts[0].status, .inProgress, "Numeric status 2 must decode to RUNNING (.inProgress)")
+
+        // Boq error trailer must never emit as payload and must populate `lastErrorTrailer`
+        let errTrailer = Data(",[null,[13,\"upstream relay disconnected\"]]".utf8)
+        let emittedErr = boqParser.feed(errTrailer)
+        XCTAssertTrue(emittedErr.isEmpty)
+        XCTAssertEqual(boqParser.lastErrorTrailer, "Boq status 13: upstream relay disconnected")
+
+        // 2. StreamingBase64Decoder incrementally decodes outer Base64-wrapped Boq streams
+        let rawOpenStream = ")]}'\n[[\"\(b64Two)\",null],"
+        let b64WrappedStream = Data(Data(rawOpenStream.utf8).base64EncodedString().utf8)
+        var b64Decoder = StreamingBase64Decoder()
+        var innerParser = CloudRelayJSPBStreamParser()
+        var decodedPayloads: [Data] = []
+        for byte in b64WrappedStream {
+            if let chunk = b64Decoder.feedByte(byte) {
+                decodedPayloads.append(contentsOf: innerParser.feed(chunk))
+            }
+        }
+        decodedPayloads.append(contentsOf: innerParser.feed(b64Decoder.flush()))
+        XCTAssertEqual(decodedPayloads.count, 1)
+        XCTAssertEqual(decodedPayloads[0], cloudFrame2)
+
+        // 3. `mergeSummaryEntry` must NEVER let stale IDLE or stripped annotations clobber RUNNING / WAITING / isUnread
+        let refNow = try XCTUnwrap(AntigravityRPCClient.parseProtoTimestamp(.string("2026-11-20T10:00:00Z")))
+        let dshUnreadJSON: JSONValue = .object([
+            "summary": .string("Go Version Of DSH Superagent"),
+            "stepCount": .int(69),
+            "status": .string("CASCADE_RUN_STATUS_IDLE"),
+            "lastModifiedTime": .string("2026-11-20T09:00:00Z"),
+            "annotations": .object([
+                "lastUserViewTime": .string("2026-11-20T08:45:00Z")
+            ]),
+            "workspaces": .array([
+                .object(["workspaceFolderAbsoluteUri": .string("file:///Users/dev/dsh-superagent-prototype")])
+            ])
+        ])
+        let dshUnread = try XCTUnwrap(
+            AntigravityRPCClient.decodeTrajectorySummaryEntry(
+                cascadeId: "cid-dsh-go",
+                value: dshUnreadJSON,
+                now: refNow
+            )
+        )
+        XCTAssertEqual(dshUnread.status, .unspecified)
+        XCTAssertTrue(dshUnread.isUnread, "Idle conversation modified after lastUserViewTime must be marked unread")
+        XCTAssertEqual(dshUnread.statusSubtitle, "New reply · 69 steps")
+
+        // Annotation-stripped Jetbox frame with same stepCount must NOT clear unread or lastUserViewTime
+        let dshStripped = CascadeSummary(
+            cascadeId: "cid-dsh-go",
+            title: "Go Version Of DSH Superagent",
+            projectSlug: "dsh-superagent-prototype",
+            workspaceUri: "file:///Users/dev/dsh-superagent-prototype",
+            status: .unspecified,
+            stepCount: 69,
+            updatedAt: refNow.addingTimeInterval(-3600),
+            isUnread: false,
+            lastUserViewTime: nil
+        )
+        var mergedMap: [String: CascadeSummary] = [:]
+        AntigravityRPCClient.mergeSummaryEntry(dshUnread, into: &mergedMap, cloudProjectsById: [:])
+        AntigravityRPCClient.mergeSummaryEntry(dshStripped, into: &mergedMap, cloudProjectsById: [:])
+        let mergedDsh = try XCTUnwrap(mergedMap["cid-dsh-go"])
+        XCTAssertTrue(mergedDsh.isUnread)
+        XCTAssertNotNil(mergedDsh.lastUserViewTime)
+        XCTAssertEqual(mergedDsh.statusSubtitle, "New reply · 69 steps")
+
+        // Active RUNNING session must NOT be clobbered by stale IDLE entry at equal stepCount
+        let runningSummary = CascadeSummary(
+            cascadeId: "cid-running-agent",
+            title: "Build iOS Sync Fix",
+            projectSlug: "iOSAntigravity",
+            workspaceUri: "cloud://venciallee/iOSAntigravity",
+            status: .inProgress,
+            stepCount: 15,
+            updatedAt: refNow,
+            isCloud: true
+        )
+        let staleIdleSummary = CascadeSummary(
+            cascadeId: "cid-running-agent",
+            title: "Build iOS Sync Fix",
+            projectSlug: "iOSAntigravity",
+            workspaceUri: "cloud://venciallee/iOSAntigravity",
+            status: .unspecified,
+            stepCount: 15,
+            updatedAt: refNow,
+            isCloud: true
+        )
+        AntigravityRPCClient.mergeSummaryEntry(runningSummary, into: &mergedMap, cloudProjectsById: [:])
+        AntigravityRPCClient.mergeSummaryEntry(staleIdleSummary, into: &mergedMap, cloudProjectsById: [:])
+        XCTAssertEqual(mergedMap["cid-running-agent"]?.status, .inProgress)
+
+        // 4. Per-instance `reconcileBatchUnreadStates` marks recent never-viewed IDLE conversation unread when siblings have lastUserViewTime
+        let viewedSibling = CascadeSummary(
+            cascadeId: "cid-viewed-sib",
+            title: "Viewed Chat",
+            projectSlug: "dsh-superagent-prototype",
+            workspaceUri: "file:///Users/dev/dsh-superagent-prototype",
+            status: .unspecified,
+            stepCount: 10,
+            updatedAt: refNow.addingTimeInterval(-7200),
+            isUnread: false,
+            originInstanceUuid: "mac-1",
+            lastUserViewTime: refNow.addingTimeInterval(-3600)
+        )
+        let unviewedRecent = CascadeSummary(
+            cascadeId: "cid-unviewed-recent",
+            title: "Unopened Reply",
+            projectSlug: "dsh-superagent-prototype",
+            workspaceUri: "file:///Users/dev/dsh-superagent-prototype",
+            status: .unspecified,
+            stepCount: 22,
+            updatedAt: refNow.addingTimeInterval(-1800),
+            isUnread: false,
+            originInstanceUuid: "mac-1",
+            lastUserViewTime: nil
+        )
+        var batchMap: [String: CascadeSummary] = [
+            viewedSibling.cascadeId: viewedSibling,
+            unviewedRecent.cascadeId: unviewedRecent
+        ]
+        AntigravityRPCClient.reconcileBatchUnreadStates(&batchMap, now: refNow)
+        XCTAssertFalse(batchMap["cid-viewed-sib"]?.isUnread ?? true)
+        XCTAssertTrue(batchMap["cid-unviewed-recent"]?.isUnread ?? false)
+        XCTAssertEqual(batchMap["cid-unviewed-recent"]?.statusSubtitle, "New reply · 22 steps")
+
+        // 5. Cloud summary (`file:///home/antigravity/venciallee/iOSAntigravity`, no projectId) links directly to `venciallee/iOSAntigravity` Cloud project
+        let cloudProject = ProjectWorkspace(
+            id: "cloud-proj-uuid-ios",
+            name: "venciallee/iOSAntigravity",
+            pathDisplay: "cloud://venciallee/iOSAntigravity",
+            workspaceUri: "cloud://venciallee/iOSAntigravity",
+            runtime: .cloud,
+            hostName: "Antigravity",
+            activeBranch: "main",
+            cloudProjectId: "cloud-proj-uuid-ios"
+        )
+        let decodedCloud = AntigravityRPCClient.decodeJetboxSummariesEvent(
+            eventA,
+            forceCloud: true,
+            originInstanceUuid: "inst-1",
+            originHostName: "Antigravity",
+            cloudProjectsById: [cloudProject.id: cloudProject]
+        )
+        XCTAssertEqual(decodedCloud.upserts.count, 1)
+        var cloudSummaries = decodedCloud.upserts
+        let reconciledProjects = AntigravitySessionStore.reconcileLiveProjects(
+            workspaces: [],
+            summaries: &cloudSummaries,
+            existingProjects: [],
+            hostName: "lt74xt6l0m-golden-star",
+            cloudProjects: [cloudProject]
+        )
+        XCTAssertEqual(reconciledProjects.count, 1, "Must NOT duplicate Cloud project into both venciallee/iOSAntigravity and iOSAntigravity")
+        XCTAssertEqual(reconciledProjects[0].name, "venciallee/iOSAntigravity")
+        XCTAssertEqual(cloudSummaries[0].projectSlug, "venciallee/iOSAntigravity")
+        XCTAssertEqual(cloudSummaries[0].cloudProjectId, "cloud-proj-uuid-ios")
+        XCTAssertEqual(cloudSummaries[0].status, .inProgress)
+    }
+
+    @MainActor
+    func testPerDeviceRelayOnlineOfflineReconciliation() {
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        let initialSlugHost = RemoteHostInstance(
+            instanceId: "lt74xt6l0m-golden-star",
+            hostname: "lt74xt6l0m-golden-star",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/lt74xt6l0m-golden-star")!,
+            isOnline: true
+        )
+        store.activeHost = initialSlugHost
+        store.hosts = [initialSlugHost]
+
+        let onlineHost = RelayInstanceInfo(
+            uuid: "uuid-golden-star-v2",
+            name: "lt74xt6l0m-golden-star",
+            version: "v2.32.0",
+            status: .connected
+        )
+        let offlineHost = RelayInstanceInfo(
+            uuid: "uuid-mac-mini-v2",
+            name: "huangjiafandemac-mini-local-swift-vapor",
+            version: "v2.32.0",
+            status: .disconnected
+        )
+
+        // 1. Reconcile snapshot with one online + one offline device; stale slug entry must be replaced without duplication
+        store.syncRelayInstancesToHosts(
+            [onlineHost, offlineHost],
+            latencyMs: 24,
+            preferredActiveInstance: onlineHost
+        )
+        XCTAssertEqual(store.hosts.count, 2)
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-golden-star-v2" })?.isOnline, true)
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-mac-mini-v2" })?.isOnline, false)
+        XCTAssertEqual(store.activeHost.instanceId, "uuid-golden-star-v2")
+        XCTAssertTrue(store.activeHost.isOnline)
+
+        // 2. If a previously online host disappears from ListInstances, it must be marked offline
+        let onlineMacMini = RelayInstanceInfo(
+            uuid: "uuid-mac-mini-v2",
+            name: "huangjiafandemac-mini-local-swift-vapor",
+            version: "v2.32.0",
+            status: .idle
+        )
+        store.syncRelayInstancesToHosts(
+            [onlineMacMini],
+            latencyMs: 31,
+            preferredActiveInstance: onlineMacMini
+        )
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-golden-star-v2" })?.isOnline, false)
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-mac-mini-v2" })?.isOnline, true)
+        XCTAssertEqual(store.activeHost.instanceId, "uuid-mac-mini-v2")
+
+        // 3. When the Cloud Relay backend goes offline, all Cloud Relay devices & availableRelayInstances must flip offline
+        store.markBackendOffline(error: AntigravityRPCError.httpError(statusCode: 503, body: "No reachable Antigravity Desktop instances online"))
+        XCTAssertTrue(store.hosts.allSatisfy { !$0.isOnline })
+        XCTAssertTrue(store.availableRelayInstances.allSatisfy { !$0.status.isReachable })
     }
 }
 

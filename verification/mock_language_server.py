@@ -321,6 +321,7 @@ class LiveMockServer:
                             return
 
                         inner_req = json.loads(inner_bytes.decode("utf-8")) if inner_bytes else {}
+                        outer_state.record(f"ApiService/ProxyCommand:{inner_method}:req", inner_req)
                         if inner_method == "GetWorkspaceInfos":
                             payload_obj = {
                                 "workspaceInfos": [
@@ -349,6 +350,180 @@ class LiveMockServer:
                                 self._send_json(400, {"code": "invalid_argument", "message": 'unknown field "modelId"'})
                                 return
                             payload_obj = {"cascadeId": "cas-cloud-relay-01"}
+                        elif inner_method == "GetCascadeModelConfigs":
+                            payload_obj = {
+                                "defaultModel": "MODEL_GOOGLE_GEMINI_4_NEON",
+                                "agents": ["Default", "go-reviewer", "release-captain"],
+                                "clientModelConfigs": [
+                                    {
+                                        "label": "Gemini 4 Neon",
+                                        "modelOrAlias": {"model": "MODEL_GOOGLE_GEMINI_4_NEON"},
+                                        "description": "Flagship coding & reasoning with Low/Medium/High/Extra thinking",
+                                        "supportsThinking": True,
+                                        "isRecommended": True,
+                                        "isNew": True,
+                                        "supportedEfforts": ["low", "medium", "high", "xhigh"],
+                                    },
+                                    {
+                                        "label": "Orchestrator (Gemini 4 Neon)",
+                                        "modelOrAlias": {"model": "MODEL_ORCHESTRATOR_NEON"},
+                                        "description": "Dual-model Planner (Neon) + Executor (Argon)",
+                                        "supportsThinking": True,
+                                        "isOrchestrator": True,
+                                        "plannerModelName": "Gemini 4 Neon",
+                                        "executorModelName": "Gemini 4 Argon",
+                                        "isNew": True,
+                                        "supportedEfforts": ["high"],
+                                    },
+                                ],
+                                "usageQuota": {
+                                    "geminiWeeklyRemaining": 0.84,
+                                    "geminiFiveHourRemaining": 0.91,
+                                    "partnerWeeklyRemaining": 0.68,
+                                    "partnerFiveHourRemaining": 0.77,
+                                    "aiCreditOveragesEnabled": True,
+                                    "planDisplayName": "Google AI Ultra",
+                                },
+                            }
+                        elif inner_method == "GetTurnDiff":
+                            compare_mode = inner_req.get("compareMode", "Per Turn")
+                            payload_obj = {
+                                "compareMode": compare_mode,
+                                "files": [
+                                    {
+                                        "turnNumber": inner_req.get("turnNumber", 3),
+                                        "filePath": "middleware/ratelimit.go",
+                                        "additions": 2,
+                                        "deletions": 1,
+                                        "statusLetter": "M",
+                                        "isStaged": False,
+                                        "compareScope": compare_mode,
+                                        "hunkHeader": "@@ -22,4 +22,5 @@ Allow",
+                                        "lines": [
+                                            {"id": 1, "kind": "context", "oldLineNumber": 22, "newLineNumber": 22, "text": "func (l *Limiter) Allow(tenant string) bool {"},
+                                            {"id": 2, "kind": "deletion", "oldLineNumber": 23, "text": "    const ttl = 5 * time.Minute"},
+                                            {"id": 3, "kind": "addition", "newLineNumber": 23, "text": "    const ttl = cfg.BucketTTL"},
+                                            {"id": 4, "kind": "addition", "newLineNumber": 24, "text": "    now := l.clock.Now()"},
+                                        ],
+                                    }
+                                ],
+                            }
+                        elif inner_method == "GetArtifactSnapshots":
+                            payload_obj = {
+                                "artifacts": [
+                                    {
+                                        "artifactPath": "/brain/implementation_plan.md",
+                                        "title": "Rate Limiter Plan",
+                                        "summary": "Token bucket per tenant with fake clock injection",
+                                        "kind": "implementationPlan",
+                                        "content": "---\ntitle: Rate Limiter Plan\n---\n# Rate Limiter Plan\nSee https://github.com/venciallee/iOSAntigravity/pull/42",
+                                        "requestFeedback": True,
+                                        "version": 2,
+                                    }
+                                ]
+                            }
+                        elif inner_method == "GetConversationOverview":
+                            payload_obj = {
+                                "reviewAdditions": 128,
+                                "reviewDeletions": 14,
+                                "modifiedFiles": ["middleware/ratelimit.go"],
+                                "subagents": [
+                                    {
+                                        "subagentId": "sub-bench-1",
+                                        "role": "Load Benchmark Runner",
+                                        "typeName": "self",
+                                        "modelLabel": "Gemini 4 Argon",
+                                        "status": "CORTEX_STEP_STATUS_IN_PROGRESS",
+                                        "summary": "Running vegeta 2000 req/s verification",
+                                    }
+                                ],
+                                "backgroundTasks": [
+                                    {
+                                        "id": "bg-vegeta-1",
+                                        "title": "Vegeta Load Runner",
+                                        "commandSummary": "vegeta attack -rate=2000/s",
+                                        "status": "CORTEX_STEP_STATUS_IN_PROGRESS",
+                                        "elapsedLabel": "14s",
+                                        "canCancel": True,
+                                    }
+                                ],
+                                "goals": [
+                                    {
+                                        "id": "goal-1",
+                                        "title": "Zero dropped requests at 2,000 req/s",
+                                        "status": "CORTEX_STEP_STATUS_IN_PROGRESS",
+                                        "progressText": "4 of 7 steps",
+                                    }
+                                ],
+                                "pullRequests": [
+                                    {
+                                        "ownerRepo": "venciallee/iOSAntigravity",
+                                        "number": 42,
+                                        "title": "feat: per-tenant rate limiter",
+                                        "state": "open",
+                                        "checksSummary": "4/4 checks passing",
+                                        "url": "https://github.com/venciallee/iOSAntigravity/pull/42",
+                                        "additions": 128,
+                                        "deletions": 14,
+                                    }
+                                ],
+                            }
+                        elif inner_method == "SendSideQuestion":
+                            q = inner_req.get("question", "")
+                            payload_obj = {
+                                "ok": True,
+                                "threadId": inner_req.get("threadId", "btw-cloud-1"),
+                                "answer": f"Cloud Relay /btw answer for '{q}'",
+                            }
+                        elif inner_method == "GetCustomizationsCatalog":
+                            payload_obj = {
+                                "skills": [
+                                    {"name": "antigravity-doc-sync", "description": "Sync Antigravity 2.0 docs", "scope": "Workspace", "isEnabled": True}
+                                ],
+                                "rules": [
+                                    {"name": "AGENTS.md", "scope": "Workspace", "preview": "Pure Swift 6 & ESDD invariants", "isActive": True}
+                                ],
+                                "customAgents": ["Default", "go-reviewer"],
+                                "mcpServers": [
+                                    {"name": "github", "transport": "remote-oauth", "state": "connected", "toolCount": 18, "oauthConnected": True}
+                                ],
+                                "plugins": [
+                                    {"id": "plugin-github", "name": "GitHub", "provider": "GitHub", "description": "PRs, Issues & Actions", "isInstalled": True, "isEnabled": True, "isFeaturedPartner": True, "accountSignedIn": True}
+                                ],
+                                "hooks": [
+                                    {"id": "hook-1", "eventName": "PreToolUse", "matcher": "run_command", "command": "scripts/verify-safe-cmd.sh", "timeoutSeconds": 30, "isValid": True}
+                                ],
+                            }
+                        elif inner_method == "GitCommit":
+                            payload_obj = {
+                                "ok": True,
+                                "commitSha": "e7f8a90",
+                                "commitMessage": inner_req.get("message", "Cloud commit"),
+                                "branchName": "main",
+                                "pushed": False,
+                            }
+                        elif inner_method == "GitPush":
+                            payload_obj = {"ok": True, "pushed": True, "branchName": inner_req.get("branchName", "main")}
+                        elif inner_method == "SendUserCascadeMessage":
+                            with outer_state.lock:
+                                outer_state.messages.append(inner_req)
+                            payload_obj = {"ok": True, "turnId": len(outer_state.messages), "echoed": inner_req}
+                        elif inner_method == "SearchAllConversations":
+                            q = (inner_req.get("query") or "").lower()
+                            payload_obj = {
+                                "trajectories": [
+                                    {
+                                        "cascadeId": "cas-rate-limiter",
+                                        "title": "Add rate limiter to /transfers",
+                                        "projectSlug": "ledger-svc",
+                                        "workspaceUri": "file:///Users/dev/code/ledger-svc",
+                                        "branchName": "main",
+                                        "status": "CORTEX_STEP_STATUS_IN_PROGRESS",
+                                        "stepCount": 7,
+                                        "snippet": f"Cloud matched '{q}'",
+                                    }
+                                ]
+                            }
                         else:
                             payload_obj = {"ok": True, "method": inner_method}
 
@@ -492,6 +667,12 @@ class LiveMockServer:
                         "askQuestion",
                         "planReview",
                         "deploy",
+                        "executeUrl",
+                        "downloadUrl",
+                        "browserUpload",
+                        "workflowScript",
+                        "mcp",
+                        "approvalInteraction",
                     }
                     matched = sorted(valid_members.intersection(interaction.keys()))
                     if not matched:
@@ -509,6 +690,7 @@ class LiveMockServer:
                         self.headers.get("X-FaceID-Signature")
                         or interaction.get("faceIdSignature")
                         or ("LAContext-biometric-ok" if interaction.get("biometricConfirmed") else None)
+                        or ("LAContext-biometric-ok" if interaction.get("runCommand", {}).get("faceIdVerified") else None)
                     )
 
                     if oneof_name == "runCommand":
@@ -537,6 +719,310 @@ class LiveMockServer:
                     self._send_json(200, ack)
                     return
 
+                if method == "GetCascadeModelConfigs":
+                    outer_state.record(method, req)
+                    self._send_json(
+                        200,
+                        {
+                            "clientModelConfigs": [
+                                {
+                                    "label": "Gemini 4 Neon",
+                                    "modelOrAlias": {"model": "MODEL_GOOGLE_GEMINI_4_NEON"},
+                                    "description": "Frontier Gemini 4 reasoning with Extra (xhigh) thinking",
+                                    "supportsThinking": True,
+                                    "isRecommended": True,
+                                    "isNew": True,
+                                    "supportedEfforts": ["low", "medium", "high", "xhigh"],
+                                },
+                                {
+                                    "label": "Gemini 4 Carbon",
+                                    "modelOrAlias": {"model": "MODEL_GOOGLE_GEMINI_4_CARBON"},
+                                    "description": "Balanced Gemini 4 daily engineering & research",
+                                    "supportsThinking": True,
+                                    "isNew": True,
+                                    "supportedEfforts": ["low", "medium", "high"],
+                                },
+                                {
+                                    "label": "Gemini 4 Argon",
+                                    "modelOrAlias": {"model": "MODEL_GOOGLE_GEMINI_4_ARGON"},
+                                    "description": "Ultra-fast Gemini 4 edits & live iterations",
+                                    "supportsThinking": True,
+                                    "isNew": True,
+                                    "supportedEfforts": ["low", "medium", "high"],
+                                },
+                                {
+                                    "label": "Gemini 4 Hydrogen",
+                                    "modelOrAlias": {"model": "MODEL_GOOGLE_GEMINI_4_HYDROGEN"},
+                                    "description": "Deep scientific & systems reasoning with Extra thinking",
+                                    "supportsThinking": True,
+                                    "isNew": True,
+                                    "supportedEfforts": ["low", "medium", "high", "xhigh"],
+                                },
+                                {
+                                    "label": "Orchestrator (Gemini 4 Neon)",
+                                    "modelOrAlias": {"model": "MODEL_ORCHESTRATOR_NEON"},
+                                    "description": "Dual-model Planner (Neon) + Executor (Argon)",
+                                    "supportsThinking": True,
+                                    "isOrchestrator": True,
+                                    "plannerModelName": "Gemini 4 Neon",
+                                    "executorModelName": "Gemini 4 Argon",
+                                    "isNew": True,
+                                    "supportedEfforts": ["high"],
+                                },
+                            ],
+                            "usageQuota": {
+                                "geminiWeeklyRemaining": 0.84,
+                                "geminiFiveHourRemaining": 0.91,
+                                "partnerWeeklyRemaining": 0.68,
+                                "partnerFiveHourRemaining": 0.77,
+                                "aiCreditOveragesEnabled": True,
+                                "planDisplayName": "Google AI Ultra",
+                            },
+                        },
+                    )
+                    return
+
+                if method == "GetTurnDiff":
+                    outer_state.record(method, req)
+                    compare_mode = req.get("compareMode", "Per Turn")
+                    self._send_json(
+                        200,
+                        {
+                            "compareMode": compare_mode,
+                            "files": [
+                                {
+                                    "turnNumber": req.get("turnNumber", 3),
+                                    "filePath": "middleware/ratelimit.go",
+                                    "additions": 2,
+                                    "deletions": 1,
+                                    "statusLetter": "M",
+                                    "isStaged": False,
+                                    "compareScope": compare_mode,
+                                    "hunkHeader": "@@ -22,4 +22,5 @@ Allow",
+                                    "lines": [
+                                        {"id": 1, "kind": "context", "oldLineNumber": 22, "newLineNumber": 22, "text": "func (l *Limiter) Allow(tenant string) bool {"},
+                                        {"id": 2, "kind": "deletion", "oldLineNumber": 23, "text": "    const ttl = 5 * time.Minute"},
+                                        {"id": 3, "kind": "addition", "newLineNumber": 23, "text": "    const ttl = cfg.BucketTTL"},
+                                        {"id": 4, "kind": "addition", "newLineNumber": 24, "text": "    now := l.clock.Now()"},
+                                    ],
+                                }
+                            ],
+                        },
+                    )
+                    return
+
+                if method in ("GitStageFile", "GitUnstageFile", "GitDiscardFile"):
+                    outer_state.record(method, req)
+                    self._send_json(200, {"ok": True, "method": method, "filePath": req.get("filePath", "")})
+                    return
+
+                if method == "GitCommit":
+                    outer_state.record(method, req)
+                    self._send_json(
+                        200,
+                        {
+                            "ok": True,
+                            "commitSha": "a1b2c3d",
+                            "commitMessage": req.get("message", "Update rate limiter"),
+                            "branchName": "main",
+                            "pushed": False,
+                        },
+                    )
+                    return
+
+                if method == "GitPush":
+                    outer_state.record(method, req)
+                    self._send_json(200, {"ok": True, "pushed": True, "branchName": req.get("branchName", "main")})
+                    return
+
+                if method == "GetArtifactSnapshots":
+                    outer_state.record(method, req)
+                    sample_ipynb = json.dumps(
+                        {
+                            "metadata": {"kernelspec": {"display_name": "Python 3.11"}},
+                            "cells": [
+                                {"id": "c1", "cell_type": "markdown", "source": ["# Benchmark Analysis"]},
+                                {
+                                    "id": "c2",
+                                    "cell_type": "code",
+                                    "execution_count": 1,
+                                    "source": ["print('p99 = 4.2ms')"],
+                                    "outputs": [{"output_type": "stream", "text": ["p99 = 4.2ms\n"]}],
+                                },
+                            ],
+                        }
+                    )
+                    self._send_json(
+                        200,
+                        {
+                            "artifacts": [
+                                {
+                                    "artifactPath": "/brain/implementation_plan.md",
+                                    "title": "Rate Limiter Plan",
+                                    "summary": "Token bucket per tenant with fake clock injection",
+                                    "kind": "implementationPlan",
+                                    "content": "---\ntitle: Rate Limiter Plan\nversion: 2\n---\n\n# Rate Limiter Plan\n\nInject `clock.Clock` and see https://github.com/venciallee/iOSAntigravity/pull/42",
+                                    "requestFeedback": True,
+                                    "version": 2,
+                                },
+                                {
+                                    "artifactPath": "/brain/latency_report.ipynb",
+                                    "title": "Latency Benchmark Notebook",
+                                    "summary": "p99 benchmark notebook",
+                                    "kind": "jupyterNotebook",
+                                    "content": sample_ipynb,
+                                },
+                                {
+                                    "artifactPath": "/brain/chart_widget.html",
+                                    "title": "Throughput Chart",
+                                    "summary": "Generative UI chart",
+                                    "kind": "generativeUIHTML",
+                                    "content": "<html><body style='background:#090A0D;color:#F5F6F8'><h3>2,000 req/s</h3></body></html>",
+                                },
+                            ]
+                        },
+                    )
+                    return
+
+                if method == "GetConversationOverview":
+                    outer_state.record(method, req)
+                    self._send_json(
+                        200,
+                        {
+                            "reviewAdditions": 128,
+                            "reviewDeletions": 14,
+                            "modifiedFiles": ["middleware/ratelimit.go", "internal/router/transfers.go"],
+                            "subagents": [
+                                {
+                                    "subagentId": "sub-bench-1",
+                                    "role": "Load Benchmark Runner",
+                                    "typeName": "self",
+                                    "modelLabel": "Gemini 4 Argon",
+                                    "status": "CORTEX_STEP_STATUS_IN_PROGRESS",
+                                    "summary": "Running vegeta 2000 req/s verification",
+                                }
+                            ],
+                            "backgroundTasks": [
+                                {
+                                    "id": "bg-vegeta-1",
+                                    "title": "Vegeta Load Runner",
+                                    "commandSummary": "vegeta attack -rate=2000/s",
+                                    "status": "CORTEX_STEP_STATUS_IN_PROGRESS",
+                                    "elapsedLabel": "14s",
+                                    "canCancel": True,
+                                }
+                            ],
+                            "goals": [
+                                {
+                                    "id": "goal-1",
+                                    "title": "Zero dropped requests at 2,000 req/s",
+                                    "status": "CORTEX_STEP_STATUS_IN_PROGRESS",
+                                    "progressText": "4 of 7 steps",
+                                }
+                            ],
+                            "pullRequests": [
+                                {
+                                    "ownerRepo": "venciallee/iOSAntigravity",
+                                    "number": 42,
+                                    "title": "feat: per-tenant rate limiter",
+                                    "state": "open",
+                                    "checksSummary": "4/4 checks passing",
+                                    "url": "https://github.com/venciallee/iOSAntigravity/pull/42",
+                                    "additions": 128,
+                                    "deletions": 14,
+                                }
+                            ],
+                        },
+                    )
+                    return
+
+                if method in ("CancelBackgroundTask", "StopSubagent", "RevertConversationToStep", "SetPermissionPreset"):
+                    outer_state.record(method, req)
+                    self._send_json(200, {"ok": True, "method": method})
+                    return
+
+                if method == "SendSideQuestion":
+                    outer_state.record(method, req)
+                    q = req.get("question", "")
+                    self._send_json(
+                        200,
+                        {
+                            "ok": True,
+                            "threadId": req.get("threadId", "btw-1"),
+                            "answer": f"Read-only /btw answer: checked token bucket mutex for '{q}' without mutating main context.",
+                        },
+                    )
+                    return
+
+                if method == "GetCustomizationsCatalog":
+                    outer_state.record(method, req)
+                    self._send_json(
+                        200,
+                        {
+                            "skills": [
+                                {"name": "antigravity-doc-sync", "description": "Sync Antigravity 2.0 docs", "scope": "Workspace", "isEnabled": True},
+                                {"name": "go-testing", "description": "Table-driven Go tests", "scope": "Workspace", "isEnabled": True},
+                            ],
+                            "rules": [
+                                {"name": "AGENTS.md", "scope": "Workspace", "preview": "Pure Swift 6 & ESDD invariants", "isActive": True}
+                            ],
+                            "customAgents": ["Default", "go-reviewer", "release-captain"],
+                            "mcpServers": [
+                                {"name": "github", "transport": "remote-oauth", "state": "connected", "toolCount": 18, "oauthConnected": True},
+                                {"name": "postgres-dev", "transport": "stdio", "state": "error", "toolCount": 6, "errorMessage": "Connection refused", "oauthConnected": False},
+                            ],
+                            "plugins": [
+                                {
+                                    "id": "plugin-github",
+                                    "name": "GitHub",
+                                    "provider": "GitHub",
+                                    "description": "PRs, Issues & Actions",
+                                    "isInstalled": True,
+                                    "isEnabled": True,
+                                    "isFeaturedPartner": True,
+                                    "accountSignedIn": True,
+                                },
+                                {
+                                    "id": "plugin-figma",
+                                    "name": "Figma",
+                                    "provider": "Figma",
+                                    "description": "Inspect design tokens",
+                                    "isInstalled": False,
+                                    "isEnabled": False,
+                                    "isFeaturedPartner": True,
+                                    "accountSignedIn": False,
+                                },
+                            ],
+                            "hooks": [
+                                {"id": "hook-1", "eventName": "PreToolUse", "matcher": "run_command", "command": "scripts/verify-safe-cmd.sh", "timeoutSeconds": 30, "isValid": True}
+                            ],
+                        },
+                    )
+                    return
+
+                if method in ("RestartMcpServer", "TogglePlugin", "InstallPlugin"):
+                    outer_state.record(method, req)
+                    self._send_json(200, {"ok": True, "method": method})
+                    return
+
+                if method == "SearchAllConversations":
+                    outer_state.record(method, req)
+                    q = (req.get("query") or "").lower()
+                    matches = [
+                        {
+                            "cascadeId": "cas-rate-limiter",
+                            "title": "Add rate limiter to /transfers",
+                            "projectSlug": "ledger-svc",
+                            "workspaceUri": "file:///Users/dev/code/ledger-svc",
+                            "branchName": "main",
+                            "status": "CORTEX_STEP_STATUS_IN_PROGRESS",
+                            "stepCount": 7,
+                            "snippet": f"Matched query '{q}' in middleware/ratelimit.go",
+                        }
+                    ]
+                    self._send_json(200, {"trajectories": matches})
+                    return
+
                 if method == "CreateProjectWorkspace":
                     runtime = req.get("runtime", "cloud")
                     source_type = req.get("sourceType", "github")
@@ -555,6 +1041,8 @@ class LiveMockServer:
                         "repository": repo_name,
                         "branch": req.get("branch", "main"),
                         "worktree": req.get("worktree", "new"),
+                        "googleDriveLinks": req.get("googleDriveLinks", []),
+                        "envSetupScript": req.get("envSetupScript", ""),
                         "conversationCount": 0,
                     }
                     with outer_state.lock:
@@ -628,10 +1116,13 @@ class LiveMockServer:
                 if method == "SendUserCascadeMessage":
                     msg = {
                         "cascadeId": req.get("cascadeId", "cas-rate-limiter"),
-                        "text": req.get("text", ""),
+                        "text": req.get("text", req.get("userResponse", "")),
+                        "items": req.get("items", []),
                         "contextChips": req.get("contextChips", []),
                         "mode": req.get("mode", "Planning"),
-                        "model": req.get("model", "Gemini 3.1 Pro"),
+                        "model": req.get("model", "Gemini 4 Neon"),
+                        "modelConfig": req.get("modelConfig", {}),
+                        "cascadeConfig": req.get("cascadeConfig", {}),
                     }
                     with outer_state.lock:
                         outer_state.messages.append(msg)

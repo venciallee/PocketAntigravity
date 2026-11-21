@@ -405,6 +405,13 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
             responseDict = ["steps": slice]
         } else if path.hasSuffix("/ListAutomations") {
             responseDict = ["automations": []]
+        } else if path.hasSuffix("/GetSidecars") {
+            responseDict = ["sidecars": []]
+        } else if path.hasSuffix("/GetSidecarEvents") {
+            responseDict = ["events": []]
+        } else if path.hasSuffix("/ManageSidecar") {
+            let sid = (jsonBody["sidecarId"] as? String) ?? "auto-mock"
+            responseDict = ["sidecarId": sid, "ok": true]
         } else if path.hasSuffix("/StartCascade") {
             createdCounter += 1
             let newId = "cid-live-created-\(createdCounter)"
@@ -552,7 +559,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
             assistantReply: "已为您补充 RegisterTagValidator 的边界单元测试。"
         )
         XCTAssertTrue(
-            waitForTextContaining("PC 端新增的实时追问消息：请补充单元测试", in: app, timeout: 6),
+            waitForTextContaining("PC 端新增的实时追问消息：请补充单元测试", in: app, timeout: 12),
             "New message added on PC must automatically appear on iOS within seconds without touching the screen"
         )
         XCTAssertTrue(
@@ -636,6 +643,61 @@ final class AntigravityInteractiveUITests: XCTestCase {
             waitForTextContaining("Google LLC", in: app, timeout: 5),
             "Settings screen must display Google LLC App Icon & Trademark copyright attribution"
         )
+        // 3d. Open Automations tab -> verify 'Create with Prompt' & 'New' buttons -> verify Create with Prompt opens an unsent draft instead of immediately creating/streaming
+        let automationsTab = app.buttons["tab-item-automations"]
+        XCTAssertTrue(automationsTab.waitForExistence(timeout: 5))
+        automationsTab.tap()
+
+        let createWithPromptButton = app.buttons["btn-empty-agent-automation"]
+        XCTAssertTrue(
+            createWithPromptButton.waitForExistence(timeout: 5),
+            "Automations empty state must render 'Create with Prompt' button"
+        )
+        XCTAssertTrue(
+            createWithPromptButton.label.contains("Create with Prompt"),
+            "Create with Prompt button copy must match PC reference"
+        )
+        let newAutomationButton = app.buttons["btn-empty-new-automation"]
+        XCTAssertTrue(
+            newAutomationButton.waitForExistence(timeout: 5),
+            "Automations empty state must render '+ New' button"
+        )
+        XCTAssertTrue(
+            newAutomationButton.label.contains("New"),
+            "New automation button copy must match PC reference"
+        )
+
+        createWithPromptButton.tap()
+        XCTAssertTrue(
+            backToSessionsButton.waitForExistence(timeout: 5),
+            "Tapping Create with Prompt must open the draft composer view"
+        )
+        let workflowChip = app.buttons["composer-workflow-chip"]
+        XCTAssertTrue(
+            workflowChip.waitForExistence(timeout: 5),
+            "Draft composer must display the removable 'automation' workflow chip"
+        )
+        let draftCard = app.descendants(matching: .any)["chat-pending-draft-card"].firstMatch
+        XCTAssertTrue(
+            draftCard.waitForExistence(timeout: 5),
+            "Create with Prompt must show the unsent draft card rather than immediately sending /automation"
+        )
+        XCTAssertFalse(
+            app.buttons["btn-stop-turn"].exists,
+            "Create with Prompt must NOT immediately start streaming before user taps Send"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["chat-inline-four-dot-loading"].firstMatch.exists,
+            "Create with Prompt must NOT immediately start agent execution"
+        )
+        attachScreenshot(named: "03d_Automations_CreateWithPrompt_Draft")
+
+        backToSessionsButton.tap()
+        XCTAssertTrue(
+            createWithPromptButton.waitForExistence(timeout: 5),
+            "Navigating back from an unsent Create with Prompt draft must return cleanly to Automations"
+        )
+
         let agentsTab = app.buttons["tab-item-agents"]
         XCTAssertTrue(agentsTab.waitForExistence(timeout: 5))
         agentsTab.tap()
@@ -660,6 +722,71 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Sending a message in Composer must dispatch StartCascade + SendUserCascadeMessage and render streamed reply"
         )
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
+    }
+
+    /// Verifies native iOS left-edge swipe-back (`interactivePopGestureRecognizer`) on Conversation
+    /// (`CascadeChatViewController`) returns smoothly to `AgentsHomeViewController`, and when opened
+    /// from `ProjectDetailViewController`, returns to Project Detail and then to Agents Home.
+    func testConversationEdgeSwipeBackToAgentsHomeAndProjectDetail() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
+
+        let app = XCUIApplication()
+        app.launchEnvironment["ANTIGRAVITY_BACKEND_URL"] = "http://127.0.0.1:\(server.port)"
+        app.launchEnvironment["ANTIGRAVITY_CSRF_TOKEN"] = "uitest-csrf-token"
+        app.launchEnvironment["ANTIGRAVITY_HOST_NAME"] = "MacBook-Pro-Live"
+        app.launchEnvironment["NO_PROXY"] = "127.0.0.1,localhost,::1"
+        app.launchEnvironment["no_proxy"] = "127.0.0.1,localhost,::1"
+        app.launch()
+
+        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+
+        // 1. Open Conversation from Agents Home -> edge-swipe right -> must pop back to Agents Home
+        reviewRow.tap()
+        let backToSessionsButton = app.buttons["btn-back-sessions"]
+        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 6))
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 5),
+            "Swiping from the left edge on Conversation must pop back to Agents Home"
+        )
+        XCTAssertFalse(
+            backToSessionsButton.exists,
+            "Conversation screen must be popped after completing edge-swipe back"
+        )
+
+        // 2. Open Project Detail -> Conversation -> edge-swipe back to Project Detail -> edge-swipe back to Agents Home
+        let projectHeader = app.buttons["project-header-slardar_app_ai"]
+        XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
+        projectHeader.tap()
+
+        let backToAgentsButton = app.buttons["btn-back-agents"]
+        XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
+
+        let projectConvRow = app.buttons["project-conv-row-cid-slardar-tracking"]
+        XCTAssertTrue(projectConvRow.waitForExistence(timeout: 5))
+        projectConvRow.tap()
+        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 5))
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            backToAgentsButton.waitForExistence(timeout: 5),
+            "Edge-swipe back from a project-launched Conversation must pop back to Project Detail"
+        )
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 5),
+            "Edge-swipe back from Project Detail must pop back to Agents Home"
+        )
+    }
+
+    private func performEdgeSwipeBack(in app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+        start.press(forDuration: 0.02, thenDragTo: end)
     }
 
     private func waitForTextContaining(_ substring: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {

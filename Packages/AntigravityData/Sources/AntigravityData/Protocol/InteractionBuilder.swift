@@ -105,11 +105,24 @@ public enum InteractionBuilder: Sendable {
             }
         }
 
+        let resolvedScope: String
+        switch decision {
+        case .allowInConversation:
+            resolvedScope = "PERMISSION_SCOPE_CONVERSATION"
+        case .alwaysAllow:
+            resolvedScope = "PERMISSION_SCOPE_ALWAYS"
+        case .alwaysAllowInTurn:
+            resolvedScope = "PERMISSION_SCOPE_TURN"
+        default:
+            resolvedScope = "PERMISSION_SCOPE_ONCE"
+        }
+
         switch requested.kind {
         case .permission:
             guard let spec = requested.permission else { return nil }
             var grants: [String] = []
-            if decision == .alwaysAllowInTurn && spec.persistSuggestionType != .blocked {
+            let shouldGrant = (decision == .alwaysAllowInTurn || decision == .allowInConversation || decision == .alwaysAllow)
+            if shouldGrant && spec.persistSuggestionType != .blocked {
                 let patternTarget = spec.suggestedPersistPattern ?? spec.target
                 grants = ["\(spec.action)(\(patternTarget))"]
             }
@@ -118,18 +131,19 @@ public enum InteractionBuilder: Sendable {
                 stepIndex: step.stepIndex,
                 kind: .permission,
                 workspaceUri: workspaceUri,
-                permission: .init(allow: true, grantPatterns: grants)
+                permission: .init(allow: true, grantPatterns: grants, scope: resolvedScope),
+                approvalScope: resolvedScope
             )
 
         case .filePermission:
             let uri = requested.filePermission?.absolutePathUri
-            let scope = decision == .alwaysAllowInTurn ? "PERMISSION_SCOPE_TURN" : "PERMISSION_SCOPE_ONCE"
             return CascadeUserInteractionPayload(
                 cascadeId: step.cascadeId,
                 stepIndex: step.stepIndex,
                 kind: .filePermission,
                 workspaceUri: workspaceUri,
-                filePermission: .init(allow: true, scope: scope, absolutePathUri: uri)
+                filePermission: .init(allow: true, scope: resolvedScope, absolutePathUri: uri),
+                approvalScope: resolvedScope
             )
 
         case .runCommand:
@@ -154,7 +168,8 @@ public enum InteractionBuilder: Sendable {
                     proposedCommandLine: proposed,
                     submittedCommandLine: submitted,
                     faceIdVerified: faceId
-                )
+                ),
+                approvalScope: resolvedScope
             )
 
         case .askQuestion, .elicitation:
@@ -172,20 +187,42 @@ public enum InteractionBuilder: Sendable {
                 )
             )
 
+        case .executeUrl, .downloadUrl, .mcp:
+            return CascadeUserInteractionPayload(
+                cascadeId: step.cascadeId,
+                stepIndex: step.stepIndex,
+                kind: requested.kind,
+                workspaceUri: workspaceUri,
+                genericConfirm: true,
+                approvalScope: resolvedScope
+            )
+
+        case .browserUpload, .workflowScript:
+            // One-time browser upload and dynamic workflow script approvals are strictly single-use
+            return CascadeUserInteractionPayload(
+                cascadeId: step.cascadeId,
+                stepIndex: step.stepIndex,
+                kind: requested.kind,
+                workspaceUri: workspaceUri,
+                genericConfirm: true,
+                approvalScope: "PERMISSION_SCOPE_ONCE"
+            )
+
         default:
             return CascadeUserInteractionPayload(
                 cascadeId: step.cascadeId,
                 stepIndex: step.stepIndex,
                 kind: requested.kind,
                 workspaceUri: workspaceUri,
-                genericConfirm: true
+                genericConfirm: true,
+                approvalScope: resolvedScope
             )
         }
     }
 
     /// Evaluates whether a `WAITING` step is eligible for Safe Auto-Accept on mobile.
-    /// Read-only permissions and workspace-scoped file reads auto-resolve; commands and
-    /// `ask_question` always require explicit user action.
+    /// Read-only permissions and workspace-scoped file reads auto-resolve; commands, browser
+    /// actions/downloads/uploads, workflow scripts, MCP writes, and `ask_question` always require explicit user action.
     public static func canSafeAutoAccept(step: CascadeStep, allowedWorkspaceRoots: [String]) -> Bool {
         guard step.status == .waiting, let requested = step.requestedInteraction else {
             return false
@@ -197,7 +234,8 @@ public enum InteractionBuilder: Sendable {
         case .filePermission:
             guard let uri = requested.filePermission?.absolutePathUri else { return false }
             return allowedWorkspaceRoots.contains { uri.hasPrefix($0) }
-        case .askQuestion, .elicitation, .runCommand, .sendCommandInput:
+        case .askQuestion, .elicitation, .runCommand, .sendCommandInput,
+             .executeUrl, .downloadUrl, .browserUpload, .workflowScript, .mcp:
             return false
         default:
             return false

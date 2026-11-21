@@ -652,9 +652,20 @@ public struct CascadeStepCellView: View {
                     ReferencedFilePillsRow(paths: refs) { tappedPath in
                         if tappedPath.lowercased().contains("plan") {
                             store.currentRoute = .planReview
+                        } else if store.activeArtifacts.contains(where: { $0.artifactPath == tappedPath }) {
+                            store.presentedSheet = .richArtifactViewer(artifactPath: tappedPath)
                         } else {
                             MarkdownClipboardHelper.copyText(MarkdownLinkFormatting.cleanDisplayPath(tappedPath))
                         }
+                    }
+                }
+                if !store.isVerificationMode, let voice = step.voiceSummary {
+                    VoiceCallSummaryCardView(summary: voice)
+                }
+                if !store.isVerificationMode {
+                    let prs = AntigravityMarkdownParser.extractGitHubPRLinks(from: prose)
+                    if !prs.isEmpty {
+                        GitHubPRStatusPillsRow(pullRequests: prs)
                     }
                 }
             }
@@ -737,13 +748,373 @@ public struct CascadeStepCellView: View {
                 .background(StepCardPalette.cardSurface)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+        case .subagentInvocation:
+            if let sub = step.subagent {
+                SubagentStepCardView(subagent: sub, onStop: {
+                    store.stopSubagent(sub.subagentId)
+                })
+            }
+        case .dynamicWorkflow:
+            if let wf = step.dynamicWorkflow {
+                DynamicWorkflowStepCardView(workflow: wf)
+            }
+        case .swarmBoard:
+            if let board = step.swarmBoard {
+                SwarmStepCardView(board: board) {
+                    store.presentedSheet = .swarmBoard(stepIndex: step.stepIndex)
+                }
+            }
+        case .mcpToolCall:
+            if let mcp = step.mcpToolCall {
+                McpToolStepCardView(mcp: mcp)
+            }
         default:
-            if let prose = step.plannerResponse?.response, !prose.isEmpty {
+            if step.status == .waiting, let req = step.requestedInteraction {
+                V233InlineApprovalCardView(store: store, step: step, requested: req)
+            } else if let prose = step.plannerResponse?.response, !prose.isEmpty {
                 AntigravityMarkdownView(markdown: prose, variant: .assistant)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("step-prose-\(step.stepIndex)")
             }
         }
+    }
+}
+
+// MARK: - Antigravity 2.0 (v2.33) Step Cards (Subagent, Workflow, Swarm, MCP, Voice Summary, PR Pills, Extended Approvals)
+
+private struct SubagentStepCardView: View {
+    let subagent: SubagentPayload
+    let onStop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "person.2.wave.2.fill")
+                    .foregroundStyle(StepCardPalette.periwinkle)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(subagent.role)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                    Text("\(subagent.typeName) · \(subagent.modelLabel)")
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                }
+                Spacer()
+                Text(subagent.status.displayBadgeText)
+                    .font(.system(size: 10, weight: .bold))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(StepCardPalette.periwinkle.opacity(0.16), in: Capsule())
+                    .foregroundStyle(subagent.status == .done ? StepCardPalette.emeraldDone : StepCardPalette.periwinkle)
+            }
+            if !subagent.summary.isEmpty {
+                Text(subagent.summary)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(AntigravityTheme.inkLabel)
+                    .lineLimit(3)
+            }
+            if subagent.status == .inProgress || subagent.status == .waiting {
+                Button("Stop Subagent", action: onStop)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.statusError)
+            }
+        }
+        .padding(12)
+        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
+    }
+}
+
+private struct DynamicWorkflowStepCardView: View {
+    let workflow: DynamicWorkflowPayload
+    @State private var showScript: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Dynamic Workflow · \(workflow.currentPhase)", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(StepCardPalette.periwinkle)
+                Spacer()
+                Text("\(workflow.completedAgents)/\(max(1, workflow.totalAgents))")
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+            }
+            Text(workflow.description)
+                .font(.system(size: 13))
+                .foregroundStyle(AntigravityTheme.inkReading)
+            ForEach(workflow.phases) { phase in
+                HStack(spacing: 6) {
+                    Image(systemName: phase.isCompleted ? "checkmark.circle.fill" : "circle.dashed")
+                        .font(.system(size: 12))
+                        .foregroundStyle(phase.isCompleted ? StepCardPalette.emeraldDone : StepCardPalette.periwinkle)
+                    Text(phase.name)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkLabel)
+                }
+            }
+            if !workflow.pythonScript.isEmpty {
+                Button(showScript ? "Hide Python Orchestrator" : "Inspect Python Orchestrator") {
+                    showScript.toggle()
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(StepCardPalette.periwinkle)
+                if showScript {
+                    Text(workflow.pythonScript)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(StepCardPalette.codeBlockBg, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .padding(12)
+        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
+    }
+}
+
+private struct SwarmStepCardView: View {
+    let board: SwarmBoardPayload
+    let onOpenBoard: () -> Void
+
+    var body: some View {
+        Button(action: onOpenBoard) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Agent Swarm · \(board.title)", systemImage: "hexagon.fill")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(StepCardPalette.periwinkle)
+                    Spacer()
+                    Text("\(board.members.count) specialists")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                }
+                HStack(spacing: 6) {
+                    ForEach(board.members.prefix(4)) { member in
+                        Text("@\(member.name)")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(AntigravityTheme.surfaceElevated, in: Capsule())
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12))
+                        .foregroundStyle(AntigravityTheme.inkMuted)
+                }
+            }
+            .padding(12)
+            .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct McpToolStepCardView: View {
+    let mcp: McpToolCallPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "server.rack")
+                    .foregroundStyle(mcp.isError ? AntigravityTheme.statusError : StepCardPalette.periwinkle)
+                Text("\(mcp.serverName) · \(mcp.toolName)")
+                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+                Spacer()
+                if let plugin = mcp.pluginName {
+                    Text(plugin)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(StepCardPalette.periwinkle.opacity(0.14), in: Capsule())
+                }
+            }
+            if !mcp.argumentsPreview.isEmpty {
+                Text(mcp.argumentsPreview)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .lineLimit(2)
+            }
+            if let res = mcp.resultPreview, !res.isEmpty {
+                Text(res)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(mcp.isError ? AntigravityTheme.statusError : AntigravityTheme.inkLabel)
+                    .lineLimit(3)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(StepCardPalette.codeBlockBg, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .padding(11)
+        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct VoiceCallSummaryCardView: View {
+    let summary: VoiceCallTranscriptSummary
+    @State private var isExpanded: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack {
+                    Image(systemName: "waveform.circle.fill")
+                        .foregroundStyle(StepCardPalette.periwinkle)
+                    Text(summary.summaryText)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .multilineTextAlignment(.leading)
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11))
+                        .foregroundStyle(AntigravityTheme.inkMuted)
+                }
+            }
+            .buttonStyle(.plain)
+            if isExpanded {
+                ForEach(summary.turns) { turn in
+                    Text("\(turn.isUser ? "You" : "Gemini"): \(turn.transcript)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                }
+            }
+        }
+        .padding(11)
+        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(StepCardPalette.periwinkle.opacity(0.25), lineWidth: 1))
+    }
+}
+
+private struct GitHubPRStatusPillsRow: View {
+    let pullRequests: [GitHubPullRequestInfo]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(pullRequests) { pr in
+                    if let url = URL(string: pr.url) {
+                        Link(destination: url) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.triangle.pull")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text("\(pr.ownerRepo) #\(pr.number)")
+                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                Text(pr.state.rawValue.uppercased())
+                                    .font(.system(size: 9.5, weight: .bold))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(StepCardPalette.emeraldDone.opacity(0.18), in: Capsule())
+                            }
+                            .foregroundStyle(StepCardPalette.emeraldDone)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(StepCardPalette.cardSurface, in: Capsule())
+                            .overlay(Capsule().stroke(StepCardPalette.emeraldDone.opacity(0.32), lineWidth: 1))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct V233InlineApprovalCardView: View {
+    let store: AntigravitySessionStore
+    let step: CascadeStep
+    let requested: RequestedInteraction
+
+    private var titleAndDetail: (String, String, Bool) {
+        switch requested.kind {
+        case .executeUrl:
+            let domain = requested.executeUrl?.domain ?? "external site"
+            let url = requested.executeUrl?.url ?? ""
+            return ("Browser Action Approval · \(domain)", url, true)
+        case .downloadUrl:
+            let file = requested.downloadUrl?.fileName ?? "file"
+            let origin = requested.downloadUrl?.origin ?? ""
+            return ("Browser Download · \(file)", "From \(origin) → \(requested.downloadUrl?.destinationFolder ?? "~/Downloads")", true)
+        case .browserUpload:
+            let files = requested.browserUpload?.fileNames.joined(separator: ", ") ?? "files"
+            return ("One-Time Upload Confirmation", "Upload \(files) to \(requested.browserUpload?.origin ?? "site")", false)
+        case .workflowScript:
+            return ("Approve Dynamic Workflow Script", requested.workflowScript?.title ?? "Python orchestrator script", false)
+        case .mcp:
+            return ("MCP Tool Approval · \(requested.mcpServerName ?? "Server")", "Invoke \(requested.mcpToolName ?? "tool")", true)
+        case .permission:
+            let action = requested.permission?.action ?? "action"
+            let target = requested.permission?.target ?? "*"
+            let plugin = requested.permission?.pluginName.map { " [\($0)]" } ?? ""
+            return ("Permission Request\(plugin)", "\(action)(\(target))", true)
+        default:
+            return ("Approval Required", requested.filePermission?.absolutePathUri ?? "Confirm pending agent action", true)
+        }
+    }
+
+    var body: some View {
+        let info = titleAndDetail
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
+                Text(info.0)
+                    .font(.system(size: 13.5, weight: .bold))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+            }
+            Text(info.1)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(AntigravityTheme.inkSecondary)
+                .lineLimit(3)
+
+            HStack(spacing: 8) {
+                Button("Allow Once") {
+                    store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .allowOnce)
+                }
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .background(AntigravityTheme.statusWaiting, in: RoundedRectangle(cornerRadius: 10))
+
+                if info.2 {
+                    Button("In Chat") {
+                        store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .allowInConversation)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 38)
+                    .background(AntigravityTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+
+                    Button("Always") {
+                        store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .alwaysAllow)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(StepCardPalette.periwinkle)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 38)
+                    .background(StepCardPalette.periwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                Button("Deny") {
+                    store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .reject)
+                }
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(AntigravityTheme.statusError)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 38)
+                .background(AntigravityTheme.statusError.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding(12)
+        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AntigravityTheme.statusWaiting.opacity(0.45), lineWidth: 1))
     }
 }
 
@@ -919,6 +1290,27 @@ private struct AntigravityMarkdownBlocksView: View {
     @ViewBuilder
     private func blockView(for block: MarkdownBlock) -> some View {
         switch block {
+        case .frontmatter(_, let entries):
+            VStack(alignment: .leading, spacing: 4) {
+                Text("FRONTMATTER")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(StepCardPalette.periwinkle)
+                ForEach(entries) { entry in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(entry.key)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        Text(entry.value)
+                            .font(.system(size: 12))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(AntigravityTheme.glassHairline, lineWidth: 1))
+
         case .heading(_, let level, let inlines):
             let size = headingFontSize(for: level)
             let weight: Font.Weight = level <= 2 ? .bold : .semibold
@@ -967,7 +1359,21 @@ private struct AntigravityMarkdownBlocksView: View {
             .padding(.leading, CGFloat(indentLevel) * 16)
 
         case .codeBlock(_, let language, let code):
-            MarkdownCodeBlockCardView(language: language, code: code)
+            VStack(alignment: .leading, spacing: 4) {
+                if block.isMermaidDiagram || block.isSVGDiagram {
+                    HStack(spacing: 6) {
+                        Image(systemName: block.isMermaidDiagram ? "chart.bar.doc.horizontal" : "scribble.variable")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(block.isMermaidDiagram ? "Mermaid Diagram" : "SVG Graphic")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(StepCardPalette.periwinkle)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(StepCardPalette.periwinkle.opacity(0.14), in: Capsule())
+                }
+                MarkdownCodeBlockCardView(language: language, code: code)
+            }
 
         case .blockquote(_, let alert, let innerBlocks):
             MarkdownBlockquoteCardView(alert: alert, innerBlocks: innerBlocks)
@@ -1418,6 +1824,12 @@ private enum MarkdownInlineBuilder {
                 var linkStyle = style
                 linkStyle.linkDestination = destination
                 appendNodes(labelNodes, style: linkStyle, baseSize: baseSize, defaultColor: defaultColor, into: &output)
+
+            case .image(let alt, let source):
+                var imgStyle = style
+                imgStyle.linkDestination = source
+                let labelText = alt.isEmpty ? "Image" : alt
+                output.append(makeSegment("🖼 \(labelText)", style: imgStyle, baseSize: baseSize, defaultColor: defaultColor))
 
             case .inlineMath(let latex):
                 var mathStyle = style

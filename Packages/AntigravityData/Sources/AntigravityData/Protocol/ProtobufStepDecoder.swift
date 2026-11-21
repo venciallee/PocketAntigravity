@@ -93,6 +93,12 @@ public enum ProtobufStepCodec {
         case 99: return .knowledgeArtifacts       // KNOWLEDGE_ARTIFACTS
         case 100: return .sendCommandInput        // SEND_COMMAND_INPUT
         case 122: return .workspaceApi            // WORKSPACE_API
+        case 130: return .subagentInvocation      // SUBAGENT_INVOCATION
+        case 131: return .dynamicWorkflow         // DYNAMIC_WORKFLOW
+        case 132: return .swarmBoard              // SWARM_BOARD
+        case 133: return .mcpToolCall             // MCP_TOOL_CALL
+        case 134: return .backgroundTask          // BACKGROUND_TASK
+        case 135: return .sideQuestion            // SIDE_QUESTION
         default:
             return CortexStepType(rawValue: raw) ?? .unspecified
         }
@@ -118,6 +124,13 @@ public enum ProtobufStepCodec {
         case 340: return "MODEL_CLAUDE_4_5_HAIKU"
         case 341: return "MODEL_CLAUDE_4_5_HAIKU_THINKING"
         case 342: return "MODEL_OPENAI_GPT_OSS_120B_MEDIUM"
+        case 401: return "MODEL_GOOGLE_GEMINI_4_NEON"
+        case 402: return "MODEL_GOOGLE_GEMINI_4_CARBON"
+        case 403: return "MODEL_GOOGLE_GEMINI_4_ARGON"
+        case 404: return "MODEL_GOOGLE_GEMINI_4_HYDROGEN"
+        case 411: return "MODEL_ORCHESTRATOR_NEON"
+        case 412: return "MODEL_ORCHESTRATOR_CARBON"
+        case 413: return "MODEL_ORCHESTRATOR_ARGON"
         default: return nil
         }
     }
@@ -169,6 +182,10 @@ public enum ProtobufStepCodec {
         var viewFilePayload: ViewFilePayload?
         var searchPayload: SearchPayload?
         var requestedInteraction: RequestedInteraction?
+        var subagentPayload: SubagentPayload?
+        var dynamicWorkflowPayload: DynamicWorkflowPayload?
+        var swarmBoardPayload: SwarmBoardPayload?
+        var mcpToolCallPayload: McpToolCallPayload?
 
         while offset < data.count {
             guard let tag = readVarint(from: data, offset: &offset) else { break }
@@ -297,6 +314,73 @@ public enum ProtobufStepCodec {
                         stepType = .notifyUser
                     }
                 }
+            case (130, 2): // SubagentInvocation
+                if let nested = readLengthDelimited(from: data, offset: &offset) {
+                    let subId = nonEmpty(extractStringField(nested, targetField: 1)) ?? "sub-\(defaultIndex)"
+                    let role = nonEmpty(extractStringField(nested, targetField: 2)) ?? "Subagent"
+                    let typeName = nonEmpty(extractStringField(nested, targetField: 3)) ?? "self"
+                    let summary = nonEmpty(extractStringField(nested, targetField: 4)) ?? ""
+                    let modelLbl = nonEmpty(extractStringField(nested, targetField: 5)) ?? "Gemini 4 Hydrogen"
+                    let waitingTitle = nonEmpty(extractStringField(nested, targetField: 6))
+                    subagentPayload = SubagentPayload(
+                        subagentId: subId,
+                        role: role,
+                        typeName: typeName,
+                        modelLabel: modelLbl,
+                        status: stepStatus == .done ? .done : (stepStatus == .error ? .error : .inProgress),
+                        summary: summary,
+                        waitingApprovalTitle: waitingTitle
+                    )
+                    stepType = .subagentInvocation
+                }
+            case (131, 2): // DynamicWorkflow
+                if let nested = readLengthDelimited(from: data, offset: &offset) {
+                    let wfId = nonEmpty(extractStringField(nested, targetField: 1)) ?? "wf-\(defaultIndex)"
+                    let desc = nonEmpty(extractStringField(nested, targetField: 2)) ?? "Dynamic Workflow"
+                    let script = nonEmpty(extractStringField(nested, targetField: 3)) ?? ""
+                    let phaseNames = extractRepeatedStringField(nested, targetField: 4)
+                    let phases = phaseNames.enumerated().map { idx, name in
+                        WorkflowPhaseItem(id: "phase-\(idx)", name: name, isCompleted: false)
+                    }
+                    dynamicWorkflowPayload = DynamicWorkflowPayload(
+                        workflowId: wfId,
+                        description: desc,
+                        pythonScript: script,
+                        currentPhase: phaseNames.first ?? "Phase 1",
+                        completedAgents: 0,
+                        totalAgents: max(1, phaseNames.count),
+                        phases: phases
+                    )
+                    stepType = .dynamicWorkflow
+                }
+            case (132, 2): // SwarmBoard
+                if let nested = readLengthDelimited(from: data, offset: &offset) {
+                    let swId = nonEmpty(extractStringField(nested, targetField: 1)) ?? "swarm-\(defaultIndex)"
+                    let title = nonEmpty(extractStringField(nested, targetField: 2)) ?? "Swarm Team"
+                    let memberNames = extractRepeatedStringField(nested, targetField: 3)
+                    let members = memberNames.map { name in
+                        SwarmMemberItem(name: name, role: "Specialist", status: .inProgress)
+                    }
+                    swarmBoardPayload = SwarmBoardPayload(swarmId: swId, title: title, members: members, posts: [])
+                    stepType = .swarmBoard
+                }
+            case (133, 2): // McpToolCall
+                if let nested = readLengthDelimited(from: data, offset: &offset) {
+                    let server = nonEmpty(extractStringField(nested, targetField: 1)) ?? "mcp"
+                    let tool = nonEmpty(extractStringField(nested, targetField: 2)) ?? "call"
+                    let args = nonEmpty(extractStringField(nested, targetField: 3)) ?? "{}"
+                    let out = nonEmpty(extractStringField(nested, targetField: 4))
+                    let plugin = nonEmpty(extractStringField(nested, targetField: 5))
+                    mcpToolCallPayload = McpToolCallPayload(
+                        serverName: server,
+                        toolName: tool,
+                        pluginName: plugin,
+                        argumentsPreview: args,
+                        resultPreview: out,
+                        isError: stepStatus == .error
+                    )
+                    stepType = .mcpToolCall
+                }
             default:
                 skipField(wireType: wireType, data: data, offset: &offset)
             }
@@ -328,7 +412,11 @@ public enum ProtobufStepCodec {
             search: searchPayload,
             requestedInteraction: requestedInteraction,
             recordedExecutionMode: recordedMode,
-            recordedModelId: recordedModelId
+            recordedModelId: recordedModelId,
+            subagent: subagentPayload,
+            dynamicWorkflow: dynamicWorkflowPayload,
+            swarmBoard: swarmBoardPayload,
+            mcpToolCall: mcpToolCallPayload
         )
     }
 
@@ -537,28 +625,64 @@ public enum ProtobufStepCodec {
                         cwd: cwd
                     )
                 )
+            case 4, 10: // OpenBrowserUrl / ExecuteUrlInteractionSpec
+                let url = nonEmpty(extractStringField(nested, targetField: 1)) ?? ""
+                let domain = nonEmpty(extractStringField(nested, targetField: 2))
+                    ?? URL(string: url)?.host
+                    ?? url
+                let isRedirect = (extractVarintField(nested, targetField: 3) ?? 0) != 0
+                return RequestedInteraction(
+                    kind: .executeUrl,
+                    executeUrl: ExecuteUrlInteractionSpec(url: url, domain: domain, isRedirect: isRedirect)
+                )
+            case 18: // McpInteractionSpec
+                let serverName = nonEmpty(extractStringField(nested, targetField: 1)) ?? "mcp-server"
+                let toolName = nonEmpty(extractStringField(nested, targetField: 2)) ?? "invoke_tool"
+                let pluginName = nonEmpty(extractStringField(nested, targetField: 3))
+                return RequestedInteraction(
+                    kind: .mcp,
+                    mcpServerName: serverName,
+                    mcpToolName: toolName,
+                    pluginName: pluginName
+                )
             case 19: // FilePermissionInteractionSpec
                 let uri = extractStringField(nested, targetField: 1) ?? ""
+                let isDir = (extractVarintField(nested, targetField: 2) ?? 0) != 0
+                let reason = nonEmpty(extractStringField(nested, targetField: 3))
                 return RequestedInteraction(
                     kind: .filePermission,
-                    filePermission: FilePermissionInteractionSpec(absolutePathUri: uri)
+                    filePermission: FilePermissionInteractionSpec(
+                        absolutePathUri: uri,
+                        isDirectory: isDir,
+                        blockReason: reason
+                    )
                 )
-            case 21: // PermissionInteractionSpec
-                let pattern = extractStringField(nested, targetField: 2)
+            case 21: // PermissionInteractionSpec (action=1, target/pattern=2, reason=3, pluginName=4, persistType=5)
+                let action = nonEmpty(extractStringField(nested, targetField: 1)) ?? "read"
+                let pattern = nonEmpty(extractStringField(nested, targetField: 2))
+                let reason = nonEmpty(extractStringField(nested, targetField: 3))
+                let plugin = nonEmpty(extractStringField(nested, targetField: 4))
+                let persistRaw = Int(extractVarintField(nested, targetField: 5) ?? 1)
+                let persistType = PersistSuggestionType(rawValue: persistRaw) ?? .suggested
                 return RequestedInteraction(
                     kind: .permission,
                     permission: PermissionInteractionSpec(
-                        action: "read",
+                        action: action,
                         target: pattern ?? "*",
-                        suggestedPersistPattern: pattern
-                    )
+                        suggestedPersistPattern: pattern,
+                        persistSuggestionType: persistType,
+                        reason: reason,
+                        pluginName: plugin
+                    ),
+                    pluginName: plugin
                 )
             case 22, 24: // AskQuestionInteractionSpec (22 real, 24 mock_language_server)
                 let q = extractStringField(nested, targetField: 1) ?? "Clarification needed"
                 let opts = extractRepeatedStringField(nested, targetField: 2)
+                let multi = (extractVarintField(nested, targetField: 3) ?? 0) != 0
                 return RequestedInteraction(
                     kind: .askQuestion,
-                    askQuestion: AskQuestionInteractionSpec(question: q, options: opts)
+                    askQuestion: AskQuestionInteractionSpec(question: q, options: opts, isMultiSelect: multi)
                 )
             case 23: // ApprovalInteractionSpec (23 real) or mock_language_server runCommand (when stepType == .runCommand)
                 if hintStepType == .runCommand,
@@ -569,6 +693,37 @@ public enum ProtobufStepCodec {
                     )
                 }
                 return RequestedInteraction(kind: .approvalInteraction)
+            case 25: // DownloadUrlInteractionSpec
+                let url = nonEmpty(extractStringField(nested, targetField: 1)) ?? ""
+                let origin = nonEmpty(extractStringField(nested, targetField: 2)) ?? (URL(string: url)?.host ?? "unknown")
+                let fileName = nonEmpty(extractStringField(nested, targetField: 3)) ?? (URL(string: url)?.lastPathComponent ?? "download.bin")
+                let mime = nonEmpty(extractStringField(nested, targetField: 4)) ?? "application/octet-stream"
+                let dest = nonEmpty(extractStringField(nested, targetField: 5)) ?? "~/Downloads"
+                return RequestedInteraction(
+                    kind: .downloadUrl,
+                    downloadUrl: DownloadUrlInteractionSpec(
+                        url: url,
+                        origin: origin,
+                        fileName: fileName,
+                        mimeType: mime,
+                        destinationFolder: dest
+                    )
+                )
+            case 26: // BrowserUploadInteractionSpec
+                let origin = nonEmpty(extractStringField(nested, targetField: 1)) ?? "https://app.example.com"
+                let files = extractRepeatedStringField(nested, targetField: 2)
+                return RequestedInteraction(
+                    kind: .browserUpload,
+                    browserUpload: BrowserUploadInteractionSpec(origin: origin, fileNames: files)
+                )
+            case 27: // WorkflowScriptInteractionSpec
+                let title = nonEmpty(extractStringField(nested, targetField: 1)) ?? "Dynamic Workflow"
+                let script = nonEmpty(extractStringField(nested, targetField: 2)) ?? ""
+                let phases = extractRepeatedStringField(nested, targetField: 3)
+                return RequestedInteraction(
+                    kind: .workflowScript,
+                    workflowScript: WorkflowScriptInteractionSpec(title: title, pythonScript: script, phaseNames: phases)
+                )
             default:
                 return RequestedInteraction(kind: .approvalInteraction)
             }

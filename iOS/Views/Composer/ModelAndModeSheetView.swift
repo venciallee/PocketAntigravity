@@ -164,9 +164,23 @@ public struct ModelAndModeSheetView: View {
                         modeSection
                     }
 
+                    if isLiveAntigravity2Mode && store.selectedModelConfig.isOrchestrator {
+                        HStack(spacing: 8) {
+                            Image(systemName: "cpu.fill")
+                                .foregroundStyle(Self.periwinkle)
+                            Text("Orchestrator uses fixed Planner (\(store.selectedModelConfig.plannerModelName ?? "Gemini 4 Neon")) + Executor (\(store.selectedModelConfig.executorModelName ?? "Gemini 4 Hydrogen")) settings.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 12))
+                    }
+
                     modelSection
 
                     if isLiveAntigravity2Mode {
+                        dualPoolQuotaSection
                         permissionsSection
                     }
 
@@ -182,6 +196,40 @@ public struct ModelAndModeSheetView: View {
         }
     }
 
+    private var dualPoolQuotaSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                sectionHeader("QUOTA · \(store.usageQuota.planDisplayName.uppercased())")
+                Spacer()
+                Text("5h & Weekly Pools")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AntigravityTheme.inkMuted)
+            }
+            HStack(spacing: 12) {
+                quotaMiniBar(label: "Gemini 5h", pct: store.usageQuota.geminiFiveHourPercent)
+                quotaMiniBar(label: "Gemini Wk", pct: store.usageQuota.geminiWeeklyPercent)
+                quotaMiniBar(label: "Partner 5h", pct: store.usageQuota.partnerFiveHourPercent)
+                quotaMiniBar(label: "Partner Wk", pct: store.usageQuota.partnerWeeklyPercent)
+            }
+            .padding(12)
+            .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+        }
+        .accessibilityIdentifier("model-usage-quota-card")
+    }
+
+    private func quotaMiniBar(label: String, pct: Int) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(AntigravityTheme.inkSecondary)
+            Text("\(pct)%")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(pct > 25 ? Self.periwinkle : AntigravityTheme.statusWaiting)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var headerBar: some View {
         ZStack {
             Text(sheetTitle)
@@ -189,6 +237,19 @@ public struct ModelAndModeSheetView: View {
                 .foregroundStyle(AntigravityTheme.inkReading)
 
             HStack {
+                if isLiveAntigravity2Mode {
+                    Button {
+                        Task { await store.refreshModelCatalog(forceRefresh: true) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                            .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-refresh-models")
+                }
                 Spacer()
                 Button {
                     applyAndDismiss()
