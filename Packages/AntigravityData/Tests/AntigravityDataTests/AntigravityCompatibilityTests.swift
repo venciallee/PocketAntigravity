@@ -113,6 +113,20 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertTrue(foldedText.contains("ratelimit.go:L22-L26"))
         XCTAssertTrue(foldedText.contains("cfg.BucketTTL"))
 
+        // 1b. JSON-wrapped Connect-RPC error bodies with escaped quotes (`\"...\"`)
+        XCTAssertEqual(
+            ProtocolCompatibilityEngine.extractUnknownProtoFieldName(
+                from: "{\"code\":\"invalid_argument\",\"message\":\"unknown field \\\"permissionPreset\\\"\"}"
+            ),
+            "permissionPreset"
+        )
+        XCTAssertEqual(
+            ProtocolCompatibilityEngine.extractInvalidEnumValue(
+                from: "{\"code\":\"invalid_argument\",\"message\":\"invalid value for enum type ThinkingEffort: \\\"XHIGH\\\"\"}"
+            ),
+            "XHIGH"
+        )
+
         // 2. Enum extraction & downgrade (`XHIGH` -> `HIGH`)
         let invalidEnum = ProtocolCompatibilityEngine.extractInvalidEnumValue(
             from: "invalid_argument: invalid value for enum type exa.cortex_pb.ThinkingEffort: \"XHIGH\""

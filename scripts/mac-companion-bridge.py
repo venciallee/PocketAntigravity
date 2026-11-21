@@ -2448,9 +2448,20 @@ def create_bridge_server(
                     err_body = e.read()
                     err_text = err_body.decode("utf-8", errors="ignore")
                     if is_json and e.code == 400 and attempts <= 4:
+                        err_search = err_text
+                        try:
+                            err_json = json.loads(err_text)
+                            if isinstance(err_json, dict):
+                                for err_k in ("message", "error", "detail"):
+                                    if isinstance(err_json.get(err_k), str) and err_json[err_k]:
+                                        err_search = err_json[err_k]
+                                        break
+                        except Exception:
+                            pass
+                        err_search = err_search.replace('\\"', '"')
                         field_m = re.search(
-                            r'(?:unknown field|no such field|unrecognized field)\s+["\']([A-Za-z0-9_]+)["\']',
-                            err_text,
+                            r'(?:unknown field|no such field|unrecognized field)\s+["\'`]+([A-Za-z0-9_]+)["\'`]+',
+                            err_search,
                             re.IGNORECASE,
                         )
                         if field_m:
@@ -2460,8 +2471,8 @@ def create_bridge_server(
                                 forward_body = json.dumps(req_obj).encode("utf-8")
                                 continue
                         enum_m = re.search(
-                            r'(?:invalid value for enum|unknown enum value|invalid enum value)[^"\']*["\']([A-Za-z0-9_\-]+)["\']',
-                            err_text,
+                            r'(?:invalid value for enum|unknown enum value|invalid enum value)[^"\'`]*["\'`]+([A-Za-z0-9_\-]+)["\'`]+',
+                            err_search,
                             re.IGNORECASE,
                         )
                         if enum_m and enum_m.group(1) in BRIDGE_ENUM_DOWNGRADES:

@@ -400,23 +400,48 @@ public enum ProtocolCompatibilityEngine: Sendable {
             || lower.contains("not implemented")
     }
 
+    /// Unwraps JSON error payloads (`{"message": "..."}` / `{"error": "..."}`) and normalizes
+    /// JSON-escaped quotes (`\"`) so protojson field/enum error extractors work on both raw HTTP
+    /// Connect-RPC bodies and already-unwrapped error strings.
+    private static func candidateErrorStrings(from raw: String) -> [String] {
+        var candidates: [String] = []
+        if let data = raw.data(using: .utf8),
+           let obj = try? JSONDecoder().decode([String: JSONValue].self, from: data) {
+            for key in ["message", "error", "detail", "details"] {
+                if let msg = obj[key]?.stringValue, !msg.isEmpty {
+                    candidates.append(msg)
+                    if msg.contains("\\\"") {
+                        candidates.append(msg.replacingOccurrences(of: "\\\"", with: "\""))
+                    }
+                }
+            }
+        }
+        candidates.append(raw)
+        if raw.contains("\\\"") {
+            candidates.append(raw.replacingOccurrences(of: "\\\"", with: "\""))
+        }
+        return candidates
+    }
+
     /// Extracts an unknown protobuf JSON field name from Connect-RPC / protojson error messages, e.g.:
     /// - `unknown field "thinkingEffort"`
-    /// - `unknown field 'permissionPreset'`
+    /// - `{"code":"invalid_argument","message":"unknown field \"permissionPreset\""}`
     /// - `no such field "agentPersona"`
     public static func extractUnknownProtoFieldName(from message: String) -> String? {
         let patterns = [
-            #"unknown field ["']([A-Za-z0-9_]+)["']"#,
-            #"no such field ["']([A-Za-z0-9_]+)["']"#,
-            #"unrecognized field ["']([A-Za-z0-9_]+)["']"#
+            #"unknown field\s+["'`]+([A-Za-z0-9_]+)["'`]+"#,
+            #"no such field\s+["'`]+([A-Za-z0-9_]+)["'`]+"#,
+            #"unrecognized field\s+["'`]+([A-Za-z0-9_]+)["'`]+"#
         ]
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-               let match = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
-               let range = Range(match.range(at: 1), in: message) {
-                let candidate = String(message[range])
-                if !candidate.isEmpty {
-                    return candidate
+        for candidate in candidateErrorStrings(from: message) {
+            for pattern in patterns {
+                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                   let match = regex.firstMatch(in: candidate, range: NSRange(candidate.startIndex..., in: candidate)),
+                   let range = Range(match.range(at: 1), in: candidate) {
+                    let field = String(candidate[range])
+                    if !field.isEmpty {
+                        return field
+                    }
                 }
             }
         }
@@ -425,20 +450,23 @@ public enum ProtocolCompatibilityEngine: Sendable {
 
     /// Extracts a rejected protobuf enum value string from Connect-RPC / protojson error messages, e.g.:
     /// - `invalid value for enum type exa.cortex_pb.ThinkingEffort: "XHIGH"`
+    /// - `{"code":"invalid_argument","message":"invalid value for enum type ThinkingEffort: \"XHIGH\""}`
     /// - `unknown enum value "PERMISSION_SCOPE_CONVERSATION"`
     public static func extractInvalidEnumValue(from message: String) -> String? {
         let patterns = [
-            #"invalid value for enum[^"']*["']([A-Za-z0-9_\-]+)["']"#,
-            #"unknown enum value[^"']*["']([A-Za-z0-9_\-]+)["']"#,
-            #"invalid enum value[^"']*["']([A-Za-z0-9_\-]+)["']"#
+            #"invalid value for enum[^"'`]*["'`]+([A-Za-z0-9_\-]+)["'`]+"#,
+            #"unknown enum value[^"'`]*["'`]+([A-Za-z0-9_\-]+)["'`]+"#,
+            #"invalid enum value[^"'`]*["'`]+([A-Za-z0-9_\-]+)["'`]+"#
         ]
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-               let match = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
-               let range = Range(match.range(at: 1), in: message) {
-                let candidate = String(message[range])
-                if !candidate.isEmpty {
-                    return candidate
+        for candidate in candidateErrorStrings(from: message) {
+            for pattern in patterns {
+                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                   let match = regex.firstMatch(in: candidate, range: NSRange(candidate.startIndex..., in: candidate)),
+                   let range = Range(match.range(at: 1), in: candidate) {
+                    let enumVal = String(candidate[range])
+                    if !enumVal.isEmpty {
+                        return enumVal
+                    }
                 }
             }
         }
