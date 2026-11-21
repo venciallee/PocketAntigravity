@@ -53,6 +53,22 @@ jobs:
           python3 verification/verify-v233-capabilities.py 2>&1 | tee verification/output/real-simulator/v233-capabilities.log
           python3 verification/verify-compat-matrix.py 2>&1 | tee verification/output/real-simulator/compat-matrix.log
 
+      - name: Set up JDK 21 for KMP Shared Core
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: "[Gate 2.5] Assemble KMP AntigravityShared.xcframework (Ktor Darwin + SKIE)"
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew :shared:umbrella:assembleAntigravitySharedDebugXCFramework --no-daemon 2>&1 | tee verification/output/real-simulator/kmp-xcframework.log
+          ls -la shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
+
       - name: "[Gate 3-5] Real Simulator XCUITest UI Taps (AntigravityUITests) + Live App RPC + 13 Native Screenshots"
         run: |
           set -euo pipefail

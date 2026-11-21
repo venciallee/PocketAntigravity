@@ -203,58 +203,33 @@ extension AntigravitySessionStore {
         activeRoute = .cascadeChat(optimisticId)
 
         let clientRef = rpcClient
+        let engineRef = kmpEngine
         let modelId = selectedModelConfig.modelId
         let shouldCallLiveBackend = (hasPairedBackend || isLiveBackendConnected)
-
         let isLive = isLiveBackendActive
+
         Task { [weak self] in
-            if shouldCallLiveBackend, let clientRef {
+            var createdCascadeId: String? = nil
+            if shouldCallLiveBackend {
                 do {
-                    let realCascadeId = try await clientRef.startCascade(
-                        workspaceUri: workspaceUri,
-                        initialPrompt: initialPrompt ?? "",
-                        modelId: modelId,
-                        cloudProjectId: cloudProjId,
-                        isCloud: isCloudProj,
-                        instanceUuidOverride: originUuid
-                    )
-                    if !realCascadeId.isEmpty {
-                        guard let self else { return }
-                        let belongsToActiveHost = !isCloudProj && (
-                            originUuid == nil
-                                || originUuid?.isEmpty == true
-                                || originUuid == self.activeHost.instanceId
+                    if let engineRef {
+                        createdCascadeId = try await engineRef.startConversation(
+                            workspaceUri: workspaceUri,
+                            initialPrompt: initialPrompt ?? "",
+                            modelId: modelId,
+                            cloudProjectId: cloudProjId,
+                            isCloud: isCloudProj,
+                            instanceUuidOverride: originUuid
                         )
-                        if belongsToActiveHost && self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
-                            self.markBackendReconnected()
-                        }
-                        let wasEmptyNew = self.locallyCreatedEmptyCascadeIds.remove(optimisticId) != nil
-                        let existingSteps = self.stepsByCascadeId.removeValue(forKey: optimisticId) ?? []
-                        if wasEmptyNew && existingSteps.isEmpty && (initialPrompt == nil || initialPrompt?.isEmpty == true) {
-                            self.locallyCreatedEmptyCascadeIds.insert(realCascadeId)
-                        }
-                        self.stepsByCascadeId[realCascadeId] = existingSteps.map { step in
-                            var copy = step
-                            copy.cascadeId = realCascadeId
-                            return copy
-                        }
-                        if let idx = self.summaries.firstIndex(where: { $0.cascadeId == optimisticId }) {
-                            self.summaries[idx].cascadeId = realCascadeId
-                        }
-                        if self.activeCascadeId == optimisticId {
-                            self.activeCascadeId = realCascadeId
-                            if case .cascadeChat = self.activeRoute {
-                                self.activeRoute = .cascadeChat(realCascadeId)
-                            }
-                        }
-                        if let prompt = initialPrompt, !prompt.isEmpty {
-                            self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
-                            self.composerDraftText = prompt
-                            self.sendCurrentDraft()
-                        } else {
-                            self.syncStepsForCascade(realCascadeId, pollUntilIdle: false)
-                        }
-                        return
+                    } else if let clientRef {
+                        createdCascadeId = try await clientRef.startCascade(
+                            workspaceUri: workspaceUri,
+                            initialPrompt: initialPrompt ?? "",
+                            modelId: modelId,
+                            cloudProjectId: cloudProjId,
+                            isCloud: isCloudProj,
+                            instanceUuidOverride: originUuid
+                        )
                     }
                 } catch {
                     if let self, isLive {
@@ -265,6 +240,44 @@ extension AntigravitySessionStore {
                         )
                     }
                 }
+            }
+            if let realCascadeId = createdCascadeId, !realCascadeId.isEmpty {
+                guard let self else { return }
+                let belongsToActiveHost = !isCloudProj && (
+                    originUuid == nil
+                        || originUuid?.isEmpty == true
+                        || originUuid == self.activeHost.instanceId
+                )
+                if belongsToActiveHost && self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
+                    self.markBackendReconnected()
+                }
+                let wasEmptyNew = self.locallyCreatedEmptyCascadeIds.remove(optimisticId) != nil
+                let existingSteps = self.stepsByCascadeId.removeValue(forKey: optimisticId) ?? []
+                if wasEmptyNew && existingSteps.isEmpty && (initialPrompt == nil || initialPrompt?.isEmpty == true) {
+                    self.locallyCreatedEmptyCascadeIds.insert(realCascadeId)
+                }
+                self.stepsByCascadeId[realCascadeId] = existingSteps.map { step in
+                    var copy = step
+                    copy.cascadeId = realCascadeId
+                    return copy
+                }
+                if let idx = self.summaries.firstIndex(where: { $0.cascadeId == optimisticId }) {
+                    self.summaries[idx].cascadeId = realCascadeId
+                }
+                if self.activeCascadeId == optimisticId {
+                    self.activeCascadeId = realCascadeId
+                    if case .cascadeChat = self.activeRoute {
+                        self.activeRoute = .cascadeChat(realCascadeId)
+                    }
+                }
+                if let prompt = initialPrompt, !prompt.isEmpty {
+                    self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
+                    self.composerDraftText = prompt
+                    self.sendCurrentDraft()
+                } else {
+                    self.syncStepsForCascade(realCascadeId, pollUntilIdle: false)
+                }
+                return
             }
 
             if let prompt = initialPrompt, !prompt.isEmpty {
@@ -359,10 +372,18 @@ extension AntigravitySessionStore {
 
         var didRefreshRelayList = skipRelayMetadataProbe
         if isRelay && !skipRelayMetadataProbe {
-            if let probe = try? await client.probeHostReachability(
-                timeoutInterval: min(syncTimeout, 8.0),
-                allowCrossHostFallback: allowCrossHostFallback
-            ) {
+            let probeResult: HostReachabilityProbeResult?
+            if let kmpEngine {
+                probeResult = try? await kmpEngine.probeHostReachability(
+                    allowCrossHostFallback: allowCrossHostFallback
+                )
+            } else {
+                probeResult = try? await client.probeHostReachability(
+                    timeoutInterval: min(syncTimeout, 8.0),
+                    allowCrossHostFallback: allowCrossHostFallback
+                )
+            }
+            if let probe = probeResult {
                 guard self.hostSwitchGeneration == generation, !self.isNetworkingSuspended else { return }
                 applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHostFallback)
                 didRefreshRelayList = true
@@ -394,14 +415,39 @@ extension AntigravitySessionStore {
         }
 
         do {
-            let federated = try await client.fetchFederatedWorkspacesAndSummaries(
-                timeoutInterval: syncTimeout,
-                lightweightPoll: useLightweight,
-                skipRelayListRefresh: didRefreshRelayList,
-                targetInstanceUuid: targetInstanceUuid,
-                includeLocal: includeLocal,
-                includeCloud: includeCloud
+            let federated: (
+                workspaces: [WorkspaceInfo],
+                summaries: [CascadeSummary],
+                cloudProjects: [ProjectWorkspace],
+                cloudWarmingUp: Bool,
+                availableRelayInstances: [RelayInstanceInfo],
+                succeededInstanceUuids: Set<String>,
+                cloudSucceeded: Bool
             )
+            if let kmpEngine {
+                let kmpSync = try await kmpEngine.refreshWorkspacesAndSummaries(
+                    hostScope: effectiveScope,
+                    skipRelayListRefresh: didRefreshRelayList
+                )
+                federated = (
+                    workspaces: kmpSync.workspaces,
+                    summaries: kmpSync.summaries,
+                    cloudProjects: kmpSync.cloudProjects,
+                    cloudWarmingUp: kmpSync.cloudWarmingUp,
+                    availableRelayInstances: kmpSync.availableRelayInstances,
+                    succeededInstanceUuids: Set(kmpSync.succeededInstanceUuids),
+                    cloudSucceeded: kmpSync.cloudSucceeded
+                )
+            } else {
+                federated = try await client.fetchFederatedWorkspacesAndSummaries(
+                    timeoutInterval: syncTimeout,
+                    lightweightPoll: useLightweight,
+                    skipRelayListRefresh: didRefreshRelayList,
+                    targetInstanceUuid: targetInstanceUuid,
+                    includeLocal: includeLocal,
+                    includeCloud: includeCloud
+                )
+            }
             guard self.hostSwitchGeneration == generation, !self.isNetworkingSuspended else { return }
 
             if isRelay && !federated.availableRelayInstances.isEmpty {

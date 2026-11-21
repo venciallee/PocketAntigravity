@@ -1,0 +1,149 @@
+import Foundation
+
+/// Outcome returned by `AntigravityKmpEnginePort.sendMessage(...)` after KMP Durable Outbox + Ktor RPC dispatch.
+public struct KmpSendMessageResult: Sendable, Equatable {
+    public let resolvedCascadeId: String
+    public let dispatchedLive: Bool
+    public let queuedInOutbox: Bool
+    public let errorMessage: String?
+
+    public init(
+        resolvedCascadeId: String,
+        dispatchedLive: Bool,
+        queuedInOutbox: Bool,
+        errorMessage: String? = nil
+    ) {
+        self.resolvedCascadeId = resolvedCascadeId
+        self.dispatchedLive = dispatchedLive
+        self.queuedInOutbox = queuedInOutbox
+        self.errorMessage = errorMessage
+    }
+}
+
+/// Federated workspace + summary sync result returned by `AntigravityKmpEnginePort.refreshWorkspacesAndSummaries(...)`.
+public struct KmpFederatedSyncResult: Sendable, Equatable {
+    public let workspaces: [WorkspaceInfo]
+    public let summaries: [CascadeSummary]
+    public let cloudProjects: [ProjectWorkspace]
+    public let cloudWarmingUp: Bool
+    public let availableRelayInstances: [RelayInstanceInfo]
+    public let succeededInstanceUuids: [String]
+    public let cloudSucceeded: Bool
+    public let latencyMs: Int
+
+    public init(
+        workspaces: [WorkspaceInfo],
+        summaries: [CascadeSummary],
+        cloudProjects: [ProjectWorkspace] = [],
+        cloudWarmingUp: Bool = false,
+        availableRelayInstances: [RelayInstanceInfo] = [],
+        succeededInstanceUuids: [String] = [],
+        cloudSucceeded: Bool = false,
+        latencyMs: Int = 0
+    ) {
+        self.workspaces = workspaces
+        self.summaries = summaries
+        self.cloudProjects = cloudProjects
+        self.cloudWarmingUp = cloudWarmingUp
+        self.availableRelayInstances = availableRelayInstances
+        self.succeededInstanceUuids = succeededInstanceUuids
+        self.cloudSucceeded = cloudSucceeded
+        self.latencyMs = latencyMs
+    }
+}
+
+/// Dependency-inverted pure-Swift port for delegating core connection, conversation sync,
+/// trajectory step loading (`<600` JSON + `>=600` Binary Protobuf), and PC-side core interactions
+/// (`StartCascade`, `SendUserCascadeMessage`, `HandleCascadeUserInteraction`, `CancelCascadeInvocation`)
+/// to the Kotlin Multiplatform `AntigravityShared.xcframework` (`Ktor Darwin` + `SKIE` + `AntigravityCoreCoordinator`).
+///
+/// Keeping this protocol in `AntigravityData` ensures `AntigravityLiveActivity` (WidgetKit 30MB limit)
+/// and `AntigravityShare` extensions never link the Kotlin/Native binary, while the main `Antigravity.app`
+/// injects `KmpCoreEngineAdapter` at launch.
+public protocol AntigravityKmpEnginePort: Sendable {
+    var engineName: String { get }
+
+    func connectDirectLan(
+        endpointURLString: String,
+        csrfToken: String,
+        certSHA256: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool
+    ) async throws -> BackendHandshakeResult
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult
+
+    func syncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep]
+
+    func startConversation(
+        workspaceUri: String,
+        initialPrompt: String,
+        modelId: String,
+        cloudProjectId: String?,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> String
+
+    func sendMessage(
+        cascadeId: String,
+        message: String,
+        workspaceUri: String,
+        attachments: [ComposerAttachmentChip],
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode,
+        agentPersona: String,
+        isCloud: Bool,
+        cloudProjectId: String?,
+        permissionPreset: AgentPermissionPreset?,
+        instanceUuidOverride: String?,
+        isOptimisticDraft: Bool
+    ) async throws -> KmpSendMessageResult
+
+    func resolveWaitingInteraction(
+        step: CascadeStep,
+        decision: InteractionDecision,
+        workspaceUri: String?,
+        instanceUuidOverride: String?
+    ) async throws -> CascadeUserInteractionPayload
+
+    func cancelActiveTurn(
+        cascadeId: String,
+        instanceUuidOverride: String?
+    ) async throws
+
+    func replayPendingOutbox(
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode
+    ) async -> Int
+
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async
+
+    func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]>
+
+    func onBackground()
+    func onForeground() async
+    func disconnectAndClearCredentials() async
+}

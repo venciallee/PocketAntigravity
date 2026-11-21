@@ -117,6 +117,15 @@ def main():
     out_dir = repo_root / "verification" / "output" / "real-simulator"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    xcf_path = repo_root / "shared" / "umbrella" / "build" / "XCFrameworks" / "debug" / "AntigravityShared.xcframework"
+    if not xcf_path.exists():
+        print("=== [0/5] Building KMP AntigravityShared.xcframework via Gradle ===")
+        subprocess.run(
+            ["./gradlew", ":shared:umbrella:assembleAntigravitySharedDebugXCFramework", "--no-daemon"],
+            cwd=repo_root,
+            check=True,
+        )
+
     print("=== [1/5] Generating Xcode Project via XcodeGen ===")
     subprocess.run(["xcodegen", "generate"], cwd=repo_root, check=True)
 

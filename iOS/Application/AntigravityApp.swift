@@ -17,7 +17,9 @@ public struct AntigravityApp: App {
             initialStore = AntigravitySessionStore.makeESDDVerificationStore()
             initialStore.configureForVerifyScene(launchCase)
         } else {
-            initialStore = AntigravitySessionStore.makeLiveStore()
+            initialStore = AntigravitySessionStore.makeLiveStore(
+                kmpEngine: KmpCoreEngineAdapter.makeDefault()
+            )
         }
         self._store = State(initialValue: initialStore)
         self._activeVerifyCase = State(initialValue: launchCase)
@@ -121,7 +123,9 @@ public struct AntigravityApp: App {
                         || RemoteHostInstance.parseRemoteControlTarget(rawURL) != nil {
                         activeVerifyCase = nil
                         if store.isVerificationMode {
-                            let liveStore = AntigravitySessionStore.makeLiveStore()
+                            let liveStore = AntigravitySessionStore.makeLiveStore(
+                                kmpEngine: KmpCoreEngineAdapter.makeDefault()
+                            )
                             liveStore.isInitialSessionCheckComplete = true
                             store = liveStore
                         }

@@ -186,7 +186,11 @@ extension AntigravitySessionStore {
 
         if isLiveBackendConnected && activeHost.isOnline {
             lastStreamReopenAttemptAt = .distantPast
-            ensureSummaryEnvelopeStreamRunning()
+            if kmpEngine != nil {
+                startKmpSummarySubscriptionIfNeeded()
+            } else {
+                ensureSummaryEnvelopeStreamRunning()
+            }
             connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
         }
 
@@ -1073,12 +1077,22 @@ extension AntigravitySessionStore {
                     && !(self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
                 var stillActive = false
                 do {
-                    let remoteSteps = try await client.fetchAllTrajectorySteps(
-                        cascadeId: cascadeId,
-                        knownStepCount: knownCount,
-                        isCloud: summaryIsCloud,
-                        instanceUuidOverride: originUuid
-                    )
+                    let remoteSteps: [CascadeStep]
+                    if let engine = self.kmpEngine {
+                        remoteSteps = try await engine.syncSteps(
+                            cascadeId: cascadeId,
+                            knownStepCount: knownCount,
+                            isCloud: summaryIsCloud,
+                            instanceUuidOverride: originUuid
+                        )
+                    } else {
+                        remoteSteps = try await client.fetchAllTrajectorySteps(
+                            cascadeId: cascadeId,
+                            knownStepCount: knownCount,
+                            isCloud: summaryIsCloud,
+                            instanceUuidOverride: originUuid
+                        )
+                    }
                     let liveRelaySnapshot: (instances: [RelayInstanceInfo], active: RelayInstanceInfo?)? =
                         (self.activeHost.channel == .cloudRelay)
                             ? await client.currentRelayInstancesSnapshot()

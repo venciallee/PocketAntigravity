@@ -910,3 +910,18 @@ public data class PendingDraftConversation(
     public val cloudProjectId: String? = null,
     public val originInstanceUuid: String? = null,
 )
+
+@Serializable
+public sealed interface AgentsHostFilterScope {
+    @Serializable
+    public data object AllHosts : AgentsHostFilterScope
+
+    @Serializable
+    public data object AntigravityCloud : AgentsHostFilterScope
+
+    @Serializable
+    public data class LocalHost(
+        public val id: String,
+        public val name: String,
+    ) : AgentsHostFilterScope
+}
