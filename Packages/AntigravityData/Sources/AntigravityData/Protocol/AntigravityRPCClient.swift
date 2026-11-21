@@ -3149,7 +3149,7 @@ public actor AntigravityRPCClient {
                 "allow": .bool(fp.allow),
                 "scope": .string(fp.scope)
             ]
-            if let uri = fp.absolutePathUri {
+            if let uri = fp.absolutePathUri, !uri.isEmpty {
                 fpObj["absolutePathUri"] = .string(uri)
             }
             interactionObj["filePermission"] = .object(fpObj)
@@ -3162,18 +3162,70 @@ public actor AntigravityRPCClient {
             }
             interactionObj["askQuestion"] = .object(qaObj)
         } else if let confirm = payload.genericConfirm {
-            var genericObj: [String: JSONValue] = ["confirm": .bool(confirm)]
-            if let scope = payload.approvalScope {
-                genericObj["scope"] = .string(scope)
+            let memberKey = payload.rawMemberKey ?? payload.kind.rawValue
+            if payload.kind == .deploy {
+                interactionObj[memberKey] = .object(["cancel": .bool(!confirm)])
+            } else {
+                var genericObj: [String: JSONValue] = ["confirm": .bool(confirm)]
+                if let scope = payload.approvalScope {
+                    genericObj["scope"] = .string(scope)
+                }
+                interactionObj[memberKey] = .object(genericObj)
             }
-            interactionObj[payload.kind.rawValue] = .object(genericObj)
         }
 
-        _ = try await callUnaryJSON(
-            method: "HandleCascadeUserInteraction",
-            body: ["interaction": .object(interactionObj)],
-            instanceUuidOverride: instanceUuidOverride
-        )
+        do {
+            _ = try await callUnaryJSON(
+                method: "HandleCascadeUserInteraction",
+                body: ["interaction": .object(interactionObj)],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        } catch let AntigravityRPCError.httpError(statusCode, errorBody)
+            where statusCode == 400
+                || errorBody.lowercased().contains("unknown field")
+                || errorBody.lowercased().contains("invalid_argument") {
+            // Retry with strict upstream-minimal proto3 fields (e.g., Desktop servers whose protojson rejects optional `scope` or expects `allow`)
+            var fallbackObj: [String: JSONValue] = [
+                "trajectoryId": .string(payload.cascadeId),
+                "stepIndex": .int(payload.stepIndex)
+            ]
+            if let perm = payload.permission {
+                var minPerm: [String: JSONValue] = ["allow": .bool(perm.allow)]
+                if !perm.grantPatterns.isEmpty {
+                    minPerm["turnGrants"] = .object([
+                        "allow": .array(perm.grantPatterns.map(JSONValue.string)),
+                        "deny": .array([])
+                    ])
+                }
+                fallbackObj["permission"] = .object(minPerm)
+            } else if let fp = payload.filePermission {
+                let compatScope = (fp.scope == "PERMISSION_SCOPE_CONVERSATION" || fp.scope == "PERMISSION_SCOPE_ALWAYS")
+                    ? "PERMISSION_SCOPE_TURN"
+                    : "PERMISSION_SCOPE_ONCE"
+                var minFp: [String: JSONValue] = [
+                    "allow": .bool(fp.allow),
+                    "scope": .string(compatScope)
+                ]
+                if let uri = fp.absolutePathUri, !uri.isEmpty {
+                    minFp["absolutePathUri"] = .string(uri)
+                }
+                fallbackObj["filePermission"] = .object(minFp)
+            } else if let confirm = payload.genericConfirm {
+                let memberKey = payload.rawMemberKey ?? payload.kind.rawValue
+                let useAllowKey = errorBody.lowercased().contains("\"confirm\"")
+                fallbackObj[memberKey] = .object([
+                    (useAllowKey ? "allow" : "confirm"): .bool(confirm)
+                ])
+            } else {
+                throw AntigravityRPCError.httpError(statusCode: statusCode, body: errorBody)
+            }
+
+            _ = try await callUnaryJSON(
+                method: "HandleCascadeUserInteraction",
+                body: ["interaction": .object(fallbackObj)],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        }
     }
 
     public func handleCascadeUserInteraction(
@@ -4991,14 +5043,310 @@ public actor AntigravityRPCClient {
         if upper.contains("PLANNER_RESPONSE") { return .plannerResponse }
         if upper.contains("NOTIFY_USER") { return .notifyUser }
         if upper.contains("TASK_BOUNDARY") { return .taskBoundary }
-        if upper.contains("RUN_COMMAND") { return .runCommand }
+        if upper.contains("SEND_COMMAND_INPUT") { return .sendCommandInput }
+        if upper.contains("COMMAND_STATUS") { return .commandStatus }
+        if upper.contains("RUN_COMMAND") || upper.contains("SHELL_EXEC") { return .runCommand }
+        if upper.contains("VIEW_CONTENT_CHUNK") { return .viewContentChunk }
         if upper.contains("VIEW_FILE") || upper.contains("VIEW_CODE") { return .viewFile }
         if upper.contains("GREP_SEARCH") || upper.contains("FIND_BY_NAME") || upper.contains("SEARCH") { return .search }
         if upper.contains("LIST_DIRECTORY") { return .listDirectory }
-        if upper.contains("CODE_ACTION") || upper.contains("REPLACE_FILE") || upper.contains("WRITE_TO_FILE") {
+        if upper.contains("READ_URL_CONTENT") { return .readUrlContent }
+        if upper.contains("BROWSER_SUBAGENT") || upper.contains("BROWSER_") { return .browserSubagent }
+        if upper.contains("SUBAGENT") { return .subagentInvocation }
+        if upper.contains("WORKFLOW") { return .dynamicWorkflow }
+        if upper.contains("SWARM") { return .swarmBoard }
+        if upper.contains("MCP") { return .mcpToolCall }
+        if upper.contains("CHECKPOINT") { return .checkpoint }
+        if upper.contains("EPHEMERAL_MESSAGE") { return .ephemeralMessage }
+        if upper.contains("CODE_ACTION")
+            || upper.contains("REPLACE_FILE")
+            || upper.contains("MULTI_REPLACE_FILE")
+            || upper.contains("WRITE_TO_FILE")
+            || upper.contains("FILE_CHANGE")
+            || upper.contains("PROPOSE_CODE") {
             return .codeAction
         }
         return .unspecified
+    }
+
+    private static func extractReadableSummary(from value: JSONValue?) -> String? {
+        guard let value else { return nil }
+        if let s = nonEmptyString(value.stringValue) {
+            return s
+        }
+        guard let obj = value.objectValue else { return nil }
+        let preferredKeys = [
+            "proposedCommandLine", "commandLine", "command", "input",
+            "absolutePathUri", "fileUri", "targetFileUri", "path", "target",
+            "url", "domain", "question", "title", "reason", "description",
+            "message", "action", "toolName", "serverName", "summary", "query"
+        ]
+        for key in preferredKeys {
+            if let s = nonEmptyString(obj[key]?.stringValue) {
+                return s
+            }
+        }
+        for key in obj.keys.sorted() {
+            if let s = nonEmptyString(obj[key]?.stringValue) {
+                return s
+            }
+        }
+        return nil
+    }
+
+    private static func decodePersistSuggestionType(_ value: JSONValue?) -> PersistSuggestionType {
+        if let raw = value?.intValue, let parsed = PersistSuggestionType(rawValue: raw) {
+            return parsed
+        }
+        if let str = value?.stringValue?.uppercased() {
+            if str.contains("BLOCKED") { return .blocked }
+            if str.contains("SUGGESTED") { return .suggested }
+            if str.contains("UNSPECIFIED") { return .unspecified }
+        }
+        return .suggested
+    }
+
+    private static func decodeJSONRequestedInteraction(
+        _ reqInt: [String: JSONValue],
+        fallbackCommandLine: String?,
+        fallbackCwd: String?
+    ) -> RequestedInteraction? {
+        if let rcInt = (reqInt["runCommand"] ?? reqInt["run_command"])?.objectValue {
+            let cmd = nonEmptyString(rcInt["proposedCommandLine"]?.stringValue)
+                ?? nonEmptyString(rcInt["commandLine"]?.stringValue)
+                ?? nonEmptyString(rcInt["command"]?.stringValue)
+                ?? fallbackCommandLine
+                ?? ""
+            let cwd = nonEmptyString(rcInt["cwd"]?.stringValue)
+                ?? fallbackCwd
+                ?? "~"
+            return RequestedInteraction(
+                kind: .runCommand,
+                runCommand: RunCommandInteractionSpec(
+                    proposedCommandLine: cmd,
+                    cwd: cwd,
+                    isDaemon: rcInt["isDaemon"]?.boolValue ?? false
+                ),
+                rawMemberKey: "runCommand"
+            )
+        }
+        if let permInt = reqInt["permission"]?.objectValue {
+            let action = nonEmptyString(permInt["action"]?.stringValue)
+                ?? nonEmptyString(permInt["toolName"]?.stringValue)
+                ?? nonEmptyString(permInt["permissionType"]?.stringValue)
+                ?? "tool"
+            let pattern = nonEmptyString(permInt["suggestedPersistPattern"]?.stringValue)
+                ?? nonEmptyString(permInt["persistPattern"]?.stringValue)
+            let targetKeys = ["target", "resource", "path", "absolutePathUri", "command"]
+            var resolvedTarget: String? = nil
+            for key in targetKeys {
+                if let candidate = nonEmptyString(permInt[key]?.stringValue) {
+                    resolvedTarget = candidate
+                    break
+                }
+            }
+            let target = resolvedTarget ?? pattern ?? "*"
+            let reason = nonEmptyString(permInt["reason"]?.stringValue)
+                ?? nonEmptyString(permInt["description"]?.stringValue)
+                ?? nonEmptyString(permInt["message"]?.stringValue)
+            let plugin = nonEmptyString(permInt["pluginName"]?.stringValue)
+                ?? nonEmptyString(permInt["serverName"]?.stringValue)
+            let persistType = decodePersistSuggestionType(permInt["persistSuggestionType"])
+            return RequestedInteraction(
+                kind: .permission,
+                permission: PermissionInteractionSpec(
+                    action: action,
+                    target: target,
+                    suggestedPersistPattern: pattern ?? target,
+                    persistSuggestionType: persistType,
+                    reason: reason,
+                    pluginName: plugin,
+                    toolIconName: nonEmptyString(permInt["toolIconName"]?.stringValue)
+                ),
+                pluginName: plugin,
+                rawMemberKey: "permission",
+                rawSummary: reason ?? "\(action)(\(target))"
+            )
+        }
+        if let fpInt = (reqInt["filePermission"] ?? reqInt["file_permission"])?.objectValue {
+            let uri = nonEmptyString(fpInt["absolutePathUri"]?.stringValue)
+                ?? nonEmptyString(fpInt["fileUri"]?.stringValue)
+                ?? nonEmptyString(fpInt["absolutePath"]?.stringValue)
+                ?? nonEmptyString(fpInt["path"]?.stringValue)
+                ?? ""
+            return RequestedInteraction(
+                kind: .filePermission,
+                filePermission: FilePermissionInteractionSpec(
+                    absolutePathUri: uri,
+                    isDirectory: fpInt["isDirectory"]?.boolValue ?? false,
+                    blockReason: nonEmptyString(fpInt["blockReason"]?.stringValue)
+                        ?? nonEmptyString(fpInt["reason"]?.stringValue)
+                ),
+                rawMemberKey: "filePermission",
+                rawSummary: uri.isEmpty ? nil : uri
+            )
+        }
+        if let qaInt = (reqInt["askQuestion"] ?? reqInt["ask_question"] ?? reqInt["elicitation"])?.objectValue {
+            let isElicitation = (reqInt["askQuestion"] == nil && reqInt["ask_question"] == nil && reqInt["elicitation"] != nil)
+            let primaryQ = qaInt["questions"]?.arrayValue?.first?.objectValue ?? qaInt
+            let rawOptions = primaryQ["options"]?.arrayValue ?? []
+            let options: [String] = rawOptions.compactMap { item in
+                if let s = nonEmptyString(item.stringValue) { return s }
+                if let o = item.objectValue {
+                    return nonEmptyString(o["label"]?.stringValue)
+                        ?? nonEmptyString(o["text"]?.stringValue)
+                        ?? nonEmptyString(o["title"]?.stringValue)
+                        ?? nonEmptyString(o["value"]?.stringValue)
+                }
+                return nil
+            }
+            let questionText = nonEmptyString(primaryQ["question"]?.stringValue)
+                ?? nonEmptyString(qaInt["question"]?.stringValue)
+                ?? nonEmptyString(qaInt["prompt"]?.stringValue)
+                ?? nonEmptyString(qaInt["message"]?.stringValue)
+                ?? "Input required"
+            return RequestedInteraction(
+                kind: isElicitation ? .elicitation : .askQuestion,
+                askQuestion: AskQuestionInteractionSpec(
+                    question: questionText,
+                    options: options,
+                    isMultiSelect: primaryQ["isMultiSelect"]?.boolValue ?? qaInt["isMultiSelect"]?.boolValue ?? false
+                ),
+                rawMemberKey: isElicitation ? "elicitation" : "askQuestion",
+                rawSummary: questionText
+            )
+        }
+        if let mcpInt = reqInt["mcp"]?.objectValue {
+            let server = nonEmptyString(mcpInt["serverName"]?.stringValue)
+                ?? nonEmptyString(mcpInt["mcpServerName"]?.stringValue)
+                ?? "mcp-server"
+            let tool = nonEmptyString(mcpInt["toolName"]?.stringValue)
+                ?? nonEmptyString(mcpInt["mcpToolName"]?.stringValue)
+                ?? "invoke_tool"
+            let plugin = nonEmptyString(mcpInt["pluginName"]?.stringValue)
+            return RequestedInteraction(
+                kind: .mcp,
+                mcpServerName: server,
+                mcpToolName: tool,
+                pluginName: plugin,
+                rawMemberKey: "mcp",
+                rawSummary: "\(server): \(tool)"
+            )
+        }
+        if let sciInt = (reqInt["sendCommandInput"] ?? reqInt["send_command_input"])?.objectValue {
+            let summary = nonEmptyString(sciInt["input"]?.stringValue)
+                ?? nonEmptyString(sciInt["commandLine"]?.stringValue)
+                ?? nonEmptyString(sciInt["commandId"]?.stringValue)
+            return RequestedInteraction(
+                kind: .sendCommandInput,
+                rawMemberKey: "sendCommandInput",
+                rawSummary: summary
+            )
+        }
+        if let dlInt = (reqInt["downloadUrl"] ?? reqInt["download_url"])?.objectValue {
+            let url = nonEmptyString(dlInt["url"]?.stringValue) ?? ""
+            let origin = nonEmptyString(dlInt["origin"]?.stringValue) ?? (URL(string: url)?.host ?? "external")
+            let fileName = nonEmptyString(dlInt["fileName"]?.stringValue) ?? (URL(string: url)?.lastPathComponent ?? "download")
+            return RequestedInteraction(
+                kind: .downloadUrl,
+                downloadUrl: DownloadUrlInteractionSpec(
+                    url: url,
+                    origin: origin,
+                    fileName: fileName,
+                    mimeType: nonEmptyString(dlInt["mimeType"]?.stringValue) ?? "application/octet-stream",
+                    destinationFolder: nonEmptyString(dlInt["destinationFolder"]?.stringValue) ?? "~/Downloads"
+                ),
+                rawMemberKey: "downloadUrl"
+            )
+        }
+        if let upInt = (reqInt["browserUpload"] ?? reqInt["browser_upload"])?.objectValue {
+            let origin = nonEmptyString(upInt["origin"]?.stringValue) ?? "external site"
+            let files = upInt["fileNames"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            return RequestedInteraction(
+                kind: .browserUpload,
+                browserUpload: BrowserUploadInteractionSpec(origin: origin, fileNames: files),
+                rawMemberKey: "browserUpload"
+            )
+        }
+        if let wfInt = (reqInt["workflowScript"] ?? reqInt["workflow_script"])?.objectValue {
+            return RequestedInteraction(
+                kind: .workflowScript,
+                workflowScript: WorkflowScriptInteractionSpec(
+                    title: nonEmptyString(wfInt["title"]?.stringValue) ?? "Dynamic Workflow",
+                    pythonScript: nonEmptyString(wfInt["pythonScript"]?.stringValue) ?? "",
+                    phaseNames: wfInt["phaseNames"]?.arrayValue?.compactMap(\.stringValue) ?? []
+                ),
+                rawMemberKey: "workflowScript"
+            )
+        }
+        let browserMembers: [(String, RequestedInteraction.MemberKind)] = [
+            ("executeUrl", .executeUrl),
+            ("openBrowserUrl", .openBrowserUrl),
+            ("browserAction", .browserAction),
+            ("executeBrowserJavascript", .executeBrowserJavascript),
+            ("captureBrowserScreenshot", .captureBrowserScreenshot),
+            ("clickBrowserPixel", .clickBrowserPixel),
+            ("openBrowserSetup", .openBrowserSetup),
+            ("confirmBrowserSetup", .confirmBrowserSetup)
+        ]
+        for (key, kind) in browserMembers {
+            if let bObj = reqInt[key]?.objectValue {
+                let url = nonEmptyString(bObj["url"]?.stringValue) ?? ""
+                let domain = nonEmptyString(bObj["domain"]?.stringValue)
+                    ?? URL(string: url)?.host
+                    ?? (url.isEmpty ? nil : url)
+                return RequestedInteraction(
+                    kind: kind,
+                    executeUrl: url.isEmpty ? nil : ExecuteUrlInteractionSpec(
+                        url: url,
+                        domain: domain ?? "external site",
+                        isRedirect: bObj["isRedirect"]?.boolValue ?? false
+                    ),
+                    rawMemberKey: key,
+                    rawSummary: extractReadableSummary(from: .object(bObj))
+                )
+            }
+        }
+        if let readUrlObj = reqInt["readUrlContent"]?.objectValue {
+            return RequestedInteraction(
+                kind: .readUrlContent,
+                rawMemberKey: "readUrlContent",
+                rawSummary: nonEmptyString(readUrlObj["url"]?.stringValue)
+                    ?? extractReadableSummary(from: .object(readUrlObj))
+            )
+        }
+        if let deployVal = reqInt["deploy"] {
+            return RequestedInteraction(
+                kind: .deploy,
+                rawMemberKey: "deploy",
+                rawSummary: extractReadableSummary(from: deployVal)
+            )
+        }
+        if let extVal = reqInt["runExtensionCode"] {
+            return RequestedInteraction(
+                kind: .runExtensionCode,
+                rawMemberKey: "runExtensionCode",
+                rawSummary: extractReadableSummary(from: extVal)
+            )
+        }
+        if let appVal = reqInt["approvalInteraction"] {
+            return RequestedInteraction(
+                kind: .approvalInteraction,
+                rawMemberKey: "approvalInteraction",
+                rawSummary: extractReadableSummary(from: appVal)
+            )
+        }
+        // Preserve any unrecognized future server interaction oneof key verbatim
+        let ignoredMetaKeys: Set<String> = ["trajectoryId", "stepIndex", "id", "metadata"]
+        if let unknownKey = reqInt.keys.sorted().first(where: { !ignoredMetaKeys.contains($0) }) {
+            let memberVal = reqInt[unknownKey]
+            return RequestedInteraction(
+                kind: .approvalInteraction,
+                rawMemberKey: unknownKey,
+                rawSummary: extractReadableSummary(from: memberVal)
+            )
+        }
+        return nil
     }
 
     private static func parseDurationSeconds(_ value: JSONValue?) -> Double? {
@@ -5117,26 +5465,29 @@ public actor AntigravityRPCClient {
             let notifyText = nonEmptyString(nu["notificationContent"]?.stringValue)
                 ?? nonEmptyString(nu["message"]?.stringValue)
                 ?? nonEmptyString(nu["reviewContent"]?.stringValue)
-            if let notifyText {
-                let paths = (nu["pathsToReview"]?.arrayValue ?? nu["reviewAbsoluteUris"]?.arrayValue)?
-                    .compactMap(\.stringValue) ?? []
+            let paths = (nu["pathsToReview"]?.arrayValue ?? nu["reviewAbsoluteUris"]?.arrayValue)?
+                .compactMap(\.stringValue) ?? []
+            if notifyText != nil || !paths.isEmpty {
                 plannerPayload = PlannerResponsePayload(
-                    response: notifyText,
+                    response: notifyText ?? "Ready for your review.",
                     referencedFiles: paths
                 )
                 stepType = .notifyUser
             }
         }
 
-        // Decode runCommand + requestedInteraction
+        // Decode runCommand / shellExec + sendCommandInput + requestedInteraction
         var runCmdPayload: RunCommandPayload?
         var interaction: RequestedInteraction?
-        if let rc = obj["runCommand"]?.objectValue {
+        if let rc = (obj["runCommand"] ?? obj["shellExec"])?.objectValue {
             let cmdLine = nonEmptyString(rc["commandLine"]?.stringValue)
                 ?? nonEmptyString(rc["proposedCommandLine"]?.stringValue)
                 ?? nonEmptyString(rc["command"]?.stringValue)
+                ?? nonEmptyString(rc["CommandLine"]?.stringValue)
                 ?? ""
-            let cwd = nonEmptyString(rc["cwd"]?.stringValue) ?? "~"
+            let cwd = nonEmptyString(rc["cwd"]?.stringValue)
+                ?? nonEmptyString(rc["Cwd"]?.stringValue)
+                ?? "~"
             if !cmdLine.isEmpty {
                 runCmdPayload = RunCommandPayload(
                     commandId: rc["commandId"]?.stringValue ?? "cmd-\(stepIndex)",
@@ -5152,41 +5503,56 @@ public actor AntigravityRPCClient {
                     stepType = .runCommand
                 }
             }
-            if stepStatus == .waiting {
-                interaction = RequestedInteraction(
-                    kind: .runCommand,
-                    runCommand: RunCommandInteractionSpec(proposedCommandLine: cmdLine, cwd: cwd)
+        } else if let sci = obj["sendCommandInput"]?.objectValue {
+            let inputText = nonEmptyString(sci["input"]?.stringValue)
+                ?? nonEmptyString(sci["commandLine"]?.stringValue)
+                ?? ""
+            if !inputText.isEmpty {
+                runCmdPayload = RunCommandPayload(
+                    commandId: sci["commandId"]?.stringValue ?? "stdin-\(stepIndex)",
+                    commandLine: inputText,
+                    proposedCommandLine: inputText,
+                    cwd: "~"
                 )
+            }
+            if stepType == .unspecified {
+                stepType = .sendCommandInput
             }
         }
 
         if let reqInt = obj["requestedInteraction"]?.objectValue {
-            if let rcInt = reqInt["runCommand"]?.objectValue {
-                let cmd = nonEmptyString(rcInt["proposedCommandLine"]?.stringValue) ?? runCmdPayload?.commandLine ?? ""
-                interaction = RequestedInteraction(
-                    kind: .runCommand,
-                    runCommand: RunCommandInteractionSpec(
-                        proposedCommandLine: cmd,
-                        cwd: nonEmptyString(rcInt["cwd"]?.stringValue) ?? "~"
+            interaction = decodeJSONRequestedInteraction(
+                reqInt,
+                fallbackCommandLine: runCmdPayload?.proposedCommandLine ?? runCmdPayload?.commandLine,
+                fallbackCwd: runCmdPayload?.cwd
+            )
+            if interaction?.kind == .runCommand, let spec = interaction?.runCommand {
+                if runCmdPayload == nil {
+                    runCmdPayload = RunCommandPayload(
+                        commandId: "cmd-\(stepIndex)",
+                        commandLine: spec.proposedCommandLine,
+                        proposedCommandLine: spec.proposedCommandLine,
+                        cwd: spec.cwd
                     )
-                )
-            } else if let qaInt = reqInt["askQuestion"]?.objectValue {
-                interaction = RequestedInteraction(
-                    kind: .askQuestion,
-                    askQuestion: AskQuestionInteractionSpec(
-                        question: nonEmptyString(qaInt["question"]?.stringValue) ?? "Input required",
-                        options: qaInt["options"]?.arrayValue?.compactMap(\.stringValue) ?? [],
-                        isMultiSelect: qaInt["isMultiSelect"]?.boolValue ?? false
-                    )
-                )
-            } else if let fpInt = reqInt["filePermission"]?.objectValue {
-                interaction = RequestedInteraction(
-                    kind: .filePermission,
-                    filePermission: FilePermissionInteractionSpec(
-                        absolutePathUri: fpInt["absolutePathUri"]?.stringValue ?? ""
-                    )
-                )
+                } else if runCmdPayload?.commandLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true,
+                          !spec.proposedCommandLine.isEmpty {
+                    runCmdPayload?.commandLine = spec.proposedCommandLine
+                    runCmdPayload?.proposedCommandLine = spec.proposedCommandLine
+                }
             }
+        }
+
+        if interaction == nil && (stepStatus == .waiting || stepStatus == .blocked),
+           let rc = runCmdPayload,
+           stepType == .runCommand {
+            interaction = RequestedInteraction(
+                kind: .runCommand,
+                runCommand: RunCommandInteractionSpec(
+                    proposedCommandLine: rc.proposedCommandLine ?? rc.commandLine,
+                    cwd: rc.cwd
+                ),
+                rawMemberKey: "runCommand"
+            )
         }
 
         var viewFilePayload: ViewFilePayload?
@@ -5196,7 +5562,8 @@ public actor AntigravityRPCClient {
         if let vf = vfCandidate,
            let uri = nonEmptyString(vf["fileUri"]?.stringValue)
             ?? nonEmptyString(vf["absolutePathUri"]?.stringValue)
-            ?? nonEmptyString(vf["absolutePath"]?.stringValue) {
+            ?? nonEmptyString(vf["absolutePath"]?.stringValue)
+            ?? nonEmptyString(vf["path"]?.stringValue) {
             var capturedViewContent: String? = nil
             if ResolvedEmbedResource.isEmbeddableTextArtifactPath(uri),
                let rawContent = nonEmptyString(vf["content"]?.stringValue),
@@ -5210,6 +5577,13 @@ public actor AntigravityRPCClient {
                 fileContent: capturedViewContent
             )
             if stepType == .unspecified { stepType = .viewFile }
+        } else if let ld = obj["listDirectory"]?.objectValue,
+                  let uri = nonEmptyString(ld["directoryPathUri"]?.stringValue)
+                    ?? nonEmptyString(ld["directoryPath"]?.stringValue)
+                    ?? nonEmptyString(ld["absolutePathUri"]?.stringValue)
+                    ?? nonEmptyString(ld["path"]?.stringValue) {
+            viewFilePayload = ViewFilePayload(fileUri: uri, startLine: 1, endLine: 1)
+            if stepType == .unspecified { stepType = .listDirectory }
         }
 
         var searchPayload: SearchPayload?
@@ -5222,6 +5596,7 @@ public actor AntigravityRPCClient {
                 ?? "workspace"
             let scope = nonEmptyString(sc["searchPath"]?.stringValue)
                 ?? nonEmptyString(sc["searchDirectory"]?.stringValue)
+                ?? nonEmptyString(sc["searchPathUri"]?.stringValue)
                 ?? "."
             let count = sc["results"]?.arrayValue?.count ?? sc["matchCount"]?.intValue ?? 0
             searchPayload = SearchPayload(query: query, scopeDirectory: scope, matchCount: count)
@@ -5229,17 +5604,41 @@ public actor AntigravityRPCClient {
         }
 
         var codeActionPayload: CodeActionPayload?
-        let caCandidate = obj["codeAction"]?.objectValue
-            ?? obj["replaceFileContent"]?.objectValue
-            ?? obj["writeToFile"]?.objectValue
+        let caCandidate: [String: JSONValue]? = [
+            obj["codeAction"],
+            obj["replaceFileContent"],
+            obj["multiReplaceFileContent"],
+            obj["writeToFile"],
+            obj["fileChange"]
+        ].compactMap { $0?.objectValue }.first
         if let ca = caCandidate {
             let actionSpec = ca["actionSpec"]?.objectValue
             let createFileSpec = actionSpec?["createFile"]?.objectValue
-            let uri = nonEmptyString(ca["targetFileUri"]?.stringValue)
-                ?? nonEmptyString(ca["fileUri"]?.stringValue)
-                ?? nonEmptyString(ca["targetFile"]?.stringValue)
-                ?? nonEmptyString(createFileSpec?["path"]?.objectValue?["absoluteUri"]?.stringValue)
-                ?? nonEmptyString(actionSpec?["insertBlock"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
+            let directUriKeys = [
+                "targetFileUri", "fileUri", "targetFile", "TargetFile",
+                "absoluteUri", "absolutePathUri", "absolutePath", "filePath", "path"
+            ]
+            var uri: String? = nil
+            for key in directUriKeys {
+                if let candidate = nonEmptyString(ca[key]?.stringValue) {
+                    uri = candidate
+                    break
+                }
+            }
+            if uri == nil {
+                let specObjects: [[String: JSONValue]?] = [
+                    createFileSpec,
+                    actionSpec?["insertBlock"]?.objectValue,
+                    actionSpec?["editFile"]?.objectValue,
+                    actionSpec?["replaceFileContent"]?.objectValue
+                ]
+                for spec in specObjects {
+                    if let candidate = nonEmptyString(spec?["path"]?.objectValue?["absoluteUri"]?.stringValue) {
+                        uri = candidate
+                        break
+                    }
+                }
+            }
             if let uri {
                 let lowerUri = uri.lowercased()
                 let isArtifact = (ca["artifactMetadata"] != nil)
@@ -5352,6 +5751,66 @@ public actor AntigravityRPCClient {
             if stepType == .unspecified { stepType = .taskBoundary }
         }
 
+        var subagentPayload: SubagentPayload?
+        if let sub = (obj["subagentInvocation"] ?? obj["subagent"])?.objectValue {
+            subagentPayload = SubagentPayload(
+                subagentId: nonEmptyString(sub["subagentId"]?.stringValue) ?? "sub-\(stepIndex)",
+                role: nonEmptyString(sub["role"]?.stringValue) ?? "Subagent",
+                typeName: nonEmptyString(sub["typeName"]?.stringValue) ?? "self",
+                modelLabel: nonEmptyString(sub["modelLabel"]?.stringValue) ?? "Gemini 4 Hydrogen",
+                status: stepStatus,
+                summary: nonEmptyString(sub["summary"]?.stringValue) ?? "",
+                waitingApprovalTitle: nonEmptyString(sub["waitingApprovalTitle"]?.stringValue)
+            )
+            if stepType == .unspecified { stepType = .subagentInvocation }
+        }
+
+        var dynamicWorkflowPayload: DynamicWorkflowPayload?
+        if let wf = obj["dynamicWorkflow"]?.objectValue {
+            let phaseNames = wf["phaseNames"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            let phases = phaseNames.enumerated().map { idx, name in
+                WorkflowPhaseItem(id: "phase-\(idx)", name: name, isCompleted: false)
+            }
+            dynamicWorkflowPayload = DynamicWorkflowPayload(
+                workflowId: nonEmptyString(wf["workflowId"]?.stringValue) ?? "wf-\(stepIndex)",
+                description: nonEmptyString(wf["description"]?.stringValue) ?? "Dynamic Workflow",
+                pythonScript: nonEmptyString(wf["pythonScript"]?.stringValue) ?? "",
+                currentPhase: nonEmptyString(wf["currentPhase"]?.stringValue) ?? phaseNames.first ?? "Phase 1",
+                completedAgents: wf["completedAgents"]?.intValue ?? 0,
+                totalAgents: wf["totalAgents"]?.intValue ?? max(1, phases.count),
+                phases: phases,
+                requiresScriptApproval: stepStatus == .waiting || stepStatus == .blocked
+            )
+            if stepType == .unspecified { stepType = .dynamicWorkflow }
+        }
+
+        var swarmBoardPayload: SwarmBoardPayload?
+        if let sw = obj["swarmBoard"]?.objectValue {
+            let memberNames = sw["memberNames"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            let members = memberNames.map { SwarmMemberItem(name: $0, role: "Specialist", status: stepStatus) }
+            swarmBoardPayload = SwarmBoardPayload(
+                swarmId: nonEmptyString(sw["swarmId"]?.stringValue) ?? "swarm-\(stepIndex)",
+                title: nonEmptyString(sw["title"]?.stringValue) ?? "Swarm Team",
+                status: stepStatus,
+                members: members,
+                posts: []
+            )
+            if stepType == .unspecified { stepType = .swarmBoard }
+        }
+
+        var mcpToolCallPayload: McpToolCallPayload?
+        if let mcp = (obj["mcpToolCall"] ?? obj["mcp"])?.objectValue {
+            mcpToolCallPayload = McpToolCallPayload(
+                serverName: nonEmptyString(mcp["serverName"]?.stringValue) ?? "mcp",
+                toolName: nonEmptyString(mcp["toolName"]?.stringValue) ?? "tool",
+                pluginName: nonEmptyString(mcp["pluginName"]?.stringValue),
+                argumentsPreview: nonEmptyString(mcp["argumentsPreview"]?.stringValue) ?? "{}",
+                resultPreview: nonEmptyString(mcp["resultPreview"]?.stringValue),
+                isError: stepStatus == .error
+            )
+            if stepType == .unspecified { stepType = .mcpToolCall }
+        }
+
         if (stepType == .plannerResponse || stepType == .notifyUser)
             && plannerPayload == nil
             && (stepStatus == .inProgress || stepStatus == .pending) {
@@ -5376,7 +5835,11 @@ public actor AntigravityRPCClient {
             search: searchPayload,
             requestedInteraction: interaction,
             recordedExecutionMode: recordedMode,
-            recordedModelId: recordedModelId
+            recordedModelId: recordedModelId,
+            subagent: subagentPayload,
+            dynamicWorkflow: dynamicWorkflowPayload,
+            swarmBoard: swarmBoardPayload,
+            mcpToolCall: mcpToolCallPayload
         )
     }
 

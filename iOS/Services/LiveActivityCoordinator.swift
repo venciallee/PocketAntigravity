@@ -26,9 +26,20 @@ public final class LiveActivityCoordinator {
         }
 
         let isRunningOrWaiting = (summary.status == .inProgress || summary.status == .waiting || summary.status == .pending)
-        let pendingCmd = store.pendingWaitingStep?.runCommand?.proposedCommandLine
-            ?? store.pendingWaitingStep?.runCommand?.commandLine
-            ?? summary.pendingInteractionTitle
+        let pendingWaiting = store.pendingWaitingStep
+        let pendingReq = pendingWaiting?.effectiveRequestedInteraction
+        let permLabel: String? = pendingReq?.permission.map { "\($0.action)(\($0.target))" }
+        let pendingCmdCandidates: [String?] = [
+            pendingWaiting?.runCommand?.proposedCommandLine,
+            pendingWaiting?.runCommand?.commandLine,
+            permLabel,
+            pendingReq?.filePermission?.absolutePathUri,
+            pendingReq?.mcpToolName,
+            pendingReq?.askQuestion?.question,
+            pendingReq?.rawSummary,
+            summary.pendingInteractionTitle
+        ]
+        let pendingCmd: String? = pendingCmdCandidates.compactMap { $0 }.first(where: { !$0.isEmpty })
 
         let contentState = AntigravityActivityAttributes.ContentState(
             statusRaw: summary.status.jsonName,
