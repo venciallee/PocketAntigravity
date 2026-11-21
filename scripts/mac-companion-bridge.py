@@ -458,6 +458,72 @@ def encode_varint_field(field_no: int, value: int) -> bytes:
     return encode_varint((field_no << 3) | 0) + encode_varint(value)
 
 
+def decode_varint(buf: bytes, offset: int) -> tuple[int, int] | None:
+    """Decodes an unsigned Protobuf LEB128 varint starting at `offset`."""
+    result = 0
+    shift = 0
+    n = len(buf)
+    while offset < n:
+        b = buf[offset]
+        offset += 1
+        result |= (b & 0x7F) << shift
+        if (b & 0x80) == 0:
+            return result, offset
+        shift += 7
+        if shift >= 64:
+            return None
+    return None
+
+
+def decode_get_steps_protobuf_request(raw_body: bytes) -> tuple[str, int, int]:
+    """Parses a binary Protobuf `GetCascadeTrajectoryStepsRequest`.
+
+    Fields:
+      1 (LD string): cascade_id
+      2 (varint):    step_offset (default 0)
+      3 (varint):    optional legacy count_hint (default 0)
+    """
+    cascade_id = ""
+    step_offset = 0
+    count_hint = 0
+    offset = 0
+    n = len(raw_body)
+    while offset < n:
+        parsed_tag = decode_varint(raw_body, offset)
+        if parsed_tag is None:
+            break
+        tag, offset = parsed_tag
+        field_no = tag >> 3
+        wire_type = tag & 0x07
+        if wire_type == 0:
+            parsed_val = decode_varint(raw_body, offset)
+            if parsed_val is None:
+                break
+            val, offset = parsed_val
+            if field_no == 2:
+                step_offset = max(0, int(val))
+            elif field_no == 3:
+                count_hint = max(0, int(val))
+        elif wire_type == 2:
+            parsed_len = decode_varint(raw_body, offset)
+            if parsed_len is None:
+                break
+            length, offset = parsed_len
+            if offset + length > n:
+                break
+            payload = raw_body[offset : offset + length]
+            offset += length
+            if field_no == 1:
+                cascade_id = payload.decode("utf-8", errors="ignore")
+        elif wire_type == 1:
+            offset = min(n, offset + 8)
+        elif wire_type == 5:
+            offset = min(n, offset + 4)
+        else:
+            break
+    return cascade_id, step_offset, count_hint
+
+
 CLOUD_URI_PREFIXES = (
     "cloud://",
     "https://github.com/",
@@ -1063,6 +1129,204 @@ class CompanionState:
                 step_buf += encode_ld(20, planner)
             out += encode_ld(1, bytes(step_buf))
         return bytes(out)
+
+    def encode_live_steps_protobuf(self, steps: list[dict]) -> bytes:
+        """Encodes live sandbox/companion step dicts into binary Protobuf `GetCascadeTrajectoryStepsResponse`.
+
+        Wire numbers match `ProtobufStepDecoder.swift` and `ProtobufStepCodec.kt` verbatim:
+          - Response: repeated field 1 (LD) = Step
+          - Step: field 1 (varint) = CortexStepType, field 4 (varint) = CortexStepStatus
+          - USER_INPUT (14): field 19 (LD) = {2: userResponse, 3: repeated TextOrScopeItem{1: text, 2: {1: {1: uri}}}}
+          - PLANNER_RESPONSE (15): field 20 (LD) = {1: response, 3: thinking, 11: Duration{1: sec, 2: nanos}}
+          - RUN_COMMAND (21): field 28 (LD) = {2: cwd, 4: output, 6: exitCode, 13: commandId, 23: commandLine, 25: proposedCommandLine}
+          - TASK_BOUNDARY (81): field 93 (LD) = {1: taskName, 2: taskStatus, 3: taskSummary}
+          - NOTIFY_USER (82): field 94 (LD) = {1: repeated reviewUris, 2: notificationContent/message}
+          - RequestedInteraction (field 56): field 3 (LD) = CascadeRunCommandInteractionSpec{1: cwd, 2: proposedCommandLine}
+        """
+        step_type_map = {
+            "CORTEX_STEP_TYPE_USER_INPUT": 14,
+            "CORTEX_STEP_TYPE_PLANNER_RESPONSE": 15,
+            "CORTEX_STEP_TYPE_RUN_COMMAND": 21,
+            "CORTEX_STEP_TYPE_TASK_BOUNDARY": 81,
+            "CORTEX_STEP_TYPE_NOTIFY_USER": 82,
+        }
+        step_status_map = {
+            "CORTEX_STEP_STATUS_UNSPECIFIED": 0,
+            "CORTEX_STEP_STATUS_PENDING": 1,
+            "CORTEX_STEP_STATUS_IN_PROGRESS": 2,
+            "CORTEX_STEP_STATUS_RUNNING": 2,
+            "CORTEX_STEP_STATUS_DONE": 3,
+            "CORTEX_STEP_STATUS_ERROR": 4,
+            "CORTEX_STEP_STATUS_CANCELLED": 6,
+            "CORTEX_STEP_STATUS_CANCELED": 6,
+            "CORTEX_STEP_STATUS_BLOCKED": 7,
+            "CORTEX_STEP_STATUS_WAITING": 9,
+        }
+
+        out = bytearray()
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            raw_type = step.get("type")
+            if isinstance(raw_type, int):
+                step_type_id = raw_type
+            else:
+                step_type_id = step_type_map.get(str(raw_type or ""), 15)
+
+            raw_status = step.get("status")
+            if isinstance(raw_status, int):
+                step_status_id = raw_status
+            else:
+                step_status_id = step_status_map.get(str(raw_status or ""), 3)
+
+            step_buf = bytearray()
+            step_buf += encode_varint_field(1, step_type_id)
+            step_buf += encode_varint_field(4, step_status_id)
+
+            if step_type_id == 14:  # USER_INPUT
+                user_input = step.get("userInput") if isinstance(step.get("userInput"), dict) else {}
+                ui_buf = bytearray()
+                user_resp = user_input.get("userResponse") or ""
+                if user_resp:
+                    ui_buf += encode_ld(2, str(user_resp).encode("utf-8"))
+                encoded_file_item = False
+                for item in user_input.get("items") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    item_buf = bytearray()
+                    txt = item.get("text")
+                    if isinstance(txt, str) and txt:
+                        item_buf += encode_ld(1, txt.encode("utf-8"))
+                    scope = item.get("item")
+                    if isinstance(scope, dict):
+                        file_info = scope.get("file")
+                        if isinstance(file_info, dict):
+                            file_uri = (
+                                file_info.get("absoluteUri")
+                                or file_info.get("uri")
+                                or file_info.get("label")
+                                or ""
+                            )
+                            clean_uri = str(file_uri).strip().lstrip("@")
+                            if clean_uri:
+                                item_buf += encode_ld(
+                                    2,
+                                    encode_ld(1, encode_ld(1, clean_uri.encode("utf-8"))),
+                                )
+                                encoded_file_item = True
+                    if item_buf:
+                        ui_buf += encode_ld(3, bytes(item_buf))
+                if not encoded_file_item:
+                    for mention in step.get("attachedMentions") or []:
+                        if isinstance(mention, str) and mention.strip():
+                            clean_mention = mention.strip().lstrip("@")
+                            if clean_mention:
+                                ui_buf += encode_ld(
+                                    3,
+                                    encode_ld(
+                                        2,
+                                        encode_ld(1, encode_ld(1, clean_mention.encode("utf-8"))),
+                                    ),
+                                )
+                if ui_buf:
+                    step_buf += encode_ld(19, bytes(ui_buf))
+
+            elif step_type_id == 15:  # PLANNER_RESPONSE
+                planner = step.get("plannerResponse") if isinstance(step.get("plannerResponse"), dict) else {}
+                pr_buf = bytearray()
+                resp_text = planner.get("response") or ""
+                thinking_text = planner.get("thinking") or ""
+                if resp_text:
+                    pr_buf += encode_ld(1, str(resp_text).encode("utf-8"))
+                if thinking_text:
+                    pr_buf += encode_ld(3, str(thinking_text).encode("utf-8"))
+                dur_val = planner.get("thinkingDurationSeconds")
+                if dur_val is not None:
+                    try:
+                        total_sec = float(dur_val)
+                        if total_sec > 0:
+                            secs = int(total_sec)
+                            nanos = int(round((total_sec - secs) * 1_000_000_000))
+                            if nanos >= 1_000_000_000:
+                                secs += 1
+                                nanos -= 1_000_000_000
+                            dur_buf = bytearray()
+                            if secs > 0:
+                                dur_buf += encode_varint_field(1, secs)
+                            if nanos > 0:
+                                dur_buf += encode_varint_field(2, nanos)
+                            if dur_buf:
+                                pr_buf += encode_ld(11, bytes(dur_buf))
+                    except (TypeError, ValueError):
+                        pass
+                if pr_buf:
+                    step_buf += encode_ld(20, bytes(pr_buf))
+
+            elif step_type_id == 21:  # RUN_COMMAND
+                rc = step.get("runCommand") if isinstance(step.get("runCommand"), dict) else {}
+                rc_buf = bytearray()
+                if rc.get("cwd"):
+                    rc_buf += encode_ld(2, str(rc["cwd"]).encode("utf-8"))
+                if rc.get("outputPreview"):
+                    rc_buf += encode_ld(4, str(rc["outputPreview"]).encode("utf-8"))
+                if rc.get("exitCode") is not None:
+                    try:
+                        rc_buf += encode_varint_field(6, int(rc["exitCode"]) & 0xFFFFFFFF)
+                    except (TypeError, ValueError):
+                        pass
+                if rc.get("commandId"):
+                    rc_buf += encode_ld(13, str(rc["commandId"]).encode("utf-8"))
+                if rc.get("commandLine"):
+                    rc_buf += encode_ld(23, str(rc["commandLine"]).encode("utf-8"))
+                if rc.get("proposedCommandLine"):
+                    rc_buf += encode_ld(25, str(rc["proposedCommandLine"]).encode("utf-8"))
+                if rc_buf:
+                    step_buf += encode_ld(28, bytes(rc_buf))
+
+            elif step_type_id == 81:  # TASK_BOUNDARY
+                tb = step.get("taskBoundary") if isinstance(step.get("taskBoundary"), dict) else {}
+                tb_buf = bytearray()
+                if tb.get("taskName"):
+                    tb_buf += encode_ld(1, str(tb["taskName"]).encode("utf-8"))
+                if tb.get("taskStatus"):
+                    tb_buf += encode_ld(2, str(tb["taskStatus"]).encode("utf-8"))
+                if tb.get("taskSummary"):
+                    tb_buf += encode_ld(3, str(tb["taskSummary"]).encode("utf-8"))
+                if tb_buf:
+                    step_buf += encode_ld(93, bytes(tb_buf))
+
+            elif step_type_id == 82:  # NOTIFY_USER
+                nu = step.get("notifyUser") if isinstance(step.get("notifyUser"), dict) else {}
+                nu_buf = bytearray()
+                for uri in nu.get("pathsToReview") or nu.get("reviewUris") or []:
+                    if isinstance(uri, str) and uri:
+                        nu_buf += encode_ld(1, uri.encode("utf-8"))
+                msg = (
+                    nu.get("notificationContent")
+                    or nu.get("message")
+                    or nu.get("content")
+                    or step.get("notificationContent")
+                    or step.get("message")
+                    or ""
+                )
+                if msg:
+                    nu_buf += encode_ld(2, str(msg).encode("utf-8"))
+                if nu_buf:
+                    step_buf += encode_ld(94, bytes(nu_buf))
+
+            req_int = step.get("requestedInteraction")
+            if isinstance(req_int, dict) and isinstance(req_int.get("runCommand"), dict):
+                rc_int = req_int["runCommand"]
+                proposed_cmd = rc_int.get("proposedCommandLine") or rc_int.get("commandLine") or ""
+                cwd_val = rc_int.get("cwd") or "/workspace"
+                spec_buf = encode_ld(1, str(cwd_val).encode("utf-8"))
+                if proposed_cmd:
+                    spec_buf += encode_ld(2, str(proposed_cmd).encode("utf-8"))
+                step_buf += encode_ld(56, encode_ld(3, spec_buf))
+
+            out += encode_ld(1, bytes(step_buf))
+        return bytes(out)
+
 
 
 def discover_desktop_oauth_token() -> str:
@@ -2385,6 +2649,10 @@ def create_bridge_server(
                     return
                 req_obj = sanitized
                 forward_body = json.dumps(req_obj).encode("utf-8")
+            elif method == "GetCascadeTrajectorySteps" and "application/proto" in content_type.lower():
+                req_cid, _, _ = decode_get_steps_protobuf_request(raw_body)
+                if req_cid:
+                    req_obj = {"cascadeId": req_cid}
 
             chosen_backend = self._select_backend_for_request(backends, method, req_obj)
             target = f"{chosen_backend['upstream_url']}{SERVICE_PREFIX}{method}"
@@ -2609,8 +2877,21 @@ def create_bridge_server(
                 self.wfile.write(payload)
                 return
 
-            if method == "GetCascadeTrajectorySteps" and "application/proto" in content_type:
-                proto_bytes = state.build_binary_steps("cas-live-welcome", count=605)
+            if method == "GetCascadeTrajectorySteps" and "application/proto" in content_type.lower():
+                req_cid, step_offset, count_hint = decode_get_steps_protobuf_request(raw_body)
+                with state.lock:
+                    live_steps = (
+                        list(state.steps_by_cascade[req_cid])
+                        if req_cid and req_cid in state.steps_by_cascade
+                        else None
+                    )
+                if count_hint > 0 or not req_cid or live_steps is None:
+                    proto_bytes = state.build_binary_steps(
+                        req_cid or "cas-live-welcome",
+                        count=max(count_hint, 605),
+                    )
+                else:
+                    proto_bytes = state.encode_live_steps_protobuf(live_steps[step_offset:])
                 self.send_response(200)
                 self._send_cors()
                 self.send_header("Content-Type", "application/proto")
@@ -2758,8 +3039,8 @@ def create_bridge_server(
 
             if method == "GetCascadeTrajectorySteps":
                 cid = req_obj.get("cascadeId") or "cas-live-welcome"
-                start_idx = int(req_obj.get("startIndex", 0))
-                end_idx = int(req_obj.get("endIndex", 200))
+                start_idx = int(req_obj.get("stepOffset", req_obj.get("startIndex", 0)))
+                end_idx = int(req_obj.get("endIndex", start_idx + 200))
                 with state.lock:
                     steps = state.steps_by_cascade.get(cid, [])[start_idx:end_idx]
                 self._write_json(200, {"steps": steps})

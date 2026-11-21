@@ -1,6 +1,6 @@
 import Foundation
 
-/// Trajectory step pagination (JSON <600 / binary Protobuf >=600) and conversation lifecycle RPCs.
+/// Adaptive trajectory step sync (local-default binary Protobuf + targeted JSON repair + runtime JSON ceiling learning) and conversation lifecycle RPCs.
 extension AntigravityRPCClient {
     /// Wakes a dormant disk trajectory into `language_server` memory (`LoadTrajectory`).
     public func loadTrajectory(
@@ -21,20 +21,101 @@ extension AntigravityRPCClient {
         )
     }
 
-    /// Fetches trajectory steps, automatically switching from JSON (`0..<600`) to Binary Protobuf (`>=600`).
+    // MARK: - Adaptive Binary Protobuf & JSON Ceiling Classifiers (Zero Hardcoded Thresholds)
+
+    /// Extracts an explicit server-advertised JSON truncation ceiling from a `GetCascadeTrajectorySteps` response,
+    /// returning `nil` when the server did not advertise truncation.
+    internal static func extractJsonTruncationCeiling(
+        from response: [String: JSONValue],
+        fallbackStepCount: Int
+    ) -> Int? {
+        if let truncatedVal = response["truncatedAt"] {
+            if let intVal = truncatedVal.intValue {
+                return intVal > 0 ? intVal : nil
+            }
+            if let strVal = truncatedVal.stringValue {
+                if let parsed = Int(strVal.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    return parsed > 0 ? parsed : nil
+                }
+                if strVal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return nil
+                }
+                return max(1, fallbackStepCount)
+            }
+            if case .null = truncatedVal {
+                return nil
+            }
+            return max(1, fallbackStepCount)
+        }
+        if response["isTruncated"]?.boolValue == true || response["truncated"]?.boolValue == true {
+            return max(1, fallbackStepCount)
+        }
+        return nil
+    }
+
+    /// Returns `true` when a JSON trajectory error indicates a server-side payload or step limit (e.g. HTTP 413 / `resource_exhausted`).
+    internal static func isJsonPayloadLimitError(_ error: Error) -> Bool {
+        if case let AntigravityRPCError.httpError(statusCode, body) = error {
+            if statusCode == 413 {
+                return true
+            }
+            let lower = body.lowercased()
+            return lower.contains("resource_exhausted")
+                || lower.contains("message too large")
+                || lower.contains("max message size")
+                || lower.contains("payload too large")
+                || lower.contains("too many steps")
+        }
+        let lower = error.localizedDescription.lowercased()
+        return lower.contains("resource_exhausted") || lower.contains("message too large")
+    }
+
+    /// Returns `true` when a host explicitly rejects `Content-Type: application/proto` on `GetCascadeTrajectorySteps`.
+    internal static func isBinaryProtobufUnsupportedError(_ error: Error) -> Bool {
+        if case let AntigravityRPCError.httpError(statusCode, body) = error {
+            if statusCode == 415 || statusCode == 406 || statusCode == 501 {
+                return true
+            }
+            if statusCode == 400 {
+                let lower = body.lowercased()
+                return lower.contains("unsupported media")
+                    || lower.contains("application/proto")
+                    || lower.contains("content-type")
+                    || lower.contains("invalid json")
+                    || lower.contains("unexpected character")
+            }
+        }
+        return false
+    }
+
+    /// Fetches trajectory steps using Binary Protobuf by default on local hosts (with targeted JSON repair for
+    /// unknown wire interactions/steps), falling back to JSON with runtime ceiling discovery on Cloud hosts or
+    /// hosts that reject `application/proto`.
     public func fetchTrajectorySteps(
         cascadeId: String,
         startIndex: Int = 0,
-        endIndex: Int = 200,
+        endIndex: Int = 0,
         instanceUuidOverride: String? = nil
     ) async throws -> [CascadeStep] {
-        if endIndex >= Self.protobufStepThreshold {
-            return try await fetchTrajectoryStepsProtobuf(
-                cascadeId: cascadeId,
-                startIndex: startIndex,
-                endIndex: endIndex,
-                instanceUuidOverride: instanceUuidOverride
-            )
+        let isRemoteCloud = cascadeId.hasPrefix("v1/")
+        if !isRemoteCloud && !isBinaryProtobufStepsUnsupported(for: instanceUuidOverride) {
+            do {
+                let protoSteps = try await fetchTrajectoryStepsProtobuf(
+                    cascadeId: cascadeId,
+                    startIndex: startIndex,
+                    endIndex: endIndex,
+                    instanceUuidOverride: instanceUuidOverride
+                )
+                if !protoSteps.isEmpty {
+                    return protoSteps
+                }
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch {
+                if Self.isBinaryProtobufUnsupportedError(error) {
+                    recordBinaryProtobufStepsUnsupported(for: instanceUuidOverride)
+                }
+            }
         }
         return try await fetchTrajectoryStepsJSON(
             cascadeId: cascadeId,
@@ -153,7 +234,80 @@ extension AntigravityRPCClient {
         let wakeKey = "\(targetUuid ?? "direct")|\(cascadeId)"
         var lastError: Error? = nil
 
-        if knownStepCount >= Self.protobufStepThreshold {
+        // Path 1 (Default for Local PC Hosts): Binary Protobuf (`application/proto`) first.
+        // Saves ~65% mobile bandwidth, avoids any server-side JSON step truncation, and repairs
+        // unknown wire interactions/step types via targeted JSON `stepOffset` lookups.
+        let protoAllowed = !isRemoteCloud && !isBinaryProtobufStepsUnsupported(for: targetUuid)
+        if protoAllowed {
+            do {
+                let protoSteps = try await fetchTrajectoryStepsProtobuf(
+                    cascadeId: cascadeId,
+                    startIndex: 0,
+                    endIndex: knownStepCount,
+                    instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: false
+                )
+                if !protoSteps.isEmpty {
+                    wokenInstanceCascadeKeys.insert(wakeKey)
+                    return protoSteps
+                }
+                // Dormant trajectory on disk -> wake with LoadTrajectory and retry Binary Protobuf once
+                if knownStepCount > 0 || !wokenInstanceCascadeKeys.contains(wakeKey) {
+                    try? await loadTrajectory(cascadeId: cascadeId, isCloud: false, instanceUuidOverride: targetUuid)
+                    let retryProtoSteps = try await fetchTrajectoryStepsProtobuf(
+                        cascadeId: cascadeId,
+                        startIndex: 0,
+                        endIndex: knownStepCount,
+                        instanceUuidOverride: targetUuid,
+                        allowCrossHostFailover: false
+                    )
+                    if !retryProtoSteps.isEmpty {
+                        wokenInstanceCascadeKeys.insert(wakeKey)
+                        return retryProtoSteps
+                    }
+                }
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch {
+                if Self.isBinaryProtobufUnsupportedError(error) {
+                    recordBinaryProtobufStepsUnsupported(for: targetUuid)
+                } else {
+                    lastError = error
+                }
+            }
+        }
+
+        // Path 2: JSON (`GetCascadeTrajectorySteps`) for Cloud (`v1/...`) sessions or when Binary Protobuf
+        // is unsupported/unavailable — with zero hardcoded thresholds and runtime per-host ceiling learning.
+        return try await fetchStepsViaAdaptiveJSON(
+            cascadeId: cascadeId,
+            knownStepCount: knownStepCount,
+            isRemoteCloud: isRemoteCloud,
+            targetUuid: targetUuid,
+            wakeKey: wakeKey,
+            initialError: lastError
+        )
+    }
+
+    /// Fetches trajectory steps over JSON with dynamic truncation detection (`truncatedAt`, payload-limit errors,
+    /// and pagination stalls) and per-host ceiling learning (`HostCapabilityProfile.learnedJsonStepCeiling`),
+    /// upgrading seamlessly to Binary Protobuf whenever a server-side JSON cap is encountered.
+    internal func fetchStepsViaAdaptiveJSON(
+        cascadeId: String,
+        knownStepCount: Int,
+        isRemoteCloud: Bool,
+        targetUuid: String?,
+        wakeKey: String,
+        initialError: Error? = nil
+    ) async throws -> [CascadeStep] {
+        var lastError = initialError
+        let canUpgradeToProtobuf = !isBinaryProtobufStepsUnsupported(for: targetUuid)
+
+        // Learned fast-path: if this host already revealed a JSON ceiling at or below `knownStepCount`,
+        // skip the doomed JSON probe and jump straight to Binary Protobuf.
+        if canUpgradeToProtobuf,
+           let learnedCeiling = learnedJsonStepCeiling(for: targetUuid),
+           knownStepCount >= learnedCeiling {
             do {
                 let protoSteps = try await fetchTrajectoryStepsProtobuf(
                     cascadeId: cascadeId,
@@ -169,20 +323,12 @@ extension AntigravityRPCClient {
             } catch let AntigravityRPCError.unauthorized(msg) {
                 throw AntigravityRPCError.unauthorized(msg)
             } catch {
-                lastError = error
+                if Self.isBinaryProtobufUnsupportedError(error) {
+                    recordBinaryProtobufStepsUnsupported(for: targetUuid)
+                } else {
+                    lastError = error
+                }
             }
-            try? await loadTrajectory(cascadeId: cascadeId, isCloud: isRemoteCloud, instanceUuidOverride: targetUuid)
-            let retryProtoSteps = try await fetchTrajectoryStepsProtobuf(
-                cascadeId: cascadeId,
-                startIndex: 0,
-                endIndex: knownStepCount,
-                instanceUuidOverride: targetUuid,
-                allowCrossHostFailover: isRemoteCloud
-            )
-            if !retryProtoSteps.isEmpty {
-                wokenInstanceCascadeKeys.insert(wakeKey)
-            }
-            return retryProtoSteps
         }
 
         var stepReqBody: [String: JSONValue] = ["cascadeId": .string(cascadeId)]
@@ -205,20 +351,41 @@ extension AntigravityRPCClient {
         } catch {
             lastError = error
             firstResp = nil
+            if Self.isJsonPayloadLimitError(error) && !isBinaryProtobufStepsUnsupported(for: targetUuid) {
+                if let protoSteps = try? await fetchTrajectoryStepsProtobuf(
+                    cascadeId: cascadeId,
+                    startIndex: 0,
+                    endIndex: knownStepCount,
+                    instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: isRemoteCloud
+                ), !protoSteps.isEmpty {
+                    let observed = knownStepCount > 0 ? min(knownStepCount, protoSteps.count) : protoSteps.count
+                    recordLearnedJsonStepCeiling(observed, for: targetUuid)
+                    wokenInstanceCascadeKeys.insert(wakeKey)
+                    return protoSteps
+                }
+            }
         }
 
-        if let resp = firstResp, resp["truncatedAt"] != nil {
-            let protoSteps = try await fetchTrajectoryStepsProtobuf(
-                cascadeId: cascadeId,
-                startIndex: 0,
-                endIndex: max(knownStepCount, Self.protobufStepThreshold),
-                instanceUuidOverride: targetUuid,
-                allowCrossHostFailover: isRemoteCloud
-            )
-            if !protoSteps.isEmpty {
-                wokenInstanceCascadeKeys.insert(wakeKey)
+        if let resp = firstResp,
+           let ceiling = Self.extractJsonTruncationCeiling(
+               from: resp,
+               fallbackStepCount: resp["steps"]?.arrayValue?.count ?? knownStepCount
+           ) {
+            recordLearnedJsonStepCeiling(ceiling, for: targetUuid)
+            if !isBinaryProtobufStepsUnsupported(for: targetUuid) {
+                let protoSteps = try await fetchTrajectoryStepsProtobuf(
+                    cascadeId: cascadeId,
+                    startIndex: 0,
+                    endIndex: max(knownStepCount, ceiling),
+                    instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: isRemoteCloud
+                )
+                if !protoSteps.isEmpty {
+                    wokenInstanceCascadeKeys.insert(wakeKey)
+                    return protoSteps
+                }
             }
-            return protoSteps
         }
 
         var rawSteps = firstResp?["steps"]?.arrayValue ?? []
@@ -235,18 +402,24 @@ extension AntigravityRPCClient {
                     timeoutInterval: 10.0
                 )
                 lastError = nil
-                if retryResp["truncatedAt"] != nil {
-                    let protoSteps = try await fetchTrajectoryStepsProtobuf(
-                        cascadeId: cascadeId,
-                        startIndex: 0,
-                        endIndex: max(knownStepCount, Self.protobufStepThreshold),
-                        instanceUuidOverride: targetUuid,
-                        allowCrossHostFailover: isRemoteCloud
-                    )
-                    if !protoSteps.isEmpty {
-                        wokenInstanceCascadeKeys.insert(wakeKey)
+                if let ceiling = Self.extractJsonTruncationCeiling(
+                    from: retryResp,
+                    fallbackStepCount: retryResp["steps"]?.arrayValue?.count ?? knownStepCount
+                ) {
+                    recordLearnedJsonStepCeiling(ceiling, for: targetUuid)
+                    if !isBinaryProtobufStepsUnsupported(for: targetUuid) {
+                        let protoSteps = try await fetchTrajectoryStepsProtobuf(
+                            cascadeId: cascadeId,
+                            startIndex: 0,
+                            endIndex: max(knownStepCount, ceiling),
+                            instanceUuidOverride: targetUuid,
+                            allowCrossHostFailover: isRemoteCloud
+                        )
+                        if !protoSteps.isEmpty {
+                            wokenInstanceCascadeKeys.insert(wakeKey)
+                            return protoSteps
+                        }
                     }
-                    return protoSteps
                 }
                 rawSteps = retryResp["steps"]?.arrayValue ?? []
                 if !rawSteps.isEmpty {
@@ -284,15 +457,17 @@ extension AntigravityRPCClient {
             }
         }
 
-        // Fallback B: Binary Protobuf (`application/proto`) when a >600-step dormant session omitted `stepCount` in summaries
-        if rawSteps.isEmpty && (firstResp == nil || lastError != nil || knownStepCount > 0) {
+        // Fallback B: Try Binary Protobuf if JSON came back empty/failed on a non-empty session
+        if rawSteps.isEmpty && (firstResp == nil || lastError != nil || knownStepCount > 0) && !isBinaryProtobufStepsUnsupported(for: targetUuid) {
             if let protoFallback = try? await fetchTrajectoryStepsProtobuf(
                 cascadeId: cascadeId,
                 startIndex: 0,
-                endIndex: max(knownStepCount, Self.protobufStepThreshold),
+                endIndex: knownStepCount,
                 instanceUuidOverride: targetUuid,
                 allowCrossHostFailover: isRemoteCloud
             ), !protoFallback.isEmpty {
+                let observed = knownStepCount > 0 ? min(knownStepCount, protoFallback.count) : protoFallback.count
+                recordLearnedJsonStepCeiling(observed, for: targetUuid)
                 wokenInstanceCascadeKeys.insert(wakeKey)
                 return protoFallback
             }
@@ -300,19 +475,6 @@ extension AntigravityRPCClient {
 
         if rawSteps.isEmpty, let lastError {
             throw lastError
-        }
-
-        if rawSteps.count >= 590 {
-            if let protoSteps = try? await fetchTrajectoryStepsProtobuf(
-                cascadeId: cascadeId,
-                startIndex: 0,
-                endIndex: max(knownStepCount, rawSteps.count),
-                instanceUuidOverride: targetUuid,
-                allowCrossHostFailover: isRemoteCloud
-            ), protoSteps.count >= rawSteps.count {
-                wokenInstanceCascadeKeys.insert(wakeKey)
-                return protoSteps
-            }
         }
 
         var seenIndices = Set<Int>()
@@ -325,19 +487,76 @@ extension AntigravityRPCClient {
             }
         }
 
-        var offset = rawSteps.count
-        while offset > 0 && offset < knownStepCount && offset < Self.protobufStepThreshold {
-            var pageBody = stepReqBody
-            pageBody["stepOffset"] = .int(offset)
-            let pageResp = try await callUnaryJSON(
-                method: "GetCascadeTrajectorySteps",
-                body: pageBody,
+        // If `knownStepCount` was omitted (0) on a host whose JSON ceiling was already learned and we hit that ceiling,
+        // probe Binary Protobuf to check whether more steps exist beyond the cap.
+        if knownStepCount == 0,
+           !isBinaryProtobufStepsUnsupported(for: targetUuid),
+           let learnedCeiling = learnedJsonStepCeiling(for: targetUuid),
+           collected.count >= learnedCeiling {
+            if let protoSteps = try? await fetchTrajectoryStepsProtobuf(
+                cascadeId: cascadeId,
+                startIndex: 0,
+                endIndex: collected.count,
                 instanceUuidOverride: targetUuid,
                 allowCrossHostFailover: isRemoteCloud
-            )
-            guard let pageSteps = pageResp["steps"]?.arrayValue, !pageSteps.isEmpty else {
+            ), protoSteps.count > collected.count {
+                wokenInstanceCascadeKeys.insert(wakeKey)
+                return protoSteps
+            }
+        }
+
+        // Dynamic JSON pagination with automatic stall detection (no hardcoded step ceiling)
+        var offset = collected.count
+        var pagesFetched = 0
+        let maxPaginationRounds = 32
+        while offset > 0 && knownStepCount > 0 && collected.count < knownStepCount && pagesFetched < maxPaginationRounds {
+            pagesFetched += 1
+            var pageBody = stepReqBody
+            pageBody["stepOffset"] = .int(offset)
+            let pageResp: [String: JSONValue]
+            do {
+                pageResp = try await callUnaryJSON(
+                    method: "GetCascadeTrajectorySteps",
+                    body: pageBody,
+                    instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: isRemoteCloud
+                )
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch {
+                if Self.isJsonPayloadLimitError(error) {
+                    recordLearnedJsonStepCeiling(max(1, collected.count), for: targetUuid)
+                }
+                if !isBinaryProtobufStepsUnsupported(for: targetUuid),
+                   let protoSteps = try? await fetchTrajectoryStepsProtobuf(
+                       cascadeId: cascadeId,
+                       startIndex: 0,
+                       endIndex: knownStepCount,
+                       instanceUuidOverride: targetUuid,
+                       allowCrossHostFailover: isRemoteCloud
+                   ), protoSteps.count > collected.count {
+                    recordLearnedJsonStepCeiling(max(1, collected.count), for: targetUuid)
+                    return protoSteps
+                }
                 break
             }
+
+            if let ceiling = Self.extractJsonTruncationCeiling(from: pageResp, fallbackStepCount: collected.count) {
+                recordLearnedJsonStepCeiling(max(collected.count, ceiling), for: targetUuid)
+                if !isBinaryProtobufStepsUnsupported(for: targetUuid),
+                   let protoSteps = try? await fetchTrajectoryStepsProtobuf(
+                       cascadeId: cascadeId,
+                       startIndex: 0,
+                       endIndex: max(knownStepCount, ceiling),
+                       instanceUuidOverride: targetUuid,
+                       allowCrossHostFailover: isRemoteCloud
+                   ), protoSteps.count >= collected.count {
+                    return protoSteps
+                }
+                break
+            }
+
+            let pageSteps = pageResp["steps"]?.arrayValue ?? []
             var addedNew = false
             for (idxOffset, item) in pageSteps.enumerated() {
                 if let step = Self.decodeJSONStep(item, cascadeId: cascadeId, fallbackIndex: offset + idxOffset) {
@@ -347,51 +566,92 @@ extension AntigravityRPCClient {
                     }
                 }
             }
-            if !addedNew {
+            if pageSteps.isEmpty || !addedNew {
+                // Pagination stall: server refused to advance past `collected.count` while `knownStepCount > collected.count`.
+                // Learn this host's true JSON ceiling dynamically and upgrade to Binary Protobuf.
+                recordLearnedJsonStepCeiling(max(1, collected.count), for: targetUuid)
+                if !isBinaryProtobufStepsUnsupported(for: targetUuid),
+                   let protoSteps = try? await fetchTrajectoryStepsProtobuf(
+                       cascadeId: cascadeId,
+                       startIndex: 0,
+                       endIndex: knownStepCount,
+                       instanceUuidOverride: targetUuid,
+                       allowCrossHostFailover: isRemoteCloud
+                   ), protoSteps.count > collected.count {
+                    return protoSteps
+                }
                 break
             }
-            offset += pageSteps.count
+            offset = max(offset + pageSteps.count, collected.count)
         }
 
         return collected.sorted { $0.stepIndex < $1.stepIndex }
     }
 
-    /// Fetches trajectory steps over JSON (`GetCascadeTrajectorySteps`) for conversations under 600 steps.
-    /// Supports both native Desktop `language_server` step JSON (`stepOffset`) and companion/mock step schemas.
+    /// Fetches trajectory steps over JSON (`GetCascadeTrajectorySteps`) with dynamic truncation detection
+    /// and automatic upgrade to Binary Protobuf when the server advertises or triggers a JSON ceiling.
     public func fetchTrajectoryStepsJSON(
         cascadeId: String,
         startIndex: Int = 0,
-        endIndex: Int = 200,
+        endIndex: Int = 0,
         instanceUuidOverride: String? = nil
     ) async throws -> [CascadeStep] {
         var body: [String: JSONValue] = ["cascadeId": .string(cascadeId)]
         if startIndex > 0 {
             body["stepOffset"] = .int(startIndex)
         }
-        let res = try await callUnaryJSON(
-            method: "GetCascadeTrajectorySteps",
-            body: body,
-            instanceUuidOverride: instanceUuidOverride
-        )
-        if res["truncatedAt"] != nil {
-            return try await fetchTrajectoryStepsProtobuf(
-                cascadeId: cascadeId,
-                startIndex: startIndex,
-                endIndex: max(endIndex, Self.protobufStepThreshold),
+        if cascadeId.hasPrefix("v1/") {
+            body["backend"] = .string("BACKEND_TYPE_REMOTE_AICODE")
+        }
+        let res: [String: JSONValue]
+        do {
+            res = try await callUnaryJSON(
+                method: "GetCascadeTrajectorySteps",
+                body: body,
                 instanceUuidOverride: instanceUuidOverride
             )
+        } catch {
+            if Self.isJsonPayloadLimitError(error) && !isBinaryProtobufStepsUnsupported(for: instanceUuidOverride) {
+                let protoSteps = try await fetchTrajectoryStepsProtobuf(
+                    cascadeId: cascadeId,
+                    startIndex: startIndex,
+                    endIndex: endIndex,
+                    instanceUuidOverride: instanceUuidOverride
+                )
+                if !protoSteps.isEmpty {
+                    let observed = endIndex > 0 ? min(endIndex, protoSteps.count) : protoSteps.count
+                    recordLearnedJsonStepCeiling(observed, for: instanceUuidOverride)
+                }
+                return protoSteps
+            }
+            throw error
         }
-        guard let rawSteps = res["steps"]?.arrayValue else { return [] }
+        let rawSteps = res["steps"]?.arrayValue ?? []
+        if let ceiling = Self.extractJsonTruncationCeiling(
+            from: res,
+            fallbackStepCount: max(rawSteps.count, endIndex)
+        ) {
+            recordLearnedJsonStepCeiling(ceiling, for: instanceUuidOverride)
+            if !isBinaryProtobufStepsUnsupported(for: instanceUuidOverride) {
+                return try await fetchTrajectoryStepsProtobuf(
+                    cascadeId: cascadeId,
+                    startIndex: startIndex,
+                    endIndex: max(endIndex, ceiling),
+                    instanceUuidOverride: instanceUuidOverride
+                )
+            }
+        }
         return rawSteps.enumerated().compactMap { offset, item in
             Self.decodeJSONStep(item, cascadeId: cascadeId, fallbackIndex: startIndex + offset)
         }
     }
 
-    /// Fetches trajectory steps using binary Protobuf (`application/proto`) to bypass the 600-step JSON ceiling.
+    /// Fetches trajectory steps using compact Binary Protobuf (`application/proto`) and performs targeted
+    /// JSON repair for any unknown wire interaction members or unrecognized future step types.
     public func fetchTrajectoryStepsProtobuf(
         cascadeId: String,
         startIndex: Int,
-        endIndex: Int,
+        endIndex: Int = 0,
         instanceUuidOverride: String? = nil,
         allowCrossHostFailover: Bool = false
     ) async throws -> [CascadeStep] {
@@ -409,7 +669,11 @@ extension AntigravityRPCClient {
                 allowCrossHostFailover: allowCrossHostFailover
             )
             let unwrapped = Self.unwrapConnectFramedPayloadIfNeeded(rawBytes)
-            let decoded = ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)
+            let decoded = ProtobufStepCodec.decodeStepsResponse(
+                unwrapped,
+                cascadeId: cascadeId,
+                startingIndex: startIndex
+            )
             return await repairUnrecognizedWireInteractionsIfNeeded(
                 decoded,
                 cascadeId: cascadeId,
@@ -430,10 +694,18 @@ extension AntigravityRPCClient {
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw AntigravityRPCError.httpError(statusCode: status, body: "Binary step fetch failed")
+            let bodyText = String(data: data, encoding: .utf8) ?? "Binary step fetch failed"
+            if status == 401 {
+                throw AntigravityRPCError.unauthorized(bodyText)
+            }
+            throw AntigravityRPCError.httpError(statusCode: status, body: bodyText)
         }
         let unwrapped = Self.unwrapConnectFramedPayloadIfNeeded(data)
-        let decoded = ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)
+        let decoded = ProtobufStepCodec.decodeStepsResponse(
+            unwrapped,
+            cascadeId: cascadeId,
+            startingIndex: startIndex
+        )
         return await repairUnrecognizedWireInteractionsIfNeeded(
             decoded,
             cascadeId: cascadeId,
@@ -442,10 +714,11 @@ extension AntigravityRPCClient {
         )
     }
 
-    /// Forward-compatibility repair: if a >600-step binary Protobuf trajectory contains a `WAITING` step
-    /// whose `RequestedInteraction` used a brand-new wire field number unknown to this build, issues a
-    /// single targeted JSON `GetCascadeTrajectorySteps(stepOffset:)` call to recover the exact JSON
-    /// `rawMemberKey` and full human-readable summary.
+    /// Forward-compatibility repair: if a Binary Protobuf trajectory contains either:
+    /// 1. A `WAITING` step whose `RequestedInteraction` used a brand-new wire field number unknown to this build, OR
+    /// 2. An unrecognized future `CortexStepType` (`.unspecified` with a non-nil `rawTypeName`),
+    /// issues targeted JSON `GetCascadeTrajectorySteps(stepOffset:)` probes to recover exact JSON field names,
+    /// `rawMemberKey`, and rich step content without forcing the whole trajectory onto JSON.
     internal func repairUnrecognizedWireInteractionsIfNeeded(
         _ steps: [CascadeStep],
         cascadeId: String,
@@ -453,13 +726,18 @@ extension AntigravityRPCClient {
         allowCrossHostFailover: Bool = false
     ) async -> [CascadeStep] {
         let targets = steps.indices.filter { idx in
-            steps[idx].isWaitingForUser && steps[idx].requestedInteraction?.isUnrecognizedWireMember == true
+            let step = steps[idx]
+            let needsInteractionRepair = step.isWaitingForUser
+                && step.requestedInteraction?.isUnrecognizedWireMember == true
+            let needsStepTypeRepair = step.type == .unspecified && step.rawTypeName != nil
+            return needsInteractionRepair || needsStepTypeRepair
         }
         guard !targets.isEmpty else { return steps }
 
         var repaired = steps
-        for idx in targets.prefix(2) {
-            let stepIndex = repaired[idx].stepIndex
+        for idx in targets.prefix(4) {
+            let current = repaired[idx]
+            let stepIndex = current.stepIndex
             var reqBody: [String: JSONValue] = [
                 "cascadeId": .string(cascadeId),
                 "stepOffset": .int(stepIndex)
@@ -481,10 +759,22 @@ extension AntigravityRPCClient {
             let decodedSlice = rawSteps.enumerated().compactMap { offset, item in
                 Self.decodeJSONStep(item, cascadeId: cascadeId, fallbackIndex: stepIndex + offset)
             }
-            if let matched = decodedSlice.first(where: { $0.stepIndex == stepIndex }),
-               let recoveredInteraction = matched.requestedInteraction,
+            guard let matched = decodedSlice.first(where: { $0.stepIndex == stepIndex }) else {
+                continue
+            }
+            if current.type == .unspecified && current.rawTypeName != nil {
+                if matched.type != .unspecified
+                    || matched.plannerResponse != nil
+                    || matched.requestedInteraction != nil
+                    || (matched.fallbackSummary?.isEmpty == false)
+                    || (matched.rawTypeName?.isEmpty == false && matched.rawTypeName != current.rawTypeName) {
+                    repaired[idx] = matched
+                    continue
+                }
+            }
+            if let recoveredInteraction = matched.requestedInteraction,
                !recoveredInteraction.isUnrecognizedWireMember,
-               let key = recoveredInteraction.rawMemberKey, !key.isEmpty {
+               (recoveredInteraction.rawMemberKey?.isEmpty == false || recoveredInteraction.kind != .approvalInteraction) {
                 repaired[idx].requestedInteraction = recoveredInteraction
             }
         }

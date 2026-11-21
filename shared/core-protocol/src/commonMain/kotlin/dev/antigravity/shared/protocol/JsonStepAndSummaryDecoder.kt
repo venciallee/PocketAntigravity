@@ -416,7 +416,8 @@ public object JsonStepAndSummaryDecoder {
     ): CascadeStep? {
         val obj = element as? JsonObject ?: return null
         val stepIndex = obj.int("stepIndex") ?: fallbackIndex
-        var stepType = resolveStepType(obj["type"])
+        val rawTypePrim = obj["type"] as? JsonPrimitive
+        var stepType = resolveStepType(rawTypePrim)
         val stepStatus = resolveStepStatus(obj["status"])
 
         var userText: String? = nonEmpty(obj.str("userInput"))
@@ -768,6 +769,26 @@ public object JsonStepAndSummaryDecoder {
         val createdAtMs = parseProtoTimestampEpochMs(obj.obj("metadata")?.get("createdAt") ?: obj["createdAt"])
             ?: nowEpochMs
 
+        val resolvedRawTypeName: String? = if (stepType == CortexStepType.UNSPECIFIED) {
+            val rawInt = rawTypePrim?.intOrNull
+            val rawStr = nonEmpty(rawTypePrim?.contentOrNull)
+            when {
+                rawInt != null && rawInt != 0 -> "STEP_TYPE_$rawInt"
+                rawStr != null &&
+                    !rawStr.equals("CORTEX_STEP_TYPE_UNSPECIFIED", ignoreCase = true) &&
+                    !rawStr.equals("UNSPECIFIED", ignoreCase = true) -> rawStr
+                else -> null
+            }
+        } else {
+            null
+        }
+
+        val resolvedFallbackSummary: String? = if (stepType == CortexStepType.UNSPECIFIED) {
+            extractFallbackSummaryFromUnknownStep(obj)
+        } else {
+            null
+        }
+
         return CascadeStep(
             cascadeId = cascadeId,
             stepIndex = stepIndex,
@@ -789,6 +810,8 @@ public object JsonStepAndSummaryDecoder {
             dynamicWorkflow = dynamicWorkflowPayload,
             swarmBoard = swarmBoardPayload,
             mcpToolCall = mcpToolCallPayload,
+            rawTypeName = resolvedRawTypeName,
+            fallbackSummary = resolvedFallbackSummary,
         )
     }
 
@@ -909,14 +932,42 @@ public object JsonStepAndSummaryDecoder {
             )
         }
         // Fallback: preserve exact wire key for any other upstream oneof member (`deploy`, `browserAction`, etc.)
-        val firstMemberKey = obj.keys.firstOrNull { key -> obj[key] is JsonObject }
+        val firstMemberKey = obj.keys.firstOrNull { key -> key != "metadata" && obj[key] is JsonObject }
+            ?: obj.keys.firstOrNull { key -> obj[key] is JsonObject }
         if (firstMemberKey != null) {
             val mapped = RequestedInteraction.MemberKind.fromWireKey(firstMemberKey)
                 ?: RequestedInteraction.MemberKind.APPROVAL_INTERACTION
+            val summary = obj.obj(firstMemberKey)?.let { extractSummaryFromUnknownObject(it) }
             return RequestedInteraction(
                 kind = mapped,
                 rawMemberKey = firstMemberKey,
+                rawSummary = summary,
+                rawWireFieldNumber = null,
             )
+        }
+        return null
+    }
+
+    private fun extractFallbackSummaryFromUnknownStep(obj: JsonObject): String? {
+        for ((key, value) in obj) {
+            if (key == "metadata" || key == "requestedInteraction") continue
+            val nested = value as? JsonObject ?: continue
+            extractSummaryFromUnknownObject(nested)?.let { return it }
+        }
+        return extractSummaryFromUnknownObject(obj)
+    }
+
+    private fun extractSummaryFromUnknownObject(obj: JsonObject): String? {
+        val preferredKeys = listOf("summary", "title", "description", "message", "text", "label", "reason", "prompt", "content", "name")
+        for (k in preferredKeys) {
+            nonEmpty(obj.str(k))?.let { return it.take(240) }
+        }
+        for ((key, value) in obj) {
+            if (key == "type" || key == "status" || key == "cascadeId" || key == "stepIndex") continue
+            val prim = value as? JsonPrimitive ?: continue
+            if (prim.isString) {
+                nonEmpty(prim.contentOrNull)?.let { return it.take(240) }
+            }
         }
         return null
     }
