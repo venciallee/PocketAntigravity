@@ -723,7 +723,7 @@ public enum CloudRelayJSPBCodec: Sendable {
 
                 let arrVersion: String? = (metadataArr != nil && metadataArr!.count > 1) ? metadataArr![1].stringValue : nil
                 let objVersion = firstNonEmptyString(in: metadataObj, keys: versionKeys)
-                let version = objVersion ?? arrVersion ?? "v2.32.0"
+                let version = objVersion ?? arrVersion ?? ""
 
                 let supportsChunking: Bool = {
                     if let b = metadataObj?["supportsChunking"]?.boolValue { return b }
@@ -763,7 +763,7 @@ public enum CloudRelayJSPBCodec: Sendable {
                 let metaVersion = firstNonEmptyString(in: metadataObj, keys: versionKeys)
                 let topVersion = firstNonEmptyString(in: obj, keys: versionKeys)
                 let arrVersion: String? = (metadataArr != nil && metadataArr!.count > 1) ? metadataArr![1].stringValue : nil
-                let version = metaVersion ?? topVersion ?? arrVersion ?? "v2.32.0"
+                let version = metaVersion ?? topVersion ?? arrVersion ?? ""
 
                 let chunkFlag = metadataObj?["supportsChunking"]?.boolValue
                     ?? metadataObj?["supports_chunking"]?.boolValue

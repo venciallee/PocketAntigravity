@@ -43,6 +43,11 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
     public var pluginName: String?
     public var rawMemberKey: String?
     public var rawSummary: String?
+    /// `true` when decoded from an unknown binary Protobuf oneof field number (no JSON member key known)
+    /// so the client avoids sending a mismatched `approvalInteraction` payload that newer PCs silently drop.
+    public var isUnrecognizedWireMember: Bool
+    /// Raw Protobuf field number inside `RequestedInteraction` when `isUnrecognizedWireMember == true`.
+    public var rawWireFieldNumber: Int?
 
     public init(
         kind: MemberKind,
@@ -58,7 +63,9 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
         mcpToolName: String? = nil,
         pluginName: String? = nil,
         rawMemberKey: String? = nil,
-        rawSummary: String? = nil
+        rawSummary: String? = nil,
+        isUnrecognizedWireMember: Bool = false,
+        rawWireFieldNumber: Int? = nil
     ) {
         self.kind = kind
         self.permission = permission
@@ -74,6 +81,34 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
         self.pluginName = pluginName
         self.rawMemberKey = rawMemberKey
         self.rawSummary = rawSummary
+        self.isUnrecognizedWireMember = isUnrecognizedWireMember
+        self.rawWireFieldNumber = rawWireFieldNumber
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, permission, filePermission, runCommand, askQuestion, executeUrl, downloadUrl
+        case browserUpload, workflowScript, mcpServerName, mcpToolName, pluginName
+        case rawMemberKey, rawSummary, isUnrecognizedWireMember, rawWireFieldNumber
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.kind = (try? c.decode(MemberKind.self, forKey: .kind)) ?? .approvalInteraction
+        self.permission = try c.decodeIfPresent(PermissionInteractionSpec.self, forKey: .permission)
+        self.filePermission = try c.decodeIfPresent(FilePermissionInteractionSpec.self, forKey: .filePermission)
+        self.runCommand = try c.decodeIfPresent(RunCommandInteractionSpec.self, forKey: .runCommand)
+        self.askQuestion = try c.decodeIfPresent(AskQuestionInteractionSpec.self, forKey: .askQuestion)
+        self.executeUrl = try c.decodeIfPresent(ExecuteUrlInteractionSpec.self, forKey: .executeUrl)
+        self.downloadUrl = try c.decodeIfPresent(DownloadUrlInteractionSpec.self, forKey: .downloadUrl)
+        self.browserUpload = try c.decodeIfPresent(BrowserUploadInteractionSpec.self, forKey: .browserUpload)
+        self.workflowScript = try c.decodeIfPresent(WorkflowScriptInteractionSpec.self, forKey: .workflowScript)
+        self.mcpServerName = try c.decodeIfPresent(String.self, forKey: .mcpServerName)
+        self.mcpToolName = try c.decodeIfPresent(String.self, forKey: .mcpToolName)
+        self.pluginName = try c.decodeIfPresent(String.self, forKey: .pluginName)
+        self.rawMemberKey = try c.decodeIfPresent(String.self, forKey: .rawMemberKey)
+        self.rawSummary = try c.decodeIfPresent(String.self, forKey: .rawSummary)
+        self.isUnrecognizedWireMember = try c.decodeIfPresent(Bool.self, forKey: .isUnrecognizedWireMember) ?? false
+        self.rawWireFieldNumber = try c.decodeIfPresent(Int.self, forKey: .rawWireFieldNumber)
     }
 }
 

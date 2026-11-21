@@ -365,15 +365,32 @@ extension AntigravitySessionStore {
 
     public func setConversationPermissionPreset(_ preset: AgentPermissionPreset, for cascadeId: String? = nil) {
         let cid = cascadeId ?? activeCascadeId
+        let previousPreset = conversationPermissionPresets[cid]
         if preset == .inheritGlobal {
             conversationPermissionPresets.removeValue(forKey: cid)
         } else {
             conversationPermissionPresets[cid] = preset
         }
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
         let clientRef = rpcClient
-        if !cid.isEmpty {
-            Task {
-                try? await clientRef?.setConversationPermissionPreset(cascadeId: cid, preset: preset)
+        if !cid.isEmpty, let clientRef {
+            Task { [weak self] in
+                do {
+                    try await clientRef.setConversationPermissionPreset(cascadeId: cid, preset: preset)
+                    await self?.refreshHostCapabilitiesFromClient()
+                } catch {
+                    guard let self, isLive else { return }
+                    if let previousPreset {
+                        self.conversationPermissionPresets[cid] = previousPreset
+                    } else {
+                        self.conversationPermissionPresets.removeValue(forKey: cid)
+                    }
+                    await self.handleLiveCapabilityWriteError(
+                        error,
+                        capability: .permissionPreset,
+                        fallbackActionLabel: "Updating permission preset"
+                    )
+                }
             }
         }
     }
@@ -443,15 +460,19 @@ extension AntigravitySessionStore {
                 selectedArtifactPath = snapshots[0].artifactPath
             }
         }
-        if let diffs = try? await client.getTurnDiff(
-            cascadeId: cid,
-            turnNumber: diffCompareMode == .turn ? selectedDiffTurn : nil,
-            compareMode: diffCompareMode
-        ) {
+        do {
+            let diffs = try await client.getTurnDiff(
+                cascadeId: cid,
+                turnNumber: diffCompareMode == .turn ? selectedDiffTurn : nil,
+                compareMode: diffCompareMode
+            )
             if !diffs.isEmpty || (hasPairedBackend || isLiveBackendConnected) {
                 activeTurnDiffs = diffs
                 selectedDiffFileIndex = min(selectedDiffFileIndex, max(0, diffs.count - 1))
             }
+            await refreshHostCapabilitiesFromClient()
+        } catch {
+            await refreshHostCapabilitiesFromClient()
         }
     }
 
@@ -467,16 +488,31 @@ extension AntigravitySessionStore {
     public func toggleStageDiffFile(at index: Int? = nil) {
         let idx = index ?? selectedDiffFileIndex
         guard activeTurnDiffs.indices.contains(idx) else { return }
+        let previousStaged = activeTurnDiffs[idx].isStaged
         activeTurnDiffs[idx].isStaged.toggle()
         let filePath = activeTurnDiffs[idx].filePath
         let nowStaged = activeTurnDiffs[idx].isStaged
         let cid = activeCascadeId
-        let clientRef = rpcClient
-        Task {
-            if nowStaged {
-                try? await clientRef?.gitStageFile(cascadeId: cid, filePath: filePath)
-            } else {
-                try? await clientRef?.gitUnstageFile(cascadeId: cid, filePath: filePath)
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
+        guard let clientRef = rpcClient else { return }
+        Task { [weak self] in
+            do {
+                if nowStaged {
+                    try await clientRef.gitStageFile(cascadeId: cid, filePath: filePath)
+                } else {
+                    try await clientRef.gitUnstageFile(cascadeId: cid, filePath: filePath)
+                }
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let revertIdx = self.activeTurnDiffs.firstIndex(where: { $0.filePath == filePath }) {
+                    self.activeTurnDiffs[revertIdx].isStaged = previousStaged
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .gitVcs,
+                    fallbackActionLabel: nowStaged ? "Staging file" : "Unstaging file"
+                )
             }
         }
     }
@@ -485,11 +521,28 @@ extension AntigravitySessionStore {
         let idx = index ?? selectedDiffFileIndex
         guard activeTurnDiffs.indices.contains(idx) else { return }
         let removed = activeTurnDiffs.remove(at: idx)
+        let previousSelected = selectedDiffFileIndex
         selectedDiffFileIndex = min(selectedDiffFileIndex, max(0, activeTurnDiffs.count - 1))
         let cid = activeCascadeId
-        let clientRef = rpcClient
-        Task {
-            try? await clientRef?.gitDiscardFile(cascadeId: cid, filePath: removed.filePath)
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
+        guard let clientRef = rpcClient else { return }
+        Task { [weak self] in
+            do {
+                try await clientRef.gitDiscardFile(cascadeId: cid, filePath: removed.filePath)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if !self.activeTurnDiffs.contains(where: { $0.filePath == removed.filePath }) {
+                    let restoreIdx = min(idx, self.activeTurnDiffs.count)
+                    self.activeTurnDiffs.insert(removed, at: restoreIdx)
+                    self.selectedDiffFileIndex = min(previousSelected, max(0, self.activeTurnDiffs.count - 1))
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .gitVcs,
+                    fallbackActionLabel: "Discarding file changes"
+                )
+            }
         }
     }
 
@@ -499,10 +552,20 @@ extension AntigravitySessionStore {
         let draft = gitCommitDraft
         let cid = activeCascadeId
         let branch = activeSummary?.branchName ?? "main"
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
         let result: GitCommitResult
-        if let client = rpcClient, (hasPairedBackend || isLiveBackendConnected),
-           let remoteResult = try? await client.gitCommitChanges(cascadeId: cid, draft: draft) {
-            result = remoteResult
+        if isLive, let client = rpcClient {
+            do {
+                result = try await client.gitCommitChanges(cascadeId: cid, draft: draft)
+                await refreshHostCapabilitiesFromClient()
+            } catch {
+                await handleLiveCapabilityWriteError(
+                    error,
+                    capability: .gitVcs,
+                    fallbackActionLabel: "Git commit"
+                )
+                return nil
+            }
         } else {
             result = GitCommitResult(
                 commitSha: String(UUID().uuidString.prefix(7)).lowercased(),
@@ -525,9 +588,20 @@ extension AntigravitySessionStore {
     public func pushCurrentDiffBranch() async -> Bool {
         let cid = activeCascadeId
         let branch = activeSummary?.branchName ?? "main"
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
         let pushed: Bool
-        if let client = rpcClient, (hasPairedBackend || isLiveBackendConnected) {
-            pushed = (try? await client.gitPushBranch(cascadeId: cid, branchName: branch)) ?? false
+        if isLive, let client = rpcClient {
+            do {
+                pushed = try await client.gitPushBranch(cascadeId: cid, branchName: branch)
+                await refreshHostCapabilitiesFromClient()
+            } catch {
+                await handleLiveCapabilityWriteError(
+                    error,
+                    capability: .gitVcs,
+                    fallbackActionLabel: "Git push"
+                )
+                return false
+            }
         } else {
             pushed = true
         }
@@ -566,47 +640,103 @@ extension AntigravitySessionStore {
 
     public func refreshCustomizations() async {
         guard let client = rpcClient, (hasPairedBackend || isLiveBackendConnected) else { return }
-        if let fetched = try? await client.fetchCustomizationsCatalog() {
+        do {
+            let fetched = try await client.fetchCustomizationsCatalog()
             customizations = fetched
             await projectionStore.saveCustomizations(fetched)
+            await refreshHostCapabilitiesFromClient()
+        } catch {
+            await refreshHostCapabilitiesFromClient()
         }
     }
 
     public func restartMcpServer(_ serverName: String) {
+        let previousServer = customizations.mcpServers.first(where: { $0.name == serverName })
         if let idx = customizations.mcpServers.firstIndex(where: { $0.name == serverName }) {
             customizations.mcpServers[idx].state = .connected
             customizations.mcpServers[idx].errorMessage = nil
         }
-        let clientRef = rpcClient
-        Task {
-            try? await clientRef?.restartMcpServer(serverName: serverName)
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
+        guard let clientRef = rpcClient else { return }
+        Task { [weak self] in
+            do {
+                try await clientRef.restartMcpServer(serverName: serverName)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let prev = previousServer,
+                   let idx = self.customizations.mcpServers.firstIndex(where: { $0.name == serverName }) {
+                    self.customizations.mcpServers[idx] = prev
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .customizationsCatalog,
+                    fallbackActionLabel: "Restarting MCP server"
+                )
+            }
         }
     }
 
     public func togglePlugin(_ pluginId: String, isEnabled: Bool) {
+        let previousPlugin = customizations.plugins.first(where: { $0.id == pluginId })
         if let idx = customizations.plugins.firstIndex(where: { $0.id == pluginId }) {
             customizations.plugins[idx].isEnabled = isEnabled
         }
         let snapshot = customizations
         let storeRef = projectionStore
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
         let clientRef = rpcClient
-        Task {
+        Task { [weak self] in
             await storeRef.saveCustomizations(snapshot)
-            try? await clientRef?.togglePlugin(pluginId: pluginId, isEnabled: isEnabled)
+            guard let clientRef else { return }
+            do {
+                try await clientRef.togglePlugin(pluginId: pluginId, isEnabled: isEnabled)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let prev = previousPlugin,
+                   let idx = self.customizations.plugins.firstIndex(where: { $0.id == pluginId }) {
+                    self.customizations.plugins[idx] = prev
+                    await storeRef.saveCustomizations(self.customizations)
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .customizationsCatalog,
+                    fallbackActionLabel: "Updating plugin"
+                )
+            }
         }
     }
 
     public func installPlugin(_ pluginId: String) {
+        let previousPlugin = customizations.plugins.first(where: { $0.id == pluginId })
         if let idx = customizations.plugins.firstIndex(where: { $0.id == pluginId }) {
             customizations.plugins[idx].isInstalled = true
             customizations.plugins[idx].isEnabled = true
         }
         let snapshot = customizations
         let storeRef = projectionStore
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
         let clientRef = rpcClient
-        Task {
+        Task { [weak self] in
             await storeRef.saveCustomizations(snapshot)
-            try? await clientRef?.installMarketplacePlugin(pluginId: pluginId)
+            guard let clientRef else { return }
+            do {
+                try await clientRef.installMarketplacePlugin(pluginId: pluginId)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let prev = previousPlugin,
+                   let idx = self.customizations.plugins.firstIndex(where: { $0.id == pluginId }) {
+                    self.customizations.plugins[idx] = prev
+                    await storeRef.saveCustomizations(self.customizations)
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .customizationsCatalog,
+                    fallbackActionLabel: "Installing plugin"
+                )
+            }
         }
     }
 

@@ -8,6 +8,7 @@ import Foundation
 public actor AntigravityRPCClient {
     public static let servicePrefix = "/exa.language_server_pb.LanguageServerService"
     public static let protobufStepThreshold = 600
+    public static let clientAppVersion = "2.33.0"
 
     internal let channel: RemoteConnectionChannel
     internal let endpointURL: URL
@@ -29,6 +30,7 @@ public actor AntigravityRPCClient {
     internal var wokenInstanceCascadeKeys: Set<String> = []
     internal var cachedValidUpstreamModels: Set<String>?
     internal var cachedDefaultUpstreamModel: String?
+    internal var capabilityProfilesByHost: [String: HostCapabilityProfile] = [:]
     internal let urlSession: URLSession
     internal let streamingURLSession: URLSession
 
@@ -324,6 +326,102 @@ public actor AntigravityRPCClient {
     }
 
 
+    // MARK: - Per-Host Capability Profile & Zero-Upstream Feature Discovery
+
+    internal func capabilityHostKey(for instanceUuidOverride: String? = nil) -> String {
+        if channel == .cloudRelay {
+            let candidate = (instanceUuidOverride?.isEmpty == false)
+                ? instanceUuidOverride!
+                : ((resolvedInstanceUuid?.isEmpty == false) ? resolvedInstanceUuid! : targetInstanceIdentifier)
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "relay:default" : trimmed
+        }
+        let hostPart = endpointURL.host ?? endpointURL.absoluteString
+        if let port = endpointURL.port {
+            return "direct:\(hostPart):\(port)"
+        }
+        return "direct:\(hostPart)"
+    }
+
+    /// Returns the runtime-discovered `HostCapabilityProfile` for `key` (or the active host when `nil`).
+    public func capabilityProfile(forHostKey key: String? = nil) -> HostCapabilityProfile {
+        let resolvedKey = (key?.isEmpty == false) ? key! : capabilityHostKey(for: nil)
+        return capabilityProfilesByHost[resolvedKey] ?? HostCapabilityProfile(hostKey: resolvedKey)
+    }
+
+    /// Returns all per-host `HostCapabilityProfile` snapshots observed during this client's lifetime.
+    public func allCapabilityProfiles() -> [String: HostCapabilityProfile] {
+        capabilityProfilesByHost
+    }
+
+    internal func mutateCapabilityProfile(
+        for instanceUuidOverride: String? = nil,
+        _ mutate: (inout HostCapabilityProfile) -> Void
+    ) {
+        let key = capabilityHostKey(for: instanceUuidOverride)
+        var profile = capabilityProfilesByHost[key] ?? HostCapabilityProfile(hostKey: key)
+        mutate(&profile)
+        capabilityProfilesByHost[key] = profile
+    }
+
+    internal func observeResponseMetadata(
+        headers: [AnyHashable: Any],
+        body: [String: JSONValue]?,
+        method: String,
+        instanceUuidOverride: String?
+    ) {
+        let bridgeCaps = ProtocolCompatibilityEngine.extractBridgeCapabilities(from: headers)
+        let detectedVersion = ProtocolCompatibilityEngine.extractVersionFromHeadersOrBody(
+            headers: headers,
+            body: body
+        )
+        mutateCapabilityProfile(for: instanceUuidOverride) { profile in
+            profile.recordMethodSupported(method)
+            if !bridgeCaps.isEmpty {
+                profile.recordBridgeCapabilities(bridgeCaps)
+            }
+            if let detectedVersion {
+                profile.updateReportedVersion(detectedVersion)
+            }
+        }
+    }
+
+    /// Applies one self-healing compatibility mutation (`unknown field` recursive strip or `invalid enum` downgrade)
+    /// when a Desktop host returns HTTP 400 / invalid_argument, caching the rule for future requests.
+    internal func attemptSelfHealingDowngrade(
+        for errorMessage: String,
+        method: String,
+        body: inout [String: JSONValue],
+        instanceUuidOverride: String?
+    ) -> Bool {
+        if let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: errorMessage) {
+            let (updated, removed) = ProtocolCompatibilityEngine.recursivelyRemoveField(unknownField, from: body)
+            if removed {
+                body = updated
+                mutateCapabilityProfile(for: instanceUuidOverride) { profile in
+                    profile.recordStrippedField(unknownField, forMethod: method)
+                }
+                return true
+            }
+        }
+        if let invalidEnum = ProtocolCompatibilityEngine.extractInvalidEnumValue(from: errorMessage),
+           let replacement = ProtocolCompatibilityEngine.downgradedEnumReplacement(for: invalidEnum) {
+            let (updated, replaced) = ProtocolCompatibilityEngine.recursivelyReplaceEnumValue(
+                invalidEnum,
+                with: replacement,
+                in: body
+            )
+            if replaced {
+                body = updated
+                mutateCapabilityProfile(for: instanceUuidOverride) { profile in
+                    profile.recordDowngradedEnum(from: invalidEnum, to: replacement, forMethod: method)
+                }
+                return true
+            }
+        }
+        return false
+    }
+
     // MARK: - Core Unary RPC (`Sendable` JSONValue & Binary Protobuf)
 
     public func callUnaryJSON(
@@ -331,8 +429,21 @@ public actor AntigravityRPCClient {
         body: [String: JSONValue] = [:],
         instanceUuidOverride: String? = nil,
         allowCrossHostFailover: Bool = false,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        respectNegativeCache: Bool = true
     ) async throws -> [String: JSONValue] {
+        // Fast-fail known-unsupported optional capability RPCs for this host to avoid wasted round-trips.
+        if respectNegativeCache,
+           HostCapability.capability(forMethod: method) != nil {
+            let profile = capabilityProfile(forHostKey: capabilityHostKey(for: instanceUuidOverride))
+            if profile.isMethodKnownUnsupported(method) {
+                throw AntigravityRPCError.httpError(
+                    statusCode: 501,
+                    body: "unimplemented (cached): \(method)"
+                )
+            }
+        }
+
         if channel == .cloudRelay {
             let relayTimeout = timeoutInterval.map { max($0, 10.0) }
             return try await callCloudRelayUnaryJSON(
@@ -345,35 +456,81 @@ public actor AntigravityRPCClient {
         }
 
         let url = endpointURL.appendingPathComponent("\(Self.servicePrefix)/\(method)")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
-        if let timeoutInterval {
-            request.timeoutInterval = timeoutInterval
-        }
-        applyAuthHeaders(to: &request)
-        request.httpBody = try JSONEncoder().encode(body)
+        let profile = capabilityProfile(forHostKey: capabilityHostKey(for: instanceUuidOverride))
+        var workingBody = ProtocolCompatibilityEngine.applyKnownDowngrades(
+            to: body,
+            method: method,
+            profile: profile
+        )
 
-        let (data, response) = try await urlSession.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw AntigravityRPCError.invalidEndpoint
+        for attempt in 1...4 {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+            if let timeoutInterval {
+                request.timeoutInterval = timeoutInterval
+            }
+            applyAuthHeaders(to: &request)
+            request.httpBody = try JSONEncoder().encode(workingBody)
+
+            let (data, response) = try await urlSession.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw AntigravityRPCError.invalidEndpoint
+            }
+            // Capture Bridge version / capability headers even on non-2xx responses
+            let bridgeCaps = ProtocolCompatibilityEngine.extractBridgeCapabilities(from: http.allHeaderFields)
+            let headerVer = ProtocolCompatibilityEngine.extractVersionFromHeadersOrBody(headers: http.allHeaderFields)
+            if !bridgeCaps.isEmpty || headerVer != nil {
+                mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                    if !bridgeCaps.isEmpty { p.recordBridgeCapabilities(bridgeCaps) }
+                    if let headerVer { p.updateReportedVersion(headerVer) }
+                }
+            }
+
+            if http.statusCode == 401 || http.statusCode == 403 {
+                let text = String(data: data, encoding: .utf8) ?? "Unauthorized"
+                throw AntigravityRPCError.unauthorized(text)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let text = String(data: data, encoding: .utf8) ?? ""
+                if http.statusCode == 400, attempt < 4,
+                   attemptSelfHealingDowngrade(
+                       for: text,
+                       method: method,
+                       body: &workingBody,
+                       instanceUuidOverride: instanceUuidOverride
+                   ) {
+                    continue
+                }
+                if ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: http.statusCode, body: text) {
+                    mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                        p.recordMethodUnsupported(method)
+                    }
+                }
+                throw AntigravityRPCError.httpError(statusCode: http.statusCode, body: text)
+            }
+            if data.isEmpty {
+                observeResponseMetadata(
+                    headers: http.allHeaderFields,
+                    body: nil,
+                    method: method,
+                    instanceUuidOverride: instanceUuidOverride
+                )
+                return [:]
+            }
+            guard let decoded = try? JSONDecoder().decode([String: JSONValue].self, from: data) else {
+                throw AntigravityRPCError.decodingError("Expected JSON object from \(method)")
+            }
+            observeResponseMetadata(
+                headers: http.allHeaderFields,
+                body: decoded,
+                method: method,
+                instanceUuidOverride: instanceUuidOverride
+            )
+            return decoded
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            let text = String(data: data, encoding: .utf8) ?? "Unauthorized"
-            throw AntigravityRPCError.unauthorized(text)
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            let text = String(data: data, encoding: .utf8) ?? ""
-            throw AntigravityRPCError.httpError(statusCode: http.statusCode, body: text)
-        }
-        if data.isEmpty {
-            return [:]
-        }
-        guard let decoded = try? JSONDecoder().decode([String: JSONValue].self, from: data) else {
-            throw AntigravityRPCError.decodingError("Expected JSON object from \(method)")
-        }
-        return decoded
+        return [:]
     }
 
     internal func callCloudRelayUnaryJSON(
@@ -385,6 +542,9 @@ public actor AntigravityRPCClient {
         allowStripUnknownFields: Bool = true
     ) async throws -> [String: JSONValue] {
         if Self.localDesktopOnlyMethods.contains(method) {
+            mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                p.recordMethodUnsupported(method)
+            }
             throw AntigravityRPCError.httpError(
                 statusCode: 501,
                 body: "\(method) is only available when connected directly to a local desktop workspace."
@@ -395,49 +555,92 @@ public actor AntigravityRPCClient {
             || body["backendType"]?.stringValue == "BACKEND_TYPE_REMOTE_AICODE"
         let effectiveCrossHostFailover = allowCrossHostFailover || isCloudBackendRequest
 
-        var workingBody = try await sanitizeCloudRelayPayload(method: method, body: body)
+        let sanitized = try await sanitizeCloudRelayPayload(method: method, body: body)
+        let profile = capabilityProfile(forHostKey: capabilityHostKey(for: instanceUuidOverride))
+        var workingBody = ProtocolCompatibilityEngine.applyKnownDowngrades(
+            to: sanitized,
+            method: method,
+            profile: profile
+        )
+
         for attempt in 1...4 {
             let encodedPayload = workingBody.isEmpty ? Data("{}".utf8) : try JSONEncoder().encode(workingBody)
-            let (rawRespData, _) = try await callCloudRelayProxyCommand(
-                method: method,
-                payload: encodedPayload,
-                contentType: "application/json",
-                instanceUuidOverride: instanceUuidOverride,
-                allowCrossHostFailover: effectiveCrossHostFailover,
-                timeoutInterval: timeoutInterval
-            )
+            let rawRespData: Data
+            let respHeaders: [String: String]
+            do {
+                let res = try await callCloudRelayProxyCommand(
+                    method: method,
+                    payload: encodedPayload,
+                    contentType: "application/json",
+                    instanceUuidOverride: instanceUuidOverride,
+                    allowCrossHostFailover: effectiveCrossHostFailover,
+                    timeoutInterval: timeoutInterval
+                )
+                rawRespData = res.payload
+                respHeaders = res.headers
+            } catch let err {
+                if ProtocolCompatibilityEngine.isMethodUnimplementedError(err) {
+                    mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                        p.recordMethodUnsupported(method)
+                    }
+                }
+                throw err
+            }
             let respData = Self.unwrapConnectFramedPayloadIfNeeded(rawRespData)
             if respData.isEmpty {
+                observeResponseMetadata(
+                    headers: respHeaders,
+                    body: nil,
+                    method: method,
+                    instanceUuidOverride: instanceUuidOverride
+                )
                 return [:]
             }
             if let decoded = try? JSONDecoder().decode([String: JSONValue].self, from: respData) {
                 if let code = decoded["code"]?.stringValue,
                    let message = decoded["message"]?.stringValue,
                    decoded.count <= 3 {
-                    if allowStripUnknownFields, attempt < 4, let unknownField = Self.extractUnknownProtoFieldName(from: message) {
-                        if workingBody[unknownField] != nil {
-                            workingBody.removeValue(forKey: unknownField)
-                            continue
-                        }
-                        if var cascadeCfg = workingBody["cascadeConfig"]?.objectValue,
-                           var plannerCfg = cascadeCfg["plannerConfig"]?.objectValue,
-                           plannerCfg[unknownField] != nil {
-                            plannerCfg.removeValue(forKey: unknownField)
-                            cascadeCfg["plannerConfig"] = .object(plannerCfg)
-                            workingBody["cascadeConfig"] = .object(cascadeCfg)
-                            continue
+                    let combinedError = "\(code): \(message)"
+                    if allowStripUnknownFields, attempt < 4,
+                       attemptSelfHealingDowngrade(
+                           for: combinedError,
+                           method: method,
+                           body: &workingBody,
+                           instanceUuidOverride: instanceUuidOverride
+                       ) {
+                        continue
+                    }
+                    let statusCode = ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: combinedError) ? 501 : 400
+                    if statusCode == 501 {
+                        mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                            p.recordMethodUnsupported(method)
                         }
                     }
-                    throw AntigravityRPCError.httpError(statusCode: 400, body: "\(code): \(message)")
+                    throw AntigravityRPCError.httpError(statusCode: statusCode, body: combinedError)
                 }
+                observeResponseMetadata(
+                    headers: respHeaders,
+                    body: decoded,
+                    method: method,
+                    instanceUuidOverride: instanceUuidOverride
+                )
                 return decoded
             }
             let rawText = String(data: respData, encoding: .utf8) ?? ""
             if allowStripUnknownFields, attempt < 4,
-               let unknownField = Self.extractUnknownProtoFieldName(from: rawText),
-               workingBody[unknownField] != nil {
-                workingBody.removeValue(forKey: unknownField)
+               attemptSelfHealingDowngrade(
+                   for: rawText,
+                   method: method,
+                   body: &workingBody,
+                   instanceUuidOverride: instanceUuidOverride
+               ) {
                 continue
+            }
+            if ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: rawText) {
+                mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                    p.recordMethodUnsupported(method)
+                }
+                throw AntigravityRPCError.httpError(statusCode: 501, body: rawText)
             }
             throw AntigravityRPCError.decodingError("Expected JSON object from Cloud Relay \(method)")
         }
@@ -1052,6 +1255,17 @@ public actor AntigravityRPCClient {
                    !agents.contains(name) {
                     agents.append(name)
                 }
+            }
+        }
+
+        if !parsedModels.isEmpty {
+            let hasOrchestrator = parsedModels.contains(where: \.isOrchestrator)
+            let hasExtraEffort = parsedModels.contains(where: { $0.supportedEfforts.contains(.extra) })
+            let hasQuota = (parsedQuota != nil)
+            mutateCapabilityProfile(for: nil) { profile in
+                profile.recordPassiveSignal(.orchestratorModels, state: hasOrchestrator ? .supported : .unsupported)
+                profile.recordPassiveSignal(.thinkingEffortExtra, state: hasExtraEffort ? .supported : .unsupported)
+                profile.recordPassiveSignal(.usageQuota, state: hasQuota ? .supported : .unsupported)
             }
         }
 

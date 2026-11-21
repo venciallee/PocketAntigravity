@@ -473,6 +473,59 @@ public struct StepInlineApprovalCardView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("card-step-approval-\(step.stepIndex)")
+        } else if requested.isUnrecognizedWireMember && (requested.rawMemberKey?.isEmpty != false) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "desktopcomputer.and.arrow.down")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(StepCardPalette.warmAmber)
+                    Text("New Approval Type · Approve on Desktop")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(StepCardPalette.warmAmber)
+                        .lineLimit(2)
+                    Spacer()
+                    if let fieldNum = requested.rawWireFieldNumber {
+                        Text("#\(fieldNum)")
+                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                    }
+                }
+
+                if let summary = requested.rawSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                    Text(summary)
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .lineSpacing(2)
+                        .lineLimit(4)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(StepCardPalette.codeBlockBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+                Text("This Antigravity Desktop host requested an interaction schema newer than this iOS build. Approve or deny it directly in Antigravity Desktop, then refresh.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+
+                Button {
+                    store.syncStepsForCascade(step.cascadeId, pollUntilIdle: false)
+                } label: {
+                    Label("Refresh Status", systemImage: "arrow.clockwise")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
+                        .background(StepCardPalette.neutralButtonBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("btn-step-approval-refresh-\(step.stepIndex)")
+            }
+            .padding(14)
+            .background(StepCardPalette.amberCardSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(StepCardPalette.warmAmber.opacity(0.35), lineWidth: 1)
+            )
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("card-step-approval-desktop-required-\(step.stepIndex)")
         } else {
             let info = descriptor
             VStack(alignment: .leading, spacing: 10) {

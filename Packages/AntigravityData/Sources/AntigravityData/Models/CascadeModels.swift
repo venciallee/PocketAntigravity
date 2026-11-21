@@ -393,6 +393,10 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
     public var swarmBoard: SwarmBoardPayload?
     public var mcpToolCall: McpToolCallPayload?
     public var voiceSummary: VoiceCallTranscriptSummary?
+    /// Raw upstream step type name/number preserved when a newer Desktop host emits an unrecognized `CortexStepType`.
+    public var rawTypeName: String?
+    /// Human-readable summary heuristically extracted from an unrecognized future step payload.
+    public var fallbackSummary: String?
 
     public init(
         cascadeId: String,
@@ -416,7 +420,9 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         dynamicWorkflow: DynamicWorkflowPayload? = nil,
         swarmBoard: SwarmBoardPayload? = nil,
         mcpToolCall: McpToolCallPayload? = nil,
-        voiceSummary: VoiceCallTranscriptSummary? = nil
+        voiceSummary: VoiceCallTranscriptSummary? = nil,
+        rawTypeName: String? = nil,
+        fallbackSummary: String? = nil
     ) {
         self.cascadeId = cascadeId
         self.stepIndex = stepIndex
@@ -440,6 +446,43 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         self.swarmBoard = swarmBoard
         self.mcpToolCall = mcpToolCall
         self.voiceSummary = voiceSummary
+        self.rawTypeName = rawTypeName
+        self.fallbackSummary = fallbackSummary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cascadeId, stepIndex, type, status, createdAt, userInput, attachedMentions, isQueuedInOutbox
+        case plannerResponse, taskBoundary, runCommand, codeAction, viewFile, search, requestedInteraction
+        case recordedExecutionMode, recordedModelId, subagent, dynamicWorkflow, swarmBoard, mcpToolCall
+        case voiceSummary, rawTypeName, fallbackSummary
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.cascadeId = try c.decode(String.self, forKey: .cascadeId)
+        self.stepIndex = try c.decode(Int.self, forKey: .stepIndex)
+        self.type = (try? c.decode(CortexStepType.self, forKey: .type)) ?? .unspecified
+        self.status = (try? c.decode(CortexStepStatus.self, forKey: .status)) ?? .unspecified
+        self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        self.userInput = try c.decodeIfPresent(String.self, forKey: .userInput)
+        self.attachedMentions = try c.decodeIfPresent([String].self, forKey: .attachedMentions) ?? []
+        self.isQueuedInOutbox = try c.decodeIfPresent(Bool.self, forKey: .isQueuedInOutbox) ?? false
+        self.plannerResponse = try c.decodeIfPresent(PlannerResponsePayload.self, forKey: .plannerResponse)
+        self.taskBoundary = try c.decodeIfPresent(TaskBoundaryPayload.self, forKey: .taskBoundary)
+        self.runCommand = try c.decodeIfPresent(RunCommandPayload.self, forKey: .runCommand)
+        self.codeAction = try c.decodeIfPresent(CodeActionPayload.self, forKey: .codeAction)
+        self.viewFile = try c.decodeIfPresent(ViewFilePayload.self, forKey: .viewFile)
+        self.search = try c.decodeIfPresent(SearchPayload.self, forKey: .search)
+        self.requestedInteraction = try c.decodeIfPresent(RequestedInteraction.self, forKey: .requestedInteraction)
+        self.recordedExecutionMode = try c.decodeIfPresent(CascadeExecutionMode.self, forKey: .recordedExecutionMode)
+        self.recordedModelId = try c.decodeIfPresent(String.self, forKey: .recordedModelId)
+        self.subagent = try c.decodeIfPresent(SubagentPayload.self, forKey: .subagent)
+        self.dynamicWorkflow = try c.decodeIfPresent(DynamicWorkflowPayload.self, forKey: .dynamicWorkflow)
+        self.swarmBoard = try c.decodeIfPresent(SwarmBoardPayload.self, forKey: .swarmBoard)
+        self.mcpToolCall = try c.decodeIfPresent(McpToolCallPayload.self, forKey: .mcpToolCall)
+        self.voiceSummary = try c.decodeIfPresent(VoiceCallTranscriptSummary.self, forKey: .voiceSummary)
+        self.rawTypeName = try c.decodeIfPresent(String.self, forKey: .rawTypeName)
+        self.fallbackSummary = try c.decodeIfPresent(String.self, forKey: .fallbackSummary)
     }
 
     /// True when this step is paused waiting for explicit user approval, review, or structured input.
@@ -551,15 +594,27 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
             )
         }
         let prose = plannerResponse?.response.trimmingCharacters(in: .whitespacesAndNewlines)
-        let summary = (prose?.isEmpty == false) ? prose : nil
+        let summary = (prose?.isEmpty == false) ? prose : fallbackSummary
         return RequestedInteraction(
             kind: .approvalInteraction,
             rawSummary: summary
         )
     }
 
+    /// `true` when this step represents a newer Desktop `CortexStepType` unknown to this app build
+    /// that carries user-visible metadata (`rawTypeName` or `fallbackSummary`) and should render a fallback card.
+    public var isUnrecognizedForwardStep: Bool {
+        guard type == .unspecified else { return false }
+        let hasProse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if hasProse { return false }
+        let hasRawType = !(rawTypeName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasSummary = !(fallbackSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasRawType || hasSummary
+    }
+
     /// Returns true if this step carries user-visible chat, tool evidence, task progress, or approval UI.
-    /// Filters out internal Desktop housekeeping steps (`CHECKPOINT`, `EPHEMERAL_MESSAGE`, empty tool-call wrappers).
+    /// Filters out internal Desktop housekeeping steps (`CHECKPOINT`, `EPHEMERAL_MESSAGE`, empty tool-call wrappers),
+    /// while keeping unrecognized future Desktop step types visible via a fallback card instead of silently vanishing.
     public var hasRenderableChatContent: Bool {
         if isWaitingForUser || requestedInteraction != nil {
             return true
@@ -597,6 +652,9 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
             let hasResponse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let hasRefs = !(plannerResponse?.referencedFiles.isEmpty ?? true)
             return hasResponse || hasRefs || viewFile != nil || search != nil || status == .inProgress
+        case .unspecified:
+            let hasResponse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return hasResponse || isUnrecognizedForwardStep
         default:
             let hasResponse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return hasResponse

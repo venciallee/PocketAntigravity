@@ -44,6 +44,8 @@ public struct RichArtifactViewerSheet: View {
                         imageAnnotationArtifactView(art)
                     case .generativeUIHTML, .urlBookmark:
                         webArtifactView(art)
+                    case .unsupportedAsset:
+                        unsupportedArtifactView(art)
                     default:
                         markdownFallbackView(art)
                     }
@@ -322,6 +324,56 @@ public struct RichArtifactViewerSheet: View {
                 .padding(16)
         }
         #endif
+    }
+
+    private func unsupportedArtifactView(_ art: ArtifactSnapshot) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.questionmark")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(art.title)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                        if let rawKind = art.rawKindName, !rawKind.isEmpty {
+                            Text("Format: \(rawKind)")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                        }
+                    }
+                    Spacer()
+                }
+                if !art.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(art.summary)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                }
+                Text(art.artifactPath)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 10))
+                Text("This artifact format isn't natively previewable in this iOS build yet. Open it in Antigravity Desktop or update the iOS app.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(AntigravityTheme.inkMuted)
+                #if canImport(UIKit)
+                Button {
+                    UIPasteboard.general.string = art.artifactPath
+                } label: {
+                    Label("Copy Artifact Path", systemImage: "doc.on.doc")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                        .background(AntigravityTheme.accentPeriwinkle, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                #endif
+            }
+            .padding(16)
+        }
     }
 
     private func markdownFallbackView(_ art: ArtifactSnapshot) -> some View {

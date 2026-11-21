@@ -1015,6 +1015,13 @@ public struct CascadeStepCellView: View {
                     AntigravityMarkdownView(markdown: prose, variant: .assistant, store: store)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("step-prose-\(step.stepIndex)")
+                } else if step.isUnrecognizedForwardStep {
+                    UnknownStepFallbackCardView(
+                        stepIndex: step.stepIndex,
+                        rawTypeName: step.rawTypeName,
+                        fallbackSummary: step.fallbackSummary,
+                        status: step.status
+                    )
                 }
             }
 
@@ -1033,5 +1040,60 @@ public struct CascadeStepCellView: View {
                 RemoteArtifactPreviewSheet(uri: uri, store: store)
             }
         }
+    }
+}
+
+/// Forward-compatible fallback card rendered when a newer Antigravity Desktop emits a `CortexStepType`
+/// unrecognized by this iOS build, preserving visibility instead of silently dropping the step.
+private struct UnknownStepFallbackCardView: View {
+    let stepIndex: Int
+    let rawTypeName: String?
+    let fallbackSummary: String?
+    let status: CortexStepStatus
+
+    private var formattedTypeLabel: String {
+        let raw = (rawTypeName ?? "Unknown Step")
+            .replacingOccurrences(of: "CORTEX_STEP_TYPE_", with: "")
+            .replacingOccurrences(of: "_", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? "Newer Desktop Step" : raw.capitalized
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles.rectangle.stack")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(StepCardPalette.periwinkle)
+                Text(formattedTypeLabel)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+                    .lineLimit(1)
+                Spacer()
+                Text(status.displayBadgeText)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.white.opacity(0.06), in: Capsule())
+            }
+            if let summary = fallbackSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                Text(summary)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .lineLimit(4)
+            }
+            Text("Synced from a newer Antigravity Desktop version · Update iOS app for full view")
+                .font(.system(size: 11))
+                .foregroundStyle(AntigravityTheme.inkMuted)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+        )
+        .accessibilityIdentifier("card-unknown-forward-step-\(stepIndex)")
     }
 }

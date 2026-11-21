@@ -336,6 +336,7 @@ public struct ConversationOverviewSheetView: View {
         case .videoAsset: return "video"
         case .generativeUIHTML: return "safari"
         case .urlBookmark: return "link"
+        case .unsupportedAsset: return "doc.questionmark"
         default: return "doc.text"
         }
     }

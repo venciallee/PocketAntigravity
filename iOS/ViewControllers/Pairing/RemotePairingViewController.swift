@@ -307,7 +307,10 @@ public struct RemotePairingViewController: View {
                                         Text(inst.name)
                                             .font(.system(size: 14.5, weight: .semibold))
                                             .foregroundStyle(isInstOnline ? Color.white : AntigravityTheme.textSecondary)
-                                        Text("\(isInstOnline ? inst.status.badgeText : "Offline") · \(inst.version)")
+                                        let statusBadge = isInstOnline ? inst.status.badgeText : "Offline"
+                                        let versionPart = inst.version.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        let subtitleLine = versionPart.isEmpty ? statusBadge : "\(statusBadge) · \(versionPart)"
+                                        Text(subtitleLine)
                                             .font(.system(size: 11.5, weight: .regular, design: .monospaced))
                                             .foregroundStyle(isInstOnline ? AntigravityTheme.textSecondary : AntigravityTheme.statusError)
                                     }

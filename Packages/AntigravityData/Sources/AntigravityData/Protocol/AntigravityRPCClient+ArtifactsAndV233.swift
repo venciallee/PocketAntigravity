@@ -22,25 +22,36 @@ extension AntigravityRPCClient {
                 ?? obj["fileUri"]?.stringValue
                 ?? obj["uri"]?.stringValue
             guard let path, !path.isEmpty else { return nil }
-            let kind: ArtifactKind = {
-                if let rawKind = obj["kind"]?.stringValue,
-                   let parsed = ArtifactKind(rawValue: rawKind) {
-                    return parsed
+            let rawKindStr = Self.nonEmptyString(obj["kind"]?.stringValue)
+            let resolvedKind: (kind: ArtifactKind, rawKindName: String?) = {
+                if let rawKindStr {
+                    if let parsed = ArtifactKind(rawValue: rawKindStr) {
+                        return (parsed, parsed == .unsupportedAsset ? rawKindStr : nil)
+                    }
+                    return (.unsupportedAsset, rawKindStr)
                 }
                 let lower = path.lowercased()
-                if lower.hasSuffix(".pdf") { return .pdfDocument }
-                if lower.hasSuffix(".ipynb") { return .jupyterNotebook }
-                if lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".webp") {
-                    return .imageAsset
+                let ext = (path as NSString).pathExtension.lowercased()
+                if lower.hasSuffix(".pdf") { return (.pdfDocument, nil) }
+                if lower.hasSuffix(".ipynb") { return (.jupyterNotebook, nil) }
+                if lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".webp") || lower.hasSuffix(".gif") {
+                    return (.imageAsset, nil)
                 }
                 if lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") || lower.hasSuffix(".webm") {
-                    return .videoAsset
+                    return (.videoAsset, nil)
                 }
-                if lower.hasSuffix(".html") || lower.hasSuffix(".htm") { return .generativeUIHTML }
-                if lower.hasSuffix(".url.json") { return .urlBookmark }
-                if lower.contains("walkthrough") { return .walkthrough }
-                if lower.contains("task") { return .taskList }
-                return .implementationPlan
+                if lower.hasSuffix(".html") || lower.hasSuffix(".htm") { return (.generativeUIHTML, nil) }
+                if lower.hasSuffix(".url.json") { return (.urlBookmark, nil) }
+                if lower.contains("walkthrough") && (ext.isEmpty || ext == "md" || ext == "markdown" || ext == "txt") {
+                    return (.walkthrough, nil)
+                }
+                if lower.contains("task") && (ext.isEmpty || ext == "md" || ext == "markdown" || ext == "txt") {
+                    return (.taskList, nil)
+                }
+                if ext.isEmpty || ext == "md" || ext == "markdown" || ext == "txt" {
+                    return (.implementationPlan, nil)
+                }
+                return (.unsupportedAsset, ext.uppercased())
             }()
             let content = obj["content"]?.stringValue
                 ?? obj["textContent"]?.stringValue
@@ -50,11 +61,12 @@ extension AntigravityRPCClient {
                 artifactPath: path,
                 title: obj["title"]?.stringValue ?? (path as NSString).lastPathComponent,
                 summary: obj["summary"]?.stringValue ?? "",
-                kind: kind,
+                kind: resolvedKind.kind,
                 content: content,
                 requestFeedback: obj["requestFeedback"]?.boolValue ?? false,
                 userFacing: obj["userFacing"]?.boolValue ?? true,
-                version: obj["version"]?.intValue ?? 1
+                version: obj["version"]?.intValue ?? 1,
+                rawKindName: resolvedKind.rawKindName
             )
         }
     }

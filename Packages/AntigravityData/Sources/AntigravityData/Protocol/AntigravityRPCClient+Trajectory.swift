@@ -409,7 +409,13 @@ extension AntigravityRPCClient {
                 allowCrossHostFailover: allowCrossHostFailover
             )
             let unwrapped = Self.unwrapConnectFramedPayloadIfNeeded(rawBytes)
-            return ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)
+            let decoded = ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)
+            return await repairUnrecognizedWireInteractionsIfNeeded(
+                decoded,
+                cascadeId: cascadeId,
+                instanceUuidOverride: instanceUuidOverride,
+                allowCrossHostFailover: allowCrossHostFailover
+            )
         }
 
         let url = endpointURL.appendingPathComponent("\(Self.servicePrefix)/GetCascadeTrajectorySteps")
@@ -427,7 +433,62 @@ extension AntigravityRPCClient {
             throw AntigravityRPCError.httpError(statusCode: status, body: "Binary step fetch failed")
         }
         let unwrapped = Self.unwrapConnectFramedPayloadIfNeeded(data)
-        return ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)
+        let decoded = ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId: cascadeId)
+        return await repairUnrecognizedWireInteractionsIfNeeded(
+            decoded,
+            cascadeId: cascadeId,
+            instanceUuidOverride: instanceUuidOverride,
+            allowCrossHostFailover: allowCrossHostFailover
+        )
+    }
+
+    /// Forward-compatibility repair: if a >600-step binary Protobuf trajectory contains a `WAITING` step
+    /// whose `RequestedInteraction` used a brand-new wire field number unknown to this build, issues a
+    /// single targeted JSON `GetCascadeTrajectorySteps(stepOffset:)` call to recover the exact JSON
+    /// `rawMemberKey` and full human-readable summary.
+    internal func repairUnrecognizedWireInteractionsIfNeeded(
+        _ steps: [CascadeStep],
+        cascadeId: String,
+        instanceUuidOverride: String? = nil,
+        allowCrossHostFailover: Bool = false
+    ) async -> [CascadeStep] {
+        let targets = steps.indices.filter { idx in
+            steps[idx].isWaitingForUser && steps[idx].requestedInteraction?.isUnrecognizedWireMember == true
+        }
+        guard !targets.isEmpty else { return steps }
+
+        var repaired = steps
+        for idx in targets.prefix(2) {
+            let stepIndex = repaired[idx].stepIndex
+            var reqBody: [String: JSONValue] = [
+                "cascadeId": .string(cascadeId),
+                "stepOffset": .int(stepIndex)
+            ]
+            if cascadeId.hasPrefix("v1/") {
+                reqBody["backend"] = .string("BACKEND_TYPE_REMOTE_AICODE")
+            }
+            guard let jsonResp = try? await callUnaryJSON(
+                method: "GetCascadeTrajectorySteps",
+                body: reqBody,
+                instanceUuidOverride: instanceUuidOverride,
+                allowCrossHostFailover: allowCrossHostFailover,
+                timeoutInterval: 5.0
+            ),
+            let rawSteps = jsonResp["steps"]?.arrayValue,
+            !rawSteps.isEmpty else {
+                continue
+            }
+            let decodedSlice = rawSteps.enumerated().compactMap { offset, item in
+                Self.decodeJSONStep(item, cascadeId: cascadeId, fallbackIndex: stepIndex + offset)
+            }
+            if let matched = decodedSlice.first(where: { $0.stepIndex == stepIndex }),
+               let recoveredInteraction = matched.requestedInteraction,
+               !recoveredInteraction.isUnrecognizedWireMember,
+               let key = recoveredInteraction.rawMemberKey, !key.isEmpty {
+                repaired[idx].requestedInteraction = recoveredInteraction
+            }
+        }
+        return repaired
     }
 
 
@@ -578,7 +639,7 @@ extension AntigravityRPCClient {
             "cascadeId": .string(clientCid),
             "metadata": .object([
                 "ideName": .string("antigravity-ios"),
-                "ideVersion": .string("2.0.0")
+                "ideVersion": .string(Self.clientAppVersion)
             ]),
             "modelId": .string(protoModel)
         ]
@@ -766,7 +827,7 @@ extension AntigravityRPCClient {
                 "userResponse": .string(message),
                 "metadata": .object([
                     "ideName": .string("antigravity-ios"),
-                    "ideVersion": .string("2.33.0")
+                    "ideVersion": .string(Self.clientAppVersion)
                 ]),
                 "cascadeConfig": .object([
                     "plannerConfig": .object(plannerConfig)
@@ -915,26 +976,35 @@ extension AntigravityRPCClient {
         isPinned: Bool,
         instanceUuidOverride: String? = nil
     ) async throws {
+        let annotationsBody: [String: JSONValue] = [
+            "cascadeId": .string(cascadeId),
+            "annotations": .object(["pinned": .bool(isPinned)]),
+            "mergeAnnotations": .bool(true)
+        ]
         if channel == .cloudRelay {
             _ = try await callUnaryJSON(
                 method: "UpdateConversationAnnotations",
-                body: [
-                    "cascadeId": .string(cascadeId),
-                    "annotations": .object(["pinned": .bool(isPinned)]),
-                    "mergeAnnotations": .bool(true)
-                ],
+                body: annotationsBody,
                 instanceUuidOverride: instanceUuidOverride
             )
             return
         }
-        _ = try await callUnaryJSON(
-            method: "PinCascade",
-            body: [
-                "cascadeId": .string(cascadeId),
-                "isPinned": .bool(isPinned)
-            ],
-            instanceUuidOverride: instanceUuidOverride
-        )
+        do {
+            _ = try await callUnaryJSON(
+                method: "PinCascade",
+                body: [
+                    "cascadeId": .string(cascadeId),
+                    "isPinned": .bool(isPinned)
+                ],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        } catch where ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+            _ = try await callUnaryJSON(
+                method: "UpdateConversationAnnotations",
+                body: annotationsBody,
+                instanceUuidOverride: instanceUuidOverride
+            )
+        }
     }
 
     public func renameCascade(
@@ -942,26 +1012,35 @@ extension AntigravityRPCClient {
         newTitle: String,
         instanceUuidOverride: String? = nil
     ) async throws {
+        let annotationsBody: [String: JSONValue] = [
+            "cascadeId": .string(cascadeId),
+            "annotations": .object(["title": .string(newTitle)]),
+            "mergeAnnotations": .bool(true)
+        ]
         if channel == .cloudRelay {
             _ = try await callUnaryJSON(
                 method: "UpdateConversationAnnotations",
-                body: [
-                    "cascadeId": .string(cascadeId),
-                    "annotations": .object(["title": .string(newTitle)]),
-                    "mergeAnnotations": .bool(true)
-                ],
+                body: annotationsBody,
                 instanceUuidOverride: instanceUuidOverride
             )
             return
         }
-        _ = try await callUnaryJSON(
-            method: "RenameCascade",
-            body: [
-                "cascadeId": .string(cascadeId),
-                "title": .string(newTitle)
-            ],
-            instanceUuidOverride: instanceUuidOverride
-        )
+        do {
+            _ = try await callUnaryJSON(
+                method: "RenameCascade",
+                body: [
+                    "cascadeId": .string(cascadeId),
+                    "title": .string(newTitle)
+                ],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        } catch where ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+            _ = try await callUnaryJSON(
+                method: "UpdateConversationAnnotations",
+                body: annotationsBody,
+                instanceUuidOverride: instanceUuidOverride
+            )
+        }
     }
 
     public func moveCascadeToWorkspace(
@@ -984,26 +1063,35 @@ extension AntigravityRPCClient {
         isArchived: Bool = true,
         instanceUuidOverride: String? = nil
     ) async throws {
+        let annotationsBody: [String: JSONValue] = [
+            "cascadeId": .string(cascadeId),
+            "annotations": .object(["archived": .bool(isArchived)]),
+            "mergeAnnotations": .bool(true)
+        ]
         if channel == .cloudRelay {
             _ = try await callUnaryJSON(
                 method: "UpdateConversationAnnotations",
-                body: [
-                    "cascadeId": .string(cascadeId),
-                    "annotations": .object(["archived": .bool(isArchived)]),
-                    "mergeAnnotations": .bool(true)
-                ],
+                body: annotationsBody,
                 instanceUuidOverride: instanceUuidOverride
             )
             return
         }
-        _ = try await callUnaryJSON(
-            method: "ArchiveCascade",
-            body: [
-                "cascadeId": .string(cascadeId),
-                "isArchived": .bool(isArchived)
-            ],
-            instanceUuidOverride: instanceUuidOverride
-        )
+        do {
+            _ = try await callUnaryJSON(
+                method: "ArchiveCascade",
+                body: [
+                    "cascadeId": .string(cascadeId),
+                    "isArchived": .bool(isArchived)
+                ],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        } catch where ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+            _ = try await callUnaryJSON(
+                method: "UpdateConversationAnnotations",
+                body: annotationsBody,
+                instanceUuidOverride: instanceUuidOverride
+            )
+        }
     }
 
     public func deleteCascade(
@@ -1018,11 +1106,19 @@ extension AntigravityRPCClient {
             )
             return
         }
-        _ = try await callUnaryJSON(
-            method: "DeleteCascade",
-            body: ["cascadeId": .string(cascadeId)],
-            instanceUuidOverride: instanceUuidOverride
-        )
+        do {
+            _ = try await callUnaryJSON(
+                method: "DeleteCascade",
+                body: ["cascadeId": .string(cascadeId)],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        } catch where ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+            _ = try await callUnaryJSON(
+                method: "DeleteCascadeTrajectory",
+                body: ["cascadeId": .string(cascadeId)],
+                instanceUuidOverride: instanceUuidOverride
+            )
+        }
     }
 
     /// Updates `annotations.lastUserViewTime` on Antigravity Desktop (`UpdateConversationAnnotations`)

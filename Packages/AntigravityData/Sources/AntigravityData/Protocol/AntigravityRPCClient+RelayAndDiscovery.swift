@@ -58,10 +58,19 @@ extension AntigravityRPCClient {
             let text = String(data: data, encoding: .utf8) ?? ""
             throw AntigravityRPCError.httpError(statusCode: http.statusCode, body: text)
         }
-        return try CloudRelayJSPBCodec.decodeListInstancesResponse(
+        let decodedInstances = try CloudRelayJSPBCodec.decodeListInstancesResponse(
             data,
             responseHeaders: http.allHeaderFields
         )
+        for inst in decodedInstances {
+            mutateCapabilityProfile(for: inst.uuid) { profile in
+                if !inst.version.isEmpty {
+                    profile.updateReportedVersion(inst.version)
+                }
+                profile.recordPassiveSignal(.streamChunking, state: inst.supportsChunking ? .supported : .unsupported)
+            }
+        }
+        return decodedInstances
     }
 
     /// Returns the currently active reachable Cloud Relay instance, if resolved.
@@ -217,6 +226,7 @@ extension AntigravityRPCClient {
             let syntheticOffline = RelayInstanceInfo(
                 uuid: rawTarget,
                 name: rawTarget,
+                version: "",
                 status: .disconnected
             )
             self.authUser = existing.authUser
@@ -237,6 +247,7 @@ extension AntigravityRPCClient {
             let directInfo = RelayInstanceInfo(
                 uuid: rawTarget,
                 name: rawTarget,
+                version: "",
                 status: .connected
             )
             self.resolvedInstanceUuid = rawTarget
@@ -252,6 +263,25 @@ extension AntigravityRPCClient {
         )
     }
 
+    /// Non-fatal read-only probe against native upstream `GetUserStatus` on direct LAN hosts
+    /// when neither `ListInstances` nor Companion Bridge headers supplied a version string.
+    internal func probeDirectServerVersionIfNeeded(timeoutInterval: TimeInterval = 2.0) async {
+        guard channel == .directHost else { return }
+        if capabilityProfile().reportedVersion != nil {
+            return
+        }
+        if let resp = try? await callUnaryJSON(
+            method: "GetUserStatus",
+            body: [:],
+            timeoutInterval: timeoutInterval,
+            respectNegativeCache: false
+        ), let detected = ProtocolCompatibilityEngine.extractVersionFromHeadersOrBody(headers: [:], body: resp) {
+            mutateCapabilityProfile(for: nil) { profile in
+                profile.updateReportedVersion(detected)
+            }
+        }
+    }
+
     // MARK: - Handshake & Login Verification
 
     /// Verifies authentication (`SAPISIDHASH` + `ApiService/ListInstances` + `ProxyCommand`, or `x-codeium-csrf-token`)
@@ -265,7 +295,7 @@ extension AntigravityRPCClient {
         var resolvedName: String? = nil
         var selectedUuid: String? = resolvedInstanceUuid
         var isSelectedHostOnline = true
-        var serverVersion = "v2.32.0"
+        var serverVersion = ""
         var allRelayInstances: [RelayInstanceInfo] = []
 
         if channel == .cloudRelay {
@@ -293,22 +323,32 @@ extension AntigravityRPCClient {
         if let selectedUuid, channel == .cloudRelay {
             self.resolvedInstanceUuid = selectedUuid
         }
+        if channel == .directHost {
+            await probeDirectServerVersionIfNeeded(timeoutInterval: min(timeoutInterval, 2.0))
+        }
         let latestInstances = federated.availableRelayInstances.isEmpty
             ? (cachedRelayInstances.isEmpty ? allRelayInstances : cachedRelayInstances)
             : federated.availableRelayInstances
         let latestActive = currentActiveRelayInstance()
+        let activeProfile = capabilityProfile(forHostKey: selectedUuid)
+        let resolvedVersion: String = {
+            if let v = latestActive?.version, !v.isEmpty { return v }
+            if !serverVersion.isEmpty { return serverVersion }
+            return activeProfile.reportedVersion ?? ""
+        }()
         let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
         return BackendHandshakeResult(
             latencyMs: elapsedMs,
             workspaces: federated.workspaces,
             summaries: federated.summaries,
             cloudProjects: federated.cloudProjects,
-            serverVersion: latestActive?.version ?? serverVersion,
+            serverVersion: resolvedVersion,
             resolvedHostname: latestActive?.name ?? resolvedName,
             resolvedInstanceUuid: selectedUuid ?? resolvedInstanceUuid,
             resolvedAuthUser: channel == .cloudRelay ? authUser : nil,
             availableRelayInstances: latestInstances,
-            isSelectedHostOnline: isSelectedHostOnline
+            isSelectedHostOnline: isSelectedHostOnline,
+            hostCapabilities: activeProfile
         )
     }
 

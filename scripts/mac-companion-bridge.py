@@ -27,6 +27,7 @@ import argparse
 import html
 import json
 import os
+import plistlib
 import re
 import secrets
 import socket
@@ -45,6 +46,160 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 SERVICE_PREFIX = "/exa.language_server_pb.LanguageServerService/"
+
+BRIDGE_CAPABILITY_METHODS = (
+    "OpenWorkspaceInFinder",
+    "ReadArtifactFile",
+    "CreateProjectWorkspace",
+    "GetTurnDiff",
+    "GitStageFile",
+    "GitUnstageFile",
+    "GitDiscardFile",
+    "GitCommit",
+    "GitPush",
+    "GetCustomizationsCatalog",
+    "ListAutomations",
+    "CreateAutomation",
+    "TriggerAutomationNow",
+    "SetAutomationPaused",
+)
+
+BRIDGE_ENUM_DOWNGRADES = {
+    "XHIGH": "HIGH",
+    "xhigh": "high",
+    "EXTRA": "HIGH",
+    "extra": "high",
+    "THINKING_EFFORT_EXTRA": "THINKING_EFFORT_HIGH",
+    "THINKING_EFFORT_XHIGH": "THINKING_EFFORT_HIGH",
+    "PERMISSION_SCOPE_CONVERSATION": "PERMISSION_SCOPE_TURN",
+    "PERMISSION_SCOPE_ALWAYS": "PERMISSION_SCOPE_TURN",
+    "PERMISSION_SCOPE_TURN": "PERMISSION_SCOPE_ONCE",
+    "ARTIFACT_REVIEW_MODE_TURBO": "ARTIFACT_REVIEW_MODE_AUTO",
+    "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER": "CASCADE_COMMANDS_AUTO_EXECUTION_AUTO",
+}
+
+
+def detect_desktop_version_from_command(cmd_line: str) -> str:
+    """Infers the installed Antigravity Desktop version without modifying upstream binaries.
+
+    Inspects:
+    1. CLI version arguments (`--ide_version`, `--extension_version`, `--app_version`)
+    2. Enclosing macOS `.app/Contents/Info.plist` (`CFBundleShortVersionString`)
+    3. Neighboring `product.json` or `package.json` near the binary path
+    """
+    if not cmd_line:
+        return ""
+    arg_match = re.search(
+        r"--(?:ide_version|extension_version|app_version|antigravity_version)[=\s]+v?(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.\-]+)?)",
+        cmd_line,
+    )
+    if arg_match:
+        return f"v{arg_match.group(1)}"
+
+    # Extract candidate executable path from ps aux command line
+    app_match = re.search(r"(/[^:\n]*?\.app)/Contents/", cmd_line)
+    if app_match:
+        info_plist = Path(app_match.group(1)) / "Contents" / "Info.plist"
+        if info_plist.is_file():
+            try:
+                with info_plist.open("rb") as f:
+                    plist_data = plistlib.load(f)
+                ver = str(plist_data.get("CFBundleShortVersionString") or "").strip()
+                if re.match(r"^v?\d+\.\d+", ver):
+                    return ver if ver.startswith("v") else f"v{ver}"
+            except Exception:
+                pass
+
+    path_match = re.search(r"(/[^\s]+?(?:language_server|antigravity_tools|agy)[^\s]*)", cmd_line)
+    if path_match:
+        bin_path = Path(path_match.group(1))
+        for parent in list(bin_path.parents)[:6]:
+            for meta_name in ("product.json", "package.json"):
+                meta_file = parent / meta_name
+                if meta_file.is_file():
+                    try:
+                        obj = json.loads(meta_file.read_text(encoding="utf-8"))
+                        ver = str(obj.get("version") or obj.get("antigravityVersion") or "").strip()
+                        if re.match(r"^v?\d+\.\d+", ver):
+                            return ver if ver.startswith("v") else f"v{ver}"
+                    except Exception:
+                        continue
+    return ""
+
+
+def recursively_strip_field(obj, field_name: str) -> tuple[object, bool]:
+    """Recursively strips `field_name` from nested dicts/lists, folding stripped rich items into text."""
+    if isinstance(obj, dict):
+        removed = False
+        new_dict = {}
+        for k, v in obj.items():
+            if k == field_name:
+                removed = True
+                continue
+            if k == "items" and isinstance(v, list) and field_name in ("codeQuote", "mention", "media"):
+                new_items = []
+                for entry in v:
+                    if isinstance(entry, dict):
+                        container = entry.get("item") if isinstance(entry.get("item"), dict) else entry
+                        if isinstance(container, dict) and isinstance(container.get(field_name), dict):
+                            sub = container[field_name]
+                            label = sub.get("label") or sub.get("uri") or sub.get("targetUri") or sub.get("filePath") or field_name
+                            snippet = sub.get("snippet") or ""
+                            if snippet:
+                                new_items.append({"text": f"[Context: {label}]\n{snippet}"})
+                            else:
+                                new_items.append({"text": f"[Attached {field_name}: {label}]"})
+                            removed = True
+                            continue
+                    cleaned_entry, r_entry = recursively_strip_field(entry, field_name)
+                    if r_entry:
+                        removed = True
+                    new_items.append(cleaned_entry)
+                new_dict[k] = new_items
+            else:
+                cleaned_val, r_val = recursively_strip_field(v, field_name)
+                if r_val:
+                    removed = True
+                new_dict[k] = cleaned_val
+        return new_dict, removed
+    if isinstance(obj, list):
+        removed = False
+        new_list = []
+        for elem in obj:
+            cleaned_elem, r_elem = recursively_strip_field(elem, field_name)
+            if r_elem:
+                removed = True
+            new_list.append(cleaned_elem)
+        return new_list, removed
+    return obj, False
+
+
+def recursively_downgrade_enum(obj, invalid_val: str, replacement: str) -> tuple[object, bool]:
+    """Recursively replaces exact string occurrences of `invalid_val` with `replacement`."""
+    if isinstance(obj, str):
+        if obj == invalid_val:
+            return replacement, True
+        return obj, False
+    if isinstance(obj, dict):
+        replaced = False
+        out = {}
+        for k, v in obj.items():
+            nv, r = recursively_downgrade_enum(v, invalid_val, replacement)
+            if r:
+                replaced = True
+            out[k] = nv
+        return out, replaced
+    if isinstance(obj, list):
+        replaced = False
+        out = []
+        for elem in obj:
+            ne, r = recursively_downgrade_enum(elem, invalid_val, replacement)
+            if r:
+                replaced = True
+            out.append(ne)
+        return out, replaced
+    return obj, False
+
 
 SYNTHETIC_PROBE_PATTERNS = (
     "ios connect-rpc handshake",
@@ -165,7 +320,8 @@ def discover_all_local_language_servers() -> list[dict]:
             for p in re.findall(r"--(?:hub[-_]|extension_server_)?[A-Za-z0-9_]*port[=\s]+(\d+)", line)
             if 1024 <= int(p) <= 65535
         ]
-        candidates.append((0 if is_hub else 1, pid, csrf_token, hinted_ports, is_hub, ws_id, is_remote_ws))
+        desktop_ver = detect_desktop_version_from_command(line)
+        candidates.append((0 if is_hub else 1, pid, csrf_token, hinted_ports, is_hub, ws_id, is_remote_ws, desktop_ver))
 
     candidates.sort(key=lambda item: (item[0], item[1]))
     ctx = make_unverified_ssl_context()
@@ -173,7 +329,7 @@ def discover_all_local_language_servers() -> list[dict]:
     discovered = []
     seen_urls = set()
 
-    for _, pid, csrf_token, hinted_ports, is_hub, ws_id, is_remote_ws in candidates:
+    for _, pid, csrf_token, hinted_ports, is_hub, ws_id, is_remote_ws, desktop_ver in candidates:
         if time.monotonic() > deadline:
             break
         ports = list(dict.fromkeys(hinted_ports))
@@ -232,6 +388,7 @@ def discover_all_local_language_servers() -> list[dict]:
                                         "is_hub": is_hub,
                                         "workspace_id": ws_id,
                                         "is_remote_workspace": is_remote_ws,
+                                        "desktop_version": desktop_ver,
                                     }
                                 )
                                 found_for_pid = True
@@ -1440,7 +1597,25 @@ def create_bridge_server(
                 "Access-Control-Allow-Headers",
                 "Content-Type, Connect-Protocol-Version, x-codeium-csrf-token, Accept, Cookie",
             )
+            self.send_header(
+                "Access-Control-Expose-Headers",
+                "X-Antigravity-Bridge-Capabilities, X-Antigravity-Desktop-Version",
+            )
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header(
+                "X-Antigravity-Bridge-Capabilities",
+                ",".join(BRIDGE_CAPABILITY_METHODS),
+            )
+            detected_ver = next(
+                (
+                    b.get("desktop_version")
+                    for b in federation.get_backends()
+                    if b.get("desktop_version")
+                ),
+                "",
+            )
+            if detected_ver:
+                self.send_header("X-Antigravity-Desktop-Version", detected_ver)
 
         def do_OPTIONS(self):
             self.send_response(204)
@@ -2272,12 +2447,30 @@ def create_bridge_server(
                 except urllib.error.HTTPError as e:
                     err_body = e.read()
                     err_text = err_body.decode("utf-8", errors="ignore")
-                    if is_json and e.code == 400 and attempts <= 3:
-                        m = re.search(r'unknown field "([^"]+)"', err_text)
-                        if m and m.group(1) in req_obj:
-                            req_obj.pop(m.group(1), None)
-                            forward_body = json.dumps(req_obj).encode("utf-8")
-                            continue
+                    if is_json and e.code == 400 and attempts <= 4:
+                        field_m = re.search(
+                            r'(?:unknown field|no such field|unrecognized field)\s+["\']([A-Za-z0-9_]+)["\']',
+                            err_text,
+                            re.IGNORECASE,
+                        )
+                        if field_m:
+                            updated_obj, did_remove = recursively_strip_field(req_obj, field_m.group(1))
+                            if did_remove and isinstance(updated_obj, dict):
+                                req_obj = updated_obj
+                                forward_body = json.dumps(req_obj).encode("utf-8")
+                                continue
+                        enum_m = re.search(
+                            r'(?:invalid value for enum|unknown enum value|invalid enum value)[^"\']*["\']([A-Za-z0-9_\-]+)["\']',
+                            err_text,
+                            re.IGNORECASE,
+                        )
+                        if enum_m and enum_m.group(1) in BRIDGE_ENUM_DOWNGRADES:
+                            replacement = BRIDGE_ENUM_DOWNGRADES[enum_m.group(1)]
+                            updated_obj, did_replace = recursively_downgrade_enum(req_obj, enum_m.group(1), replacement)
+                            if did_replace and isinstance(updated_obj, dict):
+                                req_obj = updated_obj
+                                forward_body = json.dumps(req_obj).encode("utf-8")
+                                continue
                     if is_json and method in ("StartCascade", "SendUserCascadeMessage") and e.code in (
                         400,
                         401,
