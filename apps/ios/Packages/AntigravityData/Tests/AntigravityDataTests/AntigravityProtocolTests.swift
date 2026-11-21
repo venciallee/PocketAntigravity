@@ -3812,6 +3812,131 @@ final class AntigravityProtocolTests: XCTestCase {
             .commandCustomSkill
         )
     }
+
+    @MainActor
+    func testFastLaunchEntersConversationsOnFrameZeroForPairedAndEnvLaunches() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AntigravityFastLaunchTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let prefs = InMemoryPreferencesStore()
+        let secretStore = InMemorySecretStore()
+        let projection = LocalProjectionStore(storageDirectory: tempDir)
+
+        // 1. Brand-new unpaired install resolves synchronously without stalling on "Checking saved connection..."
+        let freshStore = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projection,
+            secretStore: secretStore,
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(isLowPowerModeEnabled: false),
+            preferencesStore: prefs
+        )
+        freshStore.prepareFastLaunchSessionState(environment: [:])
+        XCTAssertFalse(freshStore.hasPairedBackend)
+        XCTAssertFalse(freshStore.isConnectingToBackend)
+        XCTAssertTrue(freshStore.isInitialSessionCheckComplete)
+
+        // 2. Environment-configured launch enters Conversations on Frame 0 with connecting loading state
+        let envStore = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projection,
+            secretStore: secretStore,
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(isLowPowerModeEnabled: false),
+            preferencesStore: prefs
+        )
+        envStore.prepareFastLaunchSessionState(environment: [
+            "ANTIGRAVITY_BACKEND_URL": "http://127.0.0.1:18787",
+            "ANTIGRAVITY_HOST_NAME": "Dev-MacBook"
+        ])
+        XCTAssertTrue(envStore.hasPairedBackend)
+        XCTAssertTrue(envStore.isInitialSessionCheckComplete)
+        XCTAssertTrue(envStore.isConnectingToBackend)
+        XCTAssertEqual(envStore.connectionLifecyclePhase, .connecting)
+        XCTAssertEqual(envStore.activeHost.hostname, "Dev-MacBook")
+
+        // 3. Previously paired session persists non-secret launch hint -> next cold launch enters Conversations on Frame 0!
+        let savedCreds = SavedBackendCredentials(
+            endpointURLString: "https://antigravity.google.com/r/uuid-work-mac",
+            channel: .cloudRelay,
+            hostname: "Work-MacBook",
+            sessionCookie: "SAPISID=test-cookie",
+            authUser: "0",
+            resolvedInstanceUuid: "uuid-work-mac"
+        )
+        await secretStore.saveCredentials(savedCreds)
+        await freshStore.hydratePersistedHostProjectionsIfNeeded(savedCredentials: savedCreds)
+
+        let coldPairedStore = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projection,
+            secretStore: secretStore,
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(isLowPowerModeEnabled: false),
+            preferencesStore: prefs
+        )
+        coldPairedStore.prepareFastLaunchSessionState(environment: [:])
+        XCTAssertTrue(coldPairedStore.hasPairedBackend, "Returning paired user must enter Conversations on Frame 0")
+        XCTAssertTrue(coldPairedStore.isInitialSessionCheckComplete)
+        XCTAssertTrue(coldPairedStore.isConnectingToBackend)
+        XCTAssertEqual(coldPairedStore.connectionLifecyclePhase, .connecting)
+        XCTAssertEqual(coldPairedStore.activeHost.hostname, "Work-MacBook")
+
+        // Opening an uncached conversation during cold-start connecting shows loading instead of a false offline error
+        coldPairedStore.selectCascade("cid-uncached-during-connect")
+        XCTAssertTrue(coldPairedStore.isLoadingSteps)
+        XCTAssertNil(coldPairedStore.stepLoadErrorText)
+
+        // Hydrating from disk returns the saved credentials cleanly
+        let hydratedCreds = await coldPairedStore.hydrateSavedSessionFromDisk()
+        XCTAssertEqual(hydratedCreds?.hostname, "Work-MacBook")
+
+        // 4. Stale launch hint without Keychain credentials (e.g. device migration) cleanly reverts to Welcome screen
+        await secretStore.clearCredentials()
+        let staleHintStore = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projection,
+            secretStore: secretStore,
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(isLowPowerModeEnabled: false),
+            preferencesStore: prefs
+        )
+        staleHintStore.prepareFastLaunchSessionState(environment: [:])
+        XCTAssertTrue(staleHintStore.hasPairedBackend)
+        let missingCreds = await staleHintStore.hydrateSavedSessionFromDisk()
+        XCTAssertNil(missingCreds)
+        XCTAssertFalse(staleHintStore.hasPairedBackend)
+        XCTAssertFalse(staleHintStore.isConnectingToBackend)
+        XCTAssertTrue(staleHintStore.isInitialSessionCheckComplete)
+
+        // 5. Optimistic initial pairing enters Conversations immediately, and rolls back cleanly on empty cookie
+        staleHintStore.beginOptimisticConnectingSession(
+            hostName: "New-Mac",
+            channel: .cloudRelay,
+            endpointURLString: "https://antigravity.google.com/r/new-mac"
+        )
+        XCTAssertTrue(staleHintStore.hasPairedBackend)
+        XCTAssertTrue(staleHintStore.isConnectingToBackend)
+        let ok = await staleHintStore.connectCloudRelay(
+            relayURLString: "https://antigravity.google.com/r/new-mac",
+            sessionCookie: ""
+        )
+        XCTAssertFalse(ok)
+        XCTAssertFalse(staleHintStore.hasPairedBackend, "Failed optimistic initial pairing must roll back cleanly to Welcome")
+        XCTAssertFalse(staleHintStore.isConnectingToBackend)
+
+        // 6. Explicit disconnect clears launch hint so subsequent cold launch starts unpaired
+        await secretStore.saveCredentials(savedCreds)
+        await coldPairedStore.hydratePersistedHostProjectionsIfNeeded(savedCredentials: savedCreds)
+        await coldPairedStore.disconnectBackendAndClearKeychain()
+        let postDisconnectStore = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projection,
+            secretStore: secretStore,
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(isLowPowerModeEnabled: false),
+            preferencesStore: prefs
+        )
+        postDisconnectStore.prepareFastLaunchSessionState(environment: [:])
+        XCTAssertFalse(postDisconnectStore.hasPairedBackend)
+        XCTAssertTrue(postDisconnectStore.isInitialSessionCheckComplete)
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {

@@ -91,6 +91,28 @@ public struct AntigravityWelcomeView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
 
+                    if store.connectionStatusText.contains("Expired"), !store.lastScannedRelayURL.isEmpty {
+                        Button {
+                            pendingRelayURL = store.lastScannedRelayURL
+                            isShowingGoogleSignIn = true
+                        } label: {
+                            HStack(spacing: 9) {
+                                Image(systemName: "person.crop.circle.badge.checkmark")
+                                    .font(.system(size: 17, weight: .semibold))
+                                Text("Sign in with Google")
+                                    .font(.system(size: 16.5, weight: .semibold))
+                            }
+                            .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .background(
+                                Capsule()
+                                    .fill(AntigravityTheme.accentPeriwinkle)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("btn-welcome-google-signin")
+                    }
+
                     Button {
                         isShowingQRScanner = true
                     } label: {
@@ -100,11 +122,28 @@ public struct AntigravityWelcomeView: View {
                             Text("Scan Remote Control QR")
                                 .font(.system(size: 16.5, weight: .semibold))
                         }
-                        .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                        .foregroundStyle(
+                            store.connectionStatusText.contains("Expired") && !store.lastScannedRelayURL.isEmpty
+                                ? AntigravityTheme.textPrimary
+                                : AntigravityTheme.inkOnPrimaryCTA
+                        )
                         .frame(maxWidth: .infinity, minHeight: 54)
                         .background(
                             Capsule()
-                                .fill(AntigravityTheme.accentPeriwinkle)
+                                .fill(
+                                    store.connectionStatusText.contains("Expired") && !store.lastScannedRelayURL.isEmpty
+                                        ? AntigravityTheme.surfacePill
+                                        : AntigravityTheme.accentPeriwinkle
+                                )
+                        )
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(
+                                    store.connectionStatusText.contains("Expired") && !store.lastScannedRelayURL.isEmpty
+                                        ? AntigravityTheme.cardBorder
+                                        : Color.clear,
+                                    lineWidth: 1
+                                )
                         )
                     }
                     .buttonStyle(.plain)
@@ -148,15 +187,27 @@ public struct AntigravityWelcomeView: View {
                         scannedInput: pendingRelayURL,
                         webViewFinalURL: finalURL
                     )
+                    let activeStore = store
+                    let onConnectedCallback = onConnected
+                    let parsed = RemoteHostInstance.parseRemoteControlTarget(effectiveURL)
+                    let displayHost = parsed?.instanceId.isEmpty == false ? parsed!.instanceId : "Antigravity Desktop"
+                    activeStore.beginOptimisticConnectingSession(
+                        hostName: displayHost,
+                        channel: .cloudRelay,
+                        endpointURLString: effectiveURL,
+                        instanceId: parsed?.instanceId,
+                        deepLinkedConversationId: parsed?.conversationId
+                    )
+                    onConnectedCallback?()
                     Task {
-                        let ok = await store.connectCloudRelay(
+                        let ok = await activeStore.connectCloudRelay(
                             relayURLString: effectiveURL,
                             sessionCookie: cookieHeader,
                             authUser: detectedAuthUser,
                             relayApiKey: detectedRelayApiKey
                         )
                         if ok {
-                            onConnected?()
+                            onConnectedCallback?()
                         }
                     }
                 },
@@ -196,10 +247,22 @@ public struct AntigravityWelcomeView: View {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if RemoteHostInstance.isDirectLANPairingURI(trimmed) {
+            let activeStore = store
+            let onConnectedCallback = onConnected
+            if let comps = URLComponents(string: trimmed),
+               let targetURL = comps.queryItems?.first(where: { $0.name == "url" })?.value {
+                let name = comps.queryItems?.first(where: { $0.name == "name" })?.value ?? "MacBook Pro"
+                activeStore.beginOptimisticConnectingSession(
+                    hostName: name,
+                    channel: .directHost,
+                    endpointURLString: targetURL
+                )
+                onConnectedCallback?()
+            }
             Task {
-                let ok = await store.connectWithPairingURI(trimmed, fallbackCookie: "")
+                let ok = await activeStore.connectWithPairingURI(trimmed, fallbackCookie: "")
                 if ok {
-                    onConnected?()
+                    onConnectedCallback?()
                 }
             }
             return
@@ -224,17 +287,27 @@ public struct AntigravityWelcomeView: View {
         }
 
         if let existingCookie, !existingCookie.isEmpty {
-            let ok = await store.connectCloudRelay(
-                relayURLString: effectiveURL,
-                sessionCookie: existingCookie,
-                authUser: savedAuthUser
+            let activeStore = store
+            let onConnectedCallback = onConnected
+            let parsed = RemoteHostInstance.parseRemoteControlTarget(effectiveURL)
+            let displayHost = parsed?.instanceId.isEmpty == false ? parsed!.instanceId : "Antigravity Desktop"
+            activeStore.beginOptimisticConnectingSession(
+                hostName: displayHost,
+                channel: .cloudRelay,
+                endpointURLString: effectiveURL,
+                instanceId: parsed?.instanceId,
+                deepLinkedConversationId: parsed?.conversationId
             )
-            if ok {
-                onConnected?()
-                return
-            }
-            if store.connectionStatusText.contains("Expired") {
-                isShowingGoogleSignIn = true
+            onConnectedCallback?()
+            Task {
+                let ok = await activeStore.connectCloudRelay(
+                    relayURLString: effectiveURL,
+                    sessionCookie: existingCookie,
+                    authUser: savedAuthUser
+                )
+                if ok {
+                    onConnectedCallback?()
+                }
             }
             return
         }

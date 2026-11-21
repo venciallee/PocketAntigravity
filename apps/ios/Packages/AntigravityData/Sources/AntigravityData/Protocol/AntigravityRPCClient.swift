@@ -192,6 +192,31 @@ public actor AntigravityRPCClient {
         relayApiKey
     }
 
+    /// Seeds resolved Cloud Relay metadata (instance UUID, `X-Goog-AuthUser`, API key, and cached instance roster)
+    /// obtained from the KMP engine handshake so follow-up Swift-only RPCs (`fetchModelCatalog`, `listAutomations`,
+    /// artifact/diff review) reuse the warm state without re-running `ListInstances` or API key discovery.
+    public func seedRelayState(
+        resolvedInstanceUuid: String?,
+        authUser: String?,
+        relayApiKey: String?,
+        relayInstances: [RelayInstanceInfo]
+    ) {
+        if let uuid = resolvedInstanceUuid?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !uuid.isEmpty,
+           !Self.isWildcardRelayIdentifier(uuid) {
+            self.resolvedInstanceUuid = uuid
+        }
+        if let user = authUser?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
+            self.authUser = user
+        }
+        if let key = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+            self.relayApiKey = key
+        }
+        if !relayInstances.isEmpty {
+            self.cachedRelayInstances = relayInstances
+        }
+    }
+
     /// Resolves the public browser `X-Goog-Api-Key` required by Google Boq `ApiService`
     /// without hardcoding any API key literal in source code.
     public func resolveRelayApiKey(forceRefresh: Bool = false) async -> String? {

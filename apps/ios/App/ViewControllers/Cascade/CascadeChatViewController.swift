@@ -96,6 +96,9 @@ public struct CascadeChatViewController: View {
             fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
         )
         if store.hasPairedBackend && !isActiveSessionHostOnline {
+            if store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting {
+                return "Connecting · \(hostTitle)"
+            }
             return "Offline · \(hostTitle)"
         }
         return hostTitle
@@ -337,7 +340,8 @@ public struct CascadeChatViewController: View {
             .padding(.top, 12)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat-pending-draft-card")
-        } else if (store.hasPairedBackend || store.isLiveBackendConnected) && store.isLoadingSteps {
+        } else if (store.hasPairedBackend || store.isLiveBackendConnected)
+            && (store.isLoadingSteps || store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting) {
             HStack(spacing: 12) {
                 AntigravityFourDotLoadingView(
                     isAnimated: shouldAnimateLive,
@@ -349,7 +353,11 @@ public struct CascadeChatViewController: View {
                     Text("Loading conversation history...")
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
-                    Text("Syncing trajectory steps from \(effectiveHeaderHostLabel)")
+                    Text(
+                        store.isConnectingToBackend
+                            ? "Connecting to \(effectiveHeaderHostLabel)..."
+                            : "Syncing trajectory steps from \(effectiveHeaderHostLabel)"
+                    )
                         .font(.system(size: 13))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }

@@ -8,6 +8,8 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
     let port: UInt16
     private let listenFD: Int32
     private let lock = NSLock()
+    private let handshakeCondition = NSCondition()
+    private var handshakePaused = false
     private var isStopped = false
     private var simulatedOffline = false
     private var trajectoriesByCascadeId: [String: [[String: Any]]] = [:]
@@ -18,6 +20,24 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
         lock.lock()
         simulatedOffline = offline
         lock.unlock()
+    }
+
+    func setHandshakePaused(_ paused: Bool) {
+        handshakeCondition.lock()
+        handshakePaused = paused
+        if !paused {
+            handshakeCondition.broadcast()
+        }
+        handshakeCondition.unlock()
+    }
+
+    private func waitWhileHandshakePaused() {
+        let deadline = Date().addingTimeInterval(12.0)
+        handshakeCondition.lock()
+        while handshakePaused && Date() < deadline {
+            handshakeCondition.wait(until: deadline)
+        }
+        handshakeCondition.unlock()
     }
 
     init() throws {
@@ -64,6 +84,7 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
     }
 
     func stop() {
+        setHandshakePaused(false)
         lock.lock()
         let alreadyStopped = isStopped
         isStopped = true
@@ -386,6 +407,9 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
     }
 
     private func routeRequest(path: String, bodyData: Data) -> (Int, String, Data) {
+        if path.hasSuffix("/GetWorkspaceInfos") || path.hasSuffix("/GetAllCascadeTrajectories") {
+            waitWhileHandshakePaused()
+        }
         lock.lock()
         let isOffline = simulatedOffline
         lock.unlock()
@@ -547,7 +571,24 @@ final class AntigravityInteractiveUITests: XCTestCase {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
+        // 0. Verify cold launch enters the Conversations screen immediately with inline loading instead of stalling on Welcome screen
+        server.setHandshakePaused(true)
         let app = launchLiveApp(serverPort: server.port)
+        let hostPill = app.buttons["host-switcher-pill"]
+        XCTAssertTrue(
+            hostPill.waitForExistence(timeout: 6),
+            "Cold launch must enter the Conversations screen immediately without blocking on the Welcome screen"
+        )
+        let inlineLoadingCard = app.descendants(matching: .any)["agents-loading-conversations"].firstMatch
+        XCTAssertTrue(
+            inlineLoadingCard.waitForExistence(timeout: 5),
+            "Conversations screen must display inline loading state while backend handshake is in progress"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["welcome-screen"].firstMatch.exists,
+            "Launch/Welcome screen must not block the user while connecting"
+        )
+        server.setHandshakePaused(false)
 
         // 1. Verify live Desktop sessions load on Agents Home, 2x2 four-dot loading indicator is present, and synthetic probe / 0-step placeholder are filtered out
         let reviewRow = app.buttons["conv-row-cid-slardar-review"]

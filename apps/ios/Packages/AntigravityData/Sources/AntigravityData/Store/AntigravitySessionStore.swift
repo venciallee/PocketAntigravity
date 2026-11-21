@@ -382,6 +382,7 @@ public final class AntigravitySessionStore {
 
     // MARK: - Dependencies
     internal static let selectedHostScopeDefaultsKey = "antigravity.ios.selectedHostScope.v1"
+    internal static let pairedHostLaunchHintDefaultsKey = "antigravity.ios.pairedHostLaunchHint.v1"
     internal let projectionStore: LocalProjectionStore
     internal let secretStore: any SecretStore
     internal let networkMonitor: any NetworkReachabilityMonitoring
@@ -391,6 +392,7 @@ public final class AntigravitySessionStore {
     public var isUsingKmpEngine: Bool { kmpEngine != nil }
     internal var kmpSummaryStreamTask: Task<Void, Never>? = nil
     internal var rpcClient: AntigravityRPCClient?
+    internal var isOptimisticInitialPairing: Bool = false
     internal var localSummaryStreamTasks: [String: Task<Void, Never>] = [:]
     internal var cloudSummaryStreamTask: Task<Void, Never>? = nil
     internal var hasReceivedLocalStreamEvent: Bool = false
@@ -507,7 +509,8 @@ public final class AntigravitySessionStore {
         networkMonitor: any NetworkReachabilityMonitoring = NetworkPathObserver(),
         powerStateProvider: any PowerStateProviding = SystemPowerStateProvider(),
         preferencesStore: any KeyValuePreferencesStore = UserDefaultsPreferencesStore(),
-        kmpEngine: (any AntigravityKmpEnginePort)? = nil
+        kmpEngine: (any AntigravityKmpEnginePort)? = nil,
+        createInitialRPCClient: Bool = true
     ) {
         self.hosts = hosts.isEmpty ? [activeHost] : hosts
         self.activeHost = activeHost
@@ -542,10 +545,14 @@ public final class AntigravitySessionStore {
         self.powerStateProvider = powerStateProvider
         self.preferencesStore = preferencesStore
         self.kmpEngine = kmpEngine
-        self.rpcClient = AntigravityRPCClient(
-            host: activeHost,
-            csrfToken: "csrf-antigravity-ios-session-token"
-        )
+        if createInitialRPCClient {
+            self.rpcClient = AntigravityRPCClient(
+                host: activeHost,
+                csrfToken: "csrf-antigravity-ios-session-token"
+            )
+        } else {
+            self.rpcClient = nil
+        }
         self.harvestEmbedResources(from: activeArtifacts)
         for (_, stepList) in mergedSteps {
             self.harvestEmbedResources(from: stepList)
@@ -600,7 +607,8 @@ public final class AntigravitySessionStore {
             networkMonitor: networkMonitor,
             powerStateProvider: powerStateProvider,
             preferencesStore: preferencesStore,
-            kmpEngine: kmpEngine
+            kmpEngine: kmpEngine,
+            createInitialRPCClient: false
         )
         store.isVerificationMode = false
         store.isInitialSessionCheckComplete = false

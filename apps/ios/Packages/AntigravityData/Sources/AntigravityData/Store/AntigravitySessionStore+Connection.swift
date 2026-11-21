@@ -315,23 +315,205 @@ extension AntigravitySessionStore {
         }
         pendingOutboxCount = await projectionStore.loadPendingOutbox().count
 
+        if let saved = savedCredentials {
+            persistPairedHostLaunchHint(from: saved)
+            isOptimisticInitialPairing = false
+        }
         hasPairedBackend = true
         isLiveBackendConnected = false
         isInitialSessionCheckComplete = true
         connectionLifecyclePhase = savedCredentials != nil ? .connecting : .offlineBackoff(attempt: 0, nextRetrySeconds: 3)
         connectionStatusText = savedCredentials != nil
-            ? "Reconnecting · \(activeHost.hostname)..."
+            ? "Connecting · \(activeHost.hostname)..."
             : "Offline · \(activeHost.hostname)"
     }
 
-    /// Restores saved Keychain credentials on launch: instantly hydrates cached per-host projections from disk
-    /// (`<10ms`) so both online and offline hosts' conversations appear immediately, then connects live to merge fresh data.
-    @discardableResult
-    public func restoreSavedBackendSession() async -> Bool {
+    // MARK: - Fast Frame-0 Launch & Non-Secret Launch Hint
+
+    internal func persistPairedHostLaunchHint(_ hint: PairedHostLaunchHint) {
+        guard !isVerificationMode else { return }
+        if let data = try? JSONEncoder().encode(hint),
+           let json = String(data: data, encoding: .utf8) {
+            preferencesStore.set(json, forKey: Self.pairedHostLaunchHintDefaultsKey)
+        }
+    }
+
+    internal func persistPairedHostLaunchHint(from credentials: SavedBackendCredentials) {
+        persistPairedHostLaunchHint(PairedHostLaunchHint(credentials: credentials))
+    }
+
+    internal func loadPairedHostLaunchHint() -> PairedHostLaunchHint? {
+        guard !isVerificationMode,
+              let raw = preferencesStore.string(forKey: Self.pairedHostLaunchHintDefaultsKey),
+              let decoded = try? JSONDecoder().decode(PairedHostLaunchHint.self, from: Data(raw.utf8)) else {
+            return nil
+        }
+        return decoded
+    }
+
+    internal func clearPairedHostLaunchHint() {
+        guard !isVerificationMode else { return }
+        preferencesStore.set(nil, forKey: Self.pairedHostLaunchHintDefaultsKey)
+    }
+
+    /// Immediately transitions the UI into the Conversations shell (or deep-linked chat) with a non-blocking
+    /// loading state before the remote network handshake finishes so the app never stalls on the Welcome screen.
+    public func beginOptimisticConnectingSession(
+        hostName: String,
+        channel: RemoteConnectionChannel,
+        endpointURLString: String,
+        instanceId: String? = nil,
+        deepLinkedConversationId: String? = nil,
+        isRestoringSaved: Bool = false
+    ) {
+        guard !isVerificationMode else { return }
+        let trimmedHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayHost = trimmedHost.isEmpty
+            ? (channel == .cloudRelay ? "Antigravity Desktop" : "MacBook Pro")
+            : trimmedHost
+        let fallbackURL = URL(string: SAPISIDHashGenerator.defaultOrigin)!
+        let resolvedURL = URL(string: endpointURLString.trimmingCharacters(in: .whitespacesAndNewlines)) ?? fallbackURL
+        let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(endpointURLString)
+        let resolvedId: String = {
+            if let explicit = instanceId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !explicit.isEmpty, explicit != "unpaired" {
+                return explicit
+            }
+            if let parsedId = parsedTarget?.instanceId, !parsedId.isEmpty {
+                return parsedId
+            }
+            if channel == .directHost, let host = resolvedURL.host, !host.isEmpty {
+                return "direct-\(host)"
+            }
+            return displayHost
+        }()
+
+        let placeholderHost = RemoteHostInstance(
+            instanceId: resolvedId,
+            hostname: displayHost,
+            channel: channel,
+            endpointURL: resolvedURL,
+            isOnline: false
+        )
+        hosts.removeAll { $0.instanceId == "unpaired" }
+        if !hosts.contains(where: { $0.instanceId == placeholderHost.instanceId }) {
+            hosts.insert(placeholderHost, at: 0)
+        }
+        if activeHost.instanceId == "unpaired" || activeHost.instanceId == placeholderHost.instanceId || !hasPairedBackend {
+            activeHost = placeholderHost
+        }
+
+        let alreadyVerified = hasPairedBackend && !isOptimisticInitialPairing
+        hasPairedBackend = true
+        isLiveBackendConnected = false
+        isInitialSessionCheckComplete = true
+        isConnectingToBackend = true
+        isOptimisticInitialPairing = !isRestoringSaved && !alreadyVerified
+        connectionErrorText = nil
+        connectionLifecyclePhase = .connecting
+        connectionStatusText = "Connecting · \(displayHost)..."
+
+        if let cid = deepLinkedConversationId?.trimmingCharacters(in: .whitespacesAndNewlines), !cid.isEmpty {
+            activeCascadeId = cid
+            activeRoute = .cascadeChat(cid)
+        } else if activeRoute == .pairingSettings {
+            activeRoute = .tabRoot
+        }
+    }
+
+    /// Synchronous (`<1ms`) Frame-0 launch preparation run inside `AntigravityApp.init()`:
+    /// - Returning paired users and env-configured launches enter the Conversations screen on Frame 0
+    ///   (with inline loading) instead of flashing or blocking on `AntigravityWelcomeView`.
+    /// - Brand-new unpaired users immediately resolve `isInitialSessionCheckComplete = true` so
+    ///   "Scan Remote Control QR" renders without a "Checking saved connection..." spinner.
+    public func prepareFastLaunchSessionState(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        guard !isVerificationMode else { return }
+
+        if let relayURL = environment["ANTIGRAVITY_RELAY_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !relayURL.isEmpty {
+            let parsed = RemoteHostInstance.parseRemoteControlTarget(relayURL)
+            let hostName = environment["ANTIGRAVITY_HOST_NAME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayHost = (hostName?.isEmpty == false ? hostName! : nil)
+                ?? (parsed?.instanceId.isEmpty == false ? parsed!.instanceId : "Antigravity Desktop")
+            beginOptimisticConnectingSession(
+                hostName: displayHost,
+                channel: .cloudRelay,
+                endpointURLString: relayURL,
+                instanceId: parsed?.instanceId,
+                deepLinkedConversationId: parsed?.conversationId,
+                isRestoringSaved: false
+            )
+            return
+        }
+
+        if let backendURL = environment["ANTIGRAVITY_BACKEND_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !backendURL.isEmpty {
+            let hostName = environment["ANTIGRAVITY_HOST_NAME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            beginOptimisticConnectingSession(
+                hostName: (hostName?.isEmpty == false ? hostName! : "MacBook Pro"),
+                channel: .directHost,
+                endpointURLString: backendURL,
+                isRestoringSaved: false
+            )
+            return
+        }
+
+        var launchHint = loadPairedHostLaunchHint()
+        if launchHint == nil, secretStore is KeychainStore {
+            if let keyChainHint = KeychainStore.peekSavedHostLaunchHintSync() {
+                persistPairedHostLaunchHint(keyChainHint)
+                launchHint = keyChainHint
+            }
+        }
+
+        if let hint = launchHint {
+            if let savedScope = loadPersistedSelectedHostScope() {
+                selectedHostScope = savedScope
+            }
+            beginOptimisticConnectingSession(
+                hostName: hint.hostname,
+                channel: hint.channel,
+                endpointURLString: hint.endpointURLString,
+                instanceId: hint.instanceId,
+                isRestoringSaved: true
+            )
+        } else {
+            hasPairedBackend = false
+            isLiveBackendConnected = false
+            isConnectingToBackend = false
+            isOptimisticInitialPairing = false
+            isInitialSessionCheckComplete = true
+        }
+    }
+
+    /// Loads Keychain credentials and immediately hydrates cached per-host projections from disk (`<10ms`)
+    /// so cached conversations appear right away before any KMP runtime or network handshake completes.
+    /// If a stale launch hint existed without backing Keychain credentials (e.g. device restore), cleanly resets
+    /// back to the unpaired Welcome screen.
+    public func hydrateSavedSessionFromDisk() async -> SavedBackendCredentials? {
+        guard !isVerificationMode else { return nil }
         guard let saved = await secretStore.loadCredentials() else {
-            return false
+            clearPairedHostLaunchHint()
+            if hasPairedBackend && !isLiveBackendConnected && !isOptimisticInitialPairing && rpcClient == nil {
+                hasPairedBackend = false
+                isConnectingToBackend = false
+                connectionLifecyclePhase = .disconnected
+                connectionStatusText = "Not Connected"
+                hosts.removeAll()
+                activeRoute = .tabRoot
+            }
+            isInitialSessionCheckComplete = true
+            return nil
         }
         await hydratePersistedHostProjectionsIfNeeded(savedCredentials: saved)
+        return saved
+    }
+
+    /// Connects live using already-loaded `SavedBackendCredentials` (preserving offline cache on failure).
+    @discardableResult
+    public func connectSavedCredentials(_ saved: SavedBackendCredentials) async -> Bool {
         switch saved.channel {
         case .directHost:
             return await connectDirectLAN(
@@ -359,6 +541,16 @@ extension AntigravitySessionStore {
                 strictTargetMatch: hasExplicitLocalScope
             )
         }
+    }
+
+    /// Restores saved Keychain credentials on launch: instantly hydrates cached per-host projections from disk
+    /// (`<10ms`) so both online and offline hosts' conversations appear immediately, then connects live to merge fresh data.
+    @discardableResult
+    public func restoreSavedBackendSession() async -> Bool {
+        guard let saved = await hydrateSavedSessionFromDisk() else {
+            return false
+        }
+        return await connectSavedCredentials(saved)
     }
 
     /// Reads any previously saved Google Cloud Relay session cookie from Keychain so scanning a new QR code
@@ -425,8 +617,16 @@ extension AntigravitySessionStore {
         hostName: String = "MacBook Pro",
         isRestoringSavedSession: Bool = false
     ) async -> Bool {
+        let wasOptimisticInitial = isOptimisticInitialPairing && !isRestoringSavedSession
         guard let url = URL(string: endpointURLString.trimmingCharacters(in: .whitespacesAndNewlines)),
               url.scheme != nil else {
+            if wasOptimisticInitial {
+                isOptimisticInitialPairing = false
+                hasPairedBackend = false
+                isLiveBackendConnected = false
+                connectionLifecyclePhase = .disconnected
+            }
+            isConnectingToBackend = false
             connectionErrorText = "Invalid endpoint URL: \(endpointURLString)"
             return false
         }
@@ -469,20 +669,20 @@ extension AntigravitySessionStore {
                 handshake: handshake
             )
             startKmpSummarySubscriptionIfNeeded()
-            await secretStore.saveCredentials(
-                SavedBackendCredentials(
-                    endpointURLString: url.absoluteString,
-                    channel: .directHost,
-                    hostname: hostName,
-                    csrfToken: csrfToken,
-                    certFingerprintSHA256: certSHA256
-                )
+            let savedCredentials = SavedBackendCredentials(
+                endpointURLString: url.absoluteString,
+                channel: .directHost,
+                hostname: hostName,
+                csrfToken: csrfToken,
+                certFingerprintSHA256: certSHA256
             )
+            persistPairedHostLaunchHint(from: savedCredentials)
+            await secretStore.saveCredentials(savedCredentials)
             return true
         } catch let AntigravityRPCError.unauthorized(reason) {
             let errMsg = "Authentication rejected (401/403): check x-codeium-csrf-token. \(reason)"
             let statusMsg = "Auth Failed · Invalid CSRF Token"
-            if isRestoringSavedSession || hasPairedBackend {
+            if isRestoringSavedSession || (hasPairedBackend && !wasOptimisticInitial) {
                 await applyOfflinePairedSession(
                     host: hostInstance,
                     client: candidateClient,
@@ -490,14 +690,17 @@ extension AntigravitySessionStore {
                     statusText: "Offline · \(hostName) (Auth Expired)"
                 )
             } else {
+                isOptimisticInitialPairing = false
+                hasPairedBackend = false
                 isLiveBackendConnected = false
+                connectionLifecyclePhase = .disconnected
                 connectionErrorText = errMsg
                 connectionStatusText = statusMsg
             }
             return false
         } catch {
             let errMsg = "Connection failed: \(error.localizedDescription)"
-            if isRestoringSavedSession || hasPairedBackend {
+            if isRestoringSavedSession || (hasPairedBackend && !wasOptimisticInitial) {
                 await applyOfflinePairedSession(
                     host: hostInstance,
                     client: candidateClient,
@@ -505,7 +708,10 @@ extension AntigravitySessionStore {
                     statusText: "Offline · \(hostName)"
                 )
             } else {
+                isOptimisticInitialPairing = false
+                hasPairedBackend = false
                 isLiveBackendConnected = false
+                connectionLifecyclePhase = .disconnected
                 connectionErrorText = errMsg
                 connectionStatusText = "Unreachable · \(url.host ?? endpointURLString)"
             }
@@ -557,12 +763,20 @@ extension AntigravitySessionStore {
         isRestoringSavedSession: Bool = false,
         strictTargetMatch: Bool = false
     ) async -> Bool {
+        let wasOptimisticInitial = isOptimisticInitialPairing && !isRestoringSavedSession
         let trimmedInput = relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         var parsedTarget = RemoteHostInstance.parseRemoteControlTarget(
             trimmedInput.isEmpty ? SAPISIDHashGenerator.defaultOrigin : trimmedInput
         )
         var canonicalURLString = parsedTarget?.canonicalRelayURLString ?? trimmedInput
         guard URL(string: canonicalURLString)?.scheme != nil else {
+            if wasOptimisticInitial {
+                isOptimisticInitialPairing = false
+                hasPairedBackend = false
+                isLiveBackendConnected = false
+                connectionLifecyclePhase = .disconnected
+            }
+            isConnectingToBackend = false
             connectionErrorText = "Invalid Remote Control QR link: \(relayURLString)"
             return false
         }
@@ -570,6 +784,12 @@ extension AntigravitySessionStore {
         lastScannedRelayURL = canonicalURLString
         let trimmedCookie = sessionCookie.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCookie.isEmpty else {
+            if wasOptimisticInitial {
+                isOptimisticInitialPairing = false
+                hasPairedBackend = false
+                connectionLifecyclePhase = .disconnected
+            }
+            isConnectingToBackend = false
             isLiveBackendConnected = false
             let fallbackName = parsedTarget?.instanceId.isEmpty == false ? parsedTarget!.instanceId : "Antigravity Desktop"
             connectionErrorText = "Google Sign-In required: sign in once to pair with \(fallbackName)."
@@ -610,6 +830,12 @@ extension AntigravitySessionStore {
         }
 
         guard let url = URL(string: canonicalURLString), url.scheme != nil else {
+            if wasOptimisticInitial {
+                isOptimisticInitialPairing = false
+                hasPairedBackend = false
+                isLiveBackendConnected = false
+                connectionLifecyclePhase = .disconnected
+            }
             connectionErrorText = "Invalid Remote Control QR link: \(relayURLString)"
             return false
         }
@@ -673,7 +899,21 @@ extension AntigravitySessionStore {
             let finalAuthUser = handshake.resolvedAuthUser ?? effectiveAuthUser ?? "0"
             let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
             let finalRelayURL = URL(string: "\(originPrefix)/r/\(finalUuid)") ?? url
-            let finalRelayApiKey = await candidateClient.currentRelayApiKey() ?? effectiveRelayApiKey
+            let kmpSavedApiKey: String? = (kmpEngine != nil)
+                ? await secretStore.loadCredentials()?.relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+                : nil
+            let finalRelayApiKey = await candidateClient.currentRelayApiKey()
+                ?? effectiveRelayApiKey
+                ?? (kmpSavedApiKey?.isEmpty == false ? kmpSavedApiKey : nil)
+
+            if kmpEngine != nil {
+                await candidateClient.seedRelayState(
+                    resolvedInstanceUuid: finalUuid,
+                    authUser: finalAuthUser,
+                    relayApiKey: finalRelayApiKey,
+                    relayInstances: handshake.availableRelayInstances
+                )
+            }
 
             let verifiedHost = RemoteHostInstance(
                 instanceId: finalUuid,
@@ -747,17 +987,17 @@ extension AntigravitySessionStore {
                 connectionLifecyclePhase = .offlineBackoff(attempt: 0, nextRetrySeconds: nextDelay)
             }
 
-            await secretStore.saveCredentials(
-                SavedBackendCredentials(
-                    endpointURLString: finalRelayURL.absoluteString,
-                    channel: .cloudRelay,
-                    hostname: finalHostName,
-                    sessionCookie: trimmedCookie,
-                    authUser: finalAuthUser,
-                    resolvedInstanceUuid: finalUuid,
-                    relayApiKey: finalRelayApiKey
-                )
+            let savedCredentials = SavedBackendCredentials(
+                endpointURLString: finalRelayURL.absoluteString,
+                channel: .cloudRelay,
+                hostname: finalHostName,
+                sessionCookie: trimmedCookie,
+                authUser: finalAuthUser,
+                resolvedInstanceUuid: finalUuid,
+                relayApiKey: finalRelayApiKey
             )
+            persistPairedHostLaunchHint(from: savedCredentials)
+            await secretStore.saveCredentials(savedCredentials)
 
             if let deepLinkConv, !deepLinkConv.isEmpty {
                 selectCascade(deepLinkConv)
@@ -773,6 +1013,11 @@ extension AntigravitySessionStore {
                     statusText: "Google Sign-In Expired"
                 )
             } else {
+                if wasOptimisticInitial {
+                    isOptimisticInitialPairing = false
+                    hasPairedBackend = false
+                    connectionLifecyclePhase = .disconnected
+                }
                 isLiveBackendConnected = false
                 connectionErrorText = errMsg
                 connectionStatusText = "Google Sign-In Expired"
@@ -780,7 +1025,7 @@ extension AntigravitySessionStore {
             return false
         } catch let AntigravityRPCError.httpError(code, body) {
             let errMsg = "Cloud Relay error (\(code)): \(body)"
-            if (isRestoringSavedSession || hasPairedBackend) && (code == 502 || code == 503 || code == 504) {
+            if (isRestoringSavedSession || (hasPairedBackend && !wasOptimisticInitial)) && (code == 502 || code == 503 || code == 504) {
                 await applyOfflinePairedSession(
                     host: hostInstance,
                     client: candidateClient,
@@ -788,6 +1033,11 @@ extension AntigravitySessionStore {
                     statusText: "Offline · \(hostName)"
                 )
             } else {
+                if wasOptimisticInitial {
+                    isOptimisticInitialPairing = false
+                    hasPairedBackend = false
+                    connectionLifecyclePhase = .disconnected
+                }
                 isLiveBackendConnected = false
                 connectionErrorText = errMsg
                 connectionStatusText = "Cloud Relay Handshake Failed"
@@ -795,7 +1045,7 @@ extension AntigravitySessionStore {
             return false
         } catch {
             let errMsg = "Cloud Relay handshake failed: \(error.localizedDescription)"
-            if isRestoringSavedSession || hasPairedBackend {
+            if isRestoringSavedSession || (hasPairedBackend && !wasOptimisticInitial) {
                 await applyOfflinePairedSession(
                     host: hostInstance,
                     client: candidateClient,
@@ -803,6 +1053,11 @@ extension AntigravitySessionStore {
                     statusText: "Offline · \(hostName)"
                 )
             } else {
+                if wasOptimisticInitial {
+                    isOptimisticInitialPairing = false
+                    hasPairedBackend = false
+                    connectionLifecyclePhase = .disconnected
+                }
                 isLiveBackendConnected = false
                 connectionErrorText = errMsg
                 connectionStatusText = "Cloud Relay Disconnected"
@@ -823,12 +1078,15 @@ extension AntigravitySessionStore {
         networkMonitor.stop()
         hasPairedBackend = false
         isLiveBackendConnected = false
+        isConnectingToBackend = false
+        isOptimisticInitialPairing = false
         isSwitchingHost = false
         activeRefreshCount = 0
         isRefreshingSummaries = false
         selectedHostScope = .allHosts
         if !isVerificationMode {
             preferencesStore.set(nil, forKey: Self.selectedHostScopeDefaultsKey)
+            clearPairedHostLaunchHint()
         }
         cloudAgentWarmingUp = false
         consecutiveSyncFailures = 0
@@ -927,6 +1185,7 @@ extension AntigravitySessionStore {
         }
 
         guard hasPairedBackend else { return }
+        guard !isConnectingToBackend else { return }
 
         if rpcClient == nil {
             _ = await restoreSavedBackendSession()
@@ -1063,6 +1322,8 @@ extension AntigravitySessionStore {
         }
 
         let wasInESDDDemoState = !hasPairedBackend
+        isOptimisticInitialPairing = false
+        isLoadingSteps = false
         hasPairedBackend = true
         isLiveBackendConnected = false
         lastPingLatencyMs = nil
@@ -1793,6 +2054,7 @@ extension AntigravitySessionStore {
         lastFullSyncAt = Date()
         lastStreamReopenAttemptAt = .distantPast
         isDeviceNetworkReachable = true
+        isOptimisticInitialPairing = false
         hasPairedBackend = true
         isLiveBackendConnected = hostOnline
         lastPingLatencyMs = handshake.latencyMs
@@ -1902,7 +2164,13 @@ extension AntigravitySessionStore {
             selectedProjectId = defaultProject?.id ?? ""
             selectedWorkspaceUri = defaultProject?.workspaceUri ?? ""
         }
-        if activeCascadeId.isEmpty || !sortedSummaries.contains(where: { $0.cascadeId == activeCascadeId }) {
+        let isViewingActiveChat: Bool = {
+            if case .cascadeChat(let routeCid) = activeRoute, !routeCid.isEmpty, routeCid == activeCascadeId {
+                return true
+            }
+            return false
+        }()
+        if activeCascadeId.isEmpty || (!isViewingActiveChat && !sortedSummaries.contains(where: { $0.cascadeId == activeCascadeId })) {
             activeCascadeId = sortedSummaries.first?.cascadeId ?? ""
         }
 
@@ -1942,7 +2210,10 @@ extension AntigravitySessionStore {
 
         startSummarySubscriptionStream()
         if hostOnline && !activeCascadeId.isEmpty {
-            syncStepsForCascade(activeCascadeId, pollUntilIdle: false)
+            syncStepsForCascade(
+                activeCascadeId,
+                pollUntilIdle: activeRoute == .cascadeChat(activeCascadeId)
+            )
         }
     }
 }
