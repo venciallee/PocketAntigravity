@@ -13,3 +13,9 @@ build/
 local.properties
 *.xcframework/
 
+# Gemini CLI runtime artifacts (keep .gemini/commands/ tracked)
+.gemini/telemetry.log
+.gemini/context.json
+.gemini/settings.json
+gha-creds-*.json
+

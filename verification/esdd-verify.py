@@ -192,8 +192,9 @@ class CDPPageDriver:
         stderr_path = Path(self._user_data_dir) / "chrome-stderr.log"
         try:
             self._stderr_handle = open(stderr_path, "wb")
-            child_env = dict(os.environ)
-            child_env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            chrome_env = dict(os.environ)
+            chrome_env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            chrome_env.pop("DBUS_SYSTEM_BUS_ADDRESS", None)
             self.proc = subprocess.Popen(
                 [
                     self.chromium_bin,
@@ -201,41 +202,58 @@ class CDPPageDriver:
                     "--no-sandbox",
                     "--disable-gpu",
                     "--disable-software-rasterizer",
-                    "--disable-background-networking",
-                    "--disable-sync",
-                    "--metrics-recording-only",
                     "--hide-scrollbars",
                     "--disable-dev-shm-usage",
                     "--no-first-run",
                     "--no-default-browser-check",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--disable-sync",
+                    "--metrics-recording-only",
+                    "--mute-audio",
                     "--remote-allow-origins=*",
+                    "--remote-debugging-address=127.0.0.1",
                     f"--user-data-dir={self._user_data_dir}",
                     f"--remote-debugging-port={self.debug_port}",
                     "about:blank",
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=self._stderr_handle,
-                env=child_env,
+                env=chrome_env,
             )
             local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             ws_url = None
-            deadline = time.monotonic() + 25.0
+            last_err = ""
+            deadline = time.monotonic() + 45.0
             while time.monotonic() < deadline:
                 if self.proc.poll() is not None:
                     break
                 try:
                     with local_opener.open(
-                        f"http://127.0.0.1:{self.debug_port}/json/list", timeout=1.5
+                        f"http://127.0.0.1:{self.debug_port}/json/list", timeout=2
                     ) as resp:
                         targets = json.loads(resp.read())
                     for t in targets:
                         if t.get("type") == "page" and t.get("webSocketDebuggerUrl"):
                             ws_url = t["webSocketDebuggerUrl"]
                             break
+                    if not ws_url and isinstance(targets, list):
+                        # Newer Chromium builds may start with zero page targets until one is created
+                        try:
+                            req = urllib.request.Request(
+                                f"http://127.0.0.1:{self.debug_port}/json/new?about:blank",
+                                method="PUT",
+                            )
+                            with local_opener.open(req, timeout=2) as new_resp:
+                                created = json.loads(new_resp.read())
+                            ws_url = created.get("webSocketDebuggerUrl")
+                        except Exception:
+                            pass
                     if ws_url:
                         break
-                except Exception:
-                    time.sleep(0.15)
+                except Exception as exc:
+                    last_err = f"{type(exc).__name__}: {exc}"
+                    time.sleep(0.2)
             if not ws_url:
                 stderr_tail = ""
                 try:
@@ -245,7 +263,7 @@ class CDPPageDriver:
                 except Exception:
                     pass
                 raise RuntimeError(
-                    f"Failed to connect to Headless Chromium CDP page target (bin={self.chromium_bin}, rc={self.proc.poll()}): {stderr_tail}"
+                    f"Failed to connect to Headless Chromium CDP page target (bin={self.chromium_bin}, rc={self.proc.poll()}, last_err={last_err}): {stderr_tail}"
                 )
 
             parsed = urlparse(ws_url)
