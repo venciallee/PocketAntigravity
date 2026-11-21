@@ -3,14 +3,14 @@
 
 Prevents compatibility regressions automatically during future feature iterations:
 1. RPC Registration Completeness:
-   Every Connect-RPC `method: "<Name>"` invoked under `Packages/AntigravityData/Sources/AntigravityData/Protocol/`
+   Every Connect-RPC `method: "<Name>"` invoked under `apps/ios/Packages/AntigravityData/Sources/AntigravityData/Protocol/`
    must be registered in `HostCapabilityRegistry.swift` (`coreBaselineMethods`, `legacyAliasMethods`, or `HostCapability.rpcMethods`).
 2. Zero Silent `try?` on Live Write RPCs:
-   Store code under `Packages/AntigravityData/Sources/AntigravityData/Store/` must never swallow errors from
+   Store code under `apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/` must never swallow errors from
    mutating RPC calls with `try? await client.<writeMethod>(...)`; use `performLiveCapabilityWrite(...)` or
    `handleLiveCapabilityWriteError(...)` instead.
 3. Resilient Forward-Compatible String Enums:
-   Every `String`-backed `Codable`/`Decodable` enum in `Packages/AntigravityData/Sources/AntigravityData/Models/`
+   Every `String`-backed `Codable`/`Decodable` enum in `apps/ios/Packages/AntigravityData/Sources/AntigravityData/Models/`
    must conform to `ResilientStringEnum` or implement a custom fallback `init(from:)`.
 4. Swift <-> Companion Bridge Enum-Downgrade Map Parity:
    Every enum downgrade key in `ProtocolCompatibilityEngine.downgradedEnumReplacement` must match
@@ -106,7 +106,7 @@ def inspect_compatibility_guardrails(repo_root: Path = ROOT) -> dict:
     errors: list[str] = []
     checks: list[str] = []
 
-    pkg_src = repo_root / "Packages" / "AntigravityData" / "Sources" / "AntigravityData"
+    pkg_src = repo_root / "apps" / "ios" / "Packages" / "AntigravityData" / "Sources" / "AntigravityData"
     protocol_dir = pkg_src / "Protocol"
     store_dir = pkg_src / "Store"
     models_dir = pkg_src / "Models"

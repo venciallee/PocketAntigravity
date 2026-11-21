@@ -244,8 +244,8 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     master_svg = (repo_root / "scripts" / "assets" / "ag-orbit-original-icon.svg").read_text(encoding="utf-8")
 
-    appicon_dir = repo_root / "iOS" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
-    preview_dir = repo_root / "iOS" / "Resources" / "Assets.xcassets" / "AntigravityAppIconPreview.imageset"
+    appicon_dir = repo_root / "apps" / "ios" / "App" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
+    preview_dir = repo_root / "apps" / "ios" / "App" / "Resources" / "Assets.xcassets" / "AntigravityAppIconPreview.imageset"
     appicon_dir.mkdir(parents=True, exist_ok=True)
     preview_dir.mkdir(parents=True, exist_ok=True)
 
