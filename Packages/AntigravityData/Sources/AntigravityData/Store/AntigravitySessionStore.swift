@@ -325,6 +325,11 @@ public final class AntigravitySessionStore {
         }
     }
 
+    /// True when operating against a real paired live host (always `false` in `--ui-verify` ESDD mode).
+    public var isLiveBackendActive: Bool {
+        !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
+    }
+
     internal func handleLiveCapabilityWriteError(
         _ error: Error,
         capability: HostCapability,
@@ -335,6 +340,43 @@ public final class AntigravitySessionStore {
             compatibilityNoticeText = activeHostCapabilities.userFacingUnsupportedMessage(for: capability)
         } else {
             compatibilityNoticeText = "\(fallbackActionLabel) failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Standardized live-backend write transaction template eliminating ad-hoc `try?` fake successes.
+    /// - Executes `optimistic()` immediately on `@MainActor`.
+    /// - In offline/ESDD verification mode (`!isLiveBackendActive`), returns `offlineResult()` without network I/O.
+    /// - Against a live host, dispatches `remote(client)`; on error, runs `rollback()` and posts an honest
+    ///   compatibility or failure notice via `handleLiveCapabilityWriteError`.
+    @discardableResult
+    public func performLiveCapabilityWrite<ResultValue: Sendable>(
+        capability: HostCapability,
+        actionLabel: String,
+        optimistic: () -> Void = {},
+        offlineResult: () -> ResultValue? = { nil },
+        remote: @escaping @Sendable (AntigravityRPCClient) async throws -> ResultValue,
+        onSuccess: (ResultValue) -> Void = { _ in },
+        rollback: () -> Void = {}
+    ) async -> ResultValue? {
+        optimistic()
+        guard isLiveBackendActive, let client = rpcClient else {
+            let value = offlineResult()
+            if let value { onSuccess(value) }
+            return value
+        }
+        do {
+            let value = try await remote(client)
+            await refreshHostCapabilitiesFromClient()
+            onSuccess(value)
+            return value
+        } catch {
+            rollback()
+            await handleLiveCapabilityWriteError(
+                error,
+                capability: capability,
+                fallbackActionLabel: actionLabel
+            )
+            return nil
         }
     }
 

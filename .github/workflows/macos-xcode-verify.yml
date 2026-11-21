@@ -33,11 +33,12 @@ jobs:
           fi
           python3 -m pip install --break-system-packages --quiet pillow || pip3 install --quiet pillow
 
-      - name: "[Gate 0] Pure-Cloud Doc-Sync Watcher Self-Test & Script Syntax Check"
+      - name: "[Gate 0] Pure-Cloud Doc-Sync Watcher Self-Test, Compat Guardrails & Script Syntax Check"
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/sync-antigravity-docs.py scripts/run-doc-sync-agent.py scripts/mac-companion-bridge.py verification/mock_language_server.py verification/verify-v233-capabilities.py
+          python3 -m py_compile scripts/sync-antigravity-docs.py scripts/run-doc-sync-agent.py scripts/mac-companion-bridge.py verification/mock_language_server.py verification/verify-v233-capabilities.py verification/verify_compat_guardrails.py verification/verify-compat-matrix.py
           python3 scripts/sync-antigravity-docs.py --self-test
+          python3 verification/verify_compat_guardrails.py
 
       - name: "[Gate 1] Swift 6 Package Compilation & XCTest Suite (AntigravityData)"
         run: |
@@ -45,11 +46,12 @@ jobs:
           mkdir -p verification/output/real-simulator
           swift test --package-path Packages/AntigravityData 2>&1 | tee verification/output/real-simulator/swift-test.log
 
-      - name: "[Gate 2] Live Connect-RPC Protocol Flow (Login + StartCascade + SendMessage + Binary Proto + Face ID)"
+      - name: "[Gate 2] Live Connect-RPC Protocol Flow & 3-Version Compat Matrix (Legacy/Current/Future)"
         run: |
           set -euo pipefail
           python3 verification/verify-live-rpc-flow.py 2>&1 | tee verification/output/real-simulator/live-rpc-flow.log
           python3 verification/verify-v233-capabilities.py 2>&1 | tee verification/output/real-simulator/v233-capabilities.log
+          python3 verification/verify-compat-matrix.py 2>&1 | tee verification/output/real-simulator/compat-matrix.log
 
       - name: Set up JDK 21 for KMP Shared Core
         uses: actions/setup-java@v4

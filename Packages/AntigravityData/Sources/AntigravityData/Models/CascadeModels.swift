@@ -167,11 +167,13 @@ public enum CortexStepType: Int, Codable, Sendable, CaseIterable {
 // MARK: - 7-Segment Task Progress & Checklist (UE07, UE13)
 
 /// Status of an individual checklist item inside a `TaskBoundaryPayload` (`UE07`).
-public enum TaskChecklistStatus: String, Codable, Sendable, CaseIterable {
+public enum TaskChecklistStatus: String, ResilientStringEnum, CaseIterable {
     case done
     case inProgress
     case waiting
     case pending
+
+    public static var unknownFallback: TaskChecklistStatus { .pending }
 }
 
 /// Checklist row rendered beneath the segmented progress bar in `CascadeChatViewController` (`UE07`).
