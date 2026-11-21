@@ -19,6 +19,7 @@ import platform.Foundation.NSURLSessionAuthChallengeCancelAuthenticationChalleng
 import platform.Foundation.NSURLSessionAuthChallengePerformDefaultHandling
 import platform.Foundation.NSURLSessionAuthChallengeUseCredential
 import platform.Foundation.credentialForTrust
+import platform.Foundation.serverTrust
 import platform.Foundation.timeIntervalSince1970
 import platform.Security.SecCertificateCopyData
 import platform.Security.SecCertificateRef
