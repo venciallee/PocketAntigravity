@@ -2158,6 +2158,68 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertEqual(cloudSummaries[0].cloudProjectId, "cloud-proj-uuid-ios")
         XCTAssertEqual(cloudSummaries[0].status, .inProgress)
     }
+
+    @MainActor
+    func testPerDeviceRelayOnlineOfflineReconciliation() {
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        let initialSlugHost = RemoteHostInstance(
+            instanceId: "lt74xt6l0m-golden-star",
+            hostname: "lt74xt6l0m-golden-star",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/lt74xt6l0m-golden-star")!,
+            isOnline: true
+        )
+        store.activeHost = initialSlugHost
+        store.hosts = [initialSlugHost]
+
+        let onlineHost = RelayInstanceInfo(
+            uuid: "uuid-golden-star-v2",
+            name: "lt74xt6l0m-golden-star",
+            version: "v2.32.0",
+            status: .connected
+        )
+        let offlineHost = RelayInstanceInfo(
+            uuid: "uuid-mac-mini-v2",
+            name: "huangjiafandemac-mini-local-swift-vapor",
+            version: "v2.32.0",
+            status: .disconnected
+        )
+
+        // 1. Reconcile snapshot with one online + one offline device; stale slug entry must be replaced without duplication
+        store.syncRelayInstancesToHosts(
+            [onlineHost, offlineHost],
+            latencyMs: 24,
+            preferredActiveInstance: onlineHost
+        )
+        XCTAssertEqual(store.hosts.count, 2)
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-golden-star-v2" })?.isOnline, true)
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-mac-mini-v2" })?.isOnline, false)
+        XCTAssertEqual(store.activeHost.instanceId, "uuid-golden-star-v2")
+        XCTAssertTrue(store.activeHost.isOnline)
+
+        // 2. If a previously online host disappears from ListInstances, it must be marked offline
+        let onlineMacMini = RelayInstanceInfo(
+            uuid: "uuid-mac-mini-v2",
+            name: "huangjiafandemac-mini-local-swift-vapor",
+            version: "v2.32.0",
+            status: .idle
+        )
+        store.syncRelayInstancesToHosts(
+            [onlineMacMini],
+            latencyMs: 31,
+            preferredActiveInstance: onlineMacMini
+        )
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-golden-star-v2" })?.isOnline, false)
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-mac-mini-v2" })?.isOnline, true)
+        XCTAssertEqual(store.activeHost.instanceId, "uuid-mac-mini-v2")
+
+        // 3. When the Cloud Relay backend goes offline, all Cloud Relay devices & availableRelayInstances must flip offline
+        store.markBackendOffline(error: AntigravityRPCError.httpError(statusCode: 503, body: "No reachable Antigravity Desktop instances online"))
+        XCTAssertTrue(store.hosts.allSatisfy { !$0.isOnline })
+        XCTAssertTrue(store.availableRelayInstances.allSatisfy { !$0.status.isReachable })
+    }
 }
 
 private extension AntigravitySessionStore {

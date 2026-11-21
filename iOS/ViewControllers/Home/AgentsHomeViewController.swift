@@ -1,10 +1,14 @@
 import SwiftUI
 import AntigravityData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// State `UE01_AGENTS_HOME`: Primary Agents Hub (Conversation & Project Hub).
 /// Matches `/home/antigravity/iOS_·_Agents_首页.png` 1:1.
 public struct AgentsHomeViewController: View {
     @Bindable public var store: AntigravitySessionStore
+    @Environment(\.displayScale) private var displayScale
 
     public var onSelectTab: ((ShellTab) -> Void)?
     public var onOpenDisplayOptions: (() -> Void)?
@@ -13,7 +17,7 @@ public struct AgentsHomeViewController: View {
     public var onOpenContextMenuPreview: (() -> Void)?
     public var onOpenConversation: ((String) -> Void)?
 
-    public enum HostFilterTarget: Equatable, Identifiable {
+    public enum HostFilterTarget: Equatable, Hashable, Identifiable {
         case allHosts
         case antigravityCloud
         case localHost(id: String, name: String)
@@ -282,6 +286,71 @@ public struct AgentsHomeViewController: View {
         store.isDeviceNetworkReachable && store.isLiveBackendConnected && store.activeHost.isOnline
     }
 
+    private func isLocalHostOnline(_ host: RemoteHostInstance) -> Bool {
+        guard store.isDeviceNetworkReachable && store.isLiveBackendConnected else {
+            return false
+        }
+        if let relayInfo = store.availableRelayInstances.first(where: { $0.uuid == host.instanceId }) {
+            return relayInfo.status.isReachable
+        }
+        return host.isOnline
+    }
+
+    private var selectedLocalHostOnline: Bool {
+        if case .localHost(let id, _) = selectedHost,
+           let matched = pairedLocalHosts.first(where: { $0.instanceId == id }) {
+            return isLocalHostOnline(matched)
+        }
+        return isPairedHostOnline
+    }
+
+    private var isAnyPairedLocalHostOnline: Bool {
+        isPairedHostOnline || pairedLocalHosts.contains(where: { isLocalHostOnline($0) })
+    }
+
+    private func isProjectHostOnline(_ proj: ProjectWorkspace) -> Bool {
+        guard store.hasPairedBackend else { return true }
+        if proj.runtime == .cloud {
+            return store.isDeviceNetworkReachable
+        }
+        if let uuid = proj.originInstanceUuid,
+           let matched = pairedLocalHosts.first(where: { $0.instanceId == uuid }) {
+            return isLocalHostOnline(matched)
+        }
+        if let matchedByName = pairedLocalHosts.first(where: { $0.hostname == proj.hostName }) {
+            return isLocalHostOnline(matchedByName)
+        }
+        return isPairedHostOnline
+    }
+
+    private func hostSelectionBinding(for target: HostFilterTarget) -> Binding<Bool> {
+        Binding(
+            get: {
+                switch (selectedHost, target) {
+                case (.allHosts, .allHosts), (.antigravityCloud, .antigravityCloud):
+                    return true
+                case (.localHost(let lhsId, _), .localHost(let rhsId, _)):
+                    return lhsId == rhsId
+                default:
+                    return false
+                }
+            },
+            set: { _ in
+                selectedHost = target
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func deviceStatusMenuIcon(isOnline: Bool) -> some View {
+        #if canImport(UIKit)
+        Image(uiImage: DeviceStatusMenuIconRenderer.image(isOnline: isOnline, scale: displayScale))
+            .renderingMode(.original)
+        #else
+        Image(systemName: isOnline ? "laptopcomputer" : "laptopcomputer.slash")
+        #endif
+    }
+
     private var pairedLocalHosts: [RemoteHostInstance] {
         var seen = Set<String>()
         var result: [RemoteHostInstance] = []
@@ -302,12 +371,12 @@ public struct AgentsHomeViewController: View {
             return store.isDeviceNetworkReachable ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.statusError
         case .localHost:
             if store.hasPairedBackend {
-                return isPairedHostOnline ? AntigravityTheme.statusDone : AntigravityTheme.statusError
+                return selectedLocalHostOnline ? AntigravityTheme.statusDone : AntigravityTheme.statusError
             }
             return AntigravityTheme.statusDone
         case .allHosts:
             if store.hasPairedBackend {
-                return isPairedHostOnline ? AntigravityTheme.statusDone : AntigravityTheme.statusError
+                return isAnyPairedLocalHostOnline ? AntigravityTheme.statusDone : AntigravityTheme.statusError
             }
             return AntigravityTheme.statusDone
         }
@@ -322,12 +391,12 @@ public struct AgentsHomeViewController: View {
             return "Antigravity"
         case .localHost(_, let name):
             if store.hasPairedBackend {
-                return isPairedHostOnline ? name : "\(name) · Offline"
+                return selectedLocalHostOnline ? name : "\(name) · Offline"
             }
             return name
         case .allHosts:
             if store.hasPairedBackend {
-                return isPairedHostOnline
+                return isAnyPairedLocalHostOnline
                     ? store.activeHost.hostname
                     : "\(store.activeHost.hostname) · Offline"
             }
@@ -338,71 +407,64 @@ public struct AgentsHomeViewController: View {
     private var topHeaderToolbar: some View {
         HStack(spacing: 8) {
             Menu {
-                if store.hasPairedBackend {
-                    Button {
-                        Task {
-                            await store.reconnectNow(userInitiated: true)
-                        }
-                    } label: {
-                        Label(
-                            isPairedHostOnline ? "Sync Desktop & Cloud Now" : "Reconnect \(store.activeHost.hostname)",
-                            systemImage: isPairedHostOnline ? "arrow.clockwise" : "bolt.horizontal.circle"
-                        )
-                    }
-                    Button {
-                        onSelectTab?(.settings)
-                    } label: {
-                        Label("Host & Pairing Settings", systemImage: "qrcode.viewfinder")
-                    }
-                    Divider()
-                } else {
-                    Button {
-                        onSelectTab?(.settings)
-                    } label: {
-                        Label("Pair Mac / Cloud Host...", systemImage: "qrcode.viewfinder")
-                    }
-                    Divider()
-                }
-
-                Button {
-                    selectedHost = .allHosts
-                } label: {
-                    Label(
-                        "All Hosts (Antigravity & Local)",
-                        systemImage: selectedHost == .allHosts ? "checkmark.circle.fill" : "square.stack.3d.up"
-                    )
-                }
-
-                Button {
-                    selectedHost = .antigravityCloud
-                } label: {
-                    Label(
-                        "Antigravity (Cloud)",
-                        systemImage: selectedHost == .antigravityCloud ? "checkmark.circle.fill" : "cloud"
-                    )
-                }
-
-                if store.hasPairedBackend {
-                    ForEach(pairedLocalHosts, id: \.instanceId) { host in
-                        let target = HostFilterTarget.localHost(id: host.instanceId, name: host.hostname)
+                Section {
+                    if store.hasPairedBackend {
                         Button {
-                            selectedHost = target
+                            Task {
+                                await store.reconnectNow(userInitiated: true)
+                            }
                         } label: {
                             Label(
-                                host.hostname,
-                                systemImage: selectedHost == target ? "checkmark.circle.fill" : "laptopcomputer"
+                                isPairedHostOnline ? "Sync Desktop & Cloud Now" : "Reconnect \(store.activeHost.hostname)",
+                                systemImage: isPairedHostOnline ? "arrow.clockwise" : "bolt.horizontal.circle"
                             )
                         }
+                        Button {
+                            onSelectTab?(.settings)
+                        } label: {
+                            Label("Host & Pairing Settings", systemImage: "qrcode.viewfinder")
+                        }
+                    } else {
+                        Button {
+                            onSelectTab?(.settings)
+                        } label: {
+                            Label("Pair Mac / Cloud Host...", systemImage: "qrcode.viewfinder")
+                        }
                     }
-                } else {
-                    let mbpTarget = HostFilterTarget.localHost(id: "host-mbp-m4", name: "MacBook Pro")
-                    Button {
-                        selectedHost = mbpTarget
-                    } label: {
-                        Label(
-                            "MacBook Pro",
-                            systemImage: selectedHost == mbpTarget ? "checkmark.circle.fill" : "laptopcomputer"
-                        )
+                }
+
+                Section {
+                    Toggle(isOn: hostSelectionBinding(for: .allHosts)) {
+                        Label("All Hosts (Antigravity & Local)", systemImage: "square.stack.3d.up")
+                    }
+
+                    Toggle(isOn: hostSelectionBinding(for: .antigravityCloud)) {
+                        Label("Antigravity (Cloud)", systemImage: "cloud")
+                    }
+
+                    if store.hasPairedBackend {
+                        ForEach(pairedLocalHosts, id: \.instanceId) { host in
+                            let target = HostFilterTarget.localHost(id: host.instanceId, name: host.hostname)
+                            let online = isLocalHostOnline(host)
+                            Toggle(isOn: hostSelectionBinding(for: target)) {
+                                Label {
+                                    Text(host.hostname)
+                                } icon: {
+                                    deviceStatusMenuIcon(isOnline: online)
+                                }
+                            }
+                            .accessibilityLabel("\(host.hostname), \(online ? "Online" : "Offline")")
+                        }
+                    } else {
+                        let mbpTarget = HostFilterTarget.localHost(id: "host-mbp-m4", name: "MacBook Pro")
+                        Toggle(isOn: hostSelectionBinding(for: mbpTarget)) {
+                            Label {
+                                Text("MacBook Pro")
+                            } icon: {
+                                deviceStatusMenuIcon(isOnline: true)
+                            }
+                        }
+                        .accessibilityLabel("MacBook Pro, Online")
                     }
                 }
             } label: {
@@ -1193,7 +1255,7 @@ public struct AgentsHomeViewController: View {
     private var filteredProjectSections: [AgentProjectSection] {
         let sourceSections: [AgentProjectSection]
         if usesLiveStoreData {
-            let hostOnline = !store.hasPairedBackend || isPairedHostOnline
+            let fallbackHostOnline = !store.hasPairedBackend || selectedLocalHostOnline
             var builtSections: [AgentProjectSection] = store.projects
                 .filter { projectMatchesHostFilter($0) }
                 .map { proj in
@@ -1203,7 +1265,7 @@ public struct AgentsHomeViewController: View {
                     return AgentProjectSection(
                         id: proj.id,
                         slug: proj.name,
-                        subtitle: proj.homeSubtitle(isHostOnline: hostOnline),
+                        subtitle: proj.homeSubtitle(isHostOnline: isProjectHostOnline(proj)),
                         isCloud: proj.runtime == .cloud,
                         conversations: convs
                     )
@@ -1222,7 +1284,7 @@ public struct AgentsHomeViewController: View {
                     AgentProjectSection(
                         id: AntigravityCloudDetector.noProjectDisplayName,
                         slug: AntigravityCloudDetector.noProjectDisplayName,
-                        subtitle: "\(hostOnline ? "Local" : "Offline") · \(store.activeHost.hostname)",
+                        subtitle: "\(fallbackHostOnline ? "Local" : "Offline") · \(store.activeHost.hostname)",
                         isCloud: false,
                         conversations: orphanedLocal
                     )
@@ -1342,3 +1404,88 @@ public struct AgentsHomeViewController: View {
         }
     }
 }
+
+#if canImport(UIKit)
+@MainActor
+private enum DeviceStatusMenuIconRenderer {
+    private static var cache: [String: UIImage] = [:]
+
+    /// Renders a `24×20pt` always-original `UIImage` combining `laptopcomputer` with a top-right
+    /// online (solid `#57C88A` emerald dot) or offline (hollow `#F07167` coral ring) status indicator
+    /// so iOS `UIMenu` preserves status color instead of flattening SF Symbols to template monochrome.
+    static func image(isOnline: Bool, scale: CGFloat) -> UIImage {
+        let clampedScale = max(scale, 2.0)
+        let cacheKey = "\(isOnline ? "online" : "offline")-\(Int((clampedScale * 10).rounded()))"
+        if let cached = cache[cacheKey] {
+            return cached
+        }
+
+        let canvasSize = CGSize(width: 24, height: 20)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = clampedScale
+        format.opaque = false
+
+        let renderer = UIGraphicsImageRenderer(size: canvasSize, format: format)
+        let rendered = renderer.image { ctx in
+            let cg = ctx.cgContext
+            let glyphColor = isOnline
+                ? UIColor(white: 1.0, alpha: 0.94)
+                : UIColor(white: 1.0, alpha: 0.48)
+            let symbolConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+            if let baseSymbol = UIImage(systemName: "laptopcomputer", withConfiguration: symbolConfig)?
+                .withTintColor(glyphColor, renderingMode: .alwaysOriginal) {
+                let symbolSize = baseSymbol.size
+                let drawRect = CGRect(
+                    x: max(0, (21.5 - symbolSize.width) * 0.5),
+                    y: max(0, (canvasSize.height - symbolSize.height) * 0.5 + 1.0),
+                    width: symbolSize.width,
+                    height: symbolSize.height
+                )
+                baseSymbol.draw(in: drawRect)
+            }
+
+            // Cut out a transparent halo so the status indicator separates crisply from the laptop bezel
+            let dotCenter = CGPoint(x: 19.5, y: 4.8)
+            let cutoutRadius: CGFloat = 4.3
+            let cutoutRect = CGRect(
+                x: dotCenter.x - cutoutRadius,
+                y: dotCenter.y - cutoutRadius,
+                width: cutoutRadius * 2,
+                height: cutoutRadius * 2
+            )
+            cg.saveGState()
+            cg.setBlendMode(.clear)
+            cg.fillEllipse(in: cutoutRect)
+            cg.restoreGState()
+
+            if isOnline {
+                let dotRadius: CGFloat = 3.0
+                let dotRect = CGRect(
+                    x: dotCenter.x - dotRadius,
+                    y: dotCenter.y - dotRadius,
+                    width: dotRadius * 2,
+                    height: dotRadius * 2
+                )
+                UIColor(red: 0x57 / 255.0, green: 0xC8 / 255.0, blue: 0x8A / 255.0, alpha: 1.0).setFill()
+                cg.fillEllipse(in: dotRect)
+            } else {
+                let lineWidth: CGFloat = 1.5
+                let ringRadius: CGFloat = 3.0 - lineWidth * 0.5
+                let ringRect = CGRect(
+                    x: dotCenter.x - ringRadius,
+                    y: dotCenter.y - ringRadius,
+                    width: ringRadius * 2,
+                    height: ringRadius * 2
+                )
+                UIColor(red: 0xF0 / 255.0, green: 0x71 / 255.0, blue: 0x67 / 255.0, alpha: 1.0).setStroke()
+                cg.setLineWidth(lineWidth)
+                cg.strokeEllipse(in: ringRect)
+            }
+        }.withRenderingMode(.alwaysOriginal)
+
+        cache[cacheKey] = rendered
+        return rendered
+    }
+}
+#endif
+

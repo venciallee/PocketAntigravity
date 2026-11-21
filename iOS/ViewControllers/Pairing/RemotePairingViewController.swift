@@ -237,6 +237,7 @@ public struct RemotePairingViewController: View {
 
                         ForEach(store.availableRelayInstances) { inst in
                             let isSelected = (store.activeHost.instanceId == inst.uuid)
+                            let isInstOnline = store.isDeviceNetworkReachable && inst.status.isReachable
                             Button {
                                 Task {
                                     if let cached = await store.loadSavedSessionCookie() {
@@ -253,15 +254,33 @@ public struct RemotePairingViewController: View {
                                     }
                                 }
                             } label: {
-                                HStack(spacing: 10) {
-                                    Circle()
-                                        .fill(inst.status.isReachable ? AntigravityTheme.statusDone : UEChromePalette.textMuted)
-                                        .frame(width: 8, height: 8)
+                                HStack(spacing: 12) {
+                                    ZStack(alignment: .topTrailing) {
+                                        Image(systemName: "laptopcomputer")
+                                            .font(.system(size: 16, weight: .regular))
+                                            .foregroundStyle(isInstOnline ? Color.white.opacity(0.94) : Color.white.opacity(0.45))
+                                            .frame(width: 24, height: 20)
+                                        ZStack {
+                                            Circle()
+                                                .fill(AntigravityTheme.surfaceCard)
+                                                .frame(width: 10, height: 10)
+                                            if isInstOnline {
+                                                Circle()
+                                                    .fill(AntigravityTheme.statusDone)
+                                                    .frame(width: 6.5, height: 6.5)
+                                            } else {
+                                                Circle()
+                                                    .strokeBorder(AntigravityTheme.statusError, lineWidth: 1.5)
+                                                    .frame(width: 6.5, height: 6.5)
+                                            }
+                                        }
+                                        .offset(x: 2, y: -2)
+                                    }
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(inst.name)
                                             .font(.system(size: 14.5, weight: .semibold))
-                                            .foregroundStyle(Color.white)
-                                        Text("\(inst.status.badgeText) · \(inst.version)")
+                                            .foregroundStyle(isInstOnline ? Color.white : UEChromePalette.textSecondary)
+                                        Text("\(isInstOnline ? inst.status.badgeText : "Offline") · \(inst.version)")
                                             .font(.system(size: 11.5, weight: .regular, design: .monospaced))
                                             .foregroundStyle(UEChromePalette.textSecondary)
                                     }

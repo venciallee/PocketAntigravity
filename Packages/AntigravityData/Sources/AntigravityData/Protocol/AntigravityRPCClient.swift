@@ -356,6 +356,11 @@ public actor AntigravityRPCClient {
         return cachedRelayInstances.first(where: \.status.isReachable)
     }
 
+    /// Returns the latest Cloud Relay instance list observed from `ApiService/ListInstances`.
+    public func currentCachedRelayInstances() -> [RelayInstanceInfo] {
+        cachedRelayInstances
+    }
+
     /// Resolves a scanned Remote Control device slug (`lt74xt6l0m-golden-star`) or UUID (`0f5819ac-...-v2`)
     /// to an online `RelayInstanceInfo`, automatically failing over across open windows on the same Mac/account
     /// and probing `X-Goog-AuthUser` `0..4` for multi-account sessions.

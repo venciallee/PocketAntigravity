@@ -962,24 +962,11 @@ public final class AntigravitySessionStore {
                 handshake: handshake
             )
 
-            // Register all reachable Cloud Relay instances in `hosts` so the user can switch Macs from Home
-            for inst in handshake.availableRelayInstances where inst.uuid != finalUuid {
-                let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? finalRelayURL
-                let peerHost = RemoteHostInstance(
-                    instanceId: inst.uuid,
-                    hostname: inst.name,
-                    version: inst.version,
-                    channel: .cloudRelay,
-                    endpointURL: instURL,
-                    isOnline: inst.status.isReachable,
-                    latencyMs: handshake.latencyMs
-                )
-                if let existingIdx = hosts.firstIndex(where: { $0.instanceId == peerHost.instanceId }) {
-                    hosts[existingIdx] = peerHost
-                } else {
-                    hosts.append(peerHost)
-                }
-            }
+            // Sync all Cloud Relay instances (online & offline) into `hosts` so Home reflects per-device reachability
+            syncRelayInstancesToHosts(
+                handshake.availableRelayInstances,
+                latencyMs: handshake.latencyMs
+            )
 
             await KeychainStore.shared.saveCredentials(
                 SavedBackendCredentials(
@@ -1352,6 +1339,21 @@ public final class AntigravitySessionStore {
         activeHost = updatedHost
         if let idx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
             hosts[idx] = updatedHost
+        }
+        if updatedHost.channel == .cloudRelay || !isDeviceNetworkReachable {
+            for idx in hosts.indices where hosts[idx].channel == updatedHost.channel || !isDeviceNetworkReachable {
+                hosts[idx].isOnline = false
+            }
+            availableRelayInstances = availableRelayInstances.map { inst in
+                RelayInstanceInfo(
+                    uuid: inst.uuid,
+                    name: inst.name,
+                    version: inst.version,
+                    supportsChunking: inst.supportsChunking,
+                    status: .disconnected,
+                    updatedAt: inst.updatedAt
+                )
+            }
         }
 
         connectionErrorText = error.localizedDescription
@@ -2133,32 +2135,84 @@ public final class AntigravitySessionStore {
         }
     }
 
-    private func applyRelayProbeMetadata(_ probe: HostReachabilityProbeResult) {
-        lastPingLatencyMs = probe.latencyMs
-        if !probe.availableRelayInstances.isEmpty {
-            availableRelayInstances = probe.availableRelayInstances
-            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
-            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
-            for inst in probe.availableRelayInstances {
-                let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
-                let peerHost = RemoteHostInstance(
-                    instanceId: inst.uuid,
-                    hostname: inst.name,
-                    version: inst.version,
-                    channel: .cloudRelay,
-                    endpointURL: instURL,
-                    isOnline: inst.status.isReachable,
-                    latencyMs: probe.latencyMs
-                )
-                if let idx = hosts.firstIndex(where: { $0.instanceId == peerHost.instanceId }) {
-                    hosts[idx] = peerHost
-                } else {
-                    hosts.append(peerHost)
+    internal func syncRelayInstancesToHosts(
+        _ relayInstances: [RelayInstanceInfo],
+        latencyMs: Int? = nil,
+        preferredActiveInstance: RelayInstanceInfo? = nil
+    ) {
+        guard !relayInstances.isEmpty else { return }
+        availableRelayInstances = relayInstances
+
+        let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
+        let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
+        let effectiveLatency = latencyMs ?? lastPingLatencyMs ?? activeHost.latencyMs
+        let seenIds = Set(relayInstances.map(\.uuid))
+
+        for inst in relayInstances {
+            let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
+            let peerHost = RemoteHostInstance(
+                instanceId: inst.uuid,
+                hostname: inst.name,
+                version: inst.version,
+                channel: .cloudRelay,
+                endpointURL: instURL,
+                isOnline: inst.status.isReachable,
+                latencyMs: effectiveLatency
+            )
+            if let idx = hosts.firstIndex(where: { $0.instanceId == inst.uuid }) {
+                hosts[idx] = peerHost
+                hosts.removeAll {
+                    $0.channel == .cloudRelay && $0.instanceId != inst.uuid && $0.instanceId == inst.name
                 }
+            } else if let slugIdx = hosts.firstIndex(where: { $0.channel == .cloudRelay && $0.instanceId == inst.name }) {
+                hosts[slugIdx] = peerHost
+            } else {
+                hosts.append(peerHost)
             }
         }
 
-        if let activeInst = probe.activeRelayInstance {
+        // Any previously cached Cloud Relay device absent from the latest ListInstances snapshot is no longer online
+        for idx in hosts.indices where hosts[idx].channel == .cloudRelay && !seenIds.contains(hosts[idx].instanceId) {
+            hosts[idx].isOnline = false
+        }
+
+        if let activeInst = preferredActiveInstance {
+            let nextURL = URL(string: "\(originPrefix)/r/\(activeInst.uuid)") ?? activeHost.endpointURL
+            let refreshedHost = RemoteHostInstance(
+                instanceId: activeInst.uuid,
+                hostname: activeInst.name,
+                version: activeInst.version,
+                channel: .cloudRelay,
+                endpointURL: nextURL,
+                isOnline: activeInst.status.isReachable,
+                latencyMs: effectiveLatency
+            )
+            activeHost = refreshedHost
+            if let idx = hosts.firstIndex(where: { $0.instanceId == refreshedHost.instanceId }) {
+                hosts[idx] = refreshedHost
+            } else {
+                hosts.insert(refreshedHost, at: 0)
+            }
+        } else if activeHost.channel == .cloudRelay,
+                  let matchedActive = relayInstances.first(where: { $0.uuid == activeHost.instanceId }) {
+            var updatedActive = activeHost
+            updatedActive.hostname = matchedActive.name
+            updatedActive.version = matchedActive.version
+            updatedActive.isOnline = matchedActive.status.isReachable
+            updatedActive.latencyMs = effectiveLatency
+            activeHost = updatedActive
+        }
+    }
+
+    private func applyRelayProbeMetadata(_ probe: HostReachabilityProbeResult) {
+        lastPingLatencyMs = probe.latencyMs
+        if !probe.availableRelayInstances.isEmpty {
+            syncRelayInstancesToHosts(
+                probe.availableRelayInstances,
+                latencyMs: probe.latencyMs,
+                preferredActiveInstance: probe.activeRelayInstance
+            )
+        } else if let activeInst = probe.activeRelayInstance {
             let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
             let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
             let nextURL = URL(string: "\(originPrefix)/r/\(activeInst.uuid)") ?? activeHost.endpointURL
@@ -2168,7 +2222,7 @@ public final class AntigravitySessionStore {
                 version: activeInst.version,
                 channel: .cloudRelay,
                 endpointURL: nextURL,
-                isOnline: true,
+                isOnline: activeInst.status.isReachable,
                 latencyMs: probe.latencyMs
             )
             activeHost = refreshedHost
@@ -2177,7 +2231,6 @@ public final class AntigravitySessionStore {
             } else {
                 hosts.insert(refreshedHost, at: 0)
             }
-            connectionStatusText = "Connected · \(refreshedHost.hostname) · \(probe.latencyMs)ms"
         } else {
             var updatedHost = activeHost
             updatedHost.latencyMs = probe.latencyMs
@@ -2186,8 +2239,8 @@ public final class AntigravitySessionStore {
             if let idx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
                 hosts[idx] = updatedHost
             }
-            connectionStatusText = "Connected · \(updatedHost.hostname) · \(probe.latencyMs)ms"
         }
+        connectionStatusText = "Connected · \(activeHost.hostname) · \(probe.latencyMs)ms"
     }
 
     private func performLightweightHeartbeatTick(allowFullReconciliation: Bool) async {
@@ -3260,6 +3313,17 @@ public final class AntigravitySessionStore {
             lastBackendActivityAt = Date()
             lastFullSyncAt = Date()
             cloudAgentWarmingUp = federated.cloudWarmingUp
+
+            if isRelay {
+                let latestInstances = await client.currentCachedRelayInstances()
+                let latestActive = await client.currentActiveRelayInstance()
+                if !latestInstances.isEmpty {
+                    syncRelayInstancesToHosts(
+                        latestInstances,
+                        preferredActiveInstance: latestActive
+                    )
+                }
+            }
 
             let remoteSummaries = federated.summaries
             if !federated.workspaces.isEmpty {
