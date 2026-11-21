@@ -192,12 +192,19 @@ public struct ProjectDetailViewController: View {
     }
 
     private var isPairedHostOnline: Bool {
-        !store.hasPairedBackend || (store.isLiveBackendConnected && store.activeHost.isOnline)
+        !store.hasPairedBackend || store.isHostOnline(forInstanceUuid: liveProject?.originInstanceUuid)
     }
 
     private var liveProject: ProjectWorkspace? {
         store.projects.first(where: { $0.id == projectSlug })
             ?? store.projects.first(where: { $0.name == projectSlug })
+    }
+
+    private var resolvedLocalHostName: String {
+        store.resolvedHostName(
+            forInstanceUuid: liveProject?.originInstanceUuid,
+            fallback: liveProject?.hostName
+        )
     }
 
     private var isNoProject: Bool {
@@ -250,7 +257,7 @@ public struct ProjectDetailViewController: View {
             return "Cloud"
         }
         let prefix = isPairedHostOnline ? "Local" : "Offline"
-        return "\(prefix) · \(store.activeHost.hostname)"
+        return "\(prefix) · \(resolvedLocalHostName)"
     }
 
     private var effectiveBranchName: String {
@@ -783,7 +790,7 @@ public struct ProjectDetailViewController: View {
                             .foregroundStyle(UEChromePalette.textSecondary)
                             .frame(width: 22)
 
-                        Text(finderFeedbackBanner ? "Opened in Finder on \(usesPairedStoreData ? store.activeHost.hostname : "MacBook Pro")" : "Reveal in Finder on Mac")
+                        Text(finderFeedbackBanner ? "Opened in Finder on \(usesPairedStoreData ? resolvedLocalHostName : "MacBook Pro")" : "Reveal in Finder on Mac")
                             .font(.system(size: 15.5, weight: .medium))
                             .foregroundStyle(UEChromePalette.textPrimary)
 

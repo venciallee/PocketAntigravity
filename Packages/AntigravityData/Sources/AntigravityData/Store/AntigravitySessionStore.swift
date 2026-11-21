@@ -976,9 +976,12 @@ public final class AntigravitySessionStore {
             )
 
             // Sync all Cloud Relay instances (online & offline) into `hosts` so Home reflects per-device reachability
+            let activeRelayInst = handshake.availableRelayInstances.first(where: { $0.uuid == finalUuid })
             syncRelayInstancesToHosts(
                 handshake.availableRelayInstances,
-                latencyMs: handshake.latencyMs
+                latencyMs: handshake.latencyMs,
+                preferredActiveInstance: activeRelayInst,
+                persistKeychainIfChanged: false
             )
 
             await KeychainStore.shared.saveCredentials(
@@ -2148,18 +2151,58 @@ public final class AntigravitySessionStore {
         }
     }
 
+    /// Resolves the freshest known display name for a local host UUID from `availableRelayInstances` / `hosts`,
+    /// falling back cleanly to `fallback` or `activeHost.hostname`.
+    public func resolvedHostName(forInstanceUuid instanceUuid: String?, fallback: String? = nil) -> String {
+        if let uuid = instanceUuid, !uuid.isEmpty {
+            if let inst = availableRelayInstances.first(where: { $0.uuid == uuid }) {
+                return inst.name
+            }
+            if let host = hosts.first(where: { $0.instanceId == uuid }) {
+                return host.hostname
+            }
+            if activeHost.instanceId == uuid {
+                return activeHost.hostname
+            }
+        }
+        if let fallback, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return fallback
+        }
+        return activeHost.hostname
+    }
+
+    /// Returns live online status for a specific host UUID (consistent with per-device Relay reachability).
+    public func isHostOnline(forInstanceUuid instanceUuid: String?) -> Bool {
+        guard hasPairedBackend else { return true }
+        guard isDeviceNetworkReachable && isLiveBackendConnected else { return false }
+        if let uuid = instanceUuid, !uuid.isEmpty {
+            if let inst = availableRelayInstances.first(where: { $0.uuid == uuid }) {
+                return inst.status.isReachable
+            }
+            if let host = hosts.first(where: { $0.instanceId == uuid }) {
+                return host.isOnline
+            }
+        }
+        return activeHost.isOnline
+    }
+
     internal func syncRelayInstancesToHosts(
         _ relayInstances: [RelayInstanceInfo],
         latencyMs: Int? = nil,
-        preferredActiveInstance: RelayInstanceInfo? = nil
+        preferredActiveInstance: RelayInstanceInfo? = nil,
+        persistKeychainIfChanged: Bool = true
     ) {
         guard !relayInstances.isEmpty else { return }
+        let previousActiveId = activeHost.instanceId
+        let previousActiveHostname = activeHost.hostname
         availableRelayInstances = relayInstances
 
         let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
         let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
         let effectiveLatency = latencyMs ?? lastPingLatencyMs ?? activeHost.latencyMs
         let seenIds = Set(relayInstances.map(\.uuid))
+
+        hosts.removeAll { $0.instanceId == "unpaired" }
 
         for inst in relayInstances {
             let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
@@ -2215,6 +2258,140 @@ public final class AntigravitySessionStore {
             updatedActive.latencyMs = effectiveLatency
             activeHost = updatedActive
         }
+
+        if isLiveBackendConnected && activeHost.isOnline {
+            if let pingMs = latencyMs ?? lastPingLatencyMs {
+                connectionStatusText = "Connected · \(activeHost.hostname) · \(pingMs)ms"
+            } else {
+                connectionStatusText = "Connected · \(activeHost.hostname)"
+            }
+        } else if hasPairedBackend && !activeHost.isOnline {
+            connectionStatusText = "Offline · \(activeHost.hostname)"
+        }
+
+        var newNameByUuid: [String: String] = [:]
+        for inst in relayInstances {
+            newNameByUuid[inst.uuid] = inst.name
+        }
+        newNameByUuid[activeHost.instanceId] = activeHost.hostname
+
+        let activeUuidRotated = previousActiveId != activeHost.instanceId
+            && previousActiveId != "unpaired"
+            && previousActiveId != "auto"
+            && !previousActiveId.isEmpty
+            && newNameByUuid[previousActiveId] == nil
+        let activeNameChanged = previousActiveHostname != activeHost.hostname
+        let previousNameStillPresent = newNameByUuid.values.contains(previousActiveHostname)
+
+        for idx in workspaces.indices where !workspaces[idx].isCloud {
+            if let u = workspaces[idx].originInstanceUuid {
+                if let freshName = newNameByUuid[u] {
+                    workspaces[idx].originHostName = freshName
+                } else if activeUuidRotated && u == previousActiveId {
+                    workspaces[idx].originInstanceUuid = activeHost.instanceId
+                    workspaces[idx].originHostName = activeHost.hostname
+                }
+            } else if activeNameChanged && !previousNameStillPresent && workspaces[idx].originHostName == previousActiveHostname {
+                workspaces[idx].originHostName = activeHost.hostname
+            }
+        }
+
+        var summariesChanged = false
+        for idx in summaries.indices where !summaries[idx].isCloud {
+            if let u = summaries[idx].originInstanceUuid {
+                if let freshName = newNameByUuid[u] {
+                    if summaries[idx].originHostName != freshName {
+                        summaries[idx].originHostName = freshName
+                        summariesChanged = true
+                    }
+                } else if activeUuidRotated && u == previousActiveId {
+                    summaries[idx].originInstanceUuid = activeHost.instanceId
+                    summaries[idx].originHostName = activeHost.hostname
+                    summariesChanged = true
+                }
+            } else if activeNameChanged && !previousNameStillPresent && summaries[idx].originHostName == previousActiveHostname {
+                summaries[idx].originHostName = activeHost.hostname
+                summariesChanged = true
+            }
+        }
+
+        var projectsChanged = false
+        for idx in projects.indices where projects[idx].runtime != .cloud {
+            if let u = projects[idx].originInstanceUuid {
+                if let freshName = newNameByUuid[u] {
+                    if projects[idx].hostName != freshName {
+                        projects[idx].hostName = freshName
+                        if projects[idx].isNoProject {
+                            projects[idx].pathDisplay = "Unassigned · \(freshName)"
+                        }
+                        projectsChanged = true
+                    }
+                } else if activeUuidRotated && u == previousActiveId {
+                    projects[idx].originInstanceUuid = activeHost.instanceId
+                    projects[idx].hostName = activeHost.hostname
+                    if projects[idx].isNoProject {
+                        projects[idx].pathDisplay = "Unassigned · \(activeHost.hostname)"
+                    }
+                    projectsChanged = true
+                }
+            } else if activeNameChanged && !previousNameStillPresent && projects[idx].hostName == previousActiveHostname {
+                projects[idx].hostName = activeHost.hostname
+                if projects[idx].isNoProject {
+                    projects[idx].pathDisplay = "Unassigned · \(activeHost.hostname)"
+                }
+                projectsChanged = true
+            }
+        }
+
+        if !isVerificationMode && (projectsChanged || summariesChanged) {
+            let storeRef = projectionStore
+            let projectsSnapshot = projectsChanged ? projects : nil
+            let summariesSnapshot = summariesChanged ? summaries : nil
+            Task {
+                if let projectsSnapshot {
+                    await storeRef.saveProjects(projectsSnapshot)
+                }
+                if let summariesSnapshot {
+                    await storeRef.saveProjectedSummaries(summariesSnapshot)
+                }
+            }
+        }
+
+        if persistKeychainIfChanged
+            && !isVerificationMode
+            && hasPairedBackend
+            && activeHost.channel == .cloudRelay
+            && (activeNameChanged || previousActiveId != activeHost.instanceId) {
+            let updatedHostname = activeHost.hostname
+            let updatedUuid = activeHost.instanceId
+            let updatedEndpoint = activeHost.endpointURL.absoluteString
+            let updatedAuthUser = activeAuthUser
+            Task {
+                if var saved = await KeychainStore.shared.loadCredentials(),
+                   saved.channel == .cloudRelay {
+                    var changed = false
+                    if saved.hostname != updatedHostname {
+                        saved.hostname = updatedHostname
+                        changed = true
+                    }
+                    if saved.resolvedInstanceUuid != updatedUuid {
+                        saved.resolvedInstanceUuid = updatedUuid
+                        changed = true
+                    }
+                    if saved.endpointURLString != updatedEndpoint {
+                        saved.endpointURLString = updatedEndpoint
+                        changed = true
+                    }
+                    if !updatedAuthUser.isEmpty && saved.authUser != updatedAuthUser {
+                        saved.authUser = updatedAuthUser
+                        changed = true
+                    }
+                    if changed {
+                        await KeychainStore.shared.saveCredentials(saved)
+                    }
+                }
+            }
+        }
     }
 
     private func applyRelayProbeMetadata(_ probe: HostReachabilityProbeResult) {
@@ -2226,24 +2403,11 @@ public final class AntigravitySessionStore {
                 preferredActiveInstance: probe.activeRelayInstance
             )
         } else if let activeInst = probe.activeRelayInstance {
-            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
-            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
-            let nextURL = URL(string: "\(originPrefix)/r/\(activeInst.uuid)") ?? activeHost.endpointURL
-            let refreshedHost = RemoteHostInstance(
-                instanceId: activeInst.uuid,
-                hostname: activeInst.name,
-                version: activeInst.version,
-                channel: .cloudRelay,
-                endpointURL: nextURL,
-                isOnline: activeInst.status.isReachable,
-                latencyMs: probe.latencyMs
+            syncRelayInstancesToHosts(
+                [activeInst],
+                latencyMs: probe.latencyMs,
+                preferredActiveInstance: activeInst
             )
-            activeHost = refreshedHost
-            if let idx = hosts.firstIndex(where: { $0.instanceId == refreshedHost.instanceId }) {
-                hosts[idx] = refreshedHost
-            } else {
-                hosts.insert(refreshedHost, at: 0)
-            }
         } else {
             var updatedHost = activeHost
             updatedHost.latencyMs = probe.latencyMs
@@ -2252,8 +2416,8 @@ public final class AntigravitySessionStore {
             if let idx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
                 hosts[idx] = updatedHost
             }
+            connectionStatusText = "Connected · \(activeHost.hostname) · \(probe.latencyMs)ms"
         }
-        connectionStatusText = "Connected · \(activeHost.hostname) · \(probe.latencyMs)ms"
     }
 
     private func performLightweightHeartbeatTick(allowFullReconciliation: Bool) async {
@@ -2279,7 +2443,11 @@ public final class AntigravitySessionStore {
                 cancelAllSummaryStreams()
                 lastStreamReopenAttemptAt = .distantPast
                 ensureSummaryEnvelopeStreamRunning()
-                await refreshWorkspacesAndSummaries(forceFullSync: true, includeAutomations: false)
+                await refreshWorkspacesAndSummaries(
+                    forceFullSync: true,
+                    includeAutomations: false,
+                    skipRelayMetadataProbe: true
+                )
             } else {
                 let missingLocalStream = localSummaryStreamTasks.isEmpty
                     || (isRelay && availableRelayInstances.contains { $0.status.isReachable && localSummaryStreamTasks[$0.uuid] == nil })
@@ -2288,7 +2456,11 @@ public final class AntigravitySessionStore {
                     ensureSummaryEnvelopeStreamRunning()
                 }
                 if allowFullReconciliation {
-                    await refreshWorkspacesAndSummaries(forceFullSync: false, includeAutomations: false)
+                    await refreshWorkspacesAndSummaries(
+                        forceFullSync: false,
+                        includeAutomations: false,
+                        skipRelayMetadataProbe: true
+                    )
                 }
             }
         } catch {
@@ -2316,7 +2488,8 @@ public final class AntigravitySessionStore {
             markBackendReconnected()
             await refreshWorkspacesAndSummaries(
                 forceFullSync: true,
-                includeAutomations: selectedTab == .automations
+                includeAutomations: selectedTab == .automations,
+                skipRelayMetadataProbe: true
             )
             return true
         } catch {
@@ -2669,40 +2842,44 @@ public final class AntigravitySessionStore {
                         isCloud: summaryIsCloud,
                         instanceUuidOverride: originUuid
                     )
-                    let liveRelayInst: RelayInstanceInfo? = (self.activeHost.channel == .cloudRelay)
-                        ? await client.currentActiveRelayInstance()
-                        : nil
+                    let liveRelaySnapshot: (instances: [RelayInstanceInfo], active: RelayInstanceInfo?)? =
+                        (self.activeHost.channel == .cloudRelay)
+                            ? await client.currentRelayInstancesSnapshot()
+                            : nil
                     guard !Task.isCancelled, !self.isNetworkingSuspended else { return }
 
                     self.lastBackendActivityAt = Date()
 
-                    if let liveRelayInst {
-                        if self.activeHost.instanceId != liveRelayInst.uuid
-                            || self.activeHost.hostname != liveRelayInst.name
-                            || !self.activeHost.isOnline {
-                            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(self.activeHost.endpointURL.absoluteString)
-                            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
-                            let nextURL = URL(string: "\(originPrefix)/r/\(liveRelayInst.uuid)") ?? self.activeHost.endpointURL
-                            let refreshedHost = RemoteHostInstance(
-                                instanceId: liveRelayInst.uuid,
-                                hostname: liveRelayInst.name,
-                                version: liveRelayInst.version,
-                                channel: .cloudRelay,
-                                endpointURL: nextURL,
-                                isOnline: true,
-                                latencyMs: self.activeHost.latencyMs
+                    if let liveRelaySnapshot,
+                       (!liveRelaySnapshot.instances.isEmpty || liveRelaySnapshot.active != nil) {
+                        let activeChanged = liveRelaySnapshot.active.map {
+                            self.activeHost.instanceId != $0.uuid
+                                || self.activeHost.hostname != $0.name
+                                || !self.activeHost.isOnline
+                        } ?? false
+                        let listChanged = !liveRelaySnapshot.instances.isEmpty
+                            && liveRelaySnapshot.instances != self.availableRelayInstances
+                        if activeChanged || listChanged {
+                            let instancesToApply = liveRelaySnapshot.instances.isEmpty
+                                ? (liveRelaySnapshot.active.map { [$0] } ?? [])
+                                : liveRelaySnapshot.instances
+                            self.syncRelayInstancesToHosts(
+                                instancesToApply,
+                                preferredActiveInstance: liveRelaySnapshot.active
                             )
-                            self.activeHost = refreshedHost
-                            if let hostIdx = self.hosts.firstIndex(where: { $0.instanceId == refreshedHost.instanceId }) {
-                                self.hosts[hostIdx] = refreshedHost
-                            } else {
-                                self.hosts.insert(refreshedHost, at: 0)
-                            }
                         }
                         if !summaryIsCloud,
                            let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
-                            self.summaries[sumIdx].originInstanceUuid = liveRelayInst.uuid
-                            self.summaries[sumIdx].originHostName = liveRelayInst.name
+                            let existingUuid = self.summaries[sumIdx].originInstanceUuid
+                            if let existingUuid,
+                               let matchedPeer = liveRelaySnapshot.instances.first(where: {
+                                   $0.uuid == existingUuid && $0.status.isReachable
+                               }) {
+                                self.summaries[sumIdx].originHostName = matchedPeer.name
+                            } else if let liveRelayInst = liveRelaySnapshot.active {
+                                self.summaries[sumIdx].originInstanceUuid = liveRelayInst.uuid
+                                self.summaries[sumIdx].originHostName = liveRelayInst.name
+                            }
                         }
                     }
 
@@ -3442,7 +3619,8 @@ public final class AntigravitySessionStore {
 
     public func refreshWorkspacesAndSummaries(
         forceFullSync: Bool = false,
-        includeAutomations: Bool = false
+        includeAutomations: Bool = false,
+        skipRelayMetadataProbe: Bool = false
     ) async {
         guard !isNetworkingSuspended else { return }
         isRefreshingSummaries = true
@@ -3453,17 +3631,25 @@ public final class AntigravitySessionStore {
         let isRelay = (activeHost.channel == .cloudRelay)
         let syncTimeout: TimeInterval = isRelay ? 14.0 : 3.5
         let useLightweight = !forceFullSync && isRelay && (backgroundPollCounter % 4 != 1) && isSummaryStreamHealthy
+        var didRefreshRelayList = skipRelayMetadataProbe
+        if isRelay && !skipRelayMetadataProbe {
+            if let probe = try? await client.probeHostReachability(timeoutInterval: min(syncTimeout, 8.0)) {
+                applyRelayProbeMetadata(probe)
+                didRefreshRelayList = true
+            }
+        }
         do {
             let federated = try await client.fetchFederatedWorkspacesAndSummaries(
                 timeoutInterval: syncTimeout,
-                lightweightPoll: useLightweight
+                lightweightPoll: useLightweight,
+                skipRelayListRefresh: didRefreshRelayList
             )
             consecutiveSyncFailures = 0
             lastBackendActivityAt = Date()
             lastFullSyncAt = Date()
             cloudAgentWarmingUp = federated.cloudWarmingUp
 
-            if isRelay {
+            if isRelay && !didRefreshRelayList {
                 let latestInstances = await client.currentCachedRelayInstances()
                 let latestActive = await client.currentActiveRelayInstance()
                 if !latestInstances.isEmpty {
