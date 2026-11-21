@@ -864,7 +864,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
           "unsupportedMethods": [],
           "strippedFieldsByMethod": {},
           "downgradedEnumsByMethod": {},
-          "passiveSignals": {},
+          "passiveSignals": [],
           "updatedAt": 0
         }
         """.utf8)
