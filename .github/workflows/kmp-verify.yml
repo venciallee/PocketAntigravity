@@ -49,6 +49,7 @@ jobs:
             :shared:core-model:jvmTest \
             :shared:core-protocol:jvmTest \
             :shared:core-markdown:jvmTest \
+            :shared:core-domain:jvmTest \
             :shared:umbrella:jvmTest \
             --no-daemon
 
@@ -76,6 +77,7 @@ jobs:
             :shared:core-model:iosSimulatorArm64Test \
             :shared:core-protocol:iosSimulatorArm64Test \
             :shared:core-markdown:iosSimulatorArm64Test \
+            :shared:core-domain:iosSimulatorArm64Test \
             :shared:umbrella:iosSimulatorArm64Test \
             :shared:umbrella:assembleAntigravitySharedDebugXCFramework \
             --no-daemon

@@ -8,9 +8,10 @@ Supports both:
     UE screenshots (`UE01`..`UE13`), skipping unaffected cases and avoiding Simulator boot
     entirely in `build-only` mode.
   - **Full / Release Mode (`--mode full|release`, or default when invoked without scope flags)**:
-    Compiles `Antigravity.app` (+ extensions + `AntigravityUITests`), runs ALL 5 modular
-    XCUITests, verifies Live Connect-RPC App Handshake, and captures ALL 13 native SwiftUI
-    screens (`UE01`..`UE13`) + composite overview board.
+    Assembles KMP `AntigravityShared.xcframework` if absent, compiles `Antigravity.app`
+    (+ extensions + `AntigravityUITests`), runs ALL 5 modular XCUITests, verifies Live
+    Connect-RPC App Handshake, and captures ALL 13 native SwiftUI screens (`UE01`..`UE13`)
+    + composite overview board.
 
 Performance optimization:
   When the Simulator is needed, `xcrun simctl boot <udid>` starts asynchronously in the
@@ -298,6 +299,17 @@ def main() -> None:
         (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         print("  [SKIP] No iOS/Xcode build or simulator verification required for this change set.", flush=True)
         return
+
+    xcf_path = repo_root / "shared" / "umbrella" / "build" / "XCFrameworks" / "debug" / "AntigravityShared.xcframework"
+    if not xcf_path.exists():
+        t_xcf = time.monotonic()
+        print("=== [0/5] Building KMP AntigravityShared.xcframework via Gradle ===", flush=True)
+        subprocess.run(
+            ["./gradlew", ":shared:umbrella:assembleAntigravitySharedDebugXCFramework", "--no-daemon"],
+            cwd=repo_root,
+            check=True,
+        )
+        timings["kmpXcframework"] = round(time.monotonic() - t_xcf, 2)
 
     t0 = time.monotonic()
     print("=== [1/5] Generating Xcode Project via XcodeGen ===", flush=True)

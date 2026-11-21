@@ -166,6 +166,11 @@ def classify_file(path: str) -> dict[str, Any]:
         return _empty_impact("helper-scripts", "Developer/local helper script or source SVG asset changed")
 
     # 8. KMP shared modules & Gradle build (verified by kmp-verify.yml)
+    if norm.startswith("shared/umbrella/"):
+        res = _empty_impact("kmp-umbrella-facade", "KMP Swift-facing umbrella facade changed (build-only iOS compile check)")
+        res["gate3_ios_build"] = True
+        return res
+
     if (
         norm.startswith("shared/")
         or norm.startswith("gradle/")
@@ -1058,10 +1063,13 @@ def run_self_tests() -> None:
     assert p8["mode"] == "scoped"
     assert p8["gates"]["iosSimulatorMode"] == "build-only"
 
-    # 9. KMP shared only -> skipped by macOS workflow (verified by kmp-verify.yml)
+    # 9. KMP shared only -> skipped by macOS workflow (verified by kmp-verify.yml); umbrella facade -> build-only
     p9 = build_verification_plan(changed_files=["shared/core-model/src/commonMain/kotlin/dev/antigravity/shared/model/CascadeModels.kt"])
     assert p9["mode"] == "scoped"
     assert p9["gates"]["needsMacOS"] is False
+    p9b = build_verification_plan(changed_files=["shared/umbrella/src/commonMain/kotlin/dev/antigravity/shared/AntigravitySharedFacade.kt"])
+    assert p9b["mode"] == "scoped"
+    assert p9b["gates"]["iosSimulatorMode"] == "build-only"
 
     # 10. Multi-file union (Automations + Project Detail)
     p10 = build_verification_plan(

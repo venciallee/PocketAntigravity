@@ -137,6 +137,34 @@ jobs:
           mkdir -p verification/output/real-simulator
           swift test --package-path Packages/AntigravityData 2>&1 | tee verification/output/real-simulator/swift-test.log
 
+      - name: Restore Cached KMP AntigravityShared.xcframework (skipped on release)
+        id: kmp-xcf-cache
+        if: needs.plan-and-fast-gates.outputs.run_gate3_ios_build == 'true' && needs.plan-and-fast-gates.outputs.is_release != 'true'
+        uses: actions/cache@v4
+        with:
+          path: shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
+          key: kmp-xcframework-${{ runner.os }}-${{ hashFiles('shared/**', 'gradle/**', 'settings.gradle.kts', 'build.gradle.kts', 'gradle.properties') }}
+
+      - name: Set up JDK 21 for KMP Shared Core
+        if: needs.plan-and-fast-gates.outputs.run_gate3_ios_build == 'true' && (steps.kmp-xcf-cache.outputs.cache-hit != 'true' || needs.plan-and-fast-gates.outputs.is_release == 'true')
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        if: needs.plan-and-fast-gates.outputs.run_gate3_ios_build == 'true' && (steps.kmp-xcf-cache.outputs.cache-hit != 'true' || needs.plan-and-fast-gates.outputs.is_release == 'true')
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: "[Gate 2.5] Assemble KMP AntigravityShared.xcframework (Ktor Darwin + SKIE)"
+        if: needs.plan-and-fast-gates.outputs.run_gate3_ios_build == 'true' && (steps.kmp-xcf-cache.outputs.cache-hit != 'true' || needs.plan-and-fast-gates.outputs.is_release == 'true')
+        run: |
+          set -euo pipefail
+          mkdir -p verification/output/real-simulator
+          chmod +x ./gradlew
+          ./gradlew :shared:umbrella:assembleAntigravitySharedDebugXCFramework --no-daemon 2>&1 | tee verification/output/real-simulator/kmp-xcframework.log
+          ls -la shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
+
       - name: Install XcodeGen & Pillow (when iOS build / screenshots needed)
         if: needs.plan-and-fast-gates.outputs.run_gate3_ios_build == 'true'
         run: |

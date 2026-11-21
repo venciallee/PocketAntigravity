@@ -191,21 +191,34 @@ extension AntigravitySessionStore {
         activeRoute = .cascadeChat(optimisticId)
 
         let clientRef = rpcClient
+        let engineRef = kmpEngine
         let modelId = selectedModelConfig.modelId
         let shouldCallLiveBackend = (hasPairedBackend || isLiveBackendConnected)
 
         Task { [weak self] in
-            if shouldCallLiveBackend,
-               let clientRef,
-               let realCascadeId = try? await clientRef.startCascade(
-                   workspaceUri: workspaceUri,
-                   initialPrompt: initialPrompt ?? "",
-                   modelId: modelId,
-                   cloudProjectId: cloudProjId,
-                   isCloud: isCloudProj,
-                   instanceUuidOverride: originUuid
-               ),
-               !realCascadeId.isEmpty {
+            var createdCascadeId: String? = nil
+            if shouldCallLiveBackend {
+                if let engineRef {
+                    createdCascadeId = try? await engineRef.startConversation(
+                        workspaceUri: workspaceUri,
+                        initialPrompt: initialPrompt ?? "",
+                        modelId: modelId,
+                        cloudProjectId: cloudProjId,
+                        isCloud: isCloudProj,
+                        instanceUuidOverride: originUuid
+                    )
+                } else if let clientRef {
+                    createdCascadeId = try? await clientRef.startCascade(
+                        workspaceUri: workspaceUri,
+                        initialPrompt: initialPrompt ?? "",
+                        modelId: modelId,
+                        cloudProjectId: cloudProjId,
+                        isCloud: isCloudProj,
+                        instanceUuidOverride: originUuid
+                    )
+                }
+            }
+            if let realCascadeId = createdCascadeId, !realCascadeId.isEmpty {
                 guard let self else { return }
                 let belongsToActiveHost = !isCloudProj && (
                     originUuid == nil
@@ -324,10 +337,18 @@ extension AntigravitySessionStore {
 
         var didRefreshRelayList = skipRelayMetadataProbe
         if isRelay && !skipRelayMetadataProbe {
-            if let probe = try? await client.probeHostReachability(
-                timeoutInterval: min(syncTimeout, 8.0),
-                allowCrossHostFallback: allowCrossHostFallback
-            ) {
+            let probeResult: HostReachabilityProbeResult?
+            if let kmpEngine {
+                probeResult = try? await kmpEngine.probeHostReachability(
+                    allowCrossHostFallback: allowCrossHostFallback
+                )
+            } else {
+                probeResult = try? await client.probeHostReachability(
+                    timeoutInterval: min(syncTimeout, 8.0),
+                    allowCrossHostFallback: allowCrossHostFallback
+                )
+            }
+            if let probe = probeResult {
                 guard self.hostSwitchGeneration == generation, !self.isNetworkingSuspended else { return }
                 applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHostFallback)
                 didRefreshRelayList = true
@@ -359,14 +380,39 @@ extension AntigravitySessionStore {
         }
 
         do {
-            let federated = try await client.fetchFederatedWorkspacesAndSummaries(
-                timeoutInterval: syncTimeout,
-                lightweightPoll: useLightweight,
-                skipRelayListRefresh: didRefreshRelayList,
-                targetInstanceUuid: targetInstanceUuid,
-                includeLocal: includeLocal,
-                includeCloud: includeCloud
+            let federated: (
+                workspaces: [WorkspaceInfo],
+                summaries: [CascadeSummary],
+                cloudProjects: [ProjectWorkspace],
+                cloudWarmingUp: Bool,
+                availableRelayInstances: [RelayInstanceInfo],
+                succeededInstanceUuids: Set<String>,
+                cloudSucceeded: Bool
             )
+            if let kmpEngine {
+                let kmpSync = try await kmpEngine.refreshWorkspacesAndSummaries(
+                    hostScope: effectiveScope,
+                    skipRelayListRefresh: didRefreshRelayList
+                )
+                federated = (
+                    workspaces: kmpSync.workspaces,
+                    summaries: kmpSync.summaries,
+                    cloudProjects: kmpSync.cloudProjects,
+                    cloudWarmingUp: kmpSync.cloudWarmingUp,
+                    availableRelayInstances: kmpSync.availableRelayInstances,
+                    succeededInstanceUuids: Set(kmpSync.succeededInstanceUuids),
+                    cloudSucceeded: kmpSync.cloudSucceeded
+                )
+            } else {
+                federated = try await client.fetchFederatedWorkspacesAndSummaries(
+                    timeoutInterval: syncTimeout,
+                    lightweightPoll: useLightweight,
+                    skipRelayListRefresh: didRefreshRelayList,
+                    targetInstanceUuid: targetInstanceUuid,
+                    includeLocal: includeLocal,
+                    includeCloud: includeCloud
+                )
+            }
             guard self.hostSwitchGeneration == generation, !self.isNetworkingSuspended else { return }
 
             if isRelay && !federated.availableRelayInstances.isEmpty {

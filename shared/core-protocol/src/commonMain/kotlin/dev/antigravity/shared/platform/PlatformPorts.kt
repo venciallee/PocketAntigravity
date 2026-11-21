@@ -15,6 +15,7 @@ public data class SavedBackendCredentials(
     public val sessionCookie: String? = null,
     public val authUser: String? = null,
     public val resolvedInstanceUuid: String? = null,
+    public val relayApiKey: String? = null,
     public val certFingerprintSha256: String? = null,
     public val pairedAtEpochMs: Long = 0L,
 )
