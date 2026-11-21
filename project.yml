@@ -34,6 +34,8 @@ targets:
           - "**/Info.plist"
     dependencies:
       - package: AntigravityData
+      - framework: shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
+        embed: false
       - target: AntigravityLiveActivity
         embed: true
       - target: AntigravityShare

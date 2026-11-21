@@ -21,31 +21,38 @@ public data class RequestedInteraction(
     public val mcpServerName: String? = null,
     public val mcpToolName: String? = null,
     public val pluginName: String? = null,
+    public val rawMemberKey: String? = null,
+    public val rawSummary: String? = null,
 ) {
     @Serializable
-    public enum class MemberKind {
-        DEPLOY,
-        RUN_COMMAND,
-        OPEN_BROWSER_URL,
-        RUN_EXTENSION_CODE,
-        EXECUTE_BROWSER_JAVASCRIPT,
-        CAPTURE_BROWSER_SCREENSHOT,
-        CLICK_BROWSER_PIXEL,
-        BROWSER_ACTION,
-        OPEN_BROWSER_SETUP,
-        CONFIRM_BROWSER_SETUP,
-        SEND_COMMAND_INPUT,
-        READ_URL_CONTENT,
-        MCP,
-        FILE_PERMISSION,
-        ELICITATION,
-        PERMISSION,
-        ASK_QUESTION,
-        APPROVAL_INTERACTION,
-        EXECUTE_URL,
-        DOWNLOAD_URL,
-        BROWSER_UPLOAD,
-        WORKFLOW_SCRIPT,
+    public enum class MemberKind(public val wireKey: String) {
+        DEPLOY("deploy"),
+        RUN_COMMAND("runCommand"),
+        OPEN_BROWSER_URL("openBrowserUrl"),
+        RUN_EXTENSION_CODE("runExtensionCode"),
+        EXECUTE_BROWSER_JAVASCRIPT("executeBrowserJavascript"),
+        CAPTURE_BROWSER_SCREENSHOT("captureBrowserScreenshot"),
+        CLICK_BROWSER_PIXEL("clickBrowserPixel"),
+        BROWSER_ACTION("browserAction"),
+        OPEN_BROWSER_SETUP("openBrowserSetup"),
+        CONFIRM_BROWSER_SETUP("confirmBrowserSetup"),
+        SEND_COMMAND_INPUT("sendCommandInput"),
+        READ_URL_CONTENT("readUrlContent"),
+        MCP("mcp"),
+        FILE_PERMISSION("filePermission"),
+        ELICITATION("elicitation"),
+        PERMISSION("permission"),
+        ASK_QUESTION("askQuestion"),
+        APPROVAL_INTERACTION("approvalInteraction"),
+        EXECUTE_URL("executeUrl"),
+        DOWNLOAD_URL("downloadUrl"),
+        BROWSER_UPLOAD("browserUpload"),
+        WORKFLOW_SCRIPT("workflowScript");
+
+        public companion object {
+            public fun fromWireKey(raw: String): MemberKind? =
+                entries.firstOrNull { it.wireKey.equals(raw, ignoreCase = true) }
+        }
     }
 }
 
@@ -167,6 +174,7 @@ public data class CascadeUserInteractionPayload(
     public val askQuestion: AskQuestionAnswer? = null,
     public val genericConfirm: Boolean? = null,
     public val approvalScope: String? = null,
+    public val rawMemberKey: String? = null,
 ) {
     @Serializable
     public data class RunCommandAnswer(
