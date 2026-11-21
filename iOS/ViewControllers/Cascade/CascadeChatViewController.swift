@@ -64,8 +64,12 @@ public struct CascadeChatViewController: View {
         if isActiveSessionCloud {
             return (store.hasPairedBackend || store.isLiveBackendConnected) ? "Antigravity" : "Cloud"
         }
-        let hostTitle = store.activeSummary?.originHostName ?? store.activeHost.hostname
-        if store.hasPairedBackend && (!store.isLiveBackendConnected || !store.activeHost.isOnline) {
+        let originUuid = store.activeSummary?.originInstanceUuid
+        let hostTitle = store.resolvedHostName(
+            forInstanceUuid: originUuid,
+            fallback: store.activeSummary?.originHostName
+        )
+        if store.hasPairedBackend && !store.isHostOnline(forInstanceUuid: originUuid) {
             return "\(hostTitle) · Offline"
         }
         return hostTitle
@@ -644,7 +648,12 @@ public struct CascadeChatViewController: View {
                 return "Waiting for your approval · Step \(store.activeSteps.count)"
             }
             if store.isCascadeStreaming {
-                let sourceTitle = isActiveSessionCloud ? "Antigravity Cloud" : (store.activeSummary?.originHostName ?? store.activeHost.hostname)
+                let sourceTitle = isActiveSessionCloud
+                    ? "Antigravity Cloud"
+                    : store.resolvedHostName(
+                        forInstanceUuid: store.activeSummary?.originInstanceUuid,
+                        fallback: store.activeSummary?.originHostName
+                    )
                 return "Streaming from \(sourceTitle) · \(store.activeSteps.count) steps"
             }
             return "Waiting for your approval · Step 5 of 7"

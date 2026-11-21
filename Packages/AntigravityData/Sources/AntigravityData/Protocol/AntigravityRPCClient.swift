@@ -55,17 +55,20 @@ public struct HostReachabilityProbeResult: Sendable, Equatable {
     public let availableRelayInstances: [RelayInstanceInfo]
     public let activeRelayInstance: RelayInstanceInfo?
     public let relayTopologyChanged: Bool
+    public let relayMetadataChanged: Bool
 
     public init(
         latencyMs: Int,
         availableRelayInstances: [RelayInstanceInfo] = [],
         activeRelayInstance: RelayInstanceInfo? = nil,
-        relayTopologyChanged: Bool = false
+        relayTopologyChanged: Bool = false,
+        relayMetadataChanged: Bool = false
     ) {
         self.latencyMs = latencyMs
         self.availableRelayInstances = availableRelayInstances
         self.activeRelayInstance = activeRelayInstance
         self.relayTopologyChanged = relayTopologyChanged
+        self.relayMetadataChanged = relayMetadataChanged
     }
 }
 
@@ -319,6 +322,7 @@ public actor AntigravityRPCClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         if let timeoutInterval {
             request.timeoutInterval = timeoutInterval
         }
@@ -360,6 +364,11 @@ public actor AntigravityRPCClient {
     /// Returns the latest Cloud Relay instance list observed from `ApiService/ListInstances`.
     public func currentCachedRelayInstances() -> [RelayInstanceInfo] {
         cachedRelayInstances
+    }
+
+    /// Returns the latest cached `ListInstances` snapshot together with the active reachable instance.
+    public func currentRelayInstancesSnapshot() -> (instances: [RelayInstanceInfo], active: RelayInstanceInfo?) {
+        (cachedRelayInstances, currentActiveRelayInstance())
     }
 
     /// Resolves a scanned Remote Control device slug (`lt74xt6l0m-golden-star`) or UUID (`0f5819ac-...-v2`)
@@ -494,8 +503,9 @@ public actor AntigravityRPCClient {
         var allRelayInstances: [RelayInstanceInfo] = []
 
         if channel == .cloudRelay {
+            let preferred = (resolvedInstanceUuid?.isEmpty == false) ? resolvedInstanceUuid : targetInstanceIdentifier
             let resolution = try await resolveCloudRelayInstance(
-                preferredIdentifier: targetInstanceIdentifier,
+                preferredIdentifier: preferred,
                 timeoutInterval: effectiveTimeout
             )
             resolvedName = resolution.selected.name
@@ -503,18 +513,23 @@ public actor AntigravityRPCClient {
             allRelayInstances = resolution.allInstances
         }
 
-        let federated = try await fetchFederatedWorkspacesAndSummaries(timeoutInterval: effectiveTimeout)
+        let federated = try await fetchFederatedWorkspacesAndSummaries(
+            timeoutInterval: effectiveTimeout,
+            skipRelayListRefresh: channel == .cloudRelay && !allRelayInstances.isEmpty
+        )
+        let latestInstances = cachedRelayInstances.isEmpty ? allRelayInstances : cachedRelayInstances
+        let latestActive = currentActiveRelayInstance()
         let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
         return BackendHandshakeResult(
             latencyMs: elapsedMs,
             workspaces: federated.workspaces,
             summaries: federated.summaries,
             cloudProjects: federated.cloudProjects,
-            serverVersion: serverVersion,
-            resolvedHostname: resolvedName,
+            serverVersion: latestActive?.version ?? serverVersion,
+            resolvedHostname: latestActive?.name ?? resolvedName,
             resolvedInstanceUuid: resolvedInstanceUuid,
             resolvedAuthUser: channel == .cloudRelay ? authUser : nil,
-            availableRelayInstances: allRelayInstances
+            availableRelayInstances: latestInstances
         )
     }
 
@@ -527,6 +542,10 @@ public actor AntigravityRPCClient {
         if channel == .cloudRelay {
             let effectiveTimeout = timeoutInterval ?? 8.0
             let prevReachableIds = Set(cachedRelayInstances.filter(\.status.isReachable).map(\.uuid))
+            let prevNamesByUuid = Dictionary(
+                cachedRelayInstances.map { ($0.uuid, $0.name) },
+                uniquingKeysWith: { _, latest in latest }
+            )
             let prevActiveUuid = resolvedInstanceUuid
 
             let instances = try await listRelayInstances(timeoutInterval: effectiveTimeout)
@@ -550,7 +569,8 @@ public actor AntigravityRPCClient {
                         latencyMs: elapsedMs,
                         availableRelayInstances: cachedRelayInstances,
                         activeRelayInstance: currentActiveRelayInstance(),
-                        relayTopologyChanged: false
+                        relayTopologyChanged: false,
+                        relayMetadataChanged: false
                     )
                 }
                 throw AntigravityRPCError.httpError(
@@ -577,13 +597,19 @@ public actor AntigravityRPCClient {
 
             self.resolvedInstanceUuid = chosen.uuid
             let newReachableIds = Set(reachable.map(\.uuid))
+            let newNamesByUuid = Dictionary(
+                instances.map { ($0.uuid, $0.name) },
+                uniquingKeysWith: { _, latest in latest }
+            )
             let topologyChanged = (newReachableIds != prevReachableIds) || (chosen.uuid != prevActiveUuid)
+            let metadataChanged = (newNamesByUuid != prevNamesByUuid)
             let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
             return HostReachabilityProbeResult(
                 latencyMs: elapsedMs,
                 availableRelayInstances: instances,
                 activeRelayInstance: chosen,
-                relayTopologyChanged: topologyChanged
+                relayTopologyChanged: topologyChanged,
+                relayMetadataChanged: metadataChanged
             )
         }
 
@@ -622,14 +648,23 @@ public actor AntigravityRPCClient {
     /// projects & conversations so both Cloud ("Antigravity") and Local hosts stay synchronized.
     public func fetchFederatedWorkspacesAndSummaries(
         timeoutInterval: TimeInterval? = nil,
-        lightweightPoll: Bool = false
+        lightweightPoll: Bool = false,
+        skipRelayListRefresh: Bool = false
     ) async throws -> (workspaces: [WorkspaceInfo], summaries: [CascadeSummary], cloudProjects: [ProjectWorkspace], cloudWarmingUp: Bool) {
-        if channel == .cloudRelay {
+        if channel == .cloudRelay && !skipRelayListRefresh {
             if let refreshed = try? await listRelayInstances(timeoutInterval: timeoutInterval), !refreshed.isEmpty {
                 self.cachedRelayInstances = refreshed
-                if let currentUuid = resolvedInstanceUuid,
-                   !refreshed.contains(where: { $0.uuid == currentUuid && $0.status.isReachable }),
-                   let fallback = refreshed.first(where: { $0.status.isReachable }) ?? refreshed.first {
+                if let currentUuid = resolvedInstanceUuid {
+                    if !refreshed.contains(where: { $0.uuid == currentUuid && $0.status.isReachable }) {
+                        let reachable = refreshed.filter(\.status.isReachable)
+                        let exactMatch = reachable.first(where: { $0.matches(identifier: targetInstanceIdentifier) })
+                        let familyMatch = reachable.first(where: { $0.sameHostFamily(as: targetInstanceIdentifier) })
+                        let fallback = exactMatch ?? familyMatch ?? reachable.first ?? refreshed.first
+                        if let fallback {
+                            self.resolvedInstanceUuid = fallback.uuid
+                        }
+                    }
+                } else if let fallback = refreshed.first(where: \.status.isReachable) ?? refreshed.first {
                     self.resolvedInstanceUuid = fallback.uuid
                 }
             }

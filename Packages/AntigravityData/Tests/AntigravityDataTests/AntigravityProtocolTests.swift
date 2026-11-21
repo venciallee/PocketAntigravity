@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import AntigravityData
 
@@ -2435,6 +2436,313 @@ final class AntigravityProtocolTests: XCTestCase {
         let resolvedHTTP = await store.resolveEmbedResource(uri: "https://antigravity.google.com/preview/widget")
         XCTAssertEqual(resolvedHTTP?.source, .directNetwork)
     }
+
+    @MainActor
+    func testRelayDeviceRenamePropagationAndFastSync() async throws {
+        // 1. Decode renamed JSPB ListInstances payload and protojson object fallback with explicit deviceName
+        let renamedJSPB = Data(
+            ")]}'\n[[[\"uuid-macbook\",[\"Venciallee\",\"2.34.0\",1],1,[1794406200,0]],[\"uuid-macmini\",[\"huangjiafandemac-mini-local-swift-vapor\",\"2.34.0\",1],2,[1794406100,0]]],5]".utf8
+        )
+        let decodedJSPB = try CloudRelayJSPBCodec.decodeListInstancesResponse(renamedJSPB)
+        XCTAssertEqual(decodedJSPB.count, 2)
+        XCTAssertEqual(decodedJSPB[0].name, "Venciallee")
+        XCTAssertEqual(decodedJSPB[0].version, "2.34.0")
+        XCTAssertEqual(decodedJSPB[0].status, .connected)
+        XCTAssertEqual(decodedJSPB[1].status, .disconnected)
+
+        let protoJSONObject = Data("""
+        {
+          "instances": [
+            {
+              "instanceId": "uuid-macbook",
+              "metadata": {
+                "hostname": "lt74xt6l0m-golden-star",
+                "deviceName": "Venciallee",
+                "version": "2.34.0",
+                "supportsChunking": true
+              },
+              "status": "CONNECTED"
+            }
+          ]
+        }
+        """.utf8)
+        let decodedObj = try CloudRelayJSPBCodec.decodeListInstancesResponse(protoJSONObject)
+        XCTAssertEqual(decodedObj.count, 1)
+        XCTAssertEqual(decodedObj[0].name, "Venciallee")
+        XCTAssertEqual(decodedObj[0].status, .connected)
+
+        // 2. End-to-end RPC client: ListInstances rename triggers relayMetadataChanged & propagates to workspaces
+        let currentDeviceName = AtomicTestString("lt74xt6l0m-golden-star")
+        MockRelayURLProtocol.state.setResponder { urlString, _, body in
+            if urlString.contains("/ListInstances") {
+                let deviceName = currentDeviceName.get()
+                let payload = ")]}'\n[[[\"uuid-macbook\",[\"\(deviceName)\",\"2.34.0\",1],1,[1794406200,0]],[\"uuid-macmini\",[\"huangjiafandemac-mini-local-swift-vapor\",\"2.34.0\",1],2,[1794406100,0]]],5]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(payload.utf8))
+            }
+            if urlString.contains("/ProxyCommand") {
+                let bodyText = String(data: body, encoding: .utf8) ?? ""
+                let innerJSON: String
+                if bodyText.contains("GetWorkspaceInfos") {
+                    innerJSON = #"{"workspaceInfos":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/code/iOSAntigravity","gitBranch":"main"}]}"#
+                } else if bodyText.contains("GetAllCascadeTrajectories") {
+                    innerJSON = #"{"trajectorySummaries":{"cas-sync-1":{"summary":"Sync test","stepCount":2,"status":"CASCADE_RUN_STATUS_DONE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/code/iOSAntigravity"}]}}}"#
+                } else {
+                    innerJSON = "{}"
+                }
+                let encodedInner = Data(innerJSON.utf8).base64EncodedString()
+                let jspb = ")]}'\n[\"\(encodedInner)\",[[\"content-type\",\"application/json\"]]]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(jspb.utf8))
+            }
+            return (200, ["Content-Type": "application/json"], Data("{}".utf8))
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: sessionConfig)
+        defer {
+            MockRelayURLProtocol.state.setResponder(nil)
+            mockSession.invalidateAndCancel()
+        }
+
+        let initialHost = RemoteHostInstance(
+            instanceId: "uuid-macbook",
+            hostname: "lt74xt6l0m-golden-star",
+            version: "2.34.0",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/uuid-macbook")!,
+            isOnline: true
+        )
+        let rpcClient = AntigravityRPCClient(
+            host: initialHost,
+            sessionCookie: "SAPISID=test_sid; SID=test_sid",
+            authUser: "0",
+            resolvedInstanceUuid: "uuid-macbook",
+            urlSession: mockSession
+        )
+
+        let firstProbe = try await rpcClient.probeHostReachability(timeoutInterval: 5.0)
+        XCTAssertEqual(firstProbe.activeRelayInstance?.name, "lt74xt6l0m-golden-star")
+
+        currentDeviceName.set("Venciallee")
+        let renamedProbe = try await rpcClient.probeHostReachability(timeoutInterval: 5.0)
+        XCTAssertEqual(renamedProbe.activeRelayInstance?.name, "Venciallee")
+        XCTAssertFalse(renamedProbe.relayTopologyChanged)
+        XCTAssertTrue(renamedProbe.relayMetadataChanged)
+
+        let federated = try await rpcClient.fetchFederatedWorkspacesAndSummaries(
+            timeoutInterval: 5.0,
+            skipRelayListRefresh: true
+        )
+        let snapshot = await rpcClient.currentRelayInstancesSnapshot()
+        XCTAssertEqual(snapshot.active?.name, "Venciallee")
+        XCTAssertEqual(snapshot.instances.first(where: { $0.uuid == "uuid-macbook" })?.name, "Venciallee")
+        XCTAssertEqual(federated.workspaces.first?.originHostName, "Venciallee")
+
+        // 3. AntigravitySessionStore in-place rename propagates to activeHost, hosts, projects, summaries & workspaces
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.isVerificationMode = true
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.activeHost = initialHost
+        let peerMiniHost = RemoteHostInstance(
+            instanceId: "uuid-macmini",
+            hostname: "huangjiafandemac-mini-local-swift-vapor",
+            version: "2.34.0",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/uuid-macmini")!,
+            isOnline: false
+        )
+        store.hosts = [initialHost, peerMiniHost]
+        store.workspaces = [
+            WorkspaceInfo(
+                workspaceUri: "file:///Users/dev/code/iOSAntigravity",
+                displayName: "iOSAntigravity",
+                activeBranch: "main",
+                isCloud: false,
+                originInstanceUuid: "uuid-macbook",
+                originHostName: "lt74xt6l0m-golden-star"
+            )
+        ]
+        store.projects = [
+            ProjectWorkspace(
+                id: "iOSAntigravity",
+                name: "iOSAntigravity",
+                pathDisplay: "/Users/dev/code/iOSAntigravity",
+                workspaceUri: "file:///Users/dev/code/iOSAntigravity",
+                runtime: .macBookPro,
+                hostName: "lt74xt6l0m-golden-star",
+                originInstanceUuid: "uuid-macbook"
+            ),
+            ProjectWorkspace(
+                id: "mini-project",
+                name: "mini-project",
+                pathDisplay: "/Users/mini/code/mini-project",
+                workspaceUri: "file:///Users/mini/code/mini-project",
+                runtime: .macBookPro,
+                hostName: "huangjiafandemac-mini-local-swift-vapor",
+                originInstanceUuid: "uuid-macmini"
+            )
+        ]
+        store.summaries = [
+            CascadeSummary(
+                cascadeId: "cas-macbook-1",
+                title: "Fix rename sync",
+                projectSlug: "iOSAntigravity",
+                workspaceUri: "file:///Users/dev/code/iOSAntigravity",
+                status: .done,
+                stepCount: 4,
+                isCloud: false,
+                originInstanceUuid: "uuid-macbook",
+                originHostName: "lt74xt6l0m-golden-star"
+            ),
+            CascadeSummary(
+                cascadeId: "cas-macmini-1",
+                title: "Mini task",
+                projectSlug: "mini-project",
+                workspaceUri: "file:///Users/mini/code/mini-project",
+                status: .done,
+                stepCount: 2,
+                isCloud: false,
+                originInstanceUuid: "uuid-macmini",
+                originHostName: "huangjiafandemac-mini-local-swift-vapor"
+            )
+        ]
+
+        store.syncRelayInstancesToHosts(
+            snapshot.instances,
+            latencyMs: 24,
+            preferredActiveInstance: snapshot.active,
+            persistKeychainIfChanged: false
+        )
+
+        XCTAssertEqual(store.activeHost.hostname, "Venciallee")
+        XCTAssertEqual(store.resolvedHostName(forInstanceUuid: "uuid-macbook"), "Venciallee")
+        XCTAssertTrue(store.isHostOnline(forInstanceUuid: "uuid-macbook"))
+        XCTAssertFalse(store.isHostOnline(forInstanceUuid: "uuid-macmini"))
+        XCTAssertEqual(store.projects[0].hostName, "Venciallee")
+        XCTAssertEqual(store.projects[1].hostName, "huangjiafandemac-mini-local-swift-vapor")
+        XCTAssertEqual(store.summaries[0].originHostName, "Venciallee")
+        XCTAssertEqual(store.summaries[1].originHostName, "huangjiafandemac-mini-local-swift-vapor")
+        XCTAssertEqual(store.workspaces[0].originHostName, "Venciallee")
+
+        // 4. UUID-rotated rename remaps active local models cleanly without clobbering peer Mac
+        let rotatedInstances = [
+            RelayInstanceInfo(uuid: "uuid-venciallee-v2", name: "Venciallee-Pro", version: "2.34.0", status: .connected),
+            RelayInstanceInfo(uuid: "uuid-macmini", name: "huangjiafandemac-mini-local-swift-vapor", version: "2.34.0", status: .disconnected)
+        ]
+        store.syncRelayInstancesToHosts(
+            rotatedInstances,
+            latencyMs: 19,
+            preferredActiveInstance: rotatedInstances[0],
+            persistKeychainIfChanged: false
+        )
+
+        XCTAssertEqual(store.activeHost.instanceId, "uuid-venciallee-v2")
+        XCTAssertEqual(store.activeHost.hostname, "Venciallee-Pro")
+        XCTAssertEqual(store.hosts.first(where: { $0.instanceId == "uuid-macbook" })?.isOnline, false)
+        XCTAssertEqual(store.projects[0].originInstanceUuid, "uuid-venciallee-v2")
+        XCTAssertEqual(store.projects[0].hostName, "Venciallee-Pro")
+        XCTAssertEqual(store.summaries[0].originInstanceUuid, "uuid-venciallee-v2")
+        XCTAssertEqual(store.summaries[0].originHostName, "Venciallee-Pro")
+        XCTAssertEqual(store.projects[1].originInstanceUuid, "uuid-macmini")
+        XCTAssertEqual(store.projects[1].hostName, "huangjiafandemac-mini-local-swift-vapor")
+    }
+}
+
+private final class AtomicTestString: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String
+
+    init(_ initial: String) {
+        self.value = initial
+    }
+
+    func get() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ newValue: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        value = newValue
+    }
+}
+
+private final class MockRelayURLProtocol: URLProtocol {
+    typealias Responder = @Sendable (_ urlString: String, _ authUser: String?, _ body: Data) -> (statusCode: Int, headers: [String: String], body: Data)
+
+    final class State: @unchecked Sendable {
+        private let lock = NSLock()
+        private var responder: Responder?
+
+        func setResponder(_ newResponder: Responder?) {
+            lock.lock()
+            defer { lock.unlock() }
+            responder = newResponder
+        }
+
+        func invoke(urlString: String, authUser: String?, body: Data) -> (statusCode: Int, headers: [String: String], body: Data) {
+            lock.lock()
+            let current = responder
+            lock.unlock()
+            return current?(urlString, authUser, body) ?? (404, [:], Data())
+        }
+    }
+
+    static let state = State()
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    private static func readBody(from request: URLRequest) -> Data {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else {
+            return Data()
+        }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let readCount = stream.read(&buffer, maxLength: buffer.count)
+            if readCount > 0 {
+                data.append(buffer, count: readCount)
+            } else {
+                break
+            }
+        }
+        return data
+    }
+
+    override func startLoading() {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        let authUser = request.value(forHTTPHeaderField: "X-Goog-AuthUser")
+        let body = Self.readBody(from: request)
+        let reply = Self.state.invoke(urlString: url.absoluteString, authUser: authUser, body: body)
+        if let httpResp = HTTPURLResponse(
+            url: url,
+            statusCode: reply.statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: reply.headers
+        ) {
+            client?.urlProtocol(self, didReceive: httpResp, cacheStoragePolicy: .notAllowed)
+        }
+        client?.urlProtocol(self, didLoad: reply.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 private extension AntigravitySessionStore {
