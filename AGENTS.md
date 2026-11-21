@@ -27,3 +27,11 @@
      5. If any macOS gate fails, inspect the exact compiler/test errors via `gh run view <run-id> -R venciallee/iOSAntigravity --log-failed`, fix them, push, and re-run until the GitHub macOS workflow passes 100%.
      6. When verifying visual iOS rendering changes, you may also download the `real-ios-simulator-verification` workflow artifact (`gh run download <run-id> -n real-ios-simulator-verification`) to inspect real iOS Simulator screenshots directly.
 
+4. **PR / MR Merge Conflict Auto-Detection & Resolution (Mandatory Before Handoff)**:
+   - Whenever you create or update a Pull Request targeting `main`, you **MUST** verify the PR has zero merge conflicts **both immediately after creating/updating the PR AND again right after macOS CI completes** (since other PRs may merge into `main` while CI is running):
+     1. Run `git fetch origin` and check `gh pr view <pr-number> -R venciallee/iOSAntigravity --json mergeable,mergeStateStatus` (re-check briefly if `mergeable` is still `"UNKNOWN"` while GitHub computes the merge preview).
+     2. If `mergeable == "CONFLICTING"` or `mergeStateStatus == "DIRTY"` (or `origin/main` has new commits conflicting with the PR):
+        - Automatically run `git merge origin/main`, resolve all conflicts cleanly (preserving both `origin/main` fixes and this PR's changes), commit, and push to the PR branch.
+        - Re-run local fast verification (`esdd-verify.py` / `verify-live-rpc-flow.py`) and wait for the updated `macos-15` CI workflow run on the new merge commit to pass 100% green.
+        - Re-check `gh pr view <pr-number> --json mergeable,mergeStateStatus` until `mergeable == "MERGEABLE"` and `mergeStateStatus` is `"CLEAN"` (or `"UNSTABLE"`/`"BLOCKED"` only if non-conflict policy applies — never `"DIRTY"`).
+     3. Never hand off a PR to the user for merge while `mergeable == "CONFLICTING"` or `mergeStateStatus == "DIRTY"`.

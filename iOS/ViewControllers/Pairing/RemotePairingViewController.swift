@@ -332,6 +332,9 @@ public struct RemotePairingViewController: View {
             .padding(.top, 12)
             .padding(.bottom, 24)
         }
+        .refreshable {
+            await store.reconnectNow(userInitiated: true)
+        }
         .background(AntigravityTheme.canvasObsidian)
         .onChange(of: externalScannerTrigger?.wrappedValue ?? false) { _, triggered in
             if triggered {

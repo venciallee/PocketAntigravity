@@ -602,7 +602,7 @@ public enum CloudRelayJSPBCodec: Sendable {
         Data("[]".utf8)
     }
 
-    /// Decodes `ListInstancesResponse` JSPB array:
+    /// Decodes `ListInstancesResponse` JSPB array (or protojson object fallback):
     /// `[ [ [uuid, [name, version, supportsChunking], statusInt, [seconds, nanos]], ... ], maxConnected ]`
     public static func decodeListInstancesResponse(
         _ rawData: Data,
@@ -613,50 +613,164 @@ public enum CloudRelayJSPBCodec: Sendable {
             return []
         }
         let rootValue = try JSONDecoder().decode(JSONValue.self, from: unwrapped)
-        guard let rootArray = rootValue.arrayValue else {
+
+        let rawInstances: [JSONValue]
+        if let rootArray = rootValue.arrayValue {
+            guard let firstArr = rootArray.first?.arrayValue else {
+                return []
+            }
+            rawInstances = firstArr
+        } else if let rootObj = rootValue.objectValue,
+                  let objInstances = rootObj["instances"]?.arrayValue {
+            rawInstances = objInstances
+        } else {
             throw AntigravityRPCError.decodingError("Expected JSPB array from ListInstances")
         }
-        guard let rawInstances = rootArray.first?.arrayValue else {
-            return []
-        }
 
-        return rawInstances.compactMap { item -> RelayInstanceInfo? in
-            guard let row = item.arrayValue,
-                  let uuid = row.first?.stringValue,
-                  !uuid.isEmpty else {
-                return nil
-            }
-            let metadataArr = row.count > 1 ? row[1].arrayValue : nil
-            let rawName = metadataArr?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = (rawName?.isEmpty == false) ? rawName! : uuid
-            let version = (metadataArr != nil && metadataArr!.count > 1 ? metadataArr![1].stringValue : nil) ?? "v2.32.0"
-            let supportsChunking: Bool = {
-                guard let metadataArr, metadataArr.count > 2 else { return true }
-                if let b = metadataArr[2].boolValue { return b }
-                if let i = metadataArr[2].intValue { return i != 0 }
-                return true
-            }()
-
-            let statusCode = row.count > 2 ? (row[2].intValue ?? 0) : 1
-            let status = RelayInstanceStatus(rawStatusCode: statusCode)
-
-            var updatedAt: Date? = nil
-            if row.count > 3, let tsArr = row[3].arrayValue, !tsArr.isEmpty {
-                let secs = tsArr[0].doubleValue ?? Double(tsArr[0].stringValue ?? "")
-                let nanos = tsArr.count > 1 ? (tsArr[1].doubleValue ?? Double(tsArr[1].stringValue ?? "") ?? 0) : 0
-                if let secs, secs > 0 {
-                    updatedAt = Date(timeIntervalSince1970: secs + nanos / 1_000_000_000.0)
+        func firstNonEmptyString(in obj: [String: JSONValue]?, keys: [String]) -> String? {
+            guard let obj else { return nil }
+            for key in keys {
+                if let str = obj[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !str.isEmpty {
+                    return str
                 }
             }
+            return nil
+        }
 
-            return RelayInstanceInfo(
-                uuid: uuid,
-                name: name,
-                version: version,
-                supportsChunking: supportsChunking,
-                status: status,
-                updatedAt: updatedAt
-            )
+        func decodeStatus(_ value: JSONValue?) -> RelayInstanceStatus {
+            if let code = value?.intValue {
+                return RelayInstanceStatus(rawStatusCode: code)
+            }
+            if let rawStr = value?.stringValue?.uppercased() {
+                if rawStr.contains("CONNECTED") && !rawStr.contains("DISCONNECTED") {
+                    return .connected
+                }
+                if rawStr.contains("IDLE") {
+                    return .idle
+                }
+                if rawStr.contains("DISCONNECTED") || rawStr.contains("OFFLINE") {
+                    return .disconnected
+                }
+            }
+            return .unknown
+        }
+
+        func decodeTimestamp(_ value: JSONValue?) -> Date? {
+            if let tsArr = value?.arrayValue, !tsArr.isEmpty {
+                let secs = tsArr[0].doubleValue ?? Double(tsArr[0].stringValue ?? "")
+                let nanos: Double
+                if tsArr.count > 1 {
+                    nanos = tsArr[1].doubleValue ?? Double(tsArr[1].stringValue ?? "") ?? 0
+                } else {
+                    nanos = 0
+                }
+                if let secs, secs > 0 {
+                    return Date(timeIntervalSince1970: secs + nanos / 1_000_000_000.0)
+                }
+            } else if let tsObj = value?.objectValue {
+                let secs = tsObj["seconds"]?.doubleValue ?? Double(tsObj["seconds"]?.stringValue ?? "")
+                let nanos = tsObj["nanos"]?.doubleValue ?? Double(tsObj["nanos"]?.stringValue ?? "") ?? 0
+                if let secs, secs > 0 {
+                    return Date(timeIntervalSince1970: secs + nanos / 1_000_000_000.0)
+                }
+            } else if let iso = value?.stringValue {
+                let fmt = ISO8601DateFormatter()
+                fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let parsed = fmt.date(from: iso) {
+                    return parsed
+                }
+                fmt.formatOptions = [.withInternetDateTime]
+                return fmt.date(from: iso)
+            }
+            return nil
+        }
+
+        let preferredNameKeys = [
+            "deviceName", "device_name",
+            "displayName", "display_name",
+            "customName", "custom_name",
+            "nickname", "hostname", "name"
+        ]
+        let versionKeys = ["version", "appVersion", "app_version"]
+
+        return rawInstances.compactMap { item -> RelayInstanceInfo? in
+            if let row = item.arrayValue {
+                guard let rawUuid = row.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !rawUuid.isEmpty else {
+                    return nil
+                }
+                let metadataVal: JSONValue? = row.count > 1 ? row[1] : nil
+                let metadataArr = metadataVal?.arrayValue
+                let metadataObj = metadataVal?.objectValue
+
+                let arrName = metadataArr?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let objName = firstNonEmptyString(in: metadataObj, keys: preferredNameKeys)
+                let resolvedName = objName ?? arrName
+                let name = (resolvedName?.isEmpty == false) ? resolvedName! : rawUuid
+
+                let arrVersion: String? = (metadataArr != nil && metadataArr!.count > 1) ? metadataArr![1].stringValue : nil
+                let objVersion = firstNonEmptyString(in: metadataObj, keys: versionKeys)
+                let version = objVersion ?? arrVersion ?? "v2.32.0"
+
+                let supportsChunking: Bool = {
+                    if let b = metadataObj?["supportsChunking"]?.boolValue { return b }
+                    if let b = metadataObj?["supports_chunking"]?.boolValue { return b }
+                    guard let metadataArr, metadataArr.count > 2 else { return true }
+                    if let b = metadataArr[2].boolValue { return b }
+                    if let i = metadataArr[2].intValue { return i != 0 }
+                    return true
+                }()
+
+                let status = row.count > 2 ? decodeStatus(row[2]) : .connected
+                let updatedAt = row.count > 3 ? decodeTimestamp(row[3]) : nil
+
+                return RelayInstanceInfo(
+                    uuid: rawUuid,
+                    name: name,
+                    version: version,
+                    supportsChunking: supportsChunking,
+                    status: status,
+                    updatedAt: updatedAt
+                )
+            }
+
+            if let obj = item.objectValue {
+                guard let rawUuid = firstNonEmptyString(in: obj, keys: ["uuid", "instanceId", "instance_id", "id"]) else {
+                    return nil
+                }
+                let metadataObj = obj["metadata"]?.objectValue
+                let metadataArr = obj["metadata"]?.arrayValue
+
+                let topName = firstNonEmptyString(in: obj, keys: preferredNameKeys)
+                let metaName = firstNonEmptyString(in: metadataObj, keys: preferredNameKeys)
+                let arrName = metadataArr?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let resolvedName = topName ?? metaName ?? arrName
+                let name = (resolvedName?.isEmpty == false) ? resolvedName! : rawUuid
+
+                let metaVersion = firstNonEmptyString(in: metadataObj, keys: versionKeys)
+                let topVersion = firstNonEmptyString(in: obj, keys: versionKeys)
+                let arrVersion: String? = (metadataArr != nil && metadataArr!.count > 1) ? metadataArr![1].stringValue : nil
+                let version = metaVersion ?? topVersion ?? arrVersion ?? "v2.32.0"
+
+                let chunkFlag = metadataObj?["supportsChunking"]?.boolValue
+                    ?? metadataObj?["supports_chunking"]?.boolValue
+                let supportsChunking = chunkFlag ?? true
+                let status = obj["status"] != nil ? decodeStatus(obj["status"]) : .connected
+                let tsVal = obj["updatedAt"] ?? obj["updated_at"] ?? obj["lastSeen"] ?? obj["last_seen"]
+                let updatedAt = decodeTimestamp(tsVal)
+
+                return RelayInstanceInfo(
+                    uuid: rawUuid,
+                    name: name,
+                    version: version,
+                    supportsChunking: supportsChunking,
+                    status: status,
+                    updatedAt: updatedAt
+                )
+            }
+
+            return nil
         }
     }
 

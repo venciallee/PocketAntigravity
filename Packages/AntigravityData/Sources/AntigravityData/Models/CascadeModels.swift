@@ -442,10 +442,126 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         self.voiceSummary = voiceSummary
     }
 
+    /// True when this step is paused waiting for explicit user approval, review, or structured input.
+    public var isWaitingForUser: Bool {
+        status == .waiting || status == .blocked
+    }
+
+    /// Authoritative `requestedInteraction` if provided by the server, or a deterministic fallback
+    /// synthesized from the step type & payload when `isWaitingForUser` is true so approval UI
+    /// and `HandleCascadeUserInteraction` dispatch can never be missing on a waiting step.
+    public var effectiveRequestedInteraction: RequestedInteraction? {
+        if let requestedInteraction {
+            return requestedInteraction
+        }
+        guard isWaitingForUser else {
+            return nil
+        }
+        if let cmd = runCommand {
+            let proposed = (cmd.proposedCommandLine?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                ? (cmd.proposedCommandLine ?? cmd.commandLine)
+                : cmd.commandLine
+            return RequestedInteraction(
+                kind: .runCommand,
+                runCommand: RunCommandInteractionSpec(
+                    proposedCommandLine: proposed,
+                    cwd: cmd.cwd.isEmpty ? "~" : cmd.cwd
+                )
+            )
+        }
+        if type == .runCommand {
+            return RequestedInteraction(
+                kind: .runCommand,
+                runCommand: RunCommandInteractionSpec(
+                    proposedCommandLine: "",
+                    cwd: "~"
+                )
+            )
+        }
+        if type == .sendCommandInput {
+            return RequestedInteraction(
+                kind: .sendCommandInput,
+                rawMemberKey: "sendCommandInput",
+                rawSummary: plannerResponse?.response
+            )
+        }
+        if let mcp = mcpToolCall {
+            return RequestedInteraction(
+                kind: .mcp,
+                mcpServerName: mcp.serverName,
+                mcpToolName: mcp.toolName,
+                pluginName: mcp.pluginName,
+                rawMemberKey: "mcp",
+                rawSummary: mcp.argumentsPreview
+            )
+        }
+        if type == .mcpToolCall {
+            return RequestedInteraction(kind: .mcp, rawMemberKey: "mcp")
+        }
+        if let wf = dynamicWorkflow {
+            return RequestedInteraction(
+                kind: .workflowScript,
+                workflowScript: WorkflowScriptInteractionSpec(
+                    title: wf.description,
+                    pythonScript: wf.pythonScript,
+                    phaseNames: wf.phases.map(\.name)
+                ),
+                rawMemberKey: "workflowScript"
+            )
+        }
+        if let vf = viewFile {
+            return RequestedInteraction(
+                kind: .filePermission,
+                filePermission: FilePermissionInteractionSpec(
+                    absolutePathUri: vf.fileUri,
+                    isDirectory: type == .listDirectory
+                ),
+                rawMemberKey: "filePermission",
+                rawSummary: vf.fileUri
+            )
+        }
+        if let ca = codeAction {
+            return RequestedInteraction(
+                kind: .filePermission,
+                filePermission: FilePermissionInteractionSpec(
+                    absolutePathUri: ca.targetFileUri,
+                    isDirectory: false
+                ),
+                rawMemberKey: "filePermission",
+                rawSummary: ca.targetFileUri
+            )
+        }
+        if let sc = search {
+            return RequestedInteraction(
+                kind: .permission,
+                permission: PermissionInteractionSpec(
+                    action: "search",
+                    target: sc.scopeDirectory,
+                    reason: sc.query
+                ),
+                rawMemberKey: "permission",
+                rawSummary: "\(sc.query) in \(sc.scopeDirectory)"
+            )
+        }
+        if let sub = subagent {
+            let summary = sub.waitingApprovalTitle ?? "\(sub.role): \(sub.summary)"
+            return RequestedInteraction(
+                kind: .approvalInteraction,
+                rawSummary: summary
+            )
+        }
+        let prose = plannerResponse?.response.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = (prose?.isEmpty == false) ? prose : nil
+        return RequestedInteraction(
+            kind: .approvalInteraction,
+            rawSummary: summary
+        )
+    }
+
     /// Returns true if this step carries user-visible chat, tool evidence, task progress, or approval UI.
     /// Filters out internal Desktop housekeeping steps (`CHECKPOINT`, `EPHEMERAL_MESSAGE`, empty tool-call wrappers).
     public var hasRenderableChatContent: Bool {
-        if status == .waiting || requestedInteraction != nil {
+        if isWaitingForUser || requestedInteraction != nil {
             return true
         }
         if voiceSummary != nil || subagent != nil || dynamicWorkflow != nil || swarmBoard != nil || mcpToolCall != nil {
@@ -524,7 +640,7 @@ public enum CascadeDisplayItem: Identifiable, Sendable, Equatable {
             if step.type == .taskBoundary {
                 flushBuffer()
                 result.append(.single(step))
-            } else if step.type.isGroupableEvidenceStep && step.status != .waiting {
+            } else if step.type.isGroupableEvidenceStep && !step.isWaitingForUser && step.requestedInteraction == nil {
                 buffer.append(step)
             } else {
                 flushBuffer()
