@@ -66,6 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m py_compile \
+            scripts/verify.py \
             scripts/sync-antigravity-docs.py \
             scripts/run-doc-sync-agent.py \
             scripts/mac-companion-bridge.py \
@@ -78,6 +79,7 @@ jobs:
             verification/ios-simulator-runner.py \
             verification/esdd_inspector.py \
             verification/esdd-verify.py
+          python3 scripts/verify.py --self-test
           python3 scripts/sync-antigravity-docs.py --self-test
           python3 verification/verify_compat_guardrails.py
           python3 verification/e2e_impact_planner.py --self-test
