@@ -48,7 +48,7 @@ jobs:
           python3 -m py_compile scripts/prepare-cr-context.py
           python3 scripts/prepare-cr-context.py --validate-config --self-test
 
-      - name: Evaluate Fork Isolation, Label Mode & Pure-Rebase Skip (git patch-id)
+      - name: Evaluate Fork Isolation, Draft & Pure-Rebase Skip (git patch-id)
         id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -145,11 +145,7 @@ jobs:
           deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0, SSPL-1.0
 
       - name: Repository Bidirectional Compatibility Static Guardrails
-        id: compat
-        run: |
-          set -euo pipefail
-          python3 verification/verify_compat_guardrails.py
-          echo "status=passed" >> "$GITHUB_OUTPUT"
+        run: python3 verification/verify_compat_guardrails.py
 
       - name: Install Semgrep & Scan Client Security Rules (Diff-Baseline)
         env:
@@ -205,22 +201,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      id-token: write
       issues: write
       pull-requests: write
 
     steps:
-      - name: Mint optional custom GitHub App token (falls back to GITHUB_TOKEN)
-        id: mint_identity_token
-        if: vars.APP_ID != ''
-        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
-        with:
-          app-id: ${{ vars.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          permission-contents: read
-          permission-issues: write
-          permission-pull-requests: write
-
       - name: Checkout repository (no persisted credentials)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -259,22 +243,18 @@ jobs:
             --out .gemini/context.json \
             --github-step-summary "$GITHUB_STEP_SUMMARY"
 
-      - name: Check Gemini Auth Configuration (AI Studio Key / Vertex AI / GCA)
+      - name: Check Personal GEMINI_API_KEY Configuration
         id: gemini_auth
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          USE_VERTEX: ${{ vars.GOOGLE_GENAI_USE_VERTEXAI || 'false' }}
-          USE_GCA: ${{ vars.GOOGLE_GENAI_USE_GCA || 'false' }}
         run: |
           set -euo pipefail
-          if [ -n "${GEMINI_API_KEY}" ] || [ -n "${GOOGLE_API_KEY}" ] || [ "${USE_VERTEX}" = "true" ] || [ "${USE_GCA}" = "true" ]; then
+          if [ -n "${GEMINI_API_KEY}" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
             {
-              echo "> ℹ️ **Gemini CLI semantic review skipped**: No \`GEMINI_API_KEY\` secret (or Vertex AI / GCA variable) is configured yet."
-              echo "> Add \`GEMINI_API_KEY\` under **Settings → Secrets and variables → Actions** to enable automatic \`run-gemini-cli\` Client & Security reviews on PRs."
+              echo "> ℹ️ **Gemini CLI semantic review skipped**: Add your personal Google AI Studio \`GEMINI_API_KEY\` under **Settings → Secrets and variables → Actions** to activate automatic PR reviews."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -294,19 +274,11 @@ jobs:
         id: gemini_pr_review
         env:
           GEMINI_CLI_TRUST_WORKSPACE: "true"
-          GITHUB_TOKEN: ${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         with:
-          gcp_location: ${{ vars.GOOGLE_CLOUD_LOCATION }}
-          gcp_project_id: ${{ vars.GOOGLE_CLOUD_PROJECT }}
-          gcp_service_account: ${{ vars.SERVICE_ACCOUNT_EMAIL }}
-          gcp_workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          gemini_cli_version: ${{ vars.GEMINI_CLI_VERSION }}
           gemini_model: ${{ vars.GEMINI_MODEL || 'gemini-2.5-pro' }}
-          google_api_key: ${{ secrets.GOOGLE_API_KEY }}
-          use_gemini_code_assist: ${{ vars.GOOGLE_GENAI_USE_GCA }}
-          use_vertex_ai: ${{ vars.GOOGLE_GENAI_USE_VERTEXAI }}
           workflow_name: client-security-cr
           github_pr_number: ${{ github.event.pull_request.number }}
           settings: |-

@@ -11,7 +11,7 @@ rules:
     paths:
       exclude:
         - "**/Tests/**"
-        - "**/iOSUITests/**"
+        - "tests/ios-ui/**"
         - ".github/cr-rules/**"
 
   - id: SEC-DATA-002-android-sharedprefs-secret
@@ -69,7 +69,7 @@ rules:
     paths:
       exclude:
         - "**/Tests/**"
-        - "**/iOSUITests/**"
+        - "tests/ios-ui/**"
         - ".github/cr-rules/**"
 
   - id: SEC-NET-001-ios-tls-bypass
@@ -167,7 +167,7 @@ rules:
     paths:
       exclude:
         - "**/Tests/**"
-        - "**/iOSUITests/**"
+        - "tests/ios-ui/**"
         - ".github/cr-rules/**"
 
   - id: CLI-IOS-004-production-try-bang
@@ -182,7 +182,7 @@ rules:
     paths:
       exclude:
         - "**/Tests/**"
-        - "**/iOSUITests/**"
+        - "tests/ios-ui/**"
         - "**/Fixtures/**"
         - ".github/cr-rules/**"
 

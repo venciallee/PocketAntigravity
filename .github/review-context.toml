@@ -1,19 +1,19 @@
 version = 1
 
 [high_risk_paths]
-# Touching any of these paths elevates the PR Risk Brief and adds a mandatory
-# human verification checklist to the Sticky Summary comment.
+# Touching any of these paths elevates the PR Risk Brief and adds a human
+# verification checklist to the review summary.
 patterns = [
-  "Packages/AntigravityData/Sources/AntigravityData/Protocol/PinnedTLSURLSessionDelegate.swift",
-  "Packages/AntigravityData/Sources/AntigravityData/Store/KeychainStore.swift",
-  "Packages/AntigravityData/Sources/AntigravityData/Store/SharedAppGroupBridge.swift",
-  "Packages/AntigravityData/Sources/AntigravityData/Protocol/CloudRelayProtocol.swift",
-  "Packages/AntigravityData/Sources/AntigravityData/Protocol/InteractionBuilder.swift",
-  "Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore+ChatAndInteractions.swift",
-  "iOS/Application/AntigravityApp.swift",
-  "Extensions/LiveActivity/**",
-  "Extensions/Share/**",
-  "Shared/LiveActivity/**",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Protocol/PinnedTLSURLSessionDelegate.swift",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/KeychainStore.swift",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/SharedAppGroupBridge.swift",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Protocol/CloudRelayProtocol.swift",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Protocol/InteractionBuilder.swift",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore+ChatAndInteractions.swift",
+  "apps/ios/App/Application/AntigravityApp.swift",
+  "apps/ios/Extensions/LiveActivity/**",
+  "apps/ios/Extensions/Share/**",
+  "apps/ios/SharedUI/LiveActivity/**",
   "project.yml",
   "**/Info.plist",
   "**/PrivacyInfo.xcprivacy",
@@ -22,12 +22,13 @@ patterns = [
   ".github/workflows/**",
   ".github/cr-rules/**",
   ".github/review-context.toml",
+  ".gemini/commands/**",
 ]
 
 [[rules]]
 name = "iOS Swift 6 Concurrency, Lifecycle & UI Safety"
 specialist = "client"
-when = { any_file = { include = ["iOS/**", "Packages/AntigravityData/**", "Shared/**"], ext = [".swift"] } }
+when = { any_file = { include = ["apps/ios/App/**", "apps/ios/Packages/**", "apps/ios/SharedUI/**"], ext = [".swift"] } }
 load = [
   { type = "file", path = ".github/cr-rules/client-ios.md" },
 ]
@@ -35,7 +36,7 @@ load = [
 [[rules]]
 name = "iOS App Extensions Memory, Sandbox & Lock Screen Privacy"
 specialist = "both"
-when = { any_file = { include = ["Extensions/**", "Shared/LiveActivity/**"] } }
+when = { any_file = { include = ["apps/ios/Extensions/**", "apps/ios/SharedUI/LiveActivity/**"] } }
 load = [
   { type = "file", path = ".github/cr-rules/client-ios.md" },
   { type = "file", path = ".github/cr-rules/security-compliance.md" },
@@ -45,12 +46,12 @@ load = [
 name = "TLS Pinning, Keychain, Auth, Deeplink & Protocol Security"
 specialist = "security"
 when = { any_file = { include = [
-  "Packages/AntigravityData/Sources/AntigravityData/Protocol/**",
-  "Packages/AntigravityData/Sources/AntigravityData/Store/KeychainStore.swift",
-  "Packages/AntigravityData/Sources/AntigravityData/Store/SharedAppGroupBridge.swift",
-  "Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore+ChatAndInteractions.swift",
-  "iOS/Application/AntigravityApp.swift",
-  "iOS/Services/**",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Protocol/**",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/KeychainStore.swift",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/SharedAppGroupBridge.swift",
+  "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore+ChatAndInteractions.swift",
+  "apps/ios/App/Application/AntigravityApp.swift",
+  "apps/ios/App/Services/**",
   "scripts/mac-companion-bridge.py",
 ] } }
 load = [
@@ -60,7 +61,7 @@ load = [
 [[rules]]
 name = "KMP & Android Coroutines, Bridge & Contract Parity"
 specialist = "client"
-when = { any_file = { include = ["shared/**", "iOS/Bridge/**", "android/**"], ext = [".kt", ".kts", ".swift", ".java"] } }
+when = { any_file = { include = ["shared/**", "apps/ios/App/Bridge/**", "apps/android/**"], ext = [".kt", ".kts", ".swift", ".java"] } }
 load = [
   { type = "file", path = ".github/cr-rules/client-kmp.md" },
 ]
@@ -74,7 +75,7 @@ when = { any_file = { include = [
   "**/PrivacyInfo.xcprivacy",
   "**/AndroidManifest.xml",
   "**/network_security_config.xml",
-  "Packages/AntigravityData/Package.swift",
+  "apps/ios/Packages/AntigravityData/Package.swift",
   "gradle/libs.versions.toml",
   "**/*.gradle.kts",
   "NOTICE",

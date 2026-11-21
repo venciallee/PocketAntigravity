@@ -136,7 +136,6 @@ def classify_file(path: str) -> dict[str, Any]:
         norm in {
             "scripts/prepare-cr-context.py",
             ".github/review-context.toml",
-            ".github/CODEOWNERS",
             ".github/zizmor.yml",
             ".github/workflows/cr-agent.yml",
             ".github/workflows/zizmor.yml",

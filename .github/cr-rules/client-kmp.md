@@ -1,6 +1,6 @@
 # Client Code Review Rules — KMP / Kotlin / Android / Swift Bridge
 
-You are reviewing Kotlin Multiplatform (`shared/`), Swift-KMP bridge (`iOS/Bridge/`), or Android (`android/`) changes. Report ONLY concrete, reachable defects introduced by this PR.
+You are reviewing Kotlin Multiplatform (`shared/`), Swift-KMP bridge (`apps/ios/App/Bridge/`), or Android (`apps/android/`) changes. Report ONLY concrete, reachable defects introduced by this PR.
 
 ## KMP & Cross-Platform Bridge Rules (`CLI-KMP-*`)
 
@@ -9,7 +9,7 @@ You are reviewing Kotlin Multiplatform (`shared/`), Swift-KMP bridge (`iOS/Bridg
 - Flag mismatched threading assumptions across Ktor Darwin / JVM / Swift `@MainActor`.
 
 ### `CLI-KMP-002` — Swift <-> Kotlin <-> Companion Bridge Contract Parity (`P1`)
-- Flag protocol DTO, enum raw value, RPC method name, or enum-downgrade map changes made on one side (`shared/core-model`, `shared/core-protocol`, `Packages/AntigravityData`, `scripts/mac-companion-bridge.py`) without updating its mirror counterpart.
+- Flag protocol DTO, enum raw value, RPC method name, or enum-downgrade map changes made on one side (`shared/core-model`, `shared/core-protocol`, `apps/ios/Packages/AntigravityData`, `scripts/mac-companion-bridge.py`) without updating its mirror counterpart.
 
 ### `CLI-KMP-003` — Exception Boundary & `commonMain` Purity (`P1`)
 - Flag Kotlin `suspend` or throwing functions exposed to Swift without `@Throws` where Swift expects structured errors (uncaught Kotlin exceptions terminate the iOS process).

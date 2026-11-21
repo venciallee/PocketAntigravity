@@ -17,21 +17,21 @@ You are reviewing Swift 6 / iOS 18 client changes. Report ONLY concrete, reachab
 - Flag escaping closures, `Timer`, `NotificationCenter`, Combine `AnyCancellable`, or long-lived `Task` / `AsyncStream` loops strongly capturing `self` (ViewController, Coordinator, ViewModel, or Store) without `[weak self]` or cancellation on teardown (`deinit` / `viewDidDisappear`).
 
 ### `CLI-IOS-004` — Production Crash Hazards (`P0`/`P1`)
-- Exclude unit/UI test targets (`Tests/`, `iOSUITests/`).
+- Exclude unit/UI test targets (`Tests/`, `tests/ios-ui/`).
 - Flag force unwraps (`!`), `try!`, `as!`, unchecked array subscripting, or reachable `fatalError()` on network, user, deeplink, or persisted data.
 
 ### `CLI-IOS-005` — App Extension Memory & Sandbox Limits (`P0`)
-- Under `Extensions/` (`LiveActivity`, `Share`) and `Shared/LiveActivity/`:
+- Under `apps/ios/Extensions/` (`LiveActivity`, `Share`) and `apps/ios/SharedUI/LiveActivity/`:
   - Flag un-downsampled image decoding, unbounded cache/history loading, or heavy allocations risking the 24–64 MB iOS extension memory ceiling.
   - Flag APIs unavailable in extensions (`UIApplication.shared`, background network assumptions without background session).
 
 ### `CLI-IOS-006` — Bidirectional Protocol & Storage Compatibility (`P1`)
-- New `String`-backed `Codable` enums in `Packages/AntigravityData/Sources/AntigravityData/Models/` must conform to `ResilientStringEnum` or implement a resilient `init(from:)` fallback.
+- New `String`-backed `Codable` enums in `apps/ios/Packages/AntigravityData/Sources/AntigravityData/Models/` must conform to `ResilientStringEnum` or implement a resilient `init(from:)` fallback.
 - New Connect-RPC methods in `Protocol/` must be registered in `HostCapabilityRegistry.swift`.
 - Local persistence / projection schema changes must handle older on-disk files gracefully without crashing or wiping state.
 
 ### `CLI-IOS-007` — Silent `try?` Swallowing Live Write RPCs (`P1`)
-- Under `Packages/AntigravityData/Sources/AntigravityData/Store/`, flag `try? await` on mutating RPC calls that silently leave optimistic local state diverged from the host; require `performLiveCapabilityWrite(...)` or explicit rollback error handling.
+- Under `apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/`, flag `try? await` on mutating RPC calls that silently leave optimistic local state diverged from the host; require `performLiveCapabilityWrite(...)` or explicit rollback error handling.
 
 ### `CLI-IOS-008` — Presentation Races & Accessibility Regressions (`P2`)
 - Flag dismissing a sheet/alert and immediately presenting another without waiting for the dismiss completion callback.

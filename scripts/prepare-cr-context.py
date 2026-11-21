@@ -200,8 +200,9 @@ def run_self_test(repo_root: Path) -> int:
         repo="venciallee/iOSAntigravity",
         pr_number="1",
         changed_files=[
-            "Packages/AntigravityData/Sources/AntigravityData/Protocol/PinnedTLSURLSessionDelegate.swift",
+            "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Protocol/PinnedTLSURLSessionDelegate.swift",
             "shared/core-protocol/src/commonMain/kotlin/Rpc.kt",
+            "apps/android/app/src/main/AndroidManifest.xml",
             ".github/workflows/cr-agent.yml",
         ],
         semgrep_json_path=None,
@@ -209,13 +210,14 @@ def run_self_test(repo_root: Path) -> int:
         additional_context="",
     )
     assert ".github/workflows/cr-agent.yml" in ctx["high_risk_paths_touched"], "dotfile high-risk glob failed"
+    assert "apps/android/app/src/main/AndroidManifest.xml" in ctx["high_risk_paths_touched"], "AndroidManifest high-risk glob failed"
     assert "CLI-IOS-001" in ctx["client_rules_markdown"], "client-ios rules missing"
     assert "CLI-KMP-001" in ctx["client_rules_markdown"], "client-kmp rules missing"
     assert "SEC-NET-001" in ctx["security_rules_markdown"], "security-compliance rules missing"
     d1 = "diff --git a/x.swift b/x.swift\n--- a/x.swift\n+++ b/x.swift\n@@ -10,0 +10,1 @@\n+let x = 1\n"
     d2 = "diff --git a/x.swift b/x.swift\n--- a/x.swift\n+++ b/x.swift\n@@ -90,0 +90,1 @@\n+let x = 1\n"
     assert compute_patch_id(d1) == compute_patch_id(d2) != "", "git patch-id rebase invariance failed"
-    print("[CR-CONTEXT] Self-test PASSED (config schema, dotfile routing, rule bundling & patch-id invariance verified).")
+    print("[CR-CONTEXT] Self-test PASSED (config schema, monorepo routing, rule bundling & patch-id invariance verified).")
     return 0
 
 

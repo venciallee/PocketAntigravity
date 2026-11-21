@@ -19,7 +19,7 @@
 - Never log passwords, tokens, CSRF headers, `Authorization` headers, private keys, or raw user PII via `print`, `NSLog`, `os_log(..., %{public}@)`, `Log.d`/`Log.e`, Crashlytics, or analytics events.
 
 ### `SEC-DATA-005` — Lock Screen, Snapshot & Clipboard Exposure (`P1`)
-- Live Activity (`Extensions/LiveActivity/`), Dynamic Island, Lock Screen widgets, and push previews must NOT expose raw tokens, secrets, or unredacted sensitive terminal commands/output.
+- Live Activity (`apps/ios/Extensions/LiveActivity/`), Dynamic Island, Lock Screen widgets, and push previews must NOT expose raw tokens, secrets, or unredacted sensitive terminal commands/output.
 - Sensitive clipboard writes must set an expiration (`UIPasteboard.Option.expirationDate`) and `localOnly: true` (iOS) / `ClipDescription.EXTRA_IS_SENSITIVE` (Android).
 
 ## 2. Network & Cryptography (`SEC-NET-*`)
@@ -58,7 +58,7 @@
 - Flag `android:exported="true"` (or components with `intent-filter`) missing explicit permission protection or vulnerable to Intent Redirection.
 
 ### `SEC-IPC-003` — Share Extension & App Group Trust Boundary (`P1`)
-- Untrusted files/text entering via `Extensions/Share/` or App Group shared containers must validate size limits, sanitize filenames against path traversal (`../`), and never be evaluated as trusted commands.
+- Untrusted files/text entering via `apps/ios/Extensions/Share/` or App Group shared containers must validate size limits, sanitize filenames against path traversal (`../`), and never be evaluated as trusted commands.
 
 ### `SEC-IPC-004` — SQL / Command / Path Injection (`P0`)
 - Flag unparameterized SQLite queries, shell/subprocess command interpolation (e.g., `scripts/mac-companion-bridge.py`), or unvalidated filesystem paths.
