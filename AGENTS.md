@@ -14,18 +14,22 @@
      3. 16 Interactive E2E user-journey flows (`TC-01` .. `TC-16`) in headless `393×852pt @3x` viewport.
      4. Pixel-accurate `@3x` screenshot rendering, HIG geometry audit (`0px` horizontal overflow), and 1:1 Side-by-Side Reference UE vs Implemented comparison sheets (`verification/output/comparisons/CMP_UE01..CMP_UE13.png`).
 
-3. **macOS Xcode & iOS Simulator CI Verification (Mandatory for Every Swift/iOS Change)**:
+3. **End-to-End Autonomous Delivery & macOS Xcode / iOS Simulator CI Verification (Mandatory for Every Development Task)**:
    - This repository is a **Swift 6 / iOS 18** native Xcode project (`project.yml`, `Packages/AntigravityData`, `iOS/`, `Shared/`, `Extensions/`, `iOSUITests/`). Remote Linux agent VMs do **not** have `swiftc`, `xcodebuild`, or the iOS Simulator installed.
-   - **Never stop at Linux-only static/Python checks.** Whenever a task modifies any Swift source, Xcode project config, or iOS runtime/UI logic, you **MUST** verify compilation, Swift 6 strict concurrency, `XCTest`, and real iOS Simulator `XCUITest` automatically on **GitHub Actions `macos-15`** via `.github/workflows/macos-xcode-verify.yml` without waiting for the user to ask:
-     1. Run local fast verification gates first (`python3 verification/esdd-verify.py` and `python3 verification/verify-live-rpc-flow.py`).
-     2. Fetch and sync with latest `origin/main`, commit changes to a feature branch (e.g. `fix/<topic>` or `feat/<topic>`), and push the branch to `origin`.
-     3. Trigger `.github/workflows/macos-xcode-verify.yml` on that branch (via `gh workflow run macos-xcode-verify.yml -R venciallee/iOSAntigravity --ref <branch>` or by opening/updating a PR targeting `main`).
-     4. Watch the `macos-15` workflow run until completion (`gh run list` / `gh run watch`) and verify **all 5 macOS gates** pass green:
+   - **Never stop at local-only edits or Linux-only static/Python checks.** Unless the user explicitly requests a draft/no-merge workflow (e.g. "先别合" / "draft PR only"), every development task (bug fixes, features, refactors, config/rule updates) **MUST** automatically execute the complete closed-loop delivery pipeline without waiting for the user to ask:
+     1. **Sync & Branch**: Fetch latest `origin/main` and branch cleanly off `origin/main` (e.g. `fix/<topic>`, `feat/<topic>`, or `chore/<topic>`). Never push directly to `main`.
+     2. **Local Fast Verification**: Run local gates first (`python3 verification/esdd-verify.py`, `python3 verification/verify-live-rpc-flow.py`, and `python3 verification/verify-v233-capabilities.py`), and restore any unmodified regenerated artifacts under `verification/output/` before committing unless intentionally updated.
+     3. **Auto Commit & Push**: Commit all verified changes with a clear conventional commit message and push the branch to `origin` (`git push -u origin <branch>`).
+     4. **Auto Open PR (MR)**: Open a Pull Request targeting `main` (`gh pr create -R venciallee/iOSAntigravity --base main --head <branch> --title "..." --body "..."`), which automatically triggers `.github/workflows/macos-xcode-verify.yml` on **GitHub Actions `macos-15`**.
+     5. **Watch All 5 macOS Gates to Completion**: Monitor the `macos-15` workflow run until completion — prefer low-frequency GraphQL status checks (every 45–60s) or `gh run watch -i 30` to avoid exhausting GitHub REST API rate limits — and verify **all 5 macOS gates** pass green:
+        - `[Gate 0]` Script syntax & Doc-Sync watcher self-test.
         - `[Gate 1]` `swift test --package-path Packages/AntigravityData` (Swift 6 strict concurrency compilation & full `XCTest` suite).
-        - `[Gate 2]` `python3 verification/verify-live-rpc-flow.py`.
-        - `[Gate 3-5]` `python3 verification/ios-simulator-runner.py` (`xcodegen` + `xcodebuild` + real iOS Simulator `AntigravityUITests` + 13 native simulator screenshots).
-     5. If any macOS gate fails, inspect the exact compiler/test errors via `gh run view <run-id> -R venciallee/iOSAntigravity --log-failed`, fix them, push, and re-run until the GitHub macOS workflow passes 100%.
-     6. When verifying visual iOS rendering changes, you may also download the `real-ios-simulator-verification` workflow artifact (`gh run download <run-id> -n real-ios-simulator-verification`) to inspect real iOS Simulator screenshots directly.
+        - `[Gate 2]` `python3 verification/verify-live-rpc-flow.py` & `python3 verification/verify-v233-capabilities.py`.
+        - `[Gate 3-5]` `python3 verification/ios-simulator-runner.py` (`xcodegen` + `xcodebuild` + real iOS Simulator `AntigravityUITests` + live Connect-RPC app handshake + 13 native simulator screenshots).
+     6. **Automatic Failure Repair Loop**: If **any** macOS gate fails (Swift 6 compiler/type-check/concurrency error, `XCTest` failure, `xcodebuild` failure, real Simulator `XCUITest` failure, or merge conflict with `origin/main`), inspect the exact failure logs (`gh run view <run-id> -R venciallee/iOSAntigravity --log-failed`), fix the root cause (or merge latest `origin/main`), commit, push to the same PR branch, and re-run until **all gates pass 100% green**.
+     7. **Auto Merge into `main`**: Once all CI checks are `SUCCESS` and the PR is `MERGEABLE`, automatically squash-merge the PR into `main` (`gh pr merge <pr-number> -R venciallee/iOSAntigravity --squash --delete-branch`), fast-forward local `main`, and report the merged PR link, `main` commit SHA, and green CI run link to the user.
+     8. **Visual Screenshot Inspection (Optional)**: When verifying visual iOS rendering changes, you may also download the `real-ios-simulator-verification` workflow artifact (`gh run download <run-id> -n real-ios-simulator-verification`) to inspect real iOS Simulator screenshots directly.
+
 
 4. **PR / MR Merge Conflict Auto-Detection & Resolution (Mandatory Before Handoff)**:
    - Whenever you create or update a Pull Request targeting `main`, you **MUST** verify the PR has zero merge conflicts **both immediately after creating/updating the PR AND again right after macOS CI completes** (since other PRs may merge into `main` while CI is running):

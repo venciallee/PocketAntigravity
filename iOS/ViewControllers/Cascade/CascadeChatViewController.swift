@@ -37,7 +37,17 @@ public struct CascadeChatViewController: View {
     }
 
     private var localSelectableProjects: [ProjectWorkspace] {
-        store.projects.filter { $0.runtime != .cloud && !$0.isNoProject }
+        let activeHostScope = AgentsHostFilterScope.localHost(
+            id: store.activeHost.instanceId,
+            name: store.activeHost.hostname
+        )
+        return store.projects.filter { proj in
+            guard proj.runtime != .cloud && !proj.isNoProject else { return false }
+            if store.pairedLocalHosts.count > 1 {
+                return store.projectMatchesHostScope(proj, scope: activeHostScope)
+            }
+            return true
+        }
     }
 
     private var activeProjectWorkspace: ProjectWorkspace? {
@@ -45,10 +55,12 @@ public struct CascadeChatViewController: View {
             if AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug) {
                 return nil
             }
-            return store.projects.first(where: { $0.id == draft.projectSlug || $0.name == draft.projectSlug })
+            return store.projects.first(where: { $0.id == draft.projectSlug })
+                ?? store.projects.first(where: { $0.name == draft.projectSlug })
         }
         if let slug = store.activeSummary?.projectSlug {
-            return store.projects.first(where: { $0.id == slug || $0.name == slug })
+            return store.projects.first(where: { $0.id == slug })
+                ?? store.projects.first(where: { $0.name == slug })
         }
         return store.selectedProject
     }
@@ -60,17 +72,31 @@ public struct CascadeChatViewController: View {
         return store.activeSummary?.isCloud == true || activeProjectWorkspace?.runtime == .cloud
     }
 
+    private var isActiveSessionHostOnline: Bool {
+        if isActiveSessionCloud {
+            return store.isDeviceNetworkReachable
+        }
+        if !store.hasPairedBackend { return true }
+        let hostTitle = store.activeSummary?.originHostName
+            ?? activeProjectWorkspace?.hostName
+            ?? store.activeHost.hostname
+        return store.isLocalHostOnline(
+            instanceId: store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid,
+            hostname: hostTitle
+        )
+    }
+
     private var effectiveHeaderHostLabel: String {
         if isActiveSessionCloud {
             return (store.hasPairedBackend || store.isLiveBackendConnected) ? "Antigravity" : "Cloud"
         }
-        let originUuid = store.activeSummary?.originInstanceUuid
+        let originUuid = store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid
         let hostTitle = store.resolvedHostName(
             forInstanceUuid: originUuid,
-            fallback: store.activeSummary?.originHostName
+            fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
         )
-        if store.hasPairedBackend && !store.isHostOnline(forInstanceUuid: originUuid) {
-            return "\(hostTitle) · Offline"
+        if store.hasPairedBackend && !isActiveSessionHostOnline {
+            return "Offline · \(hostTitle)"
         }
         return hostTitle
     }
@@ -353,9 +379,25 @@ public struct CascadeChatViewController: View {
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                 Button {
-                    if !store.isDeviceNetworkReachable || !store.isLiveBackendConnected || !store.activeHost.isOnline {
+                    if !store.isDeviceNetworkReachable || !isActiveSessionHostOnline {
                         Task {
-                            await store.reconnectNow(userInitiated: true)
+                            if !isActiveSessionCloud,
+                               let originId = store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid,
+                               !originId.isEmpty {
+                                let hostLabel = store.resolvedHostName(
+                                    forInstanceUuid: originId,
+                                    fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
+                                )
+                                let hostReachable = await store.refreshConversationsForHostScope(
+                                    .localHost(id: originId, name: hostLabel),
+                                    forceFullSync: true
+                                )
+                                if hostReachable {
+                                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                                }
+                            } else {
+                                await store.reconnectNow(userInitiated: true)
+                            }
                         }
                     } else {
                         store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
@@ -382,8 +424,10 @@ public struct CascadeChatViewController: View {
             .padding(.top, 12)
         } else {
             let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
-            let isOfflinePaired = !isActiveSessionCloud && store.hasPairedBackend && (!store.isLiveBackendConnected || !store.activeHost.isOnline)
-            let rawSlug = activeProjectWorkspace?.name ?? store.activeSummary?.projectSlug ?? AntigravityCloudDetector.noProjectDisplayName
+            let isOfflinePaired = !isActiveSessionCloud && store.hasPairedBackend && !isActiveSessionHostOnline
+            let rawSlug = AntigravityCloudDetector.stripProjectScopePrefix(
+                activeProjectWorkspace?.name ?? store.activeSummary?.projectSlug ?? AntigravityCloudDetector.noProjectDisplayName
+            )
             let isNoProjSession = (activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(rawSlug)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -425,7 +469,7 @@ public struct CascadeChatViewController: View {
         let isNoProj = AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug)
         let currentLabel = isNoProj
             ? AntigravityCloudDetector.noProjectDisplayName
-            : (activeProjectWorkspace?.name ?? draft.projectSlug)
+            : (activeProjectWorkspace?.name ?? AntigravityCloudDetector.stripProjectScopePrefix(draft.projectSlug))
 
         return HStack(spacing: 8) {
             Menu {
@@ -499,9 +543,7 @@ public struct CascadeChatViewController: View {
             ?? activePendingDraft?.projectSlug
             ?? store.activeSummary?.projectSlug
             ?? (isLiveOrPaired ? AntigravityCloudDetector.noProjectDisplayName : "ledger-svc")
-        let strippedProjectLabel = rawProjectLabel.hasPrefix("cloud:")
-            ? String(rawProjectLabel.dropFirst("cloud:".count))
-            : rawProjectLabel
+        let strippedProjectLabel = AntigravityCloudDetector.stripProjectScopePrefix(rawProjectLabel)
         let isNoProjChat = (activePendingDraft != nil || isLiveOrPaired)
             && ((activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(strippedProjectLabel))
         let projectLabel = isNoProjChat ? AntigravityCloudDetector.noProjectDisplayName : strippedProjectLabel

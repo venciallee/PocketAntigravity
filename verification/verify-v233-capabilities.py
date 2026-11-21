@@ -314,7 +314,51 @@ def verify_doc_sync_automation():
         for expected in ("01-prd-gap-analysis.md", "02-tech-design.md", "03-test-plan.md"):
             matches = list(out_dir.rglob(expected))
             assert_true(len(matches) >= 1, f"Dry-run scaffolder did not generate {expected} in {out_dir}")
-    print("  ✓ Doc-Sync watcher --self-test & agent --dry-run (v2.34.0 synthetic PRD/Tech/Test scaffold) PASSED")
+
+        # Verify non-clobbering protection for pre-existing authored specs (e.g., CLI-only delta under v2.33.0)
+        existing_dir = out_dir / "v2.33.0"
+        existing_dir.mkdir(parents=True, exist_ok=True)
+        sentinel = "# Handcrafted v2.33.0 PRD — DO NOT OVERWRITE\n"
+        (existing_dir / "01-prd-gap-analysis.md").write_text(sentinel, encoding="utf-8")
+        delta_cli_json = tmp / "delta-cli.json"
+        delta_cli_json.write_text(
+            json.dumps(
+                {
+                    "previous_app_version": "v2.33.0",
+                    "detected_app_version": "v2.33.0",
+                    "previous_cli_version": "v1.5.11",
+                    "detected_cli_version": "v1.5.12",
+                    "items": [{"source": "cli_changelog", "summary": "CLI v1.5.12 streaming fix", "tier": "tier1", "rationale": "CLI update"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        res3 = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "run-doc-sync-agent.py"),
+                "--delta-json",
+                str(delta_cli_json),
+                "--delta-md",
+                str(delta_md),
+                "--dry-run",
+                "--dry-run-out",
+                str(out_dir),
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert_true(res3.returncode == 0, f"Non-clobbering dry-run failed:\n{res3.stdout}\n{res3.stderr}")
+        assert_true(
+            (existing_dir / "01-prd-gap-analysis.md").read_text(encoding="utf-8") == sentinel,
+            "Existing handcrafted v2.33.0 PRD was overwritten!",
+        )
+        assert_true(
+            (out_dir / "v2.33.0-cli-v1.5.12" / "01-prd-gap-analysis.md").exists(),
+            "Expected non-clobbering v2.33.0-cli-v1.5.12 spec folder to be created",
+        )
+    print("  ✓ Doc-Sync watcher --self-test & agent --dry-run (v2.34.0/v3.0.0 + non-clobbering scaffold) PASSED")
 
 
 def main():

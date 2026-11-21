@@ -23,14 +23,39 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL_PATH = REPO_ROOT / ".agents" / "skills" / "antigravity-doc-sync" / "SKILL.md"
 
 
+def resolve_spec_target_dir(delta_report: dict, output_root: Path) -> tuple[str, Path]:
+    """Resolves a non-clobbering specs directory so existing handcrafted release specs are never overwritten."""
+    raw_ver = (
+        delta_report.get("detected_app_version")
+        or delta_report.get("latest_version")
+        or "v-dry-run"
+    )
+    version = f"v{raw_ver}" if raw_ver and raw_ver[0].isdigit() else raw_ver
+    target_dir = output_root / version
+    if (target_dir / "01-prd-gap-analysis.md").exists():
+        prev_cli = delta_report.get("previous_cli_version") or ""
+        det_cli = delta_report.get("detected_cli_version") or ""
+        if det_cli and det_cli != prev_cli:
+            return version, output_root / f"{version}-cli-{det_cli}"
+        checked = (delta_report.get("checked_at_utc") or "")[:10].replace("-", "")
+        suffix = checked if len(checked) == 8 else datetime.now(timezone.utc).strftime("%Y%m%d")
+        return version, output_root / f"{version}-delta-{suffix}"
+    return version, target_dir
+
+
 def build_agent_prompt(delta_report: dict, delta_summary_md: str, max_tier: str) -> str:
-    version = delta_report.get("detected_app_version", "vNext")
+    version, target_dir = resolve_spec_target_dir(delta_report, REPO_ROOT / "specs" / "deltas")
+    try:
+        target_rel = target_dir.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        target_rel = f"specs/deltas/{version}"
     skill_text = SKILL_PATH.read_text(encoding="utf-8") if SKILL_PATH.exists() else ""
     return f"""You are running in automated pure-cloud GitHub Actions Doc-Sync mode for `venciallee/iOSAntigravity`.
 
@@ -48,9 +73,9 @@ Target Release: `{version}`
 Allowed Implementation Ceiling: `{max_tier}`
 
 Execute the 4 stages strictly in order:
-1. Write `specs/deltas/{version}/01-prd-gap-analysis.md` (with Tier 1 / Tier 2 / Tier 3 classification).
-2. Write `specs/deltas/{version}/02-tech-design.md` (pure Swift 6 in `Packages/AntigravityData`, zero UIKit/WebKit/AVFoundation imports, preserving 13 states in `specs/esdd-ir.json`).
-3. Write `specs/deltas/{version}/03-test-plan.md` (XCTest + mock Connect-RPC + ESDD test cases).
+1. Write `{target_rel}/01-prd-gap-analysis.md` (with Tier 1 / Tier 2 / Tier 3 classification).
+2. Write `{target_rel}/02-tech-design.md` (pure Swift 6 in `Packages/AntigravityData`, zero UIKit/WebKit/AVFoundation imports, preserving 13 states in `specs/esdd-ir.json`).
+3. Write `{target_rel}/03-test-plan.md` (XCTest + mock Connect-RPC + ESDD test cases).
 4. Implement all items at or below `{max_tier}` (leave Tier 3 items as RFC specs only), update unit & mock tests, and run:
    - `python3 verification/verify-live-rpc-flow.py`
    - `python3 verification/verify-v233-capabilities.py`
@@ -60,8 +85,7 @@ Do not commit broken code. Summarize exact changed files and verification result
 
 
 def scaffold_dry_run_specs(delta_report: dict, delta_summary_md: str, output_root: Path) -> Path:
-    version = delta_report.get("detected_app_version") or "v-dry-run"
-    target_dir = output_root / version
+    version, target_dir = resolve_spec_target_dir(delta_report, output_root)
     target_dir.mkdir(parents=True, exist_ok=True)
     items = delta_report.get("items", [])
 
@@ -82,6 +106,12 @@ def scaffold_dry_run_specs(delta_report: dict, delta_summary_md: str, output_roo
     ]
     (target_dir / "01-prd-gap-analysis.md").write_text("\n".join(prd), encoding="utf-8")
 
+    tier2_lines = [f"- [ ] Capture live `LanguageServerService` schema for: {it['summary']}" for it in tier2[:40]]
+    if len(tier2) > 40:
+        tier2_lines.append(f"- _...and {len(tier2) - 40} additional Tier 2 item(s) recorded in `delta-report.json`._")
+    if not tier2_lines:
+        tier2_lines = ["- None required for this release."]
+
     tech = [
         f"# Auto-Generated Technical Design — Antigravity {version}",
         "",
@@ -91,8 +121,7 @@ def scaffold_dry_run_specs(delta_report: dict, delta_summary_md: str, output_roo
         "- `verification/`: `mock_language_server.py`, `verify-v233-capabilities.py`, and `esdd-verify.py`.",
         "",
         "## Tier 2 Protocol Probe Checklist",
-        *[f"- [ ] Capture live `LanguageServerService` schema for: {it['summary']}" for it in tier2],
-        *(["- None required for this release."] if not tier2 else []),
+        *tier2_lines,
         "",
     ]
     (target_dir / "02-tech-design.md").write_text("\n".join(tech), encoding="utf-8")
