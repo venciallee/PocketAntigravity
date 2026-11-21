@@ -69,9 +69,7 @@ GLOBAL_FULL_ESCALATION_PATTERNS: list[tuple[str, str]] = [
     ("apps/ios/SharedUI/DesignSystem/*", "Shared Design System tokens/glass/icons affect all 13 screens"),
     ("apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/AntigravitySessionStore.swift", "Central session store root state changed"),
     ("apps/ios/Packages/AntigravityData/Sources/AntigravityData/Fixtures/ESDDVerificationFixtures.swift", "Shared ESDD fixtures changed"),
-    (".github/workflows/macos-xcode-verify.yml", "macOS E2E CI workflow changed"),
     ("verification/ios-simulator-runner.py", "iOS Simulator E2E runner changed"),
-    ("verification/e2e_impact_planner.py", "E2E impact planner changed"),
 ]
 
 
@@ -100,7 +98,7 @@ def classify_file(path: str) -> dict[str, Any]:
     if norm.startswith("./"):
         norm = norm[2:]
 
-    # 1. Global core / CI infrastructure -> auto-escalate to full verification
+    # 1. Global core / iOS Simulator runner infrastructure -> auto-escalate to full verification
     for pattern, reason in GLOBAL_FULL_ESCALATION_PATTERNS:
         if fnmatch.fnmatch(norm, pattern):
             res = _empty_impact("core-global", reason)
@@ -131,6 +129,15 @@ def classify_file(path: str) -> dict[str, Any]:
         res["gate2_v233"] = True
         return res
 
+    # 4b. CI workflow YAML & impact planner -> Ubuntu fast gates + Stage 1 (zero macOS/Chrome unless Swift/UI changed or [full-e2e])
+    if norm in {
+        "verification/e2e_impact_planner.py",
+        ".github/workflows/macos-xcode-verify.yml",
+    }:
+        res = _empty_impact("ci-planner-workflow", "CI impact planner or workflow orchestration changed (verified via Ubuntu fast gates & self-tests)")
+        res["esdd_stages"] = [1]
+        return res
+
     # 5. Companion Bridge / Mock Server / Live RPC & Compat Matrix verifiers (Python backend & protocol harness)
     if norm in {
         "scripts/mac-companion-bridge.py",
@@ -147,10 +154,15 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_tcs"] = ["TC-15"]
         return res
 
-    # 6. Local ESDD visual/headless verification harness
+    # 6. ESDD static Stage 1 inspector (Spec-DAG, secret hygiene, compat guardrails — zero Chrome / zero macOS)
+    if norm == "verification/esdd_inspector.py":
+        res = _empty_impact("esdd-stage1-inspector", "ESDD Stage 1 static contract inspector changed")
+        res["esdd_stages"] = [1]
+        return res
+
+    # 6b. Local ESDD visual/headless verification harness (Ubuntu headless only — zero macOS)
     if norm in {
         "verification/esdd-verify.py",
-        "verification/esdd_inspector.py",
         "verification/ui_renderer.py",
     }:
         res = _empty_impact("esdd-harness", "ESDD headless verification harness changed")
@@ -1190,7 +1202,24 @@ def run_self_tests() -> None:
             f"ALL_XCUITESTS drift detected!\n  Swift:   {swift_methods}\n  Planner: {ALL_XCUITESTS}"
         )
 
-    print("✓ e2e_impact_planner self-test PASSED (14/14 scenarios + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
+    # 15. CI planner, workflow YAML, and ESDD Stage 1 inspector -> fast Ubuntu only (zero macOS, zero Chrome)
+    p15 = build_verification_plan(
+        changed_files=[
+            "verification/e2e_impact_planner.py",
+            ".github/workflows/macos-xcode-verify.yml",
+            "verification/esdd_inspector.py",
+            "AGENTS.md",
+        ]
+    )
+    assert p15["mode"] == "scoped" and not p15["isRelease"]
+    assert p15["gates"]["needsMacOS"] is False
+    assert p15["gates"]["iosSimulatorMode"] == "skip"
+    assert p15["gates"]["gate0CompatGuardrails"] is True
+    assert p15["esdd"]["full"] is False
+    assert p15["esdd"]["stages"] == [1]
+    assert p15["esdd"]["testCases"] == [] and p15["esdd"]["screens"] == []
+
+    print("✓ e2e_impact_planner self-test PASSED (15/15 scenarios + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
 
 
 def main() -> int:

@@ -18,6 +18,7 @@ Executes all 4 automated ESDD gates:
 import argparse
 import base64
 import json
+import os
 import re
 import shutil
 import socket
@@ -191,12 +192,18 @@ class CDPPageDriver:
         stderr_path = Path(self._user_data_dir) / "chrome-stderr.log"
         try:
             self._stderr_handle = open(stderr_path, "wb")
+            child_env = dict(os.environ)
+            child_env.pop("DBUS_SESSION_BUS_ADDRESS", None)
             self.proc = subprocess.Popen(
                 [
                     self.chromium_bin,
                     "--headless=new",
                     "--no-sandbox",
                     "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-background-networking",
+                    "--disable-sync",
+                    "--metrics-recording-only",
                     "--hide-scrollbars",
                     "--disable-dev-shm-usage",
                     "--no-first-run",
@@ -208,15 +215,17 @@ class CDPPageDriver:
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=self._stderr_handle,
+                env=child_env,
             )
             local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             ws_url = None
-            for _ in range(100):
+            deadline = time.monotonic() + 25.0
+            while time.monotonic() < deadline:
                 if self.proc.poll() is not None:
                     break
                 try:
                     with local_opener.open(
-                        f"http://127.0.0.1:{self.debug_port}/json/list", timeout=1
+                        f"http://127.0.0.1:{self.debug_port}/json/list", timeout=1.5
                     ) as resp:
                         targets = json.loads(resp.read())
                     for t in targets:
@@ -226,7 +235,7 @@ class CDPPageDriver:
                     if ws_url:
                         break
                 except Exception:
-                    time.sleep(0.1)
+                    time.sleep(0.15)
             if not ws_url:
                 stderr_tail = ""
                 try:
