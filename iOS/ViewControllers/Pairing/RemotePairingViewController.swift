@@ -58,13 +58,13 @@ public struct RemotePairingViewController: View {
                     )
                     .overlay(
                         VStack(spacing: 12) {
-                            if store.isConnectingToBackend {
+                            if store.isConnectingToBackend || store.isSwitchingHost {
                                 ProgressView()
                                     .controlSize(.large)
                                     .tint(AntigravityTheme.accentPeriwinkle)
                                     .padding(.bottom, 4)
 
-                                Text("Connecting to Antigravity...")
+                                Text(store.isSwitchingHost ? "Switching Host..." : "Connecting to Antigravity...")
                                     .font(.system(size: 16.5, weight: .semibold))
                                     .foregroundStyle(Color.white)
 
@@ -97,9 +97,12 @@ public struct RemotePairingViewController: View {
                                 .foregroundStyle(Color.white)
                                 .multilineTextAlignment(.center)
 
+                                let visibleSessionCount = store.summaries.filter {
+                                    store.summaryMatchesHostScope($0)
+                                }.count
                                 Text(
                                     isOnlineConnected
-                                        ? "\(store.activeHost.channel.displayName) · \(store.lastPingLatencyMs ?? store.activeHost.latencyMs)ms · \(store.summaries.count) sessions"
+                                        ? "\(store.activeHost.channel.displayName) · \(store.lastPingLatencyMs ?? store.activeHost.latencyMs)ms · \(visibleSessionCount) sessions"
                                         : (isNoInternet
                                             ? "Paused while iPhone is offline · Auto-resumes when network returns"
                                             : (isOfflinePaired
@@ -176,7 +179,7 @@ public struct RemotePairingViewController: View {
                     )
                     .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .onTapGesture {
-                        if !store.isConnectingToBackend && !isOnlineConnected && !isOfflinePaired {
+                        if !store.isConnectingToBackend && !store.isSwitchingHost && !isOnlineConnected && !isOfflinePaired {
                             isShowingQRScanner = true
                         }
                     }
@@ -227,36 +230,43 @@ public struct RemotePairingViewController: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("btn-open-customizations-settings")
 
-                // Multi-instance switcher (shown when >1 Desktop instance is registered on the signed-in Google account)
+                // Multi-instance switcher (shown only when >1 Desktop instance is paired on the signed-in Google account)
                 if store.availableRelayInstances.count > 1 {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
+                        HStack {
                             Text("AVAILABLE HOSTS")
                                 .font(.system(size: 11, weight: .semibold))
                                 .tracking(0.7)
                                 .foregroundStyle(UEChromePalette.textMuted)
-                            if store.isRefreshingRelayHosts {
-                                ProgressView()
-                                    .controlSize(.mini)
-                                    .tint(AntigravityTheme.accentPeriwinkle)
-                            }
                             Spacer()
                             Button {
                                 Task {
                                     await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
                                 }
                             } label: {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 11.5, weight: .semibold))
-                                    .foregroundStyle(UEChromePalette.textSecondary)
+                                HStack(spacing: 4) {
+                                    if store.isRefreshingRelayHosts {
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                            .tint(AntigravityTheme.accentPeriwinkle)
+                                        Text("Probing...")
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                            .font(.system(size: 10.5, weight: .semibold))
+                                        Text("Refresh")
+                                    }
+                                }
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             }
                             .buttonStyle(.plain)
+                            .disabled(store.isRefreshingRelayHosts)
                             .accessibilityIdentifier("btn-refresh-hosts")
                         }
 
                         ForEach(store.availableRelayInstances) { inst in
                             let isSelected: Bool = {
-                                if case let .localHost(filterId, _) = store.hostFilter {
+                                if case let .localHost(filterId, _) = store.selectedHostScope {
                                     return filterId == inst.uuid
                                 }
                                 return store.activeHost.instanceId == inst.uuid
@@ -265,11 +275,8 @@ public struct RemotePairingViewController: View {
                             let isRefreshingThisHost = store.isRefreshingHost(instanceId: inst.uuid, hostname: inst.name)
                             Button {
                                 Task {
-                                    let ok = await store.switchToRelayHost(
-                                        instanceUuid: inst.uuid,
-                                        hostName: inst.name
-                                    )
-                                    if ok {
+                                    let connected = await store.switchToRelayInstance(inst)
+                                    if connected || (store.hasPairedBackend && store.activeHost.instanceId == inst.uuid) {
                                         onConnected?()
                                     }
                                 }

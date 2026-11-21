@@ -40,6 +40,41 @@ public enum AgentsQuickFilter: String, Codable, CaseIterable, Sendable, Identifi
     public var id: String { rawValue }
 }
 
+/// Active host filter scope shared by `AntigravitySessionStore` and `AgentsHomeViewController`.
+public enum AgentsHostFilterScope: Codable, Sendable, Equatable, Hashable, Identifiable {
+    case allHosts
+    case antigravityCloud
+    case localHost(id: String, name: String)
+
+    public var id: String {
+        switch self {
+        case .allHosts:
+            return "all-hosts"
+        case .antigravityCloud:
+            return "antigravity-cloud"
+        case .localHost(let id, _):
+            return "host-\(id)"
+        }
+    }
+
+    public static func == (lhs: AgentsHostFilterScope, rhs: AgentsHostFilterScope) -> Bool {
+        switch (lhs, rhs) {
+        case (.allHosts, .allHosts):
+            return true
+        case (.antigravityCloud, .antigravityCloud):
+            return true
+        case (.localHost(let lhsId, _), .localHost(let rhsId, _)):
+            return lhsId == rhsId
+        default:
+            return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
 /// Grouping dimension in `DisplayOptionsSheetView` (`UE02`).
 public enum DisplayGroupBy: String, Codable, CaseIterable, Sendable, Identifiable {
     case project = "Project"
@@ -232,23 +267,24 @@ public enum AntigravityCloudDetector {
         "/root"
     ]
 
-    public static func stripProjectNamespacePrefix(_ rawSlug: String) -> String {
-        let cleaned = rawSlug.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = cleaned.lowercased()
+    /// Strips internal multi-host / Cloud scope prefixes (`cloud:` or `host:<instanceKey>:`) from a project slug.
+    public static func stripProjectScopePrefix(_ rawSlug: String) -> String {
+        let trimmed = rawSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
         if lower.hasPrefix("cloud:") {
-            return String(cleaned.dropFirst("cloud:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return String(trimmed.dropFirst("cloud:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if lower.hasPrefix("host:") {
-            let tail = cleaned.dropFirst("host:".count)
-            if let sep = tail.firstIndex(of: ":") {
-                return String(tail[tail.index(after: sep)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let rest = trimmed.dropFirst("host:".count)
+            if let colonIdx = rest.firstIndex(of: ":") {
+                return String(rest[rest.index(after: colonIdx)...]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
-        return cleaned
+        return trimmed
     }
 
     public static func isNoProjectSlug(_ rawSlug: String) -> Bool {
-        let cleaned = stripProjectNamespacePrefix(rawSlug)
+        let cleaned = stripProjectScopePrefix(rawSlug)
         let lower = cleaned.lowercased()
         return lower.isEmpty
             || lower == "no project"
@@ -497,25 +533,6 @@ public struct ProjectWorkspace: Codable, Sendable, Equatable, Identifiable {
 }
 
 // MARK: - Remote Host & Workspace Info
-
-/// Active host/runtime filter for Agents Home (`UE01`), persisted on `AntigravitySessionStore`
-/// across tab switches, chat navigation, and Settings host switching.
-public enum AgentHostFilter: Sendable, Equatable, Hashable, Identifiable {
-    case allHosts
-    case antigravityCloud
-    case localHost(id: String, name: String)
-
-    public var id: String {
-        switch self {
-        case .allHosts:
-            return "all-hosts"
-        case .antigravityCloud:
-            return "antigravity-cloud"
-        case .localHost(let id, _):
-            return "host-\(id)"
-        }
-    }
-}
 
 /// Connection transport channel for Antigravity Remote Control.
 public enum RemoteConnectionChannel: String, Codable, Sendable, CaseIterable {

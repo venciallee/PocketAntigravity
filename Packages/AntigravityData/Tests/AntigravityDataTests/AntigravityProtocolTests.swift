@@ -1962,160 +1962,6 @@ final class AntigravityProtocolTests: XCTestCase {
     }
 
     @MainActor
-    func testMultiHostFilteringIsolationAndPerHostReachability() throws {
-        // 1. Omitted status field (row.count <= 2) in ListInstances must decode as `.unknown`, never `.connected`
-        let omittedStatusJSPB = Data(
-            ")]}'\n[[[\"uuid-missing-status-v2\",[\"stale-host\",\"2.29.0-v2\",1]]],5]".utf8
-        )
-        let omittedDecoded = try CloudRelayJSPBCodec.decodeListInstancesResponse(omittedStatusJSPB)
-        XCTAssertEqual(omittedDecoded.count, 1)
-        XCTAssertEqual(omittedDecoded[0].status, .unknown)
-        XCTAssertFalse(omittedDecoded[0].status.isReachable)
-
-        // 2. Multi-host reconciliation isolates distinct hosts & partitions same-slug `No Project` per host
-        let macMiniUuid = "inst-mac-mini-v2"
-        let macMiniName = "huangjiafandemac-mini-local-swift-vapor"
-        let workstationUuid = "inst-golden-star-v2"
-        let workstationName = "lt74xt6l0m-golden-star"
-
-        var summaries: [CascadeSummary] = [
-            CascadeSummary(
-                cascadeId: "cid-game-loop-1",
-                title: "Automation And Workflow Setup",
-                projectSlug: "game_loop",
-                workspaceUri: "file:///Users/dev/code/game_loop",
-                status: .waiting,
-                stepCount: 12,
-                isUnread: true,
-                isCloud: false,
-                originInstanceUuid: macMiniUuid,
-                originHostName: macMiniName
-            ),
-            CascadeSummary(
-                cascadeId: "cid-dsh-1",
-                title: "Go Version Of DSH Superagent",
-                projectSlug: "dsh-superagent-prototype",
-                workspaceUri: "file:///Users/work/dsh-superagent-prototype",
-                status: .inProgress,
-                stepCount: 78,
-                isUnread: false,
-                isCloud: false,
-                originInstanceUuid: workstationUuid,
-                originHostName: workstationName
-            ),
-            CascadeSummary(
-                cascadeId: "cid-noproj-mini",
-                title: "Quick scratch on mini",
-                projectSlug: "No Project",
-                workspaceUri: "",
-                status: .done,
-                stepCount: 3,
-                isCloud: false,
-                originInstanceUuid: macMiniUuid,
-                originHostName: macMiniName
-            ),
-            CascadeSummary(
-                cascadeId: "cid-noproj-work",
-                title: "Quick scratch on workstation",
-                projectSlug: "No Project",
-                workspaceUri: "",
-                status: .done,
-                stepCount: 4,
-                isCloud: false,
-                originInstanceUuid: workstationUuid,
-                originHostName: workstationName
-            ),
-            CascadeSummary(
-                cascadeId: "v1/default/jetski_remote_agents_3p/cid-cloud-1",
-                title: "Cloud iOS Task",
-                projectSlug: "venciallee/iOSAntigravity",
-                workspaceUri: "cloud://venciallee/iOSAntigravity",
-                status: .done,
-                stepCount: 5,
-                isUnread: true,
-                isCloud: true,
-                originHostName: "Antigravity"
-            )
-        ]
-
-        let projects = AntigravitySessionStore.reconcileLiveProjects(
-            workspaces: [],
-            summaries: &summaries,
-            existingProjects: [],
-            hostName: macMiniName
-        )
-
-        // Two distinct local `No Project` sections should be created (one per Mac)
-        let localNoProjects = projects.filter { $0.isNoProject && $0.runtime == .macBookPro }
-        XCTAssertEqual(localNoProjects.count, 2)
-        XCTAssertEqual(Set(localNoProjects.compactMap(\.originInstanceUuid)), [macMiniUuid, workstationUuid])
-
-        // 3. Store hostFilter strictly isolates projects, conversations, and badge counts per host
-        let store = AntigravitySessionStore.makeLiveStore()
-        store.hasPairedBackend = true
-        store.isLiveBackendConnected = true
-        store.isDeviceNetworkReachable = true
-        store.activeHost = RemoteHostInstance(
-            instanceId: macMiniUuid,
-            hostname: macMiniName,
-            version: "2.29.0-v2",
-            channel: .cloudRelay,
-            endpointURL: URL(string: "https://antigravity.google.com/r/\(macMiniUuid)")!,
-            isOnline: false
-        )
-        store.syncRelayInstancesState(
-            [
-                RelayInstanceInfo(uuid: workstationUuid, name: workstationName, version: "2.34.0-v2", status: .connected),
-                RelayInstanceInfo(uuid: macMiniUuid, name: macMiniName, version: "2.29.0-v2", status: .disconnected)
-            ],
-            latencyMs: 120
-        )
-        store.projects = projects
-        store.summaries = summaries
-
-        // Per-host online reachability reflects each Mac independently
-        XCTAssertTrue(store.isLocalHostOnline(instanceId: workstationUuid, hostname: workstationName))
-        XCTAssertFalse(store.isLocalHostOnline(instanceId: macMiniUuid, hostname: macMiniName))
-        XCTAssertTrue(store.anyPairedLocalHostOnline)
-
-        let gameLoopProj = try XCTUnwrap(projects.first(where: { $0.name == "game_loop" }))
-        let dshProj = try XCTUnwrap(projects.first(where: { $0.name == "dsh-superagent-prototype" }))
-        let cloudProj = try XCTUnwrap(projects.first(where: { $0.runtime == .cloud }))
-        XCTAssertFalse(store.isProjectHostOnline(gameLoopProj))
-        XCTAssertTrue(store.isProjectHostOnline(dshProj))
-        XCTAssertTrue(store.isProjectHostOnline(cloudProj))
-
-        // Filtering to `huangjiafandemac` MUST exclude `dsh-superagent-prototype` and Cloud
-        store.selectHostFilter(.localHost(id: macMiniUuid, name: macMiniName))
-        XCTAssertTrue(store.projectMatchesHostFilter(gameLoopProj))
-        XCTAssertFalse(store.projectMatchesHostFilter(dshProj))
-        XCTAssertFalse(store.projectMatchesHostFilter(cloudProj))
-
-        let miniVisibleIds = Set(store.summaries.filter { store.summaryMatchesHostFilter($0) }.map(\.cascadeId))
-        XCTAssertEqual(miniVisibleIds, ["cid-game-loop-1", "cid-noproj-mini"])
-        XCTAssertEqual(store.hostScopedRunningCount, 0)
-        XCTAssertEqual(store.hostScopedNeedsYouCount, 1)
-        XCTAssertEqual(store.hostScopedUnreadCount, 1)
-
-        // Filtering to `lt74xt6l0m-golden-star` excludes `game_loop`, updates activeHost (since online), and scopes counts
-        store.selectHostFilter(.localHost(id: workstationUuid, name: workstationName))
-        XCTAssertEqual(store.activeHost.instanceId, workstationUuid)
-        XCTAssertFalse(store.projectMatchesHostFilter(gameLoopProj))
-        XCTAssertTrue(store.projectMatchesHostFilter(dshProj))
-        XCTAssertFalse(store.projectMatchesHostFilter(cloudProj))
-        XCTAssertEqual(store.hostScopedRunningCount, 1)
-        XCTAssertEqual(store.hostScopedNeedsYouCount, 0)
-        XCTAssertEqual(store.hostScopedUnreadCount, 0)
-
-        // Filtering to Cloud shows only Cloud
-        store.selectHostFilter(.antigravityCloud)
-        XCTAssertTrue(store.projectMatchesHostFilter(cloudProj))
-        XCTAssertFalse(store.projectMatchesHostFilter(gameLoopProj))
-        XCTAssertFalse(store.projectMatchesHostFilter(dshProj))
-        XCTAssertEqual(store.hostScopedUnreadCount, 1)
-    }
-
-    @MainActor
     func testOpenBoqStreamingParserCloudSyncStatusPriorityAndUnreadReconciliation() throws {
         // 1. Google Boq open infinite outer array (`[[["<b64>", headers]],[["<b64_2>"]],` with NO outer closing `]`)
         let cloudFrame1 = ConnectEnvelope.encode(
@@ -2690,236 +2536,6 @@ final class AntigravityProtocolTests: XCTestCase {
     }
 
     @MainActor
-    func testHostSwitchRefreshCoalescingAndPerHostCachePreservation() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AntigravityHostCoalesce-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        let tempProjection = LocalProjectionStore(storageDirectory: tempDir)
-
-        let hostAUuid = "uuid-golden-star-v2"
-        let hostAName = "lt74xt6l0m-golden-star"
-        let hostBUuid = "uuid-mac-mini-v2"
-        let hostBName = "huangjiafandemac-mini-local-swift-vapor"
-
-        let hostA = RemoteHostInstance(
-            instanceId: hostAUuid,
-            hostname: hostAName,
-            version: "2.34.0-v2",
-            channel: .cloudRelay,
-            endpointURL: URL(string: "https://antigravity.google.com/r/\(hostAUuid)")!,
-            isOnline: true
-        )
-        let hostB = RemoteHostInstance(
-            instanceId: hostBUuid,
-            hostname: hostBName,
-            version: "2.29.0-v2",
-            channel: .cloudRelay,
-            endpointURL: URL(string: "https://antigravity.google.com/r/\(hostBUuid)")!,
-            isOnline: true
-        )
-
-        let store = AntigravitySessionStore(
-            hosts: [hostA, hostB],
-            activeHost: hostA,
-            projectionStore: tempProjection
-        )
-        store.isVerificationMode = false
-        store.hasPairedBackend = true
-        store.isLiveBackendConnected = true
-        store.syncRelayInstancesState(
-            [
-                RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
-                RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .connected)
-            ],
-            latencyMs: 28
-        )
-
-        // Seed cached conversations & projects across Mac A, Mac B, and Cloud, plus cached chat steps for Mac B
-        var initialSummaries: [CascadeSummary] = [
-            CascadeSummary(
-                cascadeId: "cid-a-old",
-                title: "Stale A Conversation",
-                projectSlug: "dsh-superagent-prototype",
-                workspaceUri: "file:///Users/work/dsh-superagent-prototype",
-                status: .done,
-                stepCount: 8,
-                isCloud: false,
-                originInstanceUuid: hostAUuid,
-                originHostName: hostAName
-            ),
-            CascadeSummary(
-                cascadeId: "cid-b-cached",
-                title: "Cached Mini Conversation",
-                projectSlug: "game_loop",
-                workspaceUri: "file:///Users/dev/code/game_loop",
-                status: .waiting,
-                stepCount: 12,
-                isUnread: true,
-                isCloud: false,
-                originInstanceUuid: hostBUuid,
-                originHostName: hostBName
-            ),
-            CascadeSummary(
-                cascadeId: "v1/default/jetski_remote_agents_3p/cid-cloud-cached",
-                title: "Cloud iOS Build",
-                projectSlug: "venciallee/iOSAntigravity",
-                workspaceUri: "cloud://venciallee/iOSAntigravity",
-                status: .done,
-                stepCount: 6,
-                isCloud: true,
-                originHostName: "Antigravity"
-            )
-        ]
-        store.projects = AntigravitySessionStore.reconcileLiveProjects(
-            workspaces: [],
-            summaries: &initialSummaries,
-            existingProjects: [],
-            hostName: hostAName
-        )
-        store.summaries = initialSummaries
-        let cachedMiniStep = CascadeStep(
-            cascadeId: "cid-b-cached",
-            stepIndex: 0,
-            type: .userInput,
-            status: .done,
-            userInput: "Check local vapor worker"
-        )
-        store.stepsByCascadeId["cid-b-cached"] = [cachedMiniStep]
-
-        let coordinator = HostRefreshTestCoordinator(pausedKeys: ["host-\(hostAUuid)", "host-\(hostBUuid)"])
-        store.hostRefreshExecutorOverrideForTesting = { target in
-            await coordinator.enterAndWait(key: target.id)
-            switch target {
-            case .localHost(let id, _) where id == hostAUuid:
-                let freshA = CascadeSummary(
-                    cascadeId: "cid-a-fresh",
-                    title: "Fresh A Conversation",
-                    projectSlug: "dsh-superagent-prototype",
-                    workspaceUri: "file:///Users/work/dsh-superagent-prototype",
-                    status: .inProgress,
-                    stepCount: 24,
-                    isCloud: false,
-                    originInstanceUuid: hostAUuid,
-                    originHostName: hostAName
-                )
-                return ScopedWorkspaceSyncResult(
-                    workspaces: [
-                        WorkspaceInfo(
-                            workspaceUri: "file:///Users/work/dsh-superagent-prototype",
-                            displayName: "dsh-superagent-prototype",
-                            activeBranch: "main",
-                            isCloud: false,
-                            originInstanceUuid: hostAUuid,
-                            originHostName: hostAName
-                        )
-                    ],
-                    summaries: [freshA],
-                    relayInstances: [
-                        RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
-                        RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .disconnected)
-                    ],
-                    refreshedLocalHostUuids: [hostAUuid],
-                    refreshedLocalHostNames: [hostAName],
-                    refreshedCloud: false,
-                    targetReachable: true,
-                    latencyMs: 19
-                )
-
-            case .localHost(let id, _) where id == hostBUuid:
-                return ScopedWorkspaceSyncResult(
-                    workspaces: [],
-                    summaries: [],
-                    relayInstances: [
-                        RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
-                        RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .disconnected)
-                    ],
-                    refreshedLocalHostUuids: [],
-                    refreshedLocalHostNames: [],
-                    refreshedCloud: false,
-                    targetReachable: false,
-                    latencyMs: 42
-                )
-
-            default:
-                return ScopedWorkspaceSyncResult(targetReachable: true)
-            }
-        }
-
-        // 1. Rapidly switch A -> B -> A -> A + concurrent refresh & Settings switch targeting A while A & B are in flight
-        let filterA = AgentHostFilter.localHost(id: hostAUuid, name: hostAName)
-        let filterB = AgentHostFilter.localHost(id: hostBUuid, name: hostBName)
-
-        store.selectHostFilter(filterA)
-        XCTAssertTrue(store.isRefreshingHost(instanceId: hostAUuid))
-        XCTAssertTrue(store.isRefreshingActiveHostFilter)
-
-        store.selectHostFilter(filterB)
-        XCTAssertTrue(store.isRefreshingHost(instanceId: hostBUuid))
-
-        // Switch back to A twice synchronously while A's first request is still in flight -> MUST coalesce!
-        store.selectHostFilter(filterA)
-        store.selectHostFilter(filterA)
-
-        // Also issue an explicit refresh + Settings switchToRelayHost for A concurrently -> MUST coalesce onto the same single in-flight request!
-        async let explicitRefreshA = store.refreshConversationsForHostFilter(filterA)
-        async let settingsSwitchA = store.switchToRelayHost(instanceUuid: hostAUuid, hostName: hostAName)
-        async let explicitRefreshB = store.refreshConversationsForHostFilter(filterB)
-
-        await coordinator.waitUntilEntered(key: "host-\(hostAUuid)")
-        await coordinator.waitUntilEntered(key: "host-\(hostBUuid)")
-        for _ in 0..<200 where store.coalescedHostRefreshJoinCountForTesting < 5 {
-            await Task.yield()
-        }
-        XCTAssertEqual(store.coalescedHostRefreshJoinCountForTesting, 5, "All 5 overlapping requests across Home & Settings must join the in-flight tasks")
-
-        // Release both in-flight gates
-        await coordinator.release(key: "host-\(hostAUuid)")
-        await coordinator.release(key: "host-\(hostBUuid)")
-
-        let (okA1, okA2, okB) = await (explicitRefreshA, settingsSwitchA, explicitRefreshB)
-        XCTAssertTrue(okA1)
-        XCTAssertTrue(okA2)
-        XCTAssertFalse(okB, "Offline Mac B refresh must report unreachable")
-
-        let countAAfterBurst = await coordinator.invocationCount(for: "host-\(hostAUuid)")
-        let countBAfterBurst = await coordinator.invocationCount(for: "host-\(hostBUuid)")
-        XCTAssertEqual(countAAfterBurst, 1, "Multiple overlapping switches/refreshes to Mac A MUST coalesce into 1 request")
-        XCTAssertEqual(countBAfterBurst, 1, "Multiple overlapping switches/refreshes to Mac B MUST coalesce into 1 request")
-        XCTAssertFalse(store.isRefreshingHost(instanceId: hostAUuid))
-        XCTAssertFalse(store.isRefreshingHost(instanceId: hostBUuid))
-
-        // 2. Per-host cache preservation: Mac A updated (stale removed, fresh added), offline Mac B & Cloud + stepsByCascadeId preserved!
-        let summaryIds = Set(store.summaries.map(\.cascadeId))
-        XCTAssertTrue(summaryIds.contains("cid-a-fresh"), "Refreshed Mac A must include new conversation")
-        XCTAssertFalse(summaryIds.contains("cid-a-old"), "Refreshed Mac A must drop stale removed conversation")
-        XCTAssertTrue(summaryIds.contains("cid-b-cached"), "Offline Mac B cached conversation MUST be preserved")
-        XCTAssertTrue(summaryIds.contains("v1/default/jetski_remote_agents_3p/cid-cloud-cached"), "Unrefreshed Cloud cached conversation MUST be preserved")
-        XCTAssertEqual(store.stepsByCascadeId["cid-b-cached"]?.count, 1, "Switching hosts must never wipe cached stepsByCascadeId")
-
-        // Offline Mac B flips to offline independently while Mac A stays online and connected
-        XCTAssertTrue(store.isLocalHostOnline(instanceId: hostAUuid, hostname: hostAName))
-        XCTAssertFalse(store.isLocalHostOnline(instanceId: hostBUuid, hostname: hostBName))
-        XCTAssertTrue(store.isLiveBackendConnected)
-
-        // Persisted projection on disk also retains both fresh Mac A and offline Mac B
-        let persistedIds = Set((await tempProjection.loadProjectedSummaries()).map(\.cascadeId))
-        XCTAssertEqual(persistedIds, ["cid-a-fresh", "cid-b-cached", "v1/default/jetski_remote_agents_3p/cid-cloud-cached"])
-
-        // 3. After completion, switching back to Mac A again triggers a fresh refresh (every switch refreshes when idle)
-        let okA3 = await store.refreshConversationsForHostFilter(filterA)
-        XCTAssertTrue(okA3)
-        let countAAfterSecondSwitch = await coordinator.invocationCount(for: "host-\(hostAUuid)")
-        XCTAssertEqual(countAAfterSecondSwitch, 2, "Switching back to Mac A after prior request completed must trigger a fresh refresh")
-
-        // 4. Switching in Settings to offline Mac B returns false with error text without taking Mac A offline
-        let switchedToOfflineB = await store.switchToRelayHost(instanceUuid: hostBUuid, hostName: hostBName)
-        XCTAssertFalse(switchedToOfflineB)
-        XCTAssertNotNil(store.connectionErrorText)
-        XCTAssertTrue(store.isLiveBackendConnected)
-        XCTAssertEqual(store.activeHost.instanceId, hostAUuid)
-    }
-
-    @MainActor
     func testRelayDeviceRenamePropagationAndFastSync() async throws {
         // 1. Decode renamed JSPB ListInstances payload and protojson object fallback with explicit deviceName
         let renamedJSPB = Data(
@@ -3130,15 +2746,597 @@ final class AntigravityProtocolTests: XCTestCase {
     }
 
     @MainActor
-    func testPerHostShardedDiskCacheColdStartHydrationAndOfflineStepReading() async throws {
+    func testMultiHostProjectIsolationAndScopedCounters() throws {
+        XCTAssertEqual(AntigravityCloudDetector.stripProjectScopePrefix("host:uuid-1:No Project"), "No Project")
+        XCTAssertEqual(AntigravityCloudDetector.stripProjectScopePrefix("host:uuid-1:iOSAntigravity"), "iOSAntigravity")
+        XCTAssertEqual(AntigravityCloudDetector.stripProjectScopePrefix("cloud:No Project"), "No Project")
+        XCTAssertTrue(AntigravityCloudDetector.isNoProjectSlug("host:uuid-1:No Project"))
+        XCTAssertFalse(AntigravityCloudDetector.isNoProjectSlug("host:uuid-1:iOSAntigravity"))
+
+        let now = Date()
+        let miniUuid = "uuid-mac-mini-v2"
+        let miniName = "huangjiafandemac-mini-local-swift-vapor"
+        let goldenUuid = "uuid-golden-star-v2"
+        let goldenName = "lt74xt6l0m-golden-star"
+
+        let workspaces: [WorkspaceInfo] = [
+            WorkspaceInfo(
+                workspaceUri: "file:///Users/dev/iOSAntigravity",
+                displayName: "iOSAntigravity",
+                activeBranch: "main",
+                isCloud: false,
+                originInstanceUuid: miniUuid,
+                originHostName: miniName
+            ),
+            WorkspaceInfo(
+                workspaceUri: "file:///Users/dev/iOSAntigravity",
+                displayName: "iOSAntigravity",
+                activeBranch: "feature/host-switch",
+                isCloud: false,
+                originInstanceUuid: goldenUuid,
+                originHostName: goldenName
+            )
+        ]
+
+        var summaries: [CascadeSummary] = [
+            CascadeSummary(
+                cascadeId: "cid-mini-running",
+                title: "Mac mini running build",
+                projectSlug: "iOSAntigravity",
+                workspaceUri: "file:///Users/dev/iOSAntigravity",
+                branchName: "main",
+                status: .inProgress,
+                stepCount: 5,
+                updatedAt: now,
+                isUnread: false,
+                isCloud: false,
+                originInstanceUuid: miniUuid,
+                originHostName: miniName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-mini-noproj",
+                title: "Mac mini waiting command",
+                projectSlug: "No Project",
+                workspaceUri: "",
+                branchName: "",
+                status: .waiting,
+                stepCount: 3,
+                updatedAt: now.addingTimeInterval(-60),
+                isUnread: false,
+                isCloud: false,
+                originInstanceUuid: miniUuid,
+                originHostName: miniName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-golden-done",
+                title: "Golden Star completed refactor",
+                projectSlug: "iOSAntigravity",
+                workspaceUri: "file:///Users/dev/iOSAntigravity",
+                branchName: "feature/host-switch",
+                status: .done,
+                stepCount: 8,
+                updatedAt: now.addingTimeInterval(-120),
+                isUnread: true,
+                isCloud: false,
+                originInstanceUuid: goldenUuid,
+                originHostName: goldenName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-golden-noproj",
+                title: "Golden Star scratch chat",
+                projectSlug: "No Project",
+                workspaceUri: "",
+                branchName: "",
+                status: .done,
+                stepCount: 2,
+                updatedAt: now.addingTimeInterval(-180),
+                isUnread: false,
+                isCloud: false,
+                originInstanceUuid: goldenUuid,
+                originHostName: goldenName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-cloud-noproj",
+                title: "Cloud quick task",
+                projectSlug: "No Project",
+                workspaceUri: "",
+                branchName: "",
+                status: .done,
+                stepCount: 4,
+                updatedAt: now.addingTimeInterval(-240),
+                isUnread: true,
+                isCloud: true,
+                originInstanceUuid: miniUuid,
+                originHostName: "Antigravity"
+            )
+        ]
+
+        let reconciled = AntigravitySessionStore.reconcileLiveProjects(
+            workspaces: workspaces,
+            summaries: &summaries,
+            existingProjects: [],
+            hostName: miniName
+        )
+
+        let miniProj = try XCTUnwrap(reconciled.first(where: { $0.id == "host:\(miniUuid):iOSAntigravity" }))
+        let goldenProj = try XCTUnwrap(reconciled.first(where: { $0.id == "host:\(goldenUuid):iOSAntigravity" }))
+        let miniNoProj = try XCTUnwrap(reconciled.first(where: { $0.id == "host:\(miniUuid):No Project" }))
+        let goldenNoProj = try XCTUnwrap(reconciled.first(where: { $0.id == "host:\(goldenUuid):No Project" }))
+        let cloudNoProj = try XCTUnwrap(reconciled.first(where: { $0.id == "cloud:No Project" }))
+
+        XCTAssertEqual(miniProj.name, "iOSAntigravity")
+        XCTAssertEqual(miniProj.hostName, miniName)
+        XCTAssertEqual(goldenProj.name, "iOSAntigravity")
+        XCTAssertEqual(goldenProj.hostName, goldenName)
+        XCTAssertEqual(goldenProj.activeBranch, "feature/host-switch")
+        XCTAssertEqual(miniNoProj.hostName, miniName)
+        XCTAssertEqual(goldenNoProj.hostName, goldenName)
+        XCTAssertEqual(cloudNoProj.runtime, .cloud)
+
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        let miniHost = RemoteHostInstance(
+            instanceId: miniUuid,
+            hostname: miniName,
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(miniUuid)")!,
+            isOnline: true
+        )
+        let goldenHost = RemoteHostInstance(
+            instanceId: goldenUuid,
+            hostname: goldenName,
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(goldenUuid)")!,
+            isOnline: false
+        )
+        store.hosts = [miniHost, goldenHost]
+        store.activeHost = miniHost
+        store.projects = reconciled
+        store.summaries = summaries
+
+        let goldenScope = AgentsHostFilterScope.localHost(id: goldenUuid, name: goldenName)
+        let miniScope = AgentsHostFilterScope.localHost(id: miniUuid, name: miniName)
+
+        // Switching to Golden Star must NOT leak Mac mini's Running 1 or Needs you 1 badges or projects
+        XCTAssertEqual(store.runningCount(for: goldenScope), 0)
+        XCTAssertEqual(store.needsYouCount(for: goldenScope), 0)
+        XCTAssertEqual(store.unreadCount(for: goldenScope), 1)
+        XCTAssertEqual(
+            Set(store.summaries.filter { store.summaryMatchesHostScope($0, scope: goldenScope) }.map(\.cascadeId)),
+            ["cid-golden-done", "cid-golden-noproj"]
+        )
+        XCTAssertEqual(
+            Set(store.projects.filter { store.projectMatchesHostScope($0, scope: goldenScope) }.map(\.id)),
+            [goldenProj.id, goldenNoProj.id]
+        )
+
+        // Mac mini scope keeps its own running/needs-you badges cleanly
+        XCTAssertEqual(store.runningCount(for: miniScope), 1)
+        XCTAssertEqual(store.needsYouCount(for: miniScope), 1)
+        XCTAssertEqual(store.unreadCount(for: miniScope), 0)
+
+        // Cloud scope keeps only Cloud sessions
+        XCTAssertEqual(store.runningCount(for: .antigravityCloud), 0)
+        XCTAssertEqual(store.unreadCount(for: .antigravityCloud), 1)
+        XCTAssertEqual(
+            store.summaries.filter { store.summaryMatchesHostScope($0, scope: .antigravityCloud) }.map(\.cascadeId),
+            ["cid-cloud-noproj"]
+        )
+
+        // Per-host online status is independent of activeHost
+        XCTAssertTrue(store.isLocalHostOnline(instanceId: miniUuid, hostname: miniName))
+        XCTAssertFalse(store.isLocalHostOnline(instanceId: goldenUuid, hostname: goldenName))
+    }
+
+    func testCloudRelayStrictHostIsolationNoCrossHostFailover() async throws {
+        let miniUuid = "uuid-mac-mini-v2"
+        let miniName = "huangjiafandemac-mini-local-swift-vapor"
+        let goldenUuid = "uuid-golden-star-v2"
+        let goldenName = "lt74xt6l0m-golden-star"
+
+        let goldenOnlineFlag = AtomicTestFlag(initialValue: false)
+        defer { HostIsolationMockRelayURLProtocol.storage.setHandler(nil) }
+
+        HostIsolationMockRelayURLProtocol.storage.setHandler { request in
+            let url = request.url ?? URL(string: "https://antigravity.google.com")!
+            let path = url.path
+
+            func makeResponse(status: Int, contentType: String = "application/json+protobuf") -> HTTPURLResponse {
+                HTTPURLResponse(
+                    url: url,
+                    statusCode: status,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": contentType]
+                )!
+            }
+
+            if path.hasSuffix("/ListInstances") {
+                let goldenStatus = goldenOnlineFlag.get() ? 1 : 2
+                let body = """
+                [[["\(miniUuid)",["\(miniName)","v2.32.0",true],1,["1700000000",0]],["\(goldenUuid)",["\(goldenName)","v2.32.0",true],\(goldenStatus),["1700000000",0]]],10]
+                """
+                return (makeResponse(status: 200), Data(body.utf8))
+            }
+
+            if path.hasSuffix("/StreamProxyCommand") {
+                return (makeResponse(status: 404, contentType: "text/plain"), Data("stream unsupported in unit test".utf8))
+            }
+
+            if path.hasSuffix("/ProxyCommand") {
+                let reqData = HostIsolationMockRelayURLProtocol.readBody(from: request)
+                let decoded = try JSONDecoder().decode(JSONValue.self, from: reqData)
+                let arr = decoded.arrayValue ?? []
+                let targetUuid = arr.count > 0 ? (arr[0].stringValue ?? "") : ""
+                let rpcPath = arr.count > 1 ? (arr[1].stringValue ?? "") : ""
+
+                if targetUuid == goldenUuid {
+                    if !goldenOnlineFlag.get() {
+                        return (makeResponse(status: 503, contentType: "text/plain"), Data("target host offline".utf8))
+                    }
+                    if rpcPath.contains("GetWorkspaceInfos") {
+                        return (makeResponse(status: 404, contentType: "text/plain"), Data("method not implemented".utf8))
+                    }
+                    if rpcPath.contains("GetAllCascadeTrajectories") {
+                        let json = #"{"trajectorySummaries":{"cid-golden-only":{"summary":"Golden Star Session","stepCount":4,"status":"CASCADE_RUN_STATUS_IDLE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/iOSAntigravity"}]}}}"#
+                        let b64 = Data(json.utf8).base64EncodedString()
+                        let jspb = #"["\#(b64)",[["content-type","application/json"]]]"#
+                        return (makeResponse(status: 200), Data(jspb.utf8))
+                    }
+                }
+
+                if targetUuid == miniUuid {
+                    if rpcPath.contains("GetWorkspaceInfos") {
+                        let json = #"{"workspaceInfos":[{"workspaceUri":"file:///Users/dev/iOSAntigravity","branchName":"main"}]}"#
+                        let b64 = Data(json.utf8).base64EncodedString()
+                        let jspb = #"["\#(b64)",[["content-type","application/json"]]]"#
+                        return (makeResponse(status: 200), Data(jspb.utf8))
+                    }
+                    if rpcPath.contains("GetAllCascadeTrajectories") {
+                        let json = #"{"trajectorySummaries":{"cid-mini-only":{"summary":"Mac Mini Session","stepCount":7,"status":"CASCADE_RUN_STATUS_RUNNING","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/iOSAntigravity"}]}}}"#
+                        let b64 = Data(json.utf8).base64EncodedString()
+                        let jspb = #"["\#(b64)",[["content-type","application/json"]]]"#
+                        return (makeResponse(status: 200), Data(jspb.utf8))
+                    }
+                }
+            }
+
+            return (makeResponse(status: 404, contentType: "text/plain"), Data("not found".utf8))
+        }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HostIsolationMockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: config)
+        defer { mockSession.invalidateAndCancel() }
+
+        let goldenHost = RemoteHostInstance(
+            instanceId: goldenUuid,
+            hostname: goldenName,
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(goldenUuid)")!,
+            isOnline: false
+        )
+        let client = AntigravityRPCClient(
+            host: goldenHost,
+            sessionCookie: "SAPISID=test-sapisid-token; __Secure-3PAPISID=test-sapisid-token",
+            authUser: "0",
+            resolvedInstanceUuid: goldenUuid,
+            urlSession: mockSession
+        )
+
+        // 1. Offline explicit target must NOT hijack to online Mac mini when allowCrossHostFallback == false
+        let resolution = try await client.resolveCloudRelayInstance(
+            preferredIdentifier: goldenName,
+            allowCrossHostFallback: false
+        )
+        XCTAssertEqual(resolution.selected.uuid, goldenUuid)
+        XCTAssertFalse(resolution.selected.status.isReachable)
+        XCTAssertEqual(resolution.allInstances.count, 2)
+
+        // 2. Heartbeat probe reports isSelectedHostOnline == false while preserving goldenUuid
+        let offlineProbe = try await client.probeHostReachability(allowCrossHostFallback: false)
+        XCTAssertFalse(offlineProbe.isSelectedHostOnline)
+        XCTAssertEqual(offlineProbe.activeRelayInstance?.uuid, goldenUuid)
+        XCTAssertEqual(offlineProbe.availableRelayInstances.count, 2)
+
+        // 3. Trajectory fetch for offline goldenUuid must throw instead of failing over to Mac mini
+        do {
+            _ = try await client.getAllCascadeTrajectories(
+                instanceUuidOverride: goldenUuid,
+                originHostName: goldenName
+            )
+            XCTFail("Offline host fetch must throw rather than returning peer host trajectories")
+        } catch {
+            // Expected 503 error
+        }
+
+        // 4. When goldenUuid comes online and GetWorkspaceInfos returns HTTP 404,
+        //    targeted sync must NEVER fail over to Mac mini and must return ONLY goldenUuid's session.
+        goldenOnlineFlag.set(true)
+        await client.setTargetRelayInstance(uuid: goldenUuid, name: goldenName)
+        let targeted = try await client.fetchFederatedWorkspacesAndSummaries(
+            targetInstanceUuid: goldenUuid,
+            includeLocal: true,
+            includeCloud: false
+        )
+        XCTAssertEqual(targeted.succeededInstanceUuids, [goldenUuid])
+        XCTAssertEqual(targeted.summaries.map(\.cascadeId), ["cid-golden-only"])
+        XCTAssertEqual(targeted.summaries.first?.originInstanceUuid, goldenUuid)
+        XCTAssertEqual(targeted.summaries.first?.originHostName, goldenName)
+        let activeAfter = await client.currentActiveRelayInstance()
+        XCTAssertEqual(activeAfter?.uuid, goldenUuid)
+    }
+
+    func testRelayOmittedStatusAndEndToEndProbeDowngradesOfflineHost() async throws {
+        // 1. Omitted status column in JSPB ListInstances (row.count == 2) MUST decode as `.unknown` (not reachable)
+        let omittedStatusJSPB = #"[[["uuid-omitted-v2","huangjiafandemac"]]]"#
+        let decoded = try CloudRelayJSPBCodec.decodeListInstancesResponse(Data(omittedStatusJSPB.utf8))
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertEqual(decoded[0].uuid, "uuid-omitted-v2")
+        XCTAssertEqual(decoded[0].status, .unknown)
+        XCTAssertFalse(decoded[0].status.isReachable)
+
+        // 2. End-to-end probe (`verifyEndToEnd: true`) downgrades zombie/stale CONNECTED Mac returning HTTP 503
+        let onlineUuid = "11111111-online-mini-v2"
+        let zombieUuid = "22222222-zombie-mac-v2"
+        let onlineName = "huangjiafandemac-mini"
+        let zombieName = "huangjiafandemac"
+
+        defer { HostIsolationMockRelayURLProtocol.storage.setHandler(nil) }
+        HostIsolationMockRelayURLProtocol.storage.setHandler { request in
+            let url = request.url ?? URL(string: "https://antigravity.google.com")!
+            let path = url.path
+            func makeResponse(status: Int, contentType: String = "application/json+protobuf") -> HTTPURLResponse {
+                HTTPURLResponse(
+                    url: url,
+                    statusCode: status,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": contentType]
+                )!
+            }
+
+            if path.contains("ListInstances") {
+                // Both instances appear CONNECTED in stale ListInstances metadata
+                let payload = #"[[["\#(onlineUuid)","\#(onlineName)",1,[1760000000,0],"2.34.0"],["\#(zombieUuid)","\#(zombieName)",1,[1760000000,0],"2.29.0"]]]"#
+                return (makeResponse(status: 200), Data(payload.utf8))
+            }
+
+            if path.contains("ProxyCommand") {
+                let body = HostIsolationMockRelayURLProtocol.readBody(from: request)
+                let bodyText = String(data: body, encoding: .utf8) ?? ""
+                if bodyText.contains(zombieUuid) {
+                    return (makeResponse(status: 503, contentType: "text/plain"), Data("zombie host offline".utf8))
+                }
+                if bodyText.contains(onlineUuid) {
+                    let json = #"{"workspaceInfos":[{"workspaceUri":"file:///Users/dev/iOSAntigravity","branchName":"main"}]}"#
+                    let b64 = Data(json.utf8).base64EncodedString()
+                    let jspb = #"["\#(b64)",[["content-type","application/json"]]]"#
+                    return (makeResponse(status: 200), Data(jspb.utf8))
+                }
+            }
+
+            return (makeResponse(status: 404, contentType: "text/plain"), Data("not found".utf8))
+        }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HostIsolationMockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: config)
+        defer { mockSession.invalidateAndCancel() }
+
+        let host = RemoteHostInstance(
+            instanceId: onlineUuid,
+            hostname: onlineName,
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(onlineUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=test-sapisid-token; __Secure-3PAPISID=test-sapisid-token",
+            authUser: "0",
+            resolvedInstanceUuid: onlineUuid,
+            urlSession: mockSession
+        )
+
+        let probe = try await client.probeHostReachability(
+            allowCrossHostFallback: false,
+            verifyEndToEnd: true
+        )
+        let probedOnline = try XCTUnwrap(probe.availableRelayInstances.first(where: { $0.uuid == onlineUuid }))
+        let probedZombie = try XCTUnwrap(probe.availableRelayInstances.first(where: { $0.uuid == zombieUuid }))
+        XCTAssertTrue(probedOnline.status.isReachable)
+        XCTAssertEqual(probedZombie.status, .disconnected, "Zombie Relay instance returning 503 must be downgraded to .disconnected")
+        XCTAssertFalse(probedZombie.status.isReachable)
+    }
+
+    @MainActor
+    func testHostSwitchRefreshCoalescingAndPerHostCachePreservation() async throws {
         let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AntigravityHostShards-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("AntigravityCoalesceTest-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let hostAUuid = "uuid-golden-star-v2"
-        let hostAName = "lt74xt6l0m-golden-star"
-        let hostBUuid = "uuid-mac-mini-v2"
-        let hostBName = "huangjiafandemac-mini-local-swift-vapor"
+        let hostAUuid = "aaaa1111-workstation-v2"
+        let hostBUuid = "bbbb2222-macmini-v2"
+        let hostAName = "workstation-mac"
+        let hostBName = "huangjiafandemac-mini"
+
+        let hostA = RemoteHostInstance(
+            instanceId: hostAUuid,
+            hostname: hostAName,
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(hostAUuid)")!,
+            isOnline: true
+        )
+        let hostB = RemoteHostInstance(
+            instanceId: hostBUuid,
+            hostname: hostBName,
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(hostBUuid)")!,
+            isOnline: true
+        )
+
+        let projection = LocalProjectionStore(storageDirectory: tempDir)
+        let store = AntigravitySessionStore(
+            hosts: [hostA, hostB],
+            activeHost: hostA,
+            projectionStore: projection
+        )
+        store.isVerificationMode = false
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.availableRelayInstances = [
+            RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
+            RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.34.0-v2", status: .connected)
+        ]
+
+        var initialSummaries: [CascadeSummary] = [
+            CascadeSummary(
+                cascadeId: "cid-a-old",
+                title: "Old Host A Chat",
+                projectSlug: "dsh-superagent-prototype",
+                workspaceUri: "file:///Users/work/dsh-superagent-prototype",
+                status: .done,
+                stepCount: 3,
+                isCloud: false,
+                originInstanceUuid: hostAUuid,
+                originHostName: hostAName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-b-cached",
+                title: "Cached Host B Chat",
+                projectSlug: "game_loop",
+                workspaceUri: "file:///Users/mini/game_loop",
+                status: .done,
+                stepCount: 5,
+                isCloud: false,
+                originInstanceUuid: hostBUuid,
+                originHostName: hostBName
+            )
+        ]
+        store.projects = AntigravitySessionStore.reconcileLiveProjects(
+            workspaces: [],
+            summaries: &initialSummaries,
+            existingProjects: [],
+            hostName: hostAName
+        )
+        store.summaries = initialSummaries
+
+        let scopeA = AgentsHostFilterScope.localHost(id: hostAUuid, name: hostAName)
+        let scopeB = AgentsHostFilterScope.localHost(id: hostBUuid, name: hostBName)
+        let coordinator = HostRefreshTestCoordinator(pausedKeys: [scopeA.id, scopeB.id])
+
+        store.hostRefreshExecutorOverrideForTesting = { target in
+            await coordinator.enterAndWait(key: target.id)
+            switch target {
+            case .localHost(let id, let name) where id == hostAUuid:
+                return ScopedWorkspaceSyncResult(
+                    workspaces: [
+                        WorkspaceInfo(
+                            workspaceUri: "file:///Users/work/dsh-superagent-prototype",
+                            displayName: "dsh-superagent-prototype",
+                            activeBranch: "main",
+                            isCloud: false,
+                            originInstanceUuid: hostAUuid,
+                            originHostName: hostAName
+                        )
+                    ],
+                    summaries: [
+                        CascadeSummary(
+                            cascadeId: "cid-a-fresh",
+                            title: "Fresh Host A Chat",
+                            projectSlug: "dsh-superagent-prototype",
+                            workspaceUri: "file:///Users/work/dsh-superagent-prototype",
+                            status: .inProgress,
+                            stepCount: 9,
+                            isCloud: false,
+                            originInstanceUuid: id,
+                            originHostName: name
+                        )
+                    ],
+                    refreshedLocalHostUuids: [hostAUuid],
+                    refreshedLocalHostNames: [hostAName],
+                    refreshedCloud: false,
+                    targetReachable: true,
+                    latencyMs: 14
+                )
+            case .localHost(let id, let name) where id == hostBUuid:
+                return ScopedWorkspaceSyncResult(
+                    workspaces: [
+                        WorkspaceInfo(
+                            workspaceUri: "file:///Users/mini/game_loop",
+                            displayName: "game_loop",
+                            activeBranch: "main",
+                            isCloud: false,
+                            originInstanceUuid: hostBUuid,
+                            originHostName: hostBName
+                        )
+                    ],
+                    summaries: [
+                        CascadeSummary(
+                            cascadeId: "cid-b-fresh",
+                            title: "Fresh Host B Chat",
+                            projectSlug: "game_loop",
+                            workspaceUri: "file:///Users/mini/game_loop",
+                            status: .done,
+                            stepCount: 8,
+                            isCloud: false,
+                            originInstanceUuid: id,
+                            originHostName: name
+                        )
+                    ],
+                    refreshedLocalHostUuids: [hostBUuid],
+                    refreshedLocalHostNames: [hostBName],
+                    refreshedCloud: false,
+                    targetReachable: true,
+                    latencyMs: 19
+                )
+            default:
+                return ScopedWorkspaceSyncResult(workspaces: [], summaries: [])
+            }
+        }
+
+        // Fire rapid A -> A -> B -> A concurrent refreshes: same-device requests MUST coalesce!
+        async let reqA1 = store.refreshConversationsForHostScope(scopeA, forceFullSync: true)
+        async let reqA2 = store.refreshConversationsForHostScope(scopeA, forceFullSync: true)
+        async let reqB1 = store.refreshConversationsForHostScope(scopeB, forceFullSync: true)
+        async let reqA3 = store.refreshConversationsForHostScope(scopeA, forceFullSync: true)
+
+        await coordinator.waitUntilEntered(key: scopeA.id)
+        await coordinator.waitUntilEntered(key: scopeB.id)
+        XCTAssertTrue(store.isRefreshingHost(instanceId: hostAUuid, hostname: hostAName))
+        XCTAssertTrue(store.isRefreshingHost(instanceId: hostBUuid, hostname: hostBName))
+
+        await coordinator.release(key: scopeA.id)
+        let (okA1, okA2, okA3) = await (reqA1, reqA2, reqA3)
+        XCTAssertTrue(okA1 && okA2 && okA3)
+
+        // After ONLY Host A finishes, Host A updated to cid-a-fresh while Host B's cached cid-b-cached is untouched!
+        XCTAssertTrue(store.summaries.contains(where: { $0.cascadeId == "cid-a-fresh" }))
+        XCTAssertFalse(store.summaries.contains(where: { $0.cascadeId == "cid-a-old" }))
+        XCTAssertTrue(store.summaries.contains(where: { $0.cascadeId == "cid-b-cached" }))
+
+        await coordinator.release(key: scopeB.id)
+        let okB1 = await reqB1
+        XCTAssertTrue(okB1)
+
+        // Exactly 1 RPC executed for Host A (3 concurrent callers coalesced) and 1 for Host B!
+        let countA = await coordinator.count(for: scopeA.id)
+        let countB = await coordinator.count(for: scopeB.id)
+        XCTAssertEqual(countA, 1, "Rapid repeated switches to Host A must coalesce into a single in-flight RPC")
+        XCTAssertEqual(countB, 1, "Independent Host B refresh must run once without cancelling Host A")
+        XCTAssertEqual(Set(store.summaries.map(\.cascadeId)), ["cid-a-fresh", "cid-b-fresh"])
+    }
+
+    @MainActor
+    func testPerHostShardedDiskCacheColdStartHydrationAndOfflineStepReading() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AntigravityShardedCacheTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let hostAUuid = "11111111-aaaa-4444-8888-workstation-v2"
+        let hostBUuid = "22222222-bbbb-4444-8888-macmini-v2"
+        let hostAName = "workstation-mac"
+        let hostBName = "huangjiafandemac-mini"
 
         let hostA = RemoteHostInstance(
             instanceId: hostAUuid,
@@ -3154,10 +3352,10 @@ final class AntigravityProtocolTests: XCTestCase {
             version: "2.29.0-v2",
             channel: .cloudRelay,
             endpointURL: URL(string: "https://antigravity.google.com/r/\(hostBUuid)")!,
-            isOnline: true
+            isOnline: false
         )
 
-        // 1. Session 1: persist per-host shards + paired hosts + cached steps for Mac B
+        // 1. Seed per-host disk shards for online Mac A, offline Mac B, and Antigravity Cloud + cached steps for Mac B
         let projection1 = LocalProjectionStore(storageDirectory: tempDir)
         let store1 = AntigravitySessionStore(
             hosts: [hostA, hostB],
@@ -3167,31 +3365,28 @@ final class AntigravityProtocolTests: XCTestCase {
         store1.isVerificationMode = false
         store1.hasPairedBackend = true
         store1.isLiveBackendConnected = true
-        store1.syncRelayInstancesState(
-            [
-                RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
-                RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .connected)
-            ],
-            latencyMs: 25
-        )
+        store1.availableRelayInstances = [
+            RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
+            RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .disconnected)
+        ]
 
         var seedSummaries: [CascadeSummary] = [
             CascadeSummary(
                 cascadeId: "cid-a-1",
-                title: "Workstation Old Chat",
+                title: "Workstation Initial Chat",
                 projectSlug: "dsh-superagent-prototype",
                 workspaceUri: "file:///Users/work/dsh-superagent-prototype",
                 status: .done,
-                stepCount: 5,
+                stepCount: 4,
                 isCloud: false,
                 originInstanceUuid: hostAUuid,
                 originHostName: hostAName
             ),
             CascadeSummary(
                 cascadeId: "cid-b-cached",
-                title: "Mini Cached Chat",
+                title: "Mac Mini Cached Transcript",
                 projectSlug: "game_loop",
-                workspaceUri: "file:///Users/dev/code/game_loop",
+                workspaceUri: "file:///Users/mini/game_loop",
                 status: .done,
                 stepCount: 2,
                 isCloud: false,
@@ -3200,19 +3395,19 @@ final class AntigravityProtocolTests: XCTestCase {
             ),
             CascadeSummary(
                 cascadeId: "cid-b-uncached",
-                title: "Mini Uncached Chat",
+                title: "Mac Mini Uncached Transcript",
                 projectSlug: "game_loop",
-                workspaceUri: "file:///Users/dev/code/game_loop",
+                workspaceUri: "file:///Users/mini/game_loop",
                 status: .done,
-                stepCount: 4,
+                stepCount: 6,
                 isCloud: false,
                 originInstanceUuid: hostBUuid,
                 originHostName: hostBName
             ),
             CascadeSummary(
                 cascadeId: "v1/default/jetski_remote_agents_3p/cid-cloud-1",
-                title: "Cloud Repo Chat",
-                projectSlug: "venciallee/iOSAntigravity",
+                title: "Cloud Remote Session",
+                projectSlug: "iOSAntigravity",
                 workspaceUri: "cloud://venciallee/iOSAntigravity",
                 status: .done,
                 stepCount: 3,
@@ -3290,7 +3485,7 @@ final class AntigravityProtocolTests: XCTestCase {
                 latencyMs: 18
             )
         }
-        let refreshedA = await store1.refreshConversationsForHostFilter(.localHost(id: hostAUuid, name: hostAName))
+        let refreshedA = await store1.refreshConversationsForHostScope(.localHost(id: hostAUuid, name: hostAName))
         XCTAssertTrue(refreshedA)
 
         // Verify disk shards independently via a fresh LocalProjectionStore instance (cold disk read)
@@ -3349,12 +3544,13 @@ final class AntigravityProtocolTests: XCTestCase {
 
         // 4. Online Mac A connects while Mac B stays offline -> opening Mac B's cached conversation reads disk steps cleanly!
         coldStore.isLiveBackendConnected = true
-        coldStore.syncRelayInstancesState(
+        coldStore.syncRelayInstancesToHosts(
             [
                 RelayInstanceInfo(uuid: hostAUuid, name: hostAName, version: "2.34.0-v2", status: .connected),
                 RelayInstanceInfo(uuid: hostBUuid, name: hostBName, version: "2.29.0-v2", status: .disconnected)
             ],
-            latencyMs: 22
+            latencyMs: 22,
+            persistKeychainIfChanged: false
         )
         let sumA = try XCTUnwrap(coldStore.summaries.first(where: { $0.cascadeId == "cid-a-2" }))
         let sumBCached = try XCTUnwrap(coldStore.summaries.first(where: { $0.cascadeId == "cid-b-cached" }))
@@ -3395,52 +3591,6 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertTrue(postClearShards.isEmpty)
         XCTAssertTrue(postClearHosts.isEmpty)
         XCTAssertTrue(postClearSteps.isEmpty)
-    }
-}
-
-private actor HostRefreshTestCoordinator {
-    private var pausedKeys: Set<String>
-    private var counts: [String: Int] = [:]
-    private var releaseWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
-    private var entryWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
-
-    init(pausedKeys: Set<String>) {
-        self.pausedKeys = pausedKeys
-    }
-
-    func enterAndWait(key: String) async {
-        counts[key, default: 0] += 1
-        if let waiters = entryWaiters.removeValue(forKey: key) {
-            for waiter in waiters {
-                waiter.resume()
-            }
-        }
-        guard pausedKeys.contains(key) else { return }
-        await withCheckedContinuation { continuation in
-            releaseWaiters[key, default: []].append(continuation)
-        }
-    }
-
-    func waitUntilEntered(key: String) async {
-        if counts[key, default: 0] > 0 {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            entryWaiters[key, default: []].append(continuation)
-        }
-    }
-
-    func release(key: String) {
-        pausedKeys.remove(key)
-        if let waiters = releaseWaiters.removeValue(forKey: key) {
-            for waiter in waiters {
-                waiter.resume()
-            }
-        }
-    }
-
-    func invocationCount(for key: String) -> Int {
-        counts[key, default: 0]
     }
 }
 
@@ -3541,9 +3691,136 @@ private final class MockRelayURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class AtomicTestFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+
+    init(initialValue: Bool) {
+        self.value = initialValue
+    }
+
+    func get() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ next: Bool) {
+        lock.lock()
+        value = next
+        lock.unlock()
+    }
+}
+
+private final class HostIsolationMockRelayBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    func setHandler(_ newHandler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?) {
+        lock.lock()
+        handler = newHandler
+        lock.unlock()
+    }
+
+    func getHandler() -> (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))? {
+        lock.lock()
+        defer { lock.unlock() }
+        return handler
+    }
+}
+
+private final class HostIsolationMockRelayURLProtocol: URLProtocol, @unchecked Sendable {
+    static let storage = HostIsolationMockRelayBox()
+
+    static func readBody(from request: URLRequest) -> Data {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else {
+            return Data()
+        }
+        stream.open()
+        defer { stream.close() }
+        var collected = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            collected.append(buffer, count: count)
+        }
+        return collected
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.storage.getHandler() else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 private extension AntigravitySessionStore {
     func disconnectStepSyncForTestingIfNeeded() {
         syncStepsForCascade("", pollUntilIdle: false)
     }
 }
+
+private actor HostRefreshTestCoordinator {
+    private var pausedKeys: Set<String>
+    private var counts: [String: Int] = [:]
+    private var releaseWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    private var entryWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    init(pausedKeys: Set<String>) {
+        self.pausedKeys = pausedKeys
+    }
+
+    func enterAndWait(key: String) async {
+        counts[key, default: 0] += 1
+        if let waiters = entryWaiters.removeValue(forKey: key) {
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+        guard pausedKeys.contains(key) else { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters[key, default: []].append(continuation)
+        }
+    }
+
+    func waitUntilEntered(key: String) async {
+        if counts[key, default: 0] > 0 {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            entryWaiters[key, default: []].append(continuation)
+        }
+    }
+
+    func release(key: String) {
+        pausedKeys.remove(key)
+        let waiters = releaseWaiters.removeValue(forKey: key) ?? []
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    func count(for key: String) -> Int {
+        counts[key, default: 0]
+    }
+}
+
 
