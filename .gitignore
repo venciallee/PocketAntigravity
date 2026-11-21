@@ -6,3 +6,10 @@ DerivedData/
 .swiftpm/
 __pycache__/
 *.pyc
+.gradle/
+.kotlin/
+build/
+**/build/
+local.properties
+*.xcframework/
+
