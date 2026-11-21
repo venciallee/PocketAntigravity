@@ -87,7 +87,7 @@ load = [
 [[rules]]
 name = "CI Workflows & CR Agent Supply-Chain Hardening"
 specialist = "security"
-when = { any_file = { include = [".github/workflows/**", "scripts/cr_agent/**", "scripts/run-cr-agent.py"] } }
+when = { any_file = { include = [".github/workflows/**", ".gemini/commands/**", "scripts/prepare-cr-context.py"] } }
 load = [
   { type = "file", path = ".github/cr-rules/security-compliance.md" },
 ]

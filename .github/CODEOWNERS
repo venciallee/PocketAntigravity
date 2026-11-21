@@ -4,10 +4,10 @@
 /.github/CODEOWNERS                                                           @venciallee
 /.github/review-context.toml                                                  @venciallee
 /.github/cr-rules/                                                            @venciallee
+/.gemini/commands/                                                            @venciallee
 /.github/workflows/cr-agent.yml                                               @venciallee
 /.github/workflows/zizmor.yml                                                 @venciallee
-/scripts/run-cr-agent.py                                                      @venciallee
-/scripts/cr_agent/                                                            @venciallee
+/scripts/prepare-cr-context.py                                                @venciallee
 
 # High-risk iOS security & privacy surfaces
 /Packages/AntigravityData/Sources/AntigravityData/Protocol/PinnedTLSURLSessionDelegate.swift  @venciallee

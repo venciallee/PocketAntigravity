@@ -12,6 +12,7 @@ rules:
       exclude:
         - "**/Tests/**"
         - "**/iOSUITests/**"
+        - ".github/cr-rules/**"
 
   - id: SEC-DATA-002-android-sharedprefs-secret
     languages: [kotlin]
@@ -28,6 +29,7 @@ rules:
         - "**/src/commonTest/**"
         - "**/src/jvmTest/**"
         - "**/src/androidTest/**"
+        - ".github/cr-rules/**"
 
   - id: SEC-DATA-003-ios-keychain-always-accessible
     languages: [swift]
@@ -38,11 +40,27 @@ rules:
       category: security
       severity_level: P0
     pattern-regex: 'kSecAttrAccessibleAlways(ThisDeviceOnly)?'
+    paths:
+      exclude:
+        - ".github/cr-rules/**"
+
+  - id: SEC-DATA-003-android-allow-backup
+    languages: [generic]
+    severity: WARNING
+    message: "[SEC-DATA-003] AndroidManifest sets android:allowBackup=\"true\"; verify sensitive stores are excluded via dataExtractionRules."
+    metadata:
+      rule_id: SEC-DATA-003
+      category: security
+      severity_level: P1
+    pattern-regex: 'android:allowBackup\s*=\s*"true"'
+    paths:
+      include:
+        - "**/AndroidManifest.xml"
 
   - id: SEC-DATA-004-swift-sensitive-log
     languages: [swift]
     severity: ERROR
-    message: "[SEC-DATA-004] Avoid logging secrets, tokens, or credentials via print/NSLog/os_log."
+    message: "[SEC-DATA-004] Avoid logging secrets, tokens, or credentials via print/NSLog."
     metadata:
       rule_id: SEC-DATA-004
       category: security
@@ -52,6 +70,7 @@ rules:
       exclude:
         - "**/Tests/**"
         - "**/iOSUITests/**"
+        - ".github/cr-rules/**"
 
   - id: SEC-NET-001-ios-tls-bypass
     languages: [swift]
@@ -62,6 +81,36 @@ rules:
       category: security
       severity_level: P0
     pattern-regex: 'completionHandler\(\s*\.useCredential\s*,\s*URLCredential\(\s*trust:\s*challenge\.protectionSpace\.serverTrust!'
+    paths:
+      exclude:
+        - ".github/cr-rules/**"
+
+  - id: SEC-NET-002-ios-ats-arbitrary-loads
+    languages: [generic]
+    severity: ERROR
+    message: "[SEC-NET-002] App Transport Security disabled globally (NSAllowsArbitraryLoads: true)."
+    metadata:
+      rule_id: SEC-NET-002
+      category: security
+      severity_level: P0
+    pattern-regex: '(NSAllowsArbitraryLoads\s*:\s*true|<key>NSAllowsArbitraryLoads</key>\s*<true\s*/>)'
+    paths:
+      include:
+        - "project.yml"
+        - "**/Info.plist"
+
+  - id: SEC-NET-002-android-cleartext-traffic
+    languages: [generic]
+    severity: ERROR
+    message: "[SEC-NET-002] Android cleartext traffic enabled (android:usesCleartextTraffic=\"true\")."
+    metadata:
+      rule_id: SEC-NET-002
+      category: security
+      severity_level: P0
+    pattern-regex: 'android:usesCleartextTraffic\s*=\s*"true"'
+    paths:
+      include:
+        - "**/AndroidManifest.xml"
 
   - id: SEC-NET-003-weak-crypto-swift
     languages: [swift]
@@ -75,11 +124,12 @@ rules:
     paths:
       exclude:
         - "**/Tests/**"
+        - ".github/cr-rules/**"
 
   - id: SEC-NET-003-weak-crypto-kotlin
     languages: [kotlin]
     severity: ERROR
-    message: "[SEC-NET-003] Weak cryptographic algorithm (MD5/SHA-1/DES/ECB) detected."
+    message: "[SEC-NET-003] Weak cryptographic algorithm (MD5/SHA-1/DES/RC4/ECB) detected."
     metadata:
       rule_id: SEC-NET-003
       category: security
@@ -89,6 +139,36 @@ rules:
       exclude:
         - "**/src/test/**"
         - "**/src/commonTest/**"
+        - ".github/cr-rules/**"
+
+  - id: COMP-STORE-001-ios-private-api
+    languages: [swift]
+    severity: ERROR
+    message: "[COMP-STORE-001] Private Apple selector or dynamic dlopen detected; risks App Store rejection."
+    metadata:
+      rule_id: COMP-STORE-001
+      category: compliance
+      severity_level: P0
+    pattern-regex: '(NSSelectorFromString\(\s*"_[A-Za-z]|dlopen\()'
+    paths:
+      exclude:
+        - "**/Tests/**"
+        - ".github/cr-rules/**"
+
+  - id: CLI-IOS-001-unchecked-sendable
+    languages: [swift]
+    severity: WARNING
+    message: "[CLI-IOS-001] Swift 6 concurrency bypass (@unchecked Sendable / nonisolated(unsafe)); verify lock synchronization."
+    metadata:
+      rule_id: CLI-IOS-001
+      category: client
+      severity_level: P1
+    pattern-regex: '(@unchecked\s+Sendable|\bnonisolated\s*\(\s*unsafe\s*\))'
+    paths:
+      exclude:
+        - "**/Tests/**"
+        - "**/iOSUITests/**"
+        - ".github/cr-rules/**"
 
   - id: CLI-IOS-004-production-try-bang
     languages: [swift]
@@ -104,6 +184,7 @@ rules:
         - "**/Tests/**"
         - "**/iOSUITests/**"
         - "**/Fixtures/**"
+        - ".github/cr-rules/**"
 
   - id: CLI-AND-001-global-scope
     languages: [kotlin]
@@ -118,3 +199,4 @@ rules:
       exclude:
         - "**/src/test/**"
         - "**/src/commonTest/**"
+        - ".github/cr-rules/**"

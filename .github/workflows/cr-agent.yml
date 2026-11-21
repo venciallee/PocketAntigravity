@@ -1,19 +1,15 @@
-name: Client & Security Compliance CR Agent
+name: Client & Security Compliance CR Agent (Gemini CLI)
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
   workflow_dispatch:
     inputs:
-      mode:
-        description: "Review mode (shadow = artifacts only, comment = Sticky + Inline comments, enforce = block on P0)"
+      additional_context:
+        description: "Optional extra focus instructions for Gemini CLI review"
         required: false
-        default: "shadow"
-        type: choice
-        options:
-          - shadow
-          - comment
-          - enforce
+        default: ""
+        type: string
 
 permissions: {}
 
@@ -23,7 +19,7 @@ concurrency:
 
 jobs:
   gatekeeper:
-    name: "[Stage 0] Config Validation, Eval Suite & Rebase Gate"
+    name: "[Stage 0] Config Validation, Rebase Skip & Fork Isolation"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -31,7 +27,6 @@ jobs:
     outputs:
       should_review: ${{ steps.gate.outputs.should_review }}
       is_fork: ${{ steps.gate.outputs.is_fork }}
-      effective_mode: ${{ steps.gate.outputs.effective_mode }}
       base_sha: ${{ steps.gate.outputs.base_sha }}
       head_sha: ${{ steps.gate.outputs.head_sha }}
 
@@ -47,13 +42,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate CR Agent Config & Run Offline Eval Regression Suite
+      - name: Validate CR Rulebooks, review-context.toml & Gemini Command
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/run-cr-agent.py scripts/cr_agent/*.py
-          python3 scripts/run-cr-agent.py --validate-config --self-test
+          python3 -m py_compile scripts/prepare-cr-context.py
+          python3 scripts/prepare-cr-context.py --validate-config --self-test
 
-      - name: Evaluate Fork Isolation, Mode & Pure-Rebase Skip (git patch-id)
+      - name: Evaluate Fork Isolation, Label Mode & Pure-Rebase Skip (git patch-id)
         id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -66,19 +61,16 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.event.after }}
-          REPO_MODE: ${{ vars.CR_AGENT_MODE || 'comment' }}
-          DISPATCH_MODE: ${{ inputs.mode || 'shadow' }}
+          CR_TRIGGER_MODE: ${{ vars.CR_AGENT_MODE || 'auto' }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
           set -euo pipefail
           is_fork="false"
           should_review="true"
-          effective_mode="${REPO_MODE}"
           base_sha="${BASE_SHA}"
           head_sha="${HEAD_SHA}"
 
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            effective_mode="${DISPATCH_MODE}"
             base_sha="$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD~1)"
             head_sha="$(git rev-parse HEAD)"
           else
@@ -87,20 +79,17 @@ jobs:
             fi
 
             if [ "${IS_DRAFT}" = "true" ]; then
-              echo "PR is Draft; skipping automated AI review."
+              echo "PR is Draft; skipping automated review."
               should_review="false"
             fi
 
-            if [ "${REPO_MODE}" = "label" ]; then
-              effective_mode="comment"
-              if [[ ",${PR_LABELS}," != *",ai-review,"* ]]; then
-                echo "CR_AGENT_MODE=label and 'ai-review' label not present; skipping AI review."
-                should_review="false"
-              fi
+            if [ "${CR_TRIGGER_MODE}" = "label" ] && [[ ",${PR_LABELS}," != *",ai-review,"* ]]; then
+              echo "CR_AGENT_MODE=label and 'ai-review' label absent; skipping."
+              should_review="false"
             fi
 
             if [ "${should_review}" = "true" ] && [ "${EVENT_ACTION}" = "synchronize" ] && [ -n "${BEFORE_SHA}" ] && [ -n "${AFTER_SHA}" ]; then
-              python3 scripts/run-cr-agent.py \
+              python3 scripts/prepare-cr-context.py \
                 --check-rebase \
                 --base-ref "origin/${BASE_REF}" \
                 --before "${BEFORE_SHA}" \
@@ -116,13 +105,12 @@ jobs:
           {
             echo "should_review=${should_review}"
             echo "is_fork=${is_fork}"
-            echo "effective_mode=${effective_mode}"
             echo "base_sha=${base_sha}"
             echo "head_sha=${head_sha}"
           } >> "$GITHUB_OUTPUT"
 
   deterministic-security-gate:
-    name: "[Stage 1] Deterministic Security, Secrets, License & Guardrails Gate"
+    name: "[Stage 1] Deterministic Security Gate (Gitleaks, Semgrep, License & Guardrails)"
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_review == 'true'
     runs-on: ubuntu-latest
@@ -156,69 +144,83 @@ jobs:
           fail-on-severity: high
           deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0, SSPL-1.0
 
-      - name: Run Deterministic Layer 1 Mobile Security & Compliance Scan
-        id: layer1
+      - name: Repository Bidirectional Compatibility Static Guardrails
+        id: compat
+        run: |
+          set -euo pipefail
+          python3 verification/verify_compat_guardrails.py
+          echo "status=passed" >> "$GITHUB_OUTPUT"
+
+      - name: Install Semgrep & Scan Client Security Rules (Diff-Baseline)
         env:
           BASE_SHA: ${{ needs.gatekeeper.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.gatekeeper.outputs.head_sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
         run: |
           set -euo pipefail
           mkdir -p cr-agent-out
-          python3 scripts/run-cr-agent.py \
-            --layer1-only \
-            --base "${BASE_SHA}" \
-            --head "${HEAD_SHA}" \
-            --pr "${PR_NUMBER}" \
-            --json-out cr-agent-out/static-findings.json \
-            --sarif-out cr-agent-out/cr-agent.sarif \
-            --summary-md-out cr-agent-out/layer1-summary.md \
-            --fail-on none
+          python3 -m pip install --quiet semgrep
+          semgrep scan \
+            --config .github/cr-rules/semgrep-client-security.yml \
+            --baseline-commit "${BASE_SHA}" \
+            --sarif-output cr-agent-out/semgrep.sarif \
+            --json-output cr-agent-out/semgrep.json
 
-      - name: Upload Layer 1 SARIF to GitHub Code Scanning
-        if: always() && needs.gatekeeper.outputs.is_fork != 'true' && hashFiles('cr-agent-out/cr-agent.sarif') != ''
+      - name: Upload Semgrep SARIF to GitHub Code Scanning
+        if: always() && needs.gatekeeper.outputs.is_fork != 'true' && hashFiles('cr-agent-out/semgrep.sarif') != ''
         uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4
         with:
-          sarif_file: cr-agent-out/cr-agent.sarif
-          category: client-security-cr-agent
+          sarif_file: cr-agent-out/semgrep.sarif
+          category: client-security-semgrep
 
-      - name: Upload Layer 1 Artifacts
+      - name: Upload Layer 1 Findings Artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: cr-agent-static-findings
+          name: cr-layer1-findings
           path: cr-agent-out/
           retention-days: 14
 
-      - name: Enforce Layer 1 Deterministic P0 Hard Gate
+      - name: Enforce Deterministic Layer 1 P0 Hard Gate (Semgrep ERROR)
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json
           import sys
 
-          with open("cr-agent-out/static-findings.json", encoding="utf-8") as fh:
+          with open("cr-agent-out/semgrep.json", encoding="utf-8") as fh:
               data = json.load(fh)
-          p0 = [f for f in data.get("findings", []) if f.get("severity") == "P0"]
-          if p0:
-              print(f"Layer 1 Hard Gate FAILED: {len(p0)} deterministic P0 finding(s).", file=sys.stderr)
-              for f in p0:
-                  print(f"  - [{f['rule_id']}] {f['file']}:{f['line']} {f['title']}", file=sys.stderr)
+          errors = [r for r in data.get("results", []) if r.get("extra", {}).get("severity") == "ERROR"]
+          if errors:
+              print(f"Layer 1 Semgrep P0 Hard Gate FAILED: {len(errors)} blocking finding(s).", file=sys.stderr)
+              for r in errors:
+                  print(f"  - [{r.get('check_id')}] {r.get('path')}:{r.get('start', {}).get('line', 1)} {r.get('extra', {}).get('message')}", file=sys.stderr)
               sys.exit(1)
-          print("Layer 1 Deterministic P0 Hard Gate PASSED.")
+          print("Layer 1 Deterministic P0 Hard Gate PASSED (0 Semgrep ERROR findings).")
           PY
 
-  ai-review-agent:
-    name: "[Stage 2-4] Multi-Agent Client & Security Review + Sticky Summary"
+  gemini-code-review:
+    name: "[Stage 2] Official Gemini CLI Client & Security Review"
     needs: [gatekeeper, deterministic-security-gate]
-    if: always() && needs.gatekeeper.result == 'success' && needs.gatekeeper.outputs.should_review == 'true' && needs.gatekeeper.outputs.is_fork != 'true'
+    if: always() && needs.gatekeeper.result == 'success' && needs.gatekeeper.outputs.should_review == 'true' && needs.gatekeeper.outputs.is_fork != 'true' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
+      id-token: write
+      issues: write
       pull-requests: write
 
     steps:
+      - name: Mint optional custom GitHub App token (falls back to GITHUB_TOKEN)
+        id: mint_identity_token
+        if: vars.APP_ID != ''
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
+
       - name: Checkout repository (no persisted credentials)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -230,65 +232,117 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Download Layer 1 Static Findings
+      - name: Download Layer 1 Semgrep Findings
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: cr-agent-static-findings
+          name: cr-layer1-findings
           path: cr-agent-out
 
-      - name: "[SEC-CI-002] Assert Zero Write Credentials in Workspace Before LLM"
+      - name: Prepare Path-Routed Rules & High-Risk Context (.gemini/context.json)
+        env:
+          BASE_SHA: ${{ needs.gatekeeper.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.gatekeeper.outputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ADDITIONAL_CONTEXT: ${{ inputs.additional_context || '' }}
+          LAYER1_RESULT: ${{ needs.deterministic-security-gate.result }}
+        run: |
+          set -euo pipefail
+          python3 scripts/prepare-cr-context.py \
+            --prepare \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pr "${PR_NUMBER}" \
+            --semgrep-json cr-agent-out/semgrep.json \
+            --compat-status "${LAYER1_RESULT}" \
+            --additional-context "${ADDITIONAL_CONTEXT}" \
+            --out .gemini/context.json \
+            --github-step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Check Gemini Auth Configuration (AI Studio Key / Vertex AI / GCA)
+        id: gemini_auth
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          USE_VERTEX: ${{ vars.GOOGLE_GENAI_USE_VERTEXAI || 'false' }}
+          USE_GCA: ${{ vars.GOOGLE_GENAI_USE_GCA || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -n "${GEMINI_API_KEY}" ] || [ -n "${GOOGLE_API_KEY}" ] || [ "${USE_VERTEX}" = "true" ] || [ "${USE_GCA}" = "true" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "> ℹ️ **Gemini CLI semantic review skipped**: No \`GEMINI_API_KEY\` secret (or Vertex AI / GCA variable) is configured yet."
+              echo "> Add \`GEMINI_API_KEY\` under **Settings → Secrets and variables → Actions** to enable automatic \`run-gemini-cli\` Client & Security reviews on PRs."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "[SEC-CI-002] Assert Zero Persisted Write Credentials Before Gemini CLI"
+        if: steps.gemini_auth.outputs.configured == 'true'
         run: |
           set -euo pipefail
           leaks="$(grep -rlE 'PRIVATE KEY|x-access-token|extraheader' .git/config "$HOME/.gitconfig" 2>/dev/null || true)"
           if [ -n "${leaks}" ]; then
-            echo "::error::[SEC-CI-002] Credential material readable before LLM execution: ${leaks}"
+            echo "::error::[SEC-CI-002] Credential material readable before Gemini CLI execution: ${leaks}"
             exit 1
           fi
-          echo "Credential hygiene check PASSED."
 
-      - name: Run Multi-Agent Client + Security/Compliance Review & Publish
+      - name: Run Official Google Gemini CLI Client & Security Review
+        if: steps.gemini_auth.outputs.configured == 'true'
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        id: gemini_pr_review
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_CLI_TRUST_WORKSPACE: "true"
+          GITHUB_TOKEN: ${{ steps.mint_identity_token.outputs.token || secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CR_AGENT_PROVIDER: ${{ vars.CR_AGENT_PROVIDER || '' }}
-          CR_AGENT_MODEL: ${{ vars.CR_AGENT_MODEL || '' }}
-          BASE_SHA: ${{ needs.gatekeeper.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.gatekeeper.outputs.head_sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
-          PR_TITLE: ${{ github.event.pull_request.title || '' }}
-          PR_BODY: ${{ github.event.pull_request.body || '' }}
-          EFFECTIVE_MODE: ${{ needs.gatekeeper.outputs.effective_mode }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          PUBLISH_ARGS=()
-          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${EFFECTIVE_MODE}" != "shadow" ]; then
-            PUBLISH_ARGS+=(--publish)
-          fi
-          FAIL_ON="none"
-          if [ "${EFFECTIVE_MODE}" = "enforce" ]; then
-            FAIL_ON="P0"
-          fi
-
-          python3 scripts/run-cr-agent.py \
-            --base "${BASE_SHA}" \
-            --head "${HEAD_SHA}" \
-            --pr "${PR_NUMBER}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --static-findings-in cr-agent-out/static-findings.json \
-            --mode "${EFFECTIVE_MODE}" \
-            --json-out cr-agent-out/full-review-report.json \
-            --summary-md-out cr-agent-out/sticky-summary.md \
-            --github-step-summary "$GITHUB_STEP_SUMMARY" \
-            --fail-on "${FAIL_ON}" \
-            "${PUBLISH_ARGS[@]}"
-
-      - name: Upload CR Agent Review Report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: cr-agent-review-report
-          path: cr-agent-out/
-          retention-days: 14
+          gcp_location: ${{ vars.GOOGLE_CLOUD_LOCATION }}
+          gcp_project_id: ${{ vars.GOOGLE_CLOUD_PROJECT }}
+          gcp_service_account: ${{ vars.SERVICE_ACCOUNT_EMAIL }}
+          gcp_workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          gemini_cli_version: ${{ vars.GEMINI_CLI_VERSION }}
+          gemini_model: ${{ vars.GEMINI_MODEL || 'gemini-2.5-pro' }}
+          google_api_key: ${{ secrets.GOOGLE_API_KEY }}
+          use_gemini_code_assist: ${{ vars.GOOGLE_GENAI_USE_GCA }}
+          use_vertex_ai: ${{ vars.GOOGLE_GENAI_USE_VERTEXAI }}
+          workflow_name: client-security-cr
+          github_pr_number: ${{ github.event.pull_request.number }}
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 25
+              },
+              "telemetry": {
+                "enabled": true,
+                "target": "local",
+                "outfile": ".gemini/telemetry.log"
+              },
+              "mcpServers": {
+                "github": {
+                  "command": "docker",
+                  "args": [
+                    "run",
+                    "-i",
+                    "--rm",
+                    "-e",
+                    "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "ghcr.io/github/github-mcp-server:v0.27.0"
+                  ],
+                  "includeTools": [
+                    "pull_request_read",
+                    "get_file_contents",
+                    "add_comment_to_pending_review",
+                    "pull_request_review_write"
+                  ],
+                  "env": {
+                    "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+                  }
+                }
+              },
+              "tools": {
+                "core": []
+              }
+            }
+          prompt: "/client-security-review"
