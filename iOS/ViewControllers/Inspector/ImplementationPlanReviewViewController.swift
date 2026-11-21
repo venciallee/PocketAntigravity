@@ -30,6 +30,13 @@ public struct ImplementationPlanReviewViewController: View {
         self.store = store
     }
 
+    private var livePlanArtifact: ArtifactSnapshot? {
+        guard !store.isVerificationMode else { return nil }
+        return store.activeArtifacts.first(where: { $0.artifactPath == store.selectedArtifactPath })
+            ?? store.activeArtifacts.first(where: { $0.kind == .implementationPlan })
+            ?? store.activeArtifacts.first
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             topHeaderBar
@@ -39,38 +46,76 @@ public struct ImplementationPlanReviewViewController: View {
                     // 1. Amber Paused Banner
                     pausedReviewBanner
 
-                    // 2. H1 Plan Title & Problem Statement
-                    Text("Isolate the fake clock in settlement tests")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(AntigravityTheme.inkReading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let livePlan = livePlanArtifact {
+                        Text(livePlan.title)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    problemSummaryParagraph
+                        AntigravityMarkdownView(markdown: livePlan.content, variant: .assistant)
 
-                    // 3. Proposed Changes Section
-                    Text("Proposed changes")
-                        .font(.system(size: 16.5, weight: .bold))
-                        .foregroundStyle(AntigravityTheme.inkReading)
-                        .padding(.top, 2)
+                        if !store.planComments.isEmpty {
+                            Text("Review Comments (\(store.planComments.count))")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(AntigravityTheme.inkReading)
+                                .padding(.top, 4)
+                            ForEach(store.planComments) { comment in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text("\(comment.authorName) · \(comment.statusLabel)")
+                                            .font(.system(size: 12.5, weight: .semibold))
+                                            .foregroundStyle(Self.warmAmber)
+                                        Spacer()
+                                        Text(comment.targetFilePath)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                                    }
+                                    Text(comment.body)
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(AntigravityTheme.inkReading)
+                                }
+                                .padding(12)
+                                .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 12))
+                            }
+                        }
 
-                    // Change 1: MODIFY settlement/batch.go + Amber Highlight + WL You Pending Card
-                    batchChangeWithPendingComment
+                        if isAddingSelectionComment {
+                            inlineSelectionCommentEditor
+                        }
+                    } else {
+                        // 2. H1 Plan Title & Problem Statement (`UE11` Verification Showcase)
+                        Text("Isolate the fake clock in settlement tests")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    // Floating White `[💬 Comment | Copy]` Selection Callout + Change 2
-                    selectionCalloutAndSettlementTestChange
+                        problemSummaryParagraph
 
-                    if isAddingSelectionComment {
-                        inlineSelectionCommentEditor
+                        // 3. Proposed Changes Section
+                        Text("Proposed changes")
+                            .font(.system(size: 16.5, weight: .bold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .padding(.top, 2)
+
+                        // Change 1: MODIFY settlement/batch.go + Amber Highlight + WL You Pending Card
+                        batchChangeWithPendingComment
+
+                        // Floating White `[💬 Comment | Copy]` Selection Callout + Change 2
+                        selectionCalloutAndSettlementTestChange
+
+                        if isAddingSelectionComment {
+                            inlineSelectionCommentEditor
+                        }
+
+                        // Change 3: NEW testutil/clock.go
+                        newClockHelperChange
+
+                        // 4. Verification Section
+                        Text("Verification")
+                            .font(.system(size: 16.5, weight: .bold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                            .padding(.top, 2)
                     }
-
-                    // Change 3: NEW testutil/clock.go
-                    newClockHelperChange
-
-                    // 4. Verification Section
-                    Text("Verification")
-                        .font(.system(size: 16.5, weight: .bold))
-                        .foregroundStyle(AntigravityTheme.inkReading)
-                        .padding(.top, 2)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
@@ -79,18 +124,26 @@ public struct ImplementationPlanReviewViewController: View {
             Divider()
                 .overlay(Color.white.opacity(0.08))
 
-            // 5. Sticky Bottom Bar (`Proceed` + `Send 2 comments`)
+            // 5. Sticky Bottom Bar (`Proceed` + `Send comments`)
             bottomDecisionBar
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
         }
         .background(AntigravityTheme.canvasObsidian)
+        .task {
+            if !store.isVerificationMode {
+                await store.loadLiveArtifactsAndDiffs()
+                commentCount = max(0, store.planComments.count)
+            }
+        }
     }
 
     // MARK: - 1. Top Header Bar
 
     private var topHeaderBar: some View {
-        HStack(spacing: 8) {
+        let subtitle = livePlanArtifact.map { "\($0.title) · v\($0.version)" }
+            ?? "Fix flaky TestSettlementBatch · v2"
+        return HStack(spacing: 8) {
             Button {
                 store.currentRoute = .chatAndComposer
             } label: {
@@ -107,7 +160,7 @@ public struct ImplementationPlanReviewViewController: View {
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .lineLimit(1)
-                Text("Fix flaky TestSettlementBatch · v2")
+                Text(subtitle)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .lineLimit(1)
@@ -115,14 +168,14 @@ public struct ImplementationPlanReviewViewController: View {
 
             Spacer()
 
-            // `[💬 2]` Comments Badge
+            // `[💬 N]` Comments Badge
             Button {
                 isAddingSelectionComment.toggle()
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "bubble.left")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("\(commentCount)")
+                    Text("\(livePlanArtifact != nil ? store.planComments.count : commentCount)")
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .foregroundStyle(AntigravityTheme.inkReading)

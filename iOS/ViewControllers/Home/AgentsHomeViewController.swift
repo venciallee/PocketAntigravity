@@ -499,10 +499,20 @@ public struct AgentsHomeViewController: View {
                     .font(.system(size: 16, weight: .regular))
                     .foregroundStyle(UEChromePalette.textPrimary)
                     .tint(AntigravityTheme.accentPeriwinkle)
+                    .onChange(of: searchText) { _, newValue in
+                        if usesLiveStoreData {
+                            Task {
+                                await store.runFullTextConversationSearch(newValue)
+                            }
+                        }
+                    }
 
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
+                        if usesLiveStoreData {
+                            store.remoteSearchResults = []
+                        }
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(UEChromePalette.textSecondary)
@@ -639,10 +649,18 @@ public struct AgentsHomeViewController: View {
     // MARK: - 5. Collapsible Project Group Sections
 
     private func projectSectionView(_ project: AgentProjectSection) -> some View {
-        let isCollapsed = collapsedProjects.contains(project.id)
+        let isCollapsed = store.isVerificationMode
+            ? collapsedProjects.contains(project.id)
+            : store.isProjectCollapsed(project.id)
         let isNoProj = AntigravityCloudDetector.isNoProjectSlug(project.slug)
         let headerIcon = project.isCloud ? "cloud" : (isNoProj ? "bubble.left.and.bubble.right" : "folder")
         let a11ySuffix = (project.id != project.slug) ? project.id : project.slug
+        let displayedSubtitle: String = {
+            if !store.isVerificationMode && store.appearancePreferences.interfaceLayout == .knowledgeWork {
+                return project.isCloud ? "Antigravity Cloud" : "Workspace"
+            }
+            return project.subtitle
+        }()
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -667,7 +685,7 @@ public struct AgentsHomeViewController: View {
                             Text(project.slug)
                                 .font(.system(size: 16.5, weight: .semibold))
                                 .foregroundStyle(UEChromePalette.textPrimary)
-                            Text(project.subtitle)
+                            Text(displayedSubtitle)
                                 .font(.system(size: 12.5, weight: .regular))
                                 .foregroundStyle(UEChromePalette.textMuted)
                         }
@@ -693,10 +711,14 @@ public struct AgentsHomeViewController: View {
                 .accessibilityIdentifier("btn-add-conv-\(a11ySuffix)")
 
                 Button {
-                    if isCollapsed {
-                        collapsedProjects.remove(project.id)
+                    if store.isVerificationMode {
+                        if isCollapsed {
+                            collapsedProjects.remove(project.id)
+                        } else {
+                            collapsedProjects.insert(project.id)
+                        }
                     } else {
-                        collapsedProjects.insert(project.id)
+                        store.toggleProjectCollapsedPersisted(project.id)
                     }
                 } label: {
                     Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")

@@ -86,13 +86,31 @@ public struct TurnDiffReviewViewController: View {
         self.store = store
     }
 
+    private var usesLiveDiffs: Bool {
+        !store.isVerificationMode && !store.activeTurnDiffs.isEmpty
+    }
+
+    private var activeLiveDiff: FilePatchDiff? {
+        guard usesLiveDiffs else { return nil }
+        return store.activeTurnDiffs[min(max(0, currentFileIndex), store.activeTurnDiffs.count - 1)]
+    }
+
     private var activeFile: DiffFilePageSpec {
-        files[currentFileIndex % files.count]
+        if let live = activeLiveDiff {
+            return DiffFilePageSpec(filePath: live.filePath, additions: live.additions, deletions: live.deletions)
+        }
+        return files[currentFileIndex % files.count]
     }
 
     public var body: some View {
         VStack(spacing: 0) {
             topNavigationBar
+
+            if !store.isVerificationMode {
+                liveCompareModeAndGitBar
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+            }
 
             // Turn Selector Strip (`Turn 1`, `Turn 2`, `Turn 3 · latest`, `All`)
             turnSelectorStrip
@@ -105,56 +123,64 @@ public struct TurnDiffReviewViewController: View {
                 .padding(.top, 8)
                 .padding(.bottom, 8)
 
-            // Hunk Header Bar (`@@ -18,9 +18,27 @@ Allow` + `Revert hunk`)
+            // Hunk Header Bar
             hunkHeaderBar
 
-            // Diff Lines + Inline Line 29 Comment Composer
+            // Diff Lines + Inline Comment Composer
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(upperRows) { row in
-                        diffStaticRowView(row)
-                    }
-
-                    // Interactive Selected Line 29 (`diff-line-29`)
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            isLine29CommentOpen.toggle()
+                    if let liveDiff = activeLiveDiff {
+                        ForEach(liveDiff.lines) { line in
+                            liveDiffLineRow(line, filePath: liveDiff.filePath)
                         }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Text("29")
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(Self.periwinkle)
-                                .frame(width: 24, alignment: .trailing)
-
-                            Text("+")
-                                .font(.system(size: 12.5, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Self.emeraldDone)
-                                .frame(width: 12)
-
-                            Text("    now := time.Now()")
-                                .font(.system(size: 12.5, design: .monospaced))
-                                .foregroundStyle(AntigravityTheme.inkReading)
-                                .lineLimit(1)
-
-                            Spacer()
+                        liveGitCommitCard
+                            .padding(14)
+                    } else {
+                        ForEach(upperRows) { row in
+                            diffStaticRowView(row)
                         }
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                        .background(Self.selectedBlueBg)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("diff-line-29")
 
-                    // Inline `Comment on line 29` Composer Card (`line-comment-composer`)
-                    if isLine29CommentOpen {
-                        inlineLine29ComposerCard
+                        // Interactive Selected Line 29 (`diff-line-29`)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                isLine29CommentOpen.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("29")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(Self.periwinkle)
+                                    .frame(width: 24, alignment: .trailing)
+
+                                Text("+")
+                                    .font(.system(size: 12.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(Self.emeraldDone)
+                                    .frame(width: 12)
+
+                                Text("    now := time.Now()")
+                                    .font(.system(size: 12.5, design: .monospaced))
+                                    .foregroundStyle(AntigravityTheme.inkReading)
+                                    .lineLimit(1)
+
+                                Spacer()
+                            }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                    }
+                            .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                            .background(Self.selectedBlueBg)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("diff-line-29")
 
-                    ForEach(lowerRows) { row in
-                        diffStaticRowView(row)
+                        // Inline `Comment on line 29` Composer Card (`line-comment-composer`)
+                        if isLine29CommentOpen {
+                            inlineLine29ComposerCard
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                        }
+
+                        ForEach(lowerRows) { row in
+                            diffStaticRowView(row)
+                        }
                     }
                 }
             }
@@ -168,6 +194,152 @@ public struct TurnDiffReviewViewController: View {
                 .padding(.vertical, 10)
         }
         .background(AntigravityTheme.canvasObsidian)
+        .task {
+            if !store.isVerificationMode {
+                await store.loadLiveArtifactsAndDiffs()
+            }
+        }
+    }
+
+    private var liveCompareModeAndGitBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(DiffCompareMode.allCases) { mode in
+                    let isSelected = store.diffCompareMode == mode
+                    Button {
+                        store.setDiffCompareMode(mode)
+                    } label: {
+                        Text(mode.rawValue)
+                            .font(.system(size: 11.5, weight: isSelected ? .bold : .medium))
+                            .foregroundStyle(isSelected ? Self.inkOnCTA : AntigravityTheme.inkSecondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(isSelected ? Self.periwinkle : Self.pillBg, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("diff-compare-\(mode.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))")
+                }
+
+                if let live = activeLiveDiff {
+                    Button {
+                        store.toggleStageDiffFile(at: currentFileIndex)
+                    } label: {
+                        Label(live.isStaged ? "Unstage" : "Stage", systemImage: live.isStaged ? "minus.circle" : "plus.circle")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(live.isStaged ? Self.emeraldDone : AntigravityTheme.inkReading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Self.pillBg, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-git-stage-toggle")
+
+                    Button {
+                        store.discardDiffFile(at: currentFileIndex)
+                    } label: {
+                        Label("Discard", systemImage: "arrow.uturn.backward")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(Self.coralError)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Self.coralError.opacity(0.14), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-git-discard-file")
+                }
+            }
+        }
+    }
+
+    private func liveDiffLineRow(_ line: DiffLine, filePath: String) -> some View {
+        let isAdd = line.kind == .addition
+        let isDel = line.kind == .deletion
+        let lineNum = line.displayLineNumber.map(String.init) ?? ""
+        return HStack(spacing: 8) {
+            Text(lineNum)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(isDel ? Self.coralError : (isAdd ? Self.emeraldDone : AntigravityTheme.inkSecondary))
+                .frame(width: 28, alignment: .trailing)
+            Text(isAdd ? "+" : (isDel ? "-" : " "))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(isAdd ? Self.emeraldDone : (isDel ? Self.coralError : .clear))
+                .frame(width: 12)
+            Text(line.text)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(AntigravityTheme.inkReading)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if let num = line.displayLineNumber {
+                Button {
+                    store.quoteDiffLinesToComposer(filePath: filePath, startLine: num, endLine: num, snippet: line.text)
+                } label: {
+                    Image(systemName: "text.quote")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Self.periwinkle)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 24)
+        .background(isAdd ? Self.greenLineBg : (isDel ? Self.redLineBg : Color.clear))
+    }
+
+    private var liveGitCommitCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Git Commit & Push", systemImage: "checkmark.seal")
+                    .font(.system(size: 13.5, weight: .bold))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+                Spacer()
+                if let last = store.lastCommitResult {
+                    Text("\(last.commitSha) · \(last.pushed ? "Pushed" : "Local")")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Self.emeraldDone)
+                }
+            }
+            TextField("Commit message...", text: $store.gitCommitDraft.message)
+                .font(.system(size: 14))
+                .foregroundStyle(AntigravityTheme.inkReading)
+                .padding(10)
+                .background(Self.pillBg, in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityIdentifier("input-git-commit-message")
+
+            HStack(spacing: 12) {
+                Toggle("Include Unstaged", isOn: $store.gitCommitDraft.includeUnstaged)
+                    .font(.system(size: 12))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .tint(Self.periwinkle)
+                Toggle("Amend", isOn: $store.gitCommitDraft.amend)
+                    .font(.system(size: 12))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .tint(Self.periwinkle)
+            }
+
+            HStack(spacing: 10) {
+                Button("Commit") {
+                    Task { _ = await store.commitDiffChanges() }
+                }
+                .font(.system(size: 13.5, weight: .bold))
+                .foregroundStyle(Self.inkOnCTA)
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .background(Self.periwinkle, in: RoundedRectangle(cornerRadius: 12))
+                .disabled(store.gitCommitDraft.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("btn-git-commit")
+
+                Button("Push") {
+                    Task { _ = await store.pushCurrentDiffBranch() }
+                }
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(AntigravityTheme.inkReading)
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .background(Self.pillBg, in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityIdentifier("btn-git-push")
+            }
+        }
+        .padding(12)
+        .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
     }
 
     // MARK: - 1. Top Navigation Bar
@@ -271,9 +443,10 @@ public struct TurnDiffReviewViewController: View {
     // MARK: - 3. File Pager Card
 
     private var filePagerCard: some View {
-        HStack {
+        let totalCount = max(1, usesLiveDiffs ? store.activeTurnDiffs.count : files.count)
+        return HStack {
             Button {
-                currentFileIndex = (currentFileIndex - 1 + files.count) % files.count
+                currentFileIndex = (currentFileIndex - 1 + totalCount) % totalCount
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 14, weight: .semibold))
@@ -285,13 +458,23 @@ public struct TurnDiffReviewViewController: View {
             Spacer()
 
             VStack(spacing: 2) {
-                Text(activeFile.filePath)
-                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(AntigravityTheme.inkReading)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if let live = activeLiveDiff {
+                        Text(live.statusLetter.rawValue)
+                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(live.statusLetter == .deleted ? Self.coralError : Self.periwinkle)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Self.pillBg, in: RoundedRectangle(cornerRadius: 4))
+                    }
+                    Text(activeFile.filePath)
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .lineLimit(1)
+                }
 
                 HStack(spacing: 4) {
-                    Text("File \(currentFileIndex + 1) of \(files.count) ·")
+                    Text("File \(min(currentFileIndex + 1, totalCount)) of \(totalCount) ·")
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Text("+\(activeFile.additions)")
                         .foregroundStyle(Self.emeraldDone)
@@ -304,7 +487,7 @@ public struct TurnDiffReviewViewController: View {
             Spacer()
 
             Button {
-                currentFileIndex = (currentFileIndex + 1) % files.count
+                currentFileIndex = (currentFileIndex + 1) % totalCount
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 14, weight: .semibold))
@@ -328,15 +511,21 @@ public struct TurnDiffReviewViewController: View {
     // MARK: - 4. Hunk Header Bar
 
     private var hunkHeaderBar: some View {
-        HStack {
-            Text("@@ -18,9 +18,27 @@ Allow")
+        let headerText = activeLiveDiff?.hunkHeader ?? "@@ -18,9 +18,27 @@ Allow"
+        return HStack {
+            Text(headerText)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(AntigravityTheme.inkSecondary)
 
             Spacer()
 
             Button {
-                store.composerDraftText = "Revert hunk @@ -18,9 +18,27 @@ in \(activeFile.filePath)"
+                if usesLiveDiffs {
+                    store.selectedDiffFileIndex = currentFileIndex
+                    store.revertCurrentDiffHunk()
+                } else {
+                    store.composerDraftText = "Revert hunk \(headerText) in \(activeFile.filePath)"
+                }
             } label: {
                 Text("Revert hunk")
                     .font(.system(size: 12.5, weight: .semibold))

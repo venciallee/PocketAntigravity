@@ -334,6 +334,34 @@ public struct AntigravityRootContainerView: View {
                 )
             }
         }
+        .sheet(item: $store.presentedSheet) { modal in
+            switch modal {
+            case .conversationOverview:
+                ConversationOverviewSheetView(store: store)
+            case .sideQuestion:
+                SideQuestionSheetView(store: store)
+            case .swarmBoard(let stepIndex):
+                SwarmBoardSheetView(store: store, stepIndex: stepIndex)
+            case .voiceMode:
+                VoiceModeSheetView(store: store)
+            case .richArtifactViewer(let artifactPath):
+                RichArtifactViewerSheet(store: store, artifactPath: artifactPath)
+            case .customizationsSettings:
+                CustomizationsSettingsView(store: store)
+            case .modelAndMode, .modelConfigPicker:
+                ModelAndModeSheetView(store: store)
+            case .addContext, .fileMentionPicker:
+                AddContextSheetView(store: store)
+            case .displayOptions:
+                DisplayOptionsSheetView(store: store, onDismiss: { store.presentedSheet = nil })
+            case .createProject:
+                CreateProjectSheetView(store: store, onDismiss: { store.presentedSheet = nil })
+            case .contextMenuPreview:
+                ConversationContextPreviewMenu(store: store, onDismiss: { store.presentedSheet = nil })
+            case .permissionGate, .askQuestion, .newCascadeSheet:
+                StructuredQuestionCardView(store: store)
+            }
+        }
     }
 
     private var settingsTabContainerView: some View {

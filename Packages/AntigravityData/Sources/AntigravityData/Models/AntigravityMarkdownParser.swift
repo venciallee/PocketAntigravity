@@ -42,6 +42,17 @@ public enum MarkdownTableAlignment: Sendable, Equatable {
     case trailing
 }
 
+public struct MarkdownFrontmatterEntry: Codable, Sendable, Equatable, Identifiable {
+    public var id: String { key }
+    public var key: String
+    public var value: String
+
+    public init(key: String, value: String) {
+        self.key = key
+        self.value = value
+    }
+}
+
 public indirect enum MarkdownInline: Sendable, Equatable {
     case text(String)
     case softBreak
@@ -50,6 +61,7 @@ public indirect enum MarkdownInline: Sendable, Equatable {
     case emphasis([MarkdownInline])
     case strikethrough([MarkdownInline])
     case link(label: [MarkdownInline], destination: String)
+    case image(alt: String, source: String)
     case inlineMath(String)
 
     /// Plain-text projection used for accessibility and testing.
@@ -65,6 +77,8 @@ public indirect enum MarkdownInline: Sendable, Equatable {
             return children.map(\.plainText).joined()
         case .link(let label, _):
             return label.map(\.plainText).joined()
+        case .image(let alt, _):
+            return alt.isEmpty ? "Image" : alt
         case .inlineMath(let latex):
             return latex
         }
@@ -72,6 +86,7 @@ public indirect enum MarkdownInline: Sendable, Equatable {
 }
 
 public indirect enum MarkdownBlock: Sendable, Equatable, Identifiable {
+    case frontmatter(id: Int, entries: [MarkdownFrontmatterEntry])
     case heading(id: Int, level: Int, inlines: [MarkdownInline])
     case paragraph(id: Int, inlines: [MarkdownInline])
     case codeBlock(id: Int, language: String?, code: String)
@@ -83,7 +98,8 @@ public indirect enum MarkdownBlock: Sendable, Equatable, Identifiable {
 
     public var id: Int {
         switch self {
-        case .heading(let id, _, _),
+        case .frontmatter(let id, _),
+             .heading(let id, _, _),
              .paragraph(let id, _),
              .codeBlock(let id, _, _),
              .listItem(let id, _, _, _),
@@ -94,14 +110,29 @@ public indirect enum MarkdownBlock: Sendable, Equatable, Identifiable {
             return id
         }
     }
+
+    public var isMermaidDiagram: Bool {
+        if case .codeBlock(_, let lang, _) = self {
+            return lang?.lowercased() == "mermaid"
+        }
+        return false
+    }
+
+    public var isSVGDiagram: Bool {
+        if case .codeBlock(_, let lang, let code) = self {
+            let l = lang?.lowercased() ?? ""
+            return l == "svg" || (l == "xml" && code.contains("<svg"))
+        }
+        return false
+    }
 }
 
 // MARK: - GitHub-Flavored Markdown Parser (`AntigravityMarkdownParser`)
 
 /// Pure Swift 6 GitHub-Flavored Markdown (GFM) block + inline parser tailored for
-/// Antigravity Desktop & Cloud Agent responses (headings, fenced/streaming code blocks,
-/// nested lists, task items, GFM tables, `[!NOTE]` alerts, `` [`Symbol`](file:///...) `` links,
-/// intraword-safe `snake_case`, and LaTeX math blocks).
+/// Antigravity Desktop & Cloud Agent responses (YAML frontmatter, headings, fenced/streaming code blocks,
+/// Mermaid/SVG code blocks, inline images, nested lists, task items, GFM tables, `[!NOTE]` alerts,
+/// `` [`Symbol`](file:///...) `` links, intraword-safe `snake_case`, and LaTeX math blocks).
 public enum AntigravityMarkdownParser: Sendable {
 
     private static let asciiPunctuation: Set<Character> = Set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
@@ -109,6 +140,36 @@ public enum AntigravityMarkdownParser: Sendable {
     public static func parse(_ markdown: String) -> [MarkdownBlock] {
         var nextId = 0
         return parseBlocks(from: markdown, nextId: &nextId)
+    }
+
+    /// Extracts deduplicated GitHub Pull Request links (`https://github.com/<owner>/<repo>/pull/<number>`) from markdown text.
+    public static func extractGitHubPRLinks(from text: String) -> [GitHubPullRequestInfo] {
+        guard text.contains("github.com/") && text.contains("/pull/") else { return [] }
+        let pattern = #"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
+        let nsText = text as NSString
+        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+        var seen: Set<String> = []
+        var results: [GitHubPullRequestInfo] = []
+        for match in matches where match.numberOfRanges >= 3 {
+            let fullUrl = nsText.substring(with: match.range(at: 0))
+            let repo = nsText.substring(with: match.range(at: 1))
+            let numStr = nsText.substring(with: match.range(at: 2))
+            let key = "\(repo)#\(numStr)"
+            guard !seen.contains(key), let number = Int(numStr) else { continue }
+            seen.insert(key)
+            results.append(
+                GitHubPullRequestInfo(
+                    ownerRepo: repo,
+                    number: number,
+                    title: "Pull Request #\(number)",
+                    state: .open,
+                    checksSummary: "Checks pending",
+                    url: fullUrl
+                )
+            )
+        }
+        return results
     }
 
     // MARK: - Block Parsing
@@ -125,6 +186,12 @@ public enum AntigravityMarkdownParser: Sendable {
         var blocks: [MarkdownBlock] = []
         var index = 0
         var listIndentStack: [Int] = []
+
+        // 0. Leading YAML Frontmatter (`---` ... `---`) for SKILL.md / Rule / Artifact headers
+        if let fm = parseLeadingFrontmatter(lines: lines) {
+            blocks.append(.frontmatter(id: allocateId(&nextId), entries: fm.entries))
+            index = fm.nextIndex
+        }
 
         while index < lines.count {
             let line = lines[index]
@@ -464,7 +531,7 @@ public enum AntigravityMarkdownParser: Sendable {
                 }
             }
 
-            // 4. Link `[label](destination)` (supports nested `` [`Symbol`](file:///...) ``!)
+            // 4. Link `[label](destination)` & Inline Image `![alt](src)` (supports nested `` [`Symbol`](file:///...) ``!)
             if ch == "[" || (ch == "!" && i + 1 < end && chars[i + 1] == "[") {
                 let isImage = (ch == "!")
                 let openBracket = isImage ? i + 1 : i
@@ -472,16 +539,17 @@ public enum AntigravityMarkdownParser: Sendable {
                    closeBracket + 1 < end,
                    chars[closeBracket + 1] == "(",
                    let parsedDest = parseLinkDestination(chars, openParenAt: closeBracket + 1, end: end) {
+                    if isImage {
+                        let rawAlt = String(chars[(openBracket + 1)..<closeBracket]).trimmingCharacters(in: .whitespaces)
+                        result.append(.image(alt: rawAlt, source: parsedDest.destination))
+                        i = parsedDest.nextIndex
+                        continue
+                    }
                     let rawLabelSlice = parseInlineSlice(chars, start: openBracket + 1, end: closeBracket)
                     let labelNodes = coalesceTextNodes(rawLabelSlice)
-                    let effectiveLabel: [MarkdownInline]
-                    if labelNodes.isEmpty {
-                        effectiveLabel = [.text(isImage ? "Image" : parsedDest.destination)]
-                    } else if isImage {
-                        effectiveLabel = [.text("🖼 ")] + labelNodes
-                    } else {
-                        effectiveLabel = labelNodes
-                    }
+                    let effectiveLabel: [MarkdownInline] = labelNodes.isEmpty
+                        ? [.text(parsedDest.destination)]
+                        : labelNodes
                     result.append(.link(label: effectiveLabel, destination: parsedDest.destination))
                     i = parsedDest.nextIndex
                     continue
@@ -594,6 +662,30 @@ public enum AntigravityMarkdownParser: Sendable {
     private static func allocateId(_ counter: inout Int) -> Int {
         defer { counter += 1 }
         return counter
+    }
+
+    private static func parseLeadingFrontmatter(lines: [String]) -> (entries: [MarkdownFrontmatterEntry], nextIndex: Int)? {
+        guard lines.count >= 3 else { return nil }
+        guard lines[0].trimmingCharacters(in: .whitespaces) == "---" else { return nil }
+        var entries: [MarkdownFrontmatterEntry] = []
+        let limit = min(lines.count, 40)
+        for i in 1..<limit {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
+            if trimmed == "---" || trimmed == "..." {
+                guard !entries.isEmpty else { return nil }
+                return (entries, i + 1)
+            }
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            guard let colonIdx = trimmed.firstIndex(of: ":") else { return nil }
+            let key = String(trimmed[..<colonIdx]).trimmingCharacters(in: .whitespaces)
+            let rawVal = String(trimmed[trimmed.index(after: colonIdx)...]).trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }) else {
+                return nil
+            }
+            let cleanedVal = rawVal.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            entries.append(MarkdownFrontmatterEntry(key: key, value: cleanedVal))
+        }
+        return nil
     }
 
     private static func expandLeadingTabs(_ line: String) -> String {

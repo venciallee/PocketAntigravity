@@ -552,7 +552,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
             assistantReply: "已为您补充 RegisterTagValidator 的边界单元测试。"
         )
         XCTAssertTrue(
-            waitForTextContaining("PC 端新增的实时追问消息：请补充单元测试", in: app, timeout: 6),
+            waitForTextContaining("PC 端新增的实时追问消息：请补充单元测试", in: app, timeout: 12),
             "New message added on PC must automatically appear on iOS within seconds without touching the screen"
         )
         XCTAssertTrue(

@@ -101,6 +101,12 @@ public enum CortexStepType: Int, Codable, Sendable, CaseIterable {
     case conversationHistory = 98
     case knowledgeArtifacts = 99
     case sendCommandInput = 100
+    case subagentInvocation = 130
+    case dynamicWorkflow = 131
+    case swarmBoard = 132
+    case mcpToolCall = 133
+    case backgroundTask = 134
+    case sideQuestion = 135
 
     public var jsonName: String {
         switch self {
@@ -126,6 +132,12 @@ public enum CortexStepType: Int, Codable, Sendable, CaseIterable {
         case .conversationHistory: return "CORTEX_STEP_TYPE_CONVERSATION_HISTORY"
         case .knowledgeArtifacts: return "CORTEX_STEP_TYPE_KNOWLEDGE_ARTIFACTS"
         case .sendCommandInput: return "CORTEX_STEP_TYPE_SEND_COMMAND_INPUT"
+        case .subagentInvocation: return "CORTEX_STEP_TYPE_SUBAGENT_INVOCATION"
+        case .dynamicWorkflow: return "CORTEX_STEP_TYPE_DYNAMIC_WORKFLOW"
+        case .swarmBoard: return "CORTEX_STEP_TYPE_SWARM_BOARD"
+        case .mcpToolCall: return "CORTEX_STEP_TYPE_MCP_TOOL_CALL"
+        case .backgroundTask: return "CORTEX_STEP_TYPE_BACKGROUND_TASK"
+        case .sideQuestion: return "CORTEX_STEP_TYPE_SIDE_QUESTION"
         }
     }
 
@@ -354,6 +366,11 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
     public var requestedInteraction: RequestedInteraction?
     public var recordedExecutionMode: CascadeExecutionMode?
     public var recordedModelId: String?
+    public var subagent: SubagentPayload?
+    public var dynamicWorkflow: DynamicWorkflowPayload?
+    public var swarmBoard: SwarmBoardPayload?
+    public var mcpToolCall: McpToolCallPayload?
+    public var voiceSummary: VoiceCallTranscriptSummary?
 
     public init(
         cascadeId: String,
@@ -372,7 +389,12 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         search: SearchPayload? = nil,
         requestedInteraction: RequestedInteraction? = nil,
         recordedExecutionMode: CascadeExecutionMode? = nil,
-        recordedModelId: String? = nil
+        recordedModelId: String? = nil,
+        subagent: SubagentPayload? = nil,
+        dynamicWorkflow: DynamicWorkflowPayload? = nil,
+        swarmBoard: SwarmBoardPayload? = nil,
+        mcpToolCall: McpToolCallPayload? = nil,
+        voiceSummary: VoiceCallTranscriptSummary? = nil
     ) {
         self.cascadeId = cascadeId
         self.stepIndex = stepIndex
@@ -391,12 +413,20 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         self.requestedInteraction = requestedInteraction
         self.recordedExecutionMode = recordedExecutionMode
         self.recordedModelId = recordedModelId
+        self.subagent = subagent
+        self.dynamicWorkflow = dynamicWorkflow
+        self.swarmBoard = swarmBoard
+        self.mcpToolCall = mcpToolCall
+        self.voiceSummary = voiceSummary
     }
 
     /// Returns true if this step carries user-visible chat, tool evidence, task progress, or approval UI.
     /// Filters out internal Desktop housekeeping steps (`CHECKPOINT`, `EPHEMERAL_MESSAGE`, empty tool-call wrappers).
     public var hasRenderableChatContent: Bool {
         if status == .waiting || requestedInteraction != nil {
+            return true
+        }
+        if voiceSummary != nil || subagent != nil || dynamicWorkflow != nil || swarmBoard != nil || mcpToolCall != nil {
             return true
         }
         switch type {
@@ -417,6 +447,14 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
             return viewFile != nil
         case .search, .listDirectory:
             return search != nil || viewFile != nil
+        case .subagentInvocation:
+            return subagent != nil
+        case .dynamicWorkflow:
+            return dynamicWorkflow != nil
+        case .swarmBoard:
+            return swarmBoard != nil
+        case .mcpToolCall:
+            return mcpToolCall != nil
         default:
             let hasResponse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return hasResponse
