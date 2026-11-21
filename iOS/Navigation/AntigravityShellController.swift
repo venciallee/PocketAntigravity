@@ -47,24 +47,6 @@ public enum ShellTab: String, CaseIterable, Sendable, Identifiable {
     }
 }
 
-/// Shared UE v2.0 surface, border, and ink tokens complementing `AntigravityTheme`.
-enum UEChromePalette {
-    static let surfacePopover = Color(red: 0x25 / 255.0, green: 0x27 / 255.0, blue: 0x2F / 255.0)
-    static let surfaceSheet = Color(red: 0x17 / 255.0, green: 0x18 / 255.0, blue: 0x1D / 255.0)
-    static let surfaceSheetGroup = Color(red: 0x20 / 255.0, green: 0x22 / 255.0, blue: 0x29 / 255.0)
-    static let surfacePill = Color(red: 0x17 / 255.0, green: 0x19 / 255.0, blue: 0x1F / 255.0)
-    static let surfaceSubtleBox = Color(red: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x23 / 255.0)
-    static let surfaceGlassTab = Color(red: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x23 / 255.0)
-    static let surfaceActiveTabSlot = Color(red: 0x31 / 255.0, green: 0x34 / 255.0, blue: 0x3E / 255.0)
-    static let inkOnPrimaryCTA = Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0)
-    static let textPrimary = Color(red: 0xF5 / 255.0, green: 0xF7 / 255.0, blue: 0xFA / 255.0)
-    static let textBody = Color(red: 0xD5 / 255.0, green: 0xD8 / 255.0, blue: 0xE2 / 255.0)
-    static let textSecondary = Color(red: 0x8E / 255.0, green: 0x93 / 255.0, blue: 0xA2 / 255.0)
-    static let textMuted = Color(red: 0x7C / 255.0, green: 0x81 / 255.0, blue: 0x90 / 255.0)
-    static let cardBorder = Color.white.opacity(0.08)
-    static let subtleDivider = Color.white.opacity(0.07)
-}
-
 /// Signature UE01 / UE06 global bottom navigation chrome:
 /// Left Floating Liquid Glass 3-Tab Capsule (`Agents` | `Automations` | `Settings`)
 /// + Detached Right `56×56pt` Periwinkle (`AntigravityTheme.accentPeriwinkle`) Circular FAB.
@@ -115,7 +97,7 @@ public struct AntigravityFloatingTabBar: View {
                             Group {
                                 if isSelected {
                                     Capsule()
-                                        .fill(UEChromePalette.surfaceActiveTabSlot)
+                                        .fill(AntigravityTheme.surfaceActiveTabSlot)
                                 }
                             }
                         )
@@ -132,7 +114,7 @@ public struct AntigravityFloatingTabBar: View {
                     Capsule()
                         .fill(.ultraThinMaterial)
                     Capsule()
-                        .fill(UEChromePalette.surfaceGlassTab.opacity(0.90))
+                        .fill(AntigravityTheme.surfaceGlassTab.opacity(0.90))
                 }
             )
             .overlay(
@@ -149,7 +131,7 @@ public struct AntigravityFloatingTabBar: View {
             } label: {
                 Image(systemName: selectedTab.fabSymbolName)
                     .font(.system(size: selectedTab == .automations ? 22 : 19, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.inkOnPrimaryCTA)
+                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .frame(width: 56, height: 56)
                     .background(
                         Circle()

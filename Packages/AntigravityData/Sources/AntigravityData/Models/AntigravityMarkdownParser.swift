@@ -19,13 +19,13 @@ public enum MarkdownAlertKind: String, Sendable, Equatable, CaseIterable {
         }
     }
 
-    public var sfSymbolName: String {
+    public var semanticIcon: SemanticIcon {
         switch self {
-        case .note: return "info.circle.fill"
-        case .tip: return "lightbulb.fill"
-        case .important: return "exclamationmark.bubble.fill"
-        case .warning: return "exclamationmark.triangle.fill"
-        case .caution: return "flame.fill"
+        case .note: return .alertInfo
+        case .tip: return .alertTip
+        case .important: return .alertImportant
+        case .warning: return .alertWarning
+        case .caution: return .alertCaution
         }
     }
 }
@@ -95,15 +95,15 @@ public enum MarkdownEmbedKind: String, Sendable, Equatable {
         }
     }
 
-    public var sfSymbolName: String {
+    public var semanticIcon: SemanticIcon {
         switch self {
-        case .htmlWidget: return "sparkles.rectangle.stack"
-        case .image: return "photo"
-        case .svg: return "point.3.connected.trianglepath.dotted"
-        case .markdown: return "doc.richtext"
-        case .webURL: return "globe"
-        case .sidecar: return "puzzlepiece.extension"
-        case .generic: return "doc.badge.gearshape"
+        case .htmlWidget: return .embedHtmlWidget
+        case .image: return .embedImage
+        case .svg: return .embedSvg
+        case .markdown: return .embedMarkdown
+        case .webURL: return .embedWebLink
+        case .sidecar: return .embedSidecar
+        case .generic: return .embedArtifact
         }
     }
 }

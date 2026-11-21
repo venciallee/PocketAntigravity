@@ -88,7 +88,7 @@ public struct DisplayOptionsSheetView: View {
                         topTrailingRadius: 28,
                         style: .continuous
                     )
-                    .fill(UEChromePalette.surfaceSheet)
+                    .fill(AntigravityTheme.surfaceSheet)
                 )
                 .overlay(
                     UnevenRoundedRectangle(
@@ -98,7 +98,7 @@ public struct DisplayOptionsSheetView: View {
                         topTrailingRadius: 28,
                         style: .continuous
                     )
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
 
                 // Floating iOS pull-down Sort Popover Menu anchored below "Sort Conversations"
@@ -169,15 +169,15 @@ public struct DisplayOptionsSheetView: View {
                 HStack {
                     Text("Group By")
                         .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
                         Text(groupBy.rawValue)
                             .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -188,7 +188,7 @@ public struct DisplayOptionsSheetView: View {
             .accessibilityIdentifier("row-group-by")
 
             Divider()
-                .overlay(UEChromePalette.subtleDivider)
+                .overlay(AntigravityTheme.subtleDivider)
 
             Button {
                 isSortPopoverPresented.toggle()
@@ -196,15 +196,15 @@ public struct DisplayOptionsSheetView: View {
                 HStack {
                     Text("Sort Conversations")
                         .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
                         Text(sortField.rawValue)
                             .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -216,7 +216,7 @@ public struct DisplayOptionsSheetView: View {
             .accessibilityIdentifier("row-sort-conversations")
 
             Divider()
-                .overlay(UEChromePalette.subtleDivider)
+                .overlay(AntigravityTheme.subtleDivider)
 
             Button {
                 sortProjectsLabel = (sortProjectsLabel == "Custom Order") ? "Alphabetical" : "Custom Order"
@@ -224,15 +224,15 @@ public struct DisplayOptionsSheetView: View {
                 HStack {
                     Text("Sort Projects")
                         .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
                         Text(sortProjectsLabel)
                             .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -243,7 +243,7 @@ public struct DisplayOptionsSheetView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(UEChromePalette.surfaceSheetGroup)
+                .fill(AntigravityTheme.surfaceSheetGroup)
         )
     }
 
@@ -254,35 +254,35 @@ public struct DisplayOptionsSheetView: View {
             HStack {
                 Text("Filter")
                     .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                 Spacer()
                 HStack(spacing: 6) {
                     Text("All conversations")
                         .font(.system(size: 15.5, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                 }
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 48)
 
             Divider()
-                .overlay(UEChromePalette.subtleDivider)
+                .overlay(AntigravityTheme.subtleDivider)
 
             HStack {
                 Text("Display")
                     .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                 Spacer()
                 HStack(spacing: 6) {
                     Text("Comfortable · Previews")
                         .font(.system(size: 15.5, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                 }
             }
             .padding(.horizontal, 16)
@@ -290,7 +290,7 @@ public struct DisplayOptionsSheetView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(UEChromePalette.surfaceSheetGroup)
+                .fill(AntigravityTheme.surfaceSheetGroup)
         )
     }
 
@@ -305,10 +305,10 @@ public struct DisplayOptionsSheetView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Auto Pin")
                             .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textPrimary)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
                         Text("Pin a conversation when you message it")
                             .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                             .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
@@ -327,16 +327,16 @@ public struct DisplayOptionsSheetView: View {
             .frame(minHeight: 60)
 
             Divider()
-                .overlay(UEChromePalette.subtleDivider)
+                .overlay(AntigravityTheme.subtleDivider)
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Archived Only")
                         .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Text("Show only archived conversations")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                 }
 
                 Spacer()
@@ -351,7 +351,7 @@ public struct DisplayOptionsSheetView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(UEChromePalette.surfaceSheetGroup)
+                .fill(AntigravityTheme.surfaceSheetGroup)
         )
     }
 
@@ -368,13 +368,13 @@ public struct DisplayOptionsSheetView: View {
                 Spacer()
                 Text("\(unreadCount) unread")
                     .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textSecondary)
+                    .foregroundStyle(AntigravityTheme.textSecondary)
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 52)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(UEChromePalette.surfaceSheetGroup)
+                    .fill(AntigravityTheme.surfaceSheetGroup)
             )
             .contentShape(Rectangle())
         }

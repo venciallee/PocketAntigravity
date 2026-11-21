@@ -8,9 +8,17 @@ public enum AntigravityTheme {
     public static let canvasObsidian = Color(red: 0x09 / 255.0, green: 0x0A / 255.0, blue: 0x0D / 255.0)
     public static let surfaceObsidian = Color(red: 0x0F / 255.0, green: 0x10 / 255.0, blue: 0x14 / 255.0)
     public static let surfaceCard = Color(red: 0x14 / 255.0, green: 0x15 / 255.0, blue: 0x19 / 255.0)
+    public static let surfaceSheet = Color(red: 0x17 / 255.0, green: 0x18 / 255.0, blue: 0x1D / 255.0)
+    public static let surfacePill = Color(red: 0x17 / 255.0, green: 0x19 / 255.0, blue: 0x1F / 255.0)
+    public static let surfaceSubtleBox = Color(red: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x23 / 255.0)
+    public static let surfaceGlassTab = Color(red: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x23 / 255.0)
     public static let surfaceElevated = Color(red: 0x1D / 255.0, green: 0x1F / 255.0, blue: 0x26 / 255.0)
+    public static let surfaceSheetGroup = Color(red: 0x20 / 255.0, green: 0x22 / 255.0, blue: 0x29 / 255.0)
     public static let surfacePopover = Color(red: 0x25 / 255.0, green: 0x27 / 255.0, blue: 0x2F / 255.0)
+    public static let surfaceActiveTabSlot = Color(red: 0x31 / 255.0, green: 0x34 / 255.0, blue: 0x3E / 255.0)
     public static let glassHairline = Color.white.opacity(0.08)
+    public static let cardBorder = glassHairline
+    public static let subtleDivider = Color.white.opacity(0.07)
 
     // MARK: - Brand Accents (Latest UE Spec)
     /// Primary Periwinkle Soft Blue (`#8EB4FF`) used on primary CTAs, FABs, selected borders, and checkboxes.
@@ -31,11 +39,15 @@ public enum AntigravityTheme {
     /// Deletions / Destructive — Coral Red `#F07167`
     public static let statusError = Color(red: 0xF0 / 255.0, green: 0x71 / 255.0, blue: 0x67 / 255.0)
 
-    // MARK: - Ink Hierarchy
+    // MARK: - Ink & Chrome Text Hierarchy
     public static let inkReading = Color(red: 0xF5 / 255.0, green: 0xF6 / 255.0, blue: 0xF8 / 255.0)
     public static let inkLabel = Color(red: 0xD1 / 255.0, green: 0xD5 / 255.0, blue: 0xDF / 255.0)
     public static let inkSecondary = Color(red: 0x8A / 255.0, green: 0x90 / 255.0, blue: 0x9E / 255.0)
     public static let inkMuted = Color(red: 0x55 / 255.0, green: 0x5A / 255.0, blue: 0x66 / 255.0)
+    public static let textPrimary = Color(red: 0xF5 / 255.0, green: 0xF7 / 255.0, blue: 0xFA / 255.0)
+    public static let textBody = Color(red: 0xD5 / 255.0, green: 0xD8 / 255.0, blue: 0xE2 / 255.0)
+    public static let textSecondary = Color(red: 0x8E / 255.0, green: 0x93 / 255.0, blue: 0xA2 / 255.0)
+    public static let textMuted = Color(red: 0x7C / 255.0, green: 0x81 / 255.0, blue: 0x90 / 255.0)
 
     // MARK: - HIG Geometry Invariants
     public static let minTouchTargetPt: CGFloat = 44.0

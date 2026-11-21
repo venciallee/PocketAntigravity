@@ -125,7 +125,7 @@ public struct ChatComposerView: View {
                                 store.isSlashPopupDismissedManually = true
                             } label: {
                                 HStack(spacing: 10) {
-                                    Image(systemName: cmd.iconName)
+                                    Image(systemName: cmd.icon.sfSymbolName)
                                         .font(.system(size: 13))
                                         .foregroundStyle(Self.periwinkle)
                                         .frame(width: 20)
@@ -477,7 +477,7 @@ public struct ChatComposerView: View {
                     Button {
                         isShowingPermissionsSheet = true
                     } label: {
-                        Image(systemName: store.activePermissionPreset.symbolName)
+                        Image(systemName: store.activePermissionPreset.semanticIcon.sfSymbolName)
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(permissionButtonForeground)
                             .frame(width: 34, height: 34)

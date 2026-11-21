@@ -266,10 +266,10 @@ public struct AutomationsViewController: View {
                     ZStack(alignment: .topTrailing) {
                         Image(systemName: "line.3.horizontal.decrease")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(sectionFilter == .all ? UEChromePalette.textPrimary : AntigravityTheme.accentPeriwinkle)
+                            .foregroundStyle(sectionFilter == .all ? AntigravityTheme.textPrimary : AntigravityTheme.accentPeriwinkle)
                             .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
-                            .background(Circle().fill(UEChromePalette.surfacePill))
-                            .overlay(Circle().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                            .background(Circle().fill(AntigravityTheme.surfacePill))
+                            .overlay(Circle().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                         if sectionFilter != .all {
                             Circle()
                                 .fill(AntigravityTheme.accentPeriwinkle)
@@ -285,10 +285,10 @@ public struct AutomationsViewController: View {
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                         .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
-                        .background(Circle().fill(UEChromePalette.surfacePill))
-                        .overlay(Circle().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                        .background(Circle().fill(AntigravityTheme.surfacePill))
+                        .overlay(Circle().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("btn-automations-filter")
@@ -303,11 +303,11 @@ public struct AutomationsViewController: View {
             HStack(spacing: 9) {
                 Image(systemName: "bolt")
                     .font(.system(size: 14.5, weight: .medium))
-                    .foregroundStyle(UEChromePalette.textSecondary)
+                    .foregroundStyle(AntigravityTheme.textSecondary)
 
                 TextField("Every weekday at 9, summarize", text: $quickPromptText)
                     .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .tint(AntigravityTheme.accentPeriwinkle)
                     .lineLimit(1)
                     .submitLabel(.done)
@@ -368,7 +368,7 @@ public struct AutomationsViewController: View {
             Text("SCHEDULED · \(scheduledAutomations.count)")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
                 .padding(.leading, 2)
                 .padding(.top, 2)
 
@@ -382,7 +382,7 @@ public struct AutomationsViewController: View {
                                 .foregroundStyle(Color.white)
                             Text(item.subtitle)
                                 .font(.system(size: 13, weight: .regular))
-                                .foregroundStyle(UEChromePalette.textSecondary)
+                                .foregroundStyle(AntigravityTheme.textSecondary)
                         }
 
                         Spacer()
@@ -417,17 +417,17 @@ public struct AutomationsViewController: View {
                             Text("NEXT RUN")
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .tracking(0.5)
-                                .foregroundStyle(UEChromePalette.textMuted)
+                                .foregroundStyle(AntigravityTheme.textMuted)
                             Text(item.nextRunText)
                                 .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(UEChromePalette.textPrimary)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                         }
                         .padding(.horizontal, 11)
                         .padding(.vertical, 9)
                         .frame(maxWidth: .infinity, minHeight: 50, alignment: .topLeading)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(UEChromePalette.surfaceSubtleBox)
+                                .fill(AntigravityTheme.surfaceSubtleBox)
                         )
 
                         // LAST RUN Stat Box
@@ -436,7 +436,7 @@ public struct AutomationsViewController: View {
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .tracking(0.5)
                                 .foregroundStyle(
-                                    item.needsReview ? AntigravityTheme.statusWaiting : UEChromePalette.textMuted
+                                    item.needsReview ? AntigravityTheme.statusWaiting : AntigravityTheme.textMuted
                                 )
 
                             HStack(alignment: .firstTextBaseline, spacing: 5) {
@@ -448,7 +448,7 @@ public struct AutomationsViewController: View {
                                 Text(item.lastRunText)
                                     .font(.system(size: 13.5, weight: .medium))
                                     .foregroundStyle(
-                                        item.needsReview ? AntigravityTheme.statusWaiting : UEChromePalette.textPrimary
+                                        item.needsReview ? AntigravityTheme.statusWaiting : AntigravityTheme.textPrimary
                                     )
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.85)
@@ -462,7 +462,7 @@ public struct AutomationsViewController: View {
                                 .fill(
                                     item.needsReview
                                         ? AntigravityTheme.statusWaiting.opacity(0.14)
-                                        : UEChromePalette.surfaceSubtleBox
+                                        : AntigravityTheme.surfaceSubtleBox
                                 )
                         )
                         .overlay(
@@ -481,7 +481,7 @@ public struct AutomationsViewController: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier(item.cardAccessibilityId)
@@ -496,7 +496,7 @@ public struct AutomationsViewController: View {
             Text("ALWAYS ON · 1")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
                 .padding(.leading, 2)
                 .padding(.top, 2)
 
@@ -516,17 +516,17 @@ public struct AutomationsViewController: View {
                         .foregroundStyle(Color.white)
                     Text("web-console · On PR opened · Flash Lite")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                     Text("Last run 14m ago")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textBody)
+                        .foregroundStyle(AntigravityTheme.textBody)
                 }
 
                 Spacer()
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textMuted)
+                    .foregroundStyle(AntigravityTheme.textMuted)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -536,7 +536,7 @@ public struct AutomationsViewController: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .accessibilityIdentifier("automation-card-always-on")
         }
@@ -549,7 +549,7 @@ public struct AutomationsViewController: View {
             Text("PAUSED · \(isPausedResumed ? 0 : 1)")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
                 .padding(.leading, 2)
                 .padding(.top, 2)
 
@@ -564,7 +564,7 @@ public struct AutomationsViewController: View {
                         )
                     Text("web-console · Daily at 08:00 · Flash")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                 }
 
                 Spacer()
@@ -574,7 +574,7 @@ public struct AutomationsViewController: View {
                 } label: {
                     Text(isPausedResumed ? "Active" : "Resume")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                         .padding(.horizontal, 16)
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                         .background(
@@ -597,7 +597,7 @@ public struct AutomationsViewController: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
         }
     }
@@ -617,7 +617,7 @@ public struct AutomationsViewController: View {
                         .tint(AntigravityTheme.accentPeriwinkle)
                     Text("Loading automations from \(store.activeHost.hostname)...")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 36)
@@ -627,7 +627,7 @@ public struct AutomationsViewController: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
             } else if !store.hasPairedBackend && !store.isLiveBackendConnected {
                 VStack(alignment: .leading, spacing: 12) {
@@ -641,7 +641,7 @@ public struct AutomationsViewController: View {
                     }
                     Text("Connect to Antigravity Desktop via Cloud Relay or Direct LAN in Settings to view, create, and trigger scheduled Automations.")
                         .font(.system(size: 13.5, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .lineSpacing(2)
 
                     Button {
@@ -665,7 +665,7 @@ public struct AutomationsViewController: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
             } else {
                 VStack(alignment: .leading, spacing: 14) {
@@ -684,13 +684,13 @@ public struct AutomationsViewController: View {
                                 .foregroundStyle(Color.white)
                             Text("Running on \(store.activeHost.hostname)")
                                 .font(.system(size: 12.5, weight: .regular))
-                                .foregroundStyle(UEChromePalette.textMuted)
+                                .foregroundStyle(AntigravityTheme.textMuted)
                         }
                     }
 
                     Text("Run a prompt on a schedule, like a morning summary of yesterday's changes. Runs show up here.")
                         .font(.system(size: 13.5, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .lineSpacing(2)
 
                     HStack(spacing: 10) {
@@ -707,14 +707,14 @@ public struct AutomationsViewController: View {
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.88)
                             }
-                            .foregroundStyle(UEChromePalette.textPrimary)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
                             .padding(.horizontal, 14)
                             .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
                             .background(
-                                Capsule().fill(UEChromePalette.surfaceSheetGroup)
+                                Capsule().fill(AntigravityTheme.surfaceSheetGroup)
                             )
                             .overlay(
-                                Capsule().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                                Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                             )
                         }
                         .buttonStyle(.plain)
@@ -750,7 +750,7 @@ public struct AutomationsViewController: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
             }
         } else {
@@ -762,7 +762,7 @@ public struct AutomationsViewController: View {
                 HStack {
                     Text("No \(sectionFilter.rawValue.lowercased()) automations.")
                         .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                     Spacer()
                     Button("Show All") {
                         sectionFilter = .all
@@ -777,7 +777,7 @@ public struct AutomationsViewController: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
             }
 
@@ -786,7 +786,7 @@ public struct AutomationsViewController: View {
                     Text("SCHEDULED · \(store.scheduledAutomations.count)")
                         .font(.system(size: 11.5, weight: .semibold))
                         .tracking(0.8)
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                         .padding(.leading, 2)
                         .padding(.top, 2)
 
@@ -801,7 +801,7 @@ public struct AutomationsViewController: View {
                     Text("ALWAYS ON · \(store.alwaysOnAutomations.count)")
                         .font(.system(size: 11.5, weight: .semibold))
                         .tracking(0.8)
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                         .padding(.leading, 2)
                         .padding(.top, 2)
 
@@ -816,7 +816,7 @@ public struct AutomationsViewController: View {
                     Text("PAUSED · \(store.pausedAutomations.count)")
                         .font(.system(size: 11.5, weight: .semibold))
                         .tracking(0.8)
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                         .padding(.leading, 2)
                         .padding(.top, 2)
 
@@ -840,7 +840,7 @@ public struct AutomationsViewController: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(message)
                     .font(.system(size: 13.5, weight: .medium))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 10) {
@@ -878,7 +878,7 @@ public struct AutomationsViewController: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textMuted)
+                    .foregroundStyle(AntigravityTheme.textMuted)
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
@@ -904,7 +904,7 @@ public struct AutomationsViewController: View {
                         .lineLimit(2)
                     Text(item.scheduleSummary)
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .lineLimit(1)
                 }
 
@@ -975,7 +975,7 @@ public struct AutomationsViewController: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .frame(width: 34, height: AntigravityTheme.minTouchTargetPt)
                 }
             }
@@ -985,10 +985,10 @@ public struct AutomationsViewController: View {
                     Text("NEXT RUN")
                         .font(.system(size: 10.5, weight: .semibold))
                         .tracking(0.5)
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                     Text(item.nextRunText)
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                 }
@@ -997,7 +997,7 @@ public struct AutomationsViewController: View {
                 .frame(maxWidth: .infinity, minHeight: 50, alignment: .topLeading)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(UEChromePalette.surfaceSubtleBox)
+                        .fill(AntigravityTheme.surfaceSubtleBox)
                 )
 
                 liveLastRunBox(item)
@@ -1010,7 +1010,7 @@ public struct AutomationsViewController: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
         )
     }
 
@@ -1021,12 +1021,12 @@ public struct AutomationsViewController: View {
                 Text("LAST RUN")
                     .font(.system(size: 10.5, weight: .semibold))
                     .tracking(0.5)
-                    .foregroundStyle(item.needsReview ? AntigravityTheme.statusWaiting : UEChromePalette.textMuted)
+                    .foregroundStyle(item.needsReview ? AntigravityTheme.statusWaiting : AntigravityTheme.textMuted)
                 Spacer(minLength: 2)
                 if let cid = item.lastRunCascadeId, !cid.isEmpty {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                 }
             }
 
@@ -1046,7 +1046,7 @@ public struct AutomationsViewController: View {
                 }
                 Text(item.lastRunText)
                     .font(.system(size: 13.5, weight: .medium))
-                    .foregroundStyle(item.needsReview ? AntigravityTheme.statusWaiting : UEChromePalette.textPrimary)
+                    .foregroundStyle(item.needsReview ? AntigravityTheme.statusWaiting : AntigravityTheme.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
             }
@@ -1059,7 +1059,7 @@ public struct AutomationsViewController: View {
                 .fill(
                     item.needsReview
                         ? AntigravityTheme.statusWaiting.opacity(0.14)
-                        : UEChromePalette.surfaceSubtleBox
+                        : AntigravityTheme.surfaceSubtleBox
                 )
         )
         .overlay(
@@ -1100,11 +1100,11 @@ public struct AutomationsViewController: View {
                     .lineLimit(2)
                 Text(item.scheduleSummary)
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textSecondary)
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                     .lineLimit(1)
                 Text(item.lastRunText)
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(item.needsReview ? AntigravityTheme.statusWaiting : UEChromePalette.textBody)
+                    .foregroundStyle(item.needsReview ? AntigravityTheme.statusWaiting : AntigravityTheme.textBody)
                     .lineLimit(1)
             }
             .contentShape(Rectangle())
@@ -1143,7 +1143,7 @@ public struct AutomationsViewController: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textSecondary)
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                     .frame(width: 34, height: AntigravityTheme.minTouchTargetPt)
             }
         }
@@ -1155,7 +1155,7 @@ public struct AutomationsViewController: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
         )
     }
 
@@ -1168,7 +1168,7 @@ public struct AutomationsViewController: View {
                     .lineLimit(2)
                 Text(item.scheduleSummary)
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textMuted)
+                    .foregroundStyle(AntigravityTheme.textMuted)
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
@@ -1178,7 +1178,7 @@ public struct AutomationsViewController: View {
             } label: {
                 Text("Resume")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .padding(.horizontal, 16)
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                     .background(
@@ -1215,7 +1215,7 @@ public struct AutomationsViewController: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(UEChromePalette.textMuted)
+                    .foregroundStyle(AntigravityTheme.textMuted)
                     .frame(width: 30, height: AntigravityTheme.minTouchTargetPt)
             }
         }
@@ -1227,7 +1227,7 @@ public struct AutomationsViewController: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
         )
     }
 
@@ -1504,7 +1504,7 @@ private struct AutomationEditorSheetView: View {
             } label: {
                 Text("Cancel")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(UEChromePalette.textBody)
+                    .foregroundStyle(AntigravityTheme.textBody)
                     .padding(.horizontal, 14)
                     .frame(minHeight: 36)
                     .background(
@@ -1525,7 +1525,7 @@ private struct AutomationEditorSheetView: View {
                     } else {
                         Text(editingItem == nil ? "Create" : "Save")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(canSubmit ? AntigravityTheme.inkOnPrimaryCTA : UEChromePalette.textMuted)
+                            .foregroundStyle(canSubmit ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.textMuted)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -1562,12 +1562,12 @@ private struct AutomationEditorSheetView: View {
                     HStack(spacing: 4) {
                         Text(targetDisplayLabel)
                             .font(.system(size: 14.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textBody)
+                            .foregroundStyle(AntigravityTheme.textBody)
                             .lineLimit(1)
                         if !localProjects.isEmpty {
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(UEChromePalette.textMuted)
+                                .foregroundStyle(AntigravityTheme.textMuted)
                         }
                     }
                 }
@@ -1607,11 +1607,11 @@ private struct AutomationEditorSheetView: View {
                     HStack(spacing: 6) {
                         Text(selectedModelLabel)
                             .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textPrimary)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.textMuted)
+                            .foregroundStyle(AntigravityTheme.textMuted)
                     }
                     .padding(.horizontal, 11)
                     .frame(minHeight: 32)
@@ -1621,7 +1621,7 @@ private struct AutomationEditorSheetView: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
                 }
 
@@ -1630,7 +1630,7 @@ private struct AutomationEditorSheetView: View {
 
             Text("Uses your local files and tools. Schedules only.")
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
         }
     }
 
@@ -1644,7 +1644,7 @@ private struct AutomationEditorSheetView: View {
                     .foregroundStyle(color)
                 Text(err)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
                 if authExpired {
@@ -1675,16 +1675,16 @@ private struct AutomationEditorSheetView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Trigger")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(UEChromePalette.textSecondary)
+                .foregroundStyle(AntigravityTheme.textSecondary)
 
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 7) {
                     Image(systemName: "clock")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                     Text("Scheduled")
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                 }
 
                 HStack(spacing: 8) {
@@ -1704,26 +1704,26 @@ private struct AutomationEditorSheetView: View {
                         HStack(spacing: 6) {
                             Text(frequency.rawValue)
                                 .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(UEChromePalette.textPrimary)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(UEChromePalette.textMuted)
+                                .foregroundStyle(AntigravityTheme.textMuted)
                         }
                         .padding(.horizontal, 12)
                         .frame(minHeight: 36)
                         .background(
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(UEChromePalette.surfaceSubtleBox)
+                                .fill(AntigravityTheme.surfaceSubtleBox)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                         )
                     }
 
                     Text("at")
                         .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
 
                     Menu {
                         if frequency == .hourly {
@@ -1744,26 +1744,26 @@ private struct AutomationEditorSheetView: View {
                         HStack(spacing: 6) {
                             Text(currentTimeLabel)
                                 .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(UEChromePalette.textPrimary)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(UEChromePalette.textMuted)
+                                .foregroundStyle(AntigravityTheme.textMuted)
                         }
                         .padding(.horizontal, 12)
                         .frame(minHeight: 36)
                         .background(
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(UEChromePalette.surfaceSubtleBox)
+                                .fill(AntigravityTheme.surfaceSubtleBox)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                         )
                     }
 
                     Text(timeZoneShortLabel)
                         .font(.system(size: 13.5, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
 
                     Spacer(minLength: 0)
                 }
@@ -1777,11 +1777,11 @@ private struct AutomationEditorSheetView: View {
                             } label: {
                                 Text(label)
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(active ? AntigravityTheme.inkOnPrimaryCTA : UEChromePalette.textSecondary)
+                                    .foregroundStyle(active ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.textSecondary)
                                     .frame(maxWidth: .infinity, minHeight: 30)
                                     .background(
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .fill(active ? AntigravityTheme.accentPeriwinkle : UEChromePalette.surfaceSubtleBox)
+                                            .fill(active ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.surfaceSubtleBox)
                                     )
                             }
                             .buttonStyle(.plain)
@@ -1797,7 +1797,7 @@ private struct AutomationEditorSheetView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
         }
     }
@@ -1806,20 +1806,20 @@ private struct AutomationEditorSheetView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Instructions")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(UEChromePalette.textSecondary)
+                .foregroundStyle(AntigravityTheme.textSecondary)
 
             ZStack(alignment: .topLeading) {
                 if promptText.isEmpty {
                     Text("What should the agent do on each run? For example: summarize new bugs assigned to me and anything that changed overnight.")
                         .font(.system(size: 14.5, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 13)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $promptText)
                     .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(UEChromePalette.textPrimary)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .tint(AntigravityTheme.accentPeriwinkle)
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 136, maxHeight: 220)
@@ -1832,7 +1832,7 @@ private struct AutomationEditorSheetView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
         }
     }

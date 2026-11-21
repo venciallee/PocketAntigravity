@@ -48,7 +48,7 @@ public struct AntigravityWelcomeView: View {
 
                     Text("Scan the Remote Control QR code in Antigravity Desktop to sync your conversations over Wi-Fi or 5G.")
                         .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .multilineTextAlignment(.center)
                         .lineSpacing(3)
                         .padding(.horizontal, 20)
@@ -70,7 +70,7 @@ public struct AntigravityWelcomeView: View {
                                 : "Checking saved connection..."
                         )
                         .font(.system(size: 13.5, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
                     }
@@ -100,7 +100,7 @@ public struct AntigravityWelcomeView: View {
                             Text("Scan Remote Control QR")
                                 .font(.system(size: 16.5, weight: .semibold))
                         }
-                        .foregroundStyle(UEChromePalette.inkOnPrimaryCTA)
+                        .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(maxWidth: .infinity, minHeight: 54)
                         .background(
                             Capsule()
@@ -113,11 +113,11 @@ public struct AntigravityWelcomeView: View {
                     VStack(spacing: 4) {
                         Text("Open Antigravity on Mac / PC → Remote Control")
                             .font(.system(size: 12.5, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textMuted)
+                            .foregroundStyle(AntigravityTheme.textMuted)
 
                         Text("Independent third-party companion · Not affiliated with Google LLC")
                             .font(.system(size: 11, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textMuted.opacity(0.8))
+                            .foregroundStyle(AntigravityTheme.textMuted.opacity(0.8))
                             .multilineTextAlignment(.center)
                     }
                 }

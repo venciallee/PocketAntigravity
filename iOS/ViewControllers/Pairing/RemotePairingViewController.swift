@@ -40,7 +40,7 @@ public struct RemotePairingViewController: View {
                         .foregroundStyle(Color.white)
                     Text("Scan Antigravity Desktop's Remote Control QR code — works over Wi-Fi & 5G")
                         .font(.system(size: 13.5, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                 }
 
                 // Single Primary Card: Tap to Scan Remote Control QR (or Live Connection Status)
@@ -52,7 +52,7 @@ public struct RemotePairingViewController: View {
                             .strokeBorder(
                                 isOnlineConnected
                                     ? AntigravityTheme.statusDone.opacity(0.45)
-                                    : (isOfflinePaired ? AntigravityTheme.statusError.opacity(0.50) : UEChromePalette.cardBorder),
+                                    : (isOfflinePaired ? AntigravityTheme.statusError.opacity(0.50) : AntigravityTheme.cardBorder),
                                 lineWidth: 1
                             )
                     )
@@ -70,7 +70,7 @@ public struct RemotePairingViewController: View {
 
                                 Text(store.connectionStatusText)
                                     .font(.system(size: 12.5, weight: .regular))
-                                    .foregroundStyle(UEChromePalette.textSecondary)
+                                    .foregroundStyle(AntigravityTheme.textSecondary)
                                     .multilineTextAlignment(.center)
                                     .lineLimit(2)
                             } else {
@@ -107,7 +107,7 @@ public struct RemotePairingViewController: View {
                                                 : "Open Antigravity on Mac/PC → Remote Control"))
                                 )
                                 .font(.system(size: 13, weight: .regular))
-                                .foregroundStyle(UEChromePalette.textSecondary)
+                                .foregroundStyle(AntigravityTheme.textSecondary)
                                 .multilineTextAlignment(.center)
                                 .lineLimit(2)
 
@@ -127,8 +127,8 @@ public struct RemotePairingViewController: View {
                                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                             .padding(.horizontal, 14)
                                             .frame(minHeight: 36)
-                                            .background(Capsule().fill(UEChromePalette.surfacePill))
-                                            .overlay(Capsule().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                                            .background(Capsule().fill(AntigravityTheme.surfacePill))
+                                            .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                                         }
                                         .buttonStyle(.plain)
                                         .accessibilityIdentifier("btn-retry-connection")
@@ -142,11 +142,11 @@ public struct RemotePairingViewController: View {
                                                 Text("Scan QR")
                                                     .font(.system(size: 13, weight: .semibold))
                                             }
-                                            .foregroundStyle(UEChromePalette.textPrimary)
+                                            .foregroundStyle(AntigravityTheme.textPrimary)
                                             .padding(.horizontal, 14)
                                             .frame(minHeight: 36)
-                                            .background(Capsule().fill(UEChromePalette.surfacePill))
-                                            .overlay(Capsule().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                                            .background(Capsule().fill(AntigravityTheme.surfacePill))
+                                            .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                                         }
                                         .buttonStyle(.plain)
                                     }
@@ -164,8 +164,8 @@ public struct RemotePairingViewController: View {
                                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                         .padding(.horizontal, 14)
                                         .frame(minHeight: 36)
-                                        .background(Capsule().fill(UEChromePalette.surfacePill))
-                                        .overlay(Capsule().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                                        .background(Capsule().fill(AntigravityTheme.surfacePill))
+                                        .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                                     }
                                     .buttonStyle(.plain)
                                     .padding(.top, 2)
@@ -212,17 +212,17 @@ public struct RemotePairingViewController: View {
                                 .foregroundStyle(Color.white)
                             Text("\(store.appearancePreferences.globalPermissionPreset.rawValue) · \(store.customizations.plugins.filter(\.isInstalled).count) plugins · \(store.appearancePreferences.interfaceLayout.rawValue)")
                                 .font(.system(size: 12.5))
-                                .foregroundStyle(UEChromePalette.textSecondary)
+                                .foregroundStyle(AntigravityTheme.textSecondary)
                                 .lineLimit(1)
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.textMuted)
+                            .foregroundStyle(AntigravityTheme.textMuted)
                     }
                     .padding(14)
                     .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("btn-open-customizations-settings")
@@ -233,7 +233,7 @@ public struct RemotePairingViewController: View {
                         Text("AVAILABLE HOSTS")
                             .font(.system(size: 11, weight: .semibold))
                             .tracking(0.7)
-                            .foregroundStyle(UEChromePalette.textMuted)
+                            .foregroundStyle(AntigravityTheme.textMuted)
 
                         ForEach(store.availableRelayInstances) { inst in
                             let isSelected = (store.activeHost.instanceId == inst.uuid)
@@ -279,10 +279,10 @@ public struct RemotePairingViewController: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(inst.name)
                                             .font(.system(size: 14.5, weight: .semibold))
-                                            .foregroundStyle(isInstOnline ? Color.white : UEChromePalette.textSecondary)
+                                            .foregroundStyle(isInstOnline ? Color.white : AntigravityTheme.textSecondary)
                                         Text("\(isInstOnline ? inst.status.badgeText : "Offline") · \(inst.version)")
                                             .font(.system(size: 11.5, weight: .regular, design: .monospaced))
-                                            .foregroundStyle(UEChromePalette.textSecondary)
+                                            .foregroundStyle(AntigravityTheme.textSecondary)
                                     }
                                     Spacer()
                                     if isSelected {
@@ -296,7 +296,7 @@ public struct RemotePairingViewController: View {
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                                         .strokeBorder(
-                                            isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.5) : UEChromePalette.cardBorder,
+                                            isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.5) : AntigravityTheme.cardBorder,
                                             lineWidth: 1
                                         )
                                 )
@@ -389,7 +389,7 @@ public struct RemotePairingViewController: View {
             Text("ABOUT & COPYRIGHT · 版权与商标声明")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
 
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
@@ -412,27 +412,27 @@ public struct RemotePairingViewController: View {
                         }
                         Text("Companion for Antigravity")
                             .font(.system(size: 12.5, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                     }
                 }
 
                 Rectangle()
-                    .fill(UEChromePalette.subtleDivider)
+                    .fill(AntigravityTheme.subtleDivider)
                     .frame(height: 1)
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Original App Icon & Client Code © 2026 iOSAntigravity Contributors.")
                         .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(UEChromePalette.textPrimary)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
 
                     Text("AG Orbit is an independent, unofficial third-party companion client and is not affiliated with, endorsed by, or sponsored by Google LLC. \"Google\" and \"Antigravity\" are trademarks of Google LLC, referenced solely to describe compatibility with user-hosted Antigravity Desktop and Cloud instances.")
                         .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Text("原创 7 段轨道应用图标与客户端代码版权归 © 2026 iOSAntigravity Contributors 所有（不含任何第三方官方品牌图形资产）。“Google” 与 “Antigravity” 为 Google LLC 的商标，仅用于说明伴侣客户端兼容性，与 Google LLC 无隶属或官方背书关系。")
                         .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textMuted)
+                        .foregroundStyle(AntigravityTheme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -444,7 +444,7 @@ public struct RemotePairingViewController: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("card-about-copyright")

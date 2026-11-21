@@ -1,0 +1,1515 @@
+import Foundation
+
+/// Cloud Relay instance discovery, handshake/probe, federated summaries, model catalog, and Cloud projects.
+extension AntigravityRPCClient {
+    // MARK: - Cloud Relay `ApiService/ListInstances` & Instance Resolution
+
+    /// Queries `POST /$rpc/devtools_jetski_boq_api_proto.ApiService/ListInstances` for a given `X-Goog-AuthUser`.
+    public func listRelayInstances(
+        authUserOverride: String? = nil,
+        timeoutInterval: TimeInterval? = nil
+    ) async throws -> [RelayInstanceInfo] {
+        let activeAuthUser = authUserOverride ?? authUser
+        let urlString = "\(SAPISIDHashGenerator.normalizeOrigin(relayOriginURL.absoluteString))\(SAPISIDHashGenerator.apiServicePrefix)/ListInstances"
+        guard let url = URL(string: urlString) else {
+            throw AntigravityRPCError.invalidEndpoint
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        if let timeoutInterval {
+            request.timeoutInterval = timeoutInterval
+        }
+        SAPISIDHashGenerator.applyApiServiceHeaders(
+            to: &request,
+            cookieHeader: sessionCookie ?? "",
+            origin: relayOriginURL.absoluteString,
+            authUser: activeAuthUser
+        )
+        request.httpBody = CloudRelayJSPBCodec.encodeListInstancesRequest()
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AntigravityRPCError.invalidEndpoint
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            let text = String(data: data, encoding: .utf8) ?? "Google session expired or unauthorized"
+            throw AntigravityRPCError.unauthorized(text)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let text = String(data: data, encoding: .utf8) ?? ""
+            throw AntigravityRPCError.httpError(statusCode: http.statusCode, body: text)
+        }
+        return try CloudRelayJSPBCodec.decodeListInstancesResponse(
+            data,
+            responseHeaders: http.allHeaderFields
+        )
+    }
+
+    /// Returns the currently active reachable Cloud Relay instance, if resolved.
+    public func currentActiveRelayInstance() -> RelayInstanceInfo? {
+        if let resUuid = resolvedInstanceUuid,
+           let matched = cachedRelayInstances.first(where: { $0.uuid == resUuid && $0.status.isReachable }) {
+            return matched
+        }
+        return cachedRelayInstances.first(where: \.status.isReachable)
+    }
+
+    /// Returns the latest Cloud Relay instance list observed from `ApiService/ListInstances`.
+    public func currentCachedRelayInstances() -> [RelayInstanceInfo] {
+        cachedRelayInstances
+    }
+
+    /// Resolves a scanned Remote Control device slug (`lt74xt6l0m-golden-star`) or UUID (`0f5819ac-...-v2`)
+    /// to an online `RelayInstanceInfo`, automatically failing over across open windows on the same Mac/account
+    /// and probing `X-Goog-AuthUser` `0..4` for multi-account sessions.
+    public func resolveCloudRelayInstance(
+        preferredIdentifier: String? = nil,
+        timeoutInterval: TimeInterval? = nil
+    ) async throws -> (selected: RelayInstanceInfo, allInstances: [RelayInstanceInfo], matchedAuthUser: String) {
+        let rawTarget = (preferredIdentifier ?? targetInstanceIdentifier).trimmingCharacters(in: .whitespacesAndNewlines)
+        let isWildcardTarget = rawTarget.isEmpty
+            || rawTarget == "r"
+            || rawTarget == "auto"
+            || rawTarget == "macbook-pro-local"
+
+        var candidateAuthUsers: [String] = []
+        if let explicitAuthUser, !explicitAuthUser.isEmpty {
+            candidateAuthUsers.append(explicitAuthUser)
+        }
+        for fallbackIdx in ["0", "1", "2", "3", "4"] where !candidateAuthUsers.contains(fallbackIdx) {
+            candidateAuthUsers.append(fallbackIdx)
+        }
+
+        var firstNonEmptyResult: (instances: [RelayInstanceInfo], authUser: String)? = nil
+        var bestReachableFallback: (selected: RelayInstanceInfo, instances: [RelayInstanceInfo], authUser: String)? = nil
+        var bestOfflineMatch: (selected: RelayInstanceInfo, instances: [RelayInstanceInfo], authUser: String)? = nil
+        var lastError: Error? = nil
+
+        for (userIdx, candidateUser) in candidateAuthUsers.enumerated() {
+            do {
+                let perUserTimeout = userIdx == 0 ? timeoutInterval : min(timeoutInterval ?? 6.0, 5.0)
+                let instances = try await listRelayInstances(
+                    authUserOverride: candidateUser,
+                    timeoutInterval: perUserTimeout
+                )
+                if instances.isEmpty {
+                    continue
+                }
+                if firstNonEmptyResult == nil {
+                    firstNonEmptyResult = (instances, candidateUser)
+                }
+
+                if !isWildcardTarget {
+                    // 1. Exact UUID or window slug match that is currently ONLINE (`isReachable`)
+                    if let exactOnline = instances.first(where: { $0.matches(identifier: rawTarget) && $0.status.isReachable }) {
+                        self.authUser = candidateUser
+                        self.resolvedInstanceUuid = exactOnline.uuid
+                        self.cachedRelayInstances = instances
+                        return (exactOnline, instances, candidateUser)
+                    }
+                    // 2. Peer window on the SAME Mac (`huangjiafandemac-mini-local-...`) that is currently ONLINE
+                    if let familyOnline = instances.first(where: { $0.sameHostFamily(as: rawTarget) && $0.status.isReachable }) {
+                        self.authUser = candidateUser
+                        self.resolvedInstanceUuid = familyOnline.uuid
+                        self.cachedRelayInstances = instances
+                        return (familyOnline, instances, candidateUser)
+                    }
+                    // 3. Record any online instance on this account before considering disconnected windows
+                    if bestReachableFallback == nil,
+                       let anyOnline = instances.first(where: \.status.isReachable) {
+                        bestReachableFallback = (anyOnline, instances, candidateUser)
+                    }
+                    if bestOfflineMatch == nil,
+                       let exactOffline = instances.first(where: { $0.matches(identifier: rawTarget) })
+                           ?? instances.first(where: { $0.sameHostFamily(as: rawTarget) }) {
+                        bestOfflineMatch = (exactOffline, instances, candidateUser)
+                    }
+                } else if let online = instances.first(where: \.status.isReachable) {
+                    self.authUser = candidateUser
+                    self.resolvedInstanceUuid = online.uuid
+                    self.cachedRelayInstances = instances
+                    return (online, instances, candidateUser)
+                }
+            } catch {
+                lastError = error
+                if explicitAuthUser != nil && candidateUser == explicitAuthUser {
+                    continue
+                }
+            }
+        }
+
+        if let reachable = bestReachableFallback {
+            self.authUser = reachable.authUser
+            self.resolvedInstanceUuid = reachable.selected.uuid
+            self.cachedRelayInstances = reachable.instances
+            return (reachable.selected, reachable.instances, reachable.authUser)
+        }
+
+        if let offline = bestOfflineMatch {
+            self.authUser = offline.authUser
+            self.resolvedInstanceUuid = offline.selected.uuid
+            self.cachedRelayInstances = offline.instances
+            return (offline.selected, offline.instances, offline.authUser)
+        }
+
+        if let fallback = firstNonEmptyResult,
+           let chosen = fallback.instances.first(where: \.status.isReachable) ?? fallback.instances.first {
+            self.authUser = fallback.authUser
+            self.resolvedInstanceUuid = chosen.uuid
+            self.cachedRelayInstances = fallback.instances
+            return (chosen, fallback.instances, fallback.authUser)
+        }
+
+        if firstNonEmptyResult == nil && !isWildcardTarget && (rawTarget.hasSuffix("-v2") || rawTarget.count >= 32) {
+            let directInfo = RelayInstanceInfo(
+                uuid: rawTarget,
+                name: rawTarget,
+                status: .connected
+            )
+            self.resolvedInstanceUuid = rawTarget
+            self.cachedRelayInstances = [directInfo]
+            return (directInfo, [directInfo], authUser)
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        throw AntigravityRPCError.unauthorized(
+            "No online Antigravity Desktop instances found for this Google account. Ensure Remote Control is enabled on your Mac/PC."
+        )
+    }
+
+    // MARK: - Handshake & Login Verification
+
+    /// Verifies authentication (`SAPISIDHASH` + `ApiService/ListInstances` + `ProxyCommand`, or `x-codeium-csrf-token`)
+    /// and hydrates initial local + Antigravity Cloud workspaces & trajectories across all reachable instances.
+    public func verifyConnection(timeoutInterval: TimeInterval = 4.0) async throws -> BackendHandshakeResult {
+        let start = Date()
+        let effectiveTimeout = (channel == .cloudRelay) ? max(timeoutInterval, 15.0) : timeoutInterval
+        var resolvedName: String? = nil
+        var serverVersion = "v2.32.0"
+        var allRelayInstances: [RelayInstanceInfo] = []
+
+        if channel == .cloudRelay {
+            let resolution = try await resolveCloudRelayInstance(
+                preferredIdentifier: targetInstanceIdentifier,
+                timeoutInterval: effectiveTimeout
+            )
+            resolvedName = resolution.selected.name
+            serverVersion = resolution.selected.version
+            allRelayInstances = resolution.allInstances
+        }
+
+        let federated = try await fetchFederatedWorkspacesAndSummaries(timeoutInterval: effectiveTimeout)
+        let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+        return BackendHandshakeResult(
+            latencyMs: elapsedMs,
+            workspaces: federated.workspaces,
+            summaries: federated.summaries,
+            cloudProjects: federated.cloudProjects,
+            serverVersion: serverVersion,
+            resolvedHostname: resolvedName,
+            resolvedInstanceUuid: resolvedInstanceUuid,
+            resolvedAuthUser: channel == .cloudRelay ? authUser : nil,
+            availableRelayInstances: allRelayInstances
+        )
+    }
+
+    /// Single-request lightweight reachability probe used by foreground idle heartbeats
+    /// and exponential-backoff offline recovery so mobile radios avoid multi-RPC fan-out.
+    /// - Cloud Relay: sends only `ApiService/ListInstances` (a few hundred bytes, zero `ProxyCommand` fan-out).
+    /// - Direct LAN: sends a single short-timeout `GetWorkspaceInfos` probe (HTTP 404 still proves server + auth liveness).
+    public func probeHostReachability(timeoutInterval: TimeInterval? = nil) async throws -> HostReachabilityProbeResult {
+        let start = Date()
+        if channel == .cloudRelay {
+            let effectiveTimeout = timeoutInterval ?? 8.0
+            let prevReachableIds = Set(cachedRelayInstances.filter(\.status.isReachable).map(\.uuid))
+            let prevActiveUuid = resolvedInstanceUuid
+
+            let instances = try await listRelayInstances(timeoutInterval: effectiveTimeout)
+            if !instances.isEmpty {
+                self.cachedRelayInstances = instances
+            }
+
+            let reachable = instances.filter(\.status.isReachable)
+            if reachable.isEmpty {
+                if instances.isEmpty, let directUuid = resolvedInstanceUuid, !directUuid.isEmpty {
+                    do {
+                        _ = try await getWorkspaceInfos(
+                            instanceUuidOverride: directUuid,
+                            timeoutInterval: effectiveTimeout
+                        )
+                    } catch let AntigravityRPCError.httpError(statusCode, _) where statusCode == 404 {
+                        // HTTP 404 on optional endpoint still proves the remote language_server is alive.
+                    }
+                    let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+                    return HostReachabilityProbeResult(
+                        latencyMs: elapsedMs,
+                        availableRelayInstances: cachedRelayInstances,
+                        activeRelayInstance: currentActiveRelayInstance(),
+                        relayTopologyChanged: false
+                    )
+                }
+                throw AntigravityRPCError.httpError(
+                    statusCode: 503,
+                    body: "No reachable Antigravity Desktop instances online"
+                )
+            }
+
+            let chosen: RelayInstanceInfo = {
+                if let prevActiveUuid,
+                   let stillOnline = reachable.first(where: { $0.uuid == prevActiveUuid }) {
+                    return stillOnline
+                }
+                if !targetInstanceIdentifier.isEmpty {
+                    if let exact = reachable.first(where: { $0.matches(identifier: targetInstanceIdentifier) }) {
+                        return exact
+                    }
+                    if let sameFamily = reachable.first(where: { $0.sameHostFamily(as: targetInstanceIdentifier) }) {
+                        return sameFamily
+                    }
+                }
+                return reachable[0]
+            }()
+
+            self.resolvedInstanceUuid = chosen.uuid
+            let newReachableIds = Set(reachable.map(\.uuid))
+            let topologyChanged = (newReachableIds != prevReachableIds) || (chosen.uuid != prevActiveUuid)
+            let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+            return HostReachabilityProbeResult(
+                latencyMs: elapsedMs,
+                availableRelayInstances: instances,
+                activeRelayInstance: chosen,
+                relayTopologyChanged: topologyChanged
+            )
+        }
+
+        let effectiveTimeout = timeoutInterval ?? 3.0
+        _ = try await getWorkspaceInfosOptional(timeoutInterval: effectiveTimeout)
+        let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+        return HostReachabilityProbeResult(latencyMs: elapsedMs)
+    }
+
+    /// Returns all currently reachable Cloud Relay Desktop instances (falling back to the resolved instance).
+    public func currentReachableRelayInstances() -> [RelayInstanceInfo] {
+        guard channel == .cloudRelay else { return [] }
+        let reachable = cachedRelayInstances.filter(\.status.isReachable)
+        if !reachable.isEmpty {
+            return reachable
+        }
+        if let uuid = resolvedInstanceUuid, !uuid.isEmpty {
+            return [RelayInstanceInfo(uuid: uuid, name: targetInstanceIdentifier.isEmpty ? "Mac" : targetInstanceIdentifier, status: .connected)]
+        }
+        return []
+    }
+
+    /// Returns the reachable Cloud Relay instance that most recently served Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) RPCs.
+    public func currentPreferredCloudInstanceUuid() -> String? {
+        if let pref = preferredCloudInstanceUuid, !pref.isEmpty {
+            if cachedRelayInstances.isEmpty
+                || cachedRelayInstances.contains(where: { $0.uuid == pref && $0.status.isReachable }) {
+                return pref
+            }
+        }
+        return selectReachableRelayUuid(preferred: resolvedInstanceUuid)
+    }
+
+    /// Refreshes `ListInstances` (when on `.cloudRelay`), federates local workspaces & summaries across all
+    /// reachable instances on the signed-in Google account, and queries Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`)
+    /// projects & conversations so both Cloud ("Antigravity") and Local hosts stay synchronized.
+    public func fetchFederatedWorkspacesAndSummaries(
+        timeoutInterval: TimeInterval? = nil,
+        lightweightPoll: Bool = false
+    ) async throws -> (workspaces: [WorkspaceInfo], summaries: [CascadeSummary], cloudProjects: [ProjectWorkspace], cloudWarmingUp: Bool) {
+        if channel == .cloudRelay {
+            if let refreshed = try? await listRelayInstances(timeoutInterval: timeoutInterval), !refreshed.isEmpty {
+                self.cachedRelayInstances = refreshed
+                if let currentUuid = resolvedInstanceUuid,
+                   !refreshed.contains(where: { $0.uuid == currentUuid && $0.status.isReachable }),
+                   let fallback = refreshed.first(where: { $0.status.isReachable }) ?? refreshed.first {
+                    self.resolvedInstanceUuid = fallback.uuid
+                }
+            }
+        }
+
+        let reachableInstances = currentReachableRelayInstances()
+
+        // 1. Fetch Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects (reuse cache on lightweight periodic ticks)
+        let cloudProjectOutcome: (projects: [ProjectWorkspace], warmingUp: Bool)
+        if lightweightPoll && !cachedCloudProjectsById.isEmpty {
+            cloudProjectOutcome = (Array(cachedCloudProjectsById.values), false)
+        } else {
+            cloudProjectOutcome = await fetchCloudProjects(
+                candidateInstances: reachableInstances,
+                timeoutInterval: timeoutInterval
+            )
+        }
+        let cloudProjects = cloudProjectOutcome.projects
+
+        var mergedWorkspacesByUri: [String: WorkspaceInfo] = [:]
+        for cp in cloudProjects {
+            mergedWorkspacesByUri[cp.workspaceUri] = WorkspaceInfo(
+                workspaceUri: cp.workspaceUri,
+                displayName: cp.name,
+                activeBranch: cp.activeBranch,
+                isCloud: true,
+                originInstanceUuid: cp.originInstanceUuid,
+                originHostName: "Antigravity"
+            )
+        }
+
+        var mergedSummariesById: [String: CascadeSummary] = [:]
+
+        if channel == .cloudRelay && !reachableInstances.isEmpty {
+            let cloudProjectsSnapshot = self.cachedCloudProjectsById
+            var anyInstanceSucceeded = false
+
+            // Order Cloud candidate instances with the instance that served Cloud projects first
+            let preferredCloudUuid = self.preferredCloudInstanceUuid
+            let orderedCloudCandidates: [RelayInstanceInfo] = {
+                guard let preferredCloudUuid,
+                      let prefInst = reachableInstances.first(where: { $0.uuid == preferredCloudUuid }) else {
+                    return reachableInstances
+                }
+                return [prefInst] + reachableInstances.filter { $0.uuid != preferredCloudUuid }
+            }()
+
+            // Run Cloud (`BACKEND_TYPE_REMOTE_AICODE`) summary fetch concurrently with Local per-instance federation
+            async let cloudSummariesTask: [CascadeSummary] = self.fetchCloudSummariesAcrossInstances(
+                candidates: orderedCloudCandidates,
+                timeoutInterval: timeoutInterval
+            )
+
+            await withTaskGroup(of: (Bool, [WorkspaceInfo], [CascadeSummary], [CascadeSummary]).self) { group in
+                for inst in reachableInstances {
+                    group.addTask {
+                        var instOk = false
+                        let ws: [WorkspaceInfo]
+                        do {
+                            ws = try await self.getWorkspaceInfos(
+                                instanceUuidOverride: inst.uuid,
+                                originHostName: inst.name,
+                                timeoutInterval: timeoutInterval
+                            )
+                            instOk = true
+                        } catch let AntigravityRPCError.httpError(code, _) where code == 404 {
+                            ws = []
+                            instOk = true
+                        } catch {
+                            ws = []
+                        }
+
+                        async let memTask = self.getAllCascadeTrajectories(
+                            instanceUuidOverride: inst.uuid,
+                            originHostName: inst.name,
+                            timeoutInterval: timeoutInterval
+                        )
+                        async let jbLocalTask = self.fetchJetboxSummariesSnapshot(
+                            cloud: false,
+                            instanceUuidOverride: inst.uuid,
+                            originHostName: inst.name,
+                            snapshotTimeout: 4.0
+                        )
+
+                        let memResult = try? await memTask
+                        let jbLocal = await jbLocalTask
+                        if memResult != nil || !jbLocal.isEmpty {
+                            instOk = true
+                        }
+                        return (instOk, ws, memResult ?? [], jbLocal)
+                    }
+                }
+
+                for await (instOk, wsList, memList, jbLocalList) in group {
+                    if instOk { anyInstanceSucceeded = true }
+                    for ws in wsList where mergedWorkspacesByUri[ws.workspaceUri] == nil {
+                        mergedWorkspacesByUri[ws.workspaceUri] = ws
+                    }
+                    for s in memList + jbLocalList {
+                        Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: cloudProjectsSnapshot)
+                    }
+                }
+            }
+
+            let cloudSummaries = await cloudSummariesTask
+            let updatedCloudProjects = self.cachedCloudProjectsById
+            if !cloudSummaries.isEmpty {
+                anyInstanceSucceeded = true
+                for s in cloudSummaries {
+                    Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: updatedCloudProjects)
+                }
+            }
+
+            if !anyInstanceSucceeded && cloudProjects.isEmpty {
+                let ws = try await getWorkspaceInfosOptional(timeoutInterval: timeoutInterval)
+                let sums = try await getAllCascadeTrajectories(timeoutInterval: timeoutInterval)
+                for w in ws { mergedWorkspacesByUri[w.workspaceUri] = w }
+                for s in sums { Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: updatedCloudProjects) }
+            }
+        } else {
+            // Direct LAN / Companion / Mock server mode
+            async let workspacesTask = getWorkspaceInfosOptional(timeoutInterval: timeoutInterval)
+            async let summariesTask = getAllCascadeTrajectories(timeoutInterval: timeoutInterval)
+            let workspaces = try await workspacesTask
+            let summaries = try await summariesTask
+            let cloudSummaries = await fetchJetboxSummariesSnapshot(
+                cloud: true,
+                originHostName: "Antigravity",
+                snapshotTimeout: 1.5
+            )
+            let cloudProjectsSnapshot = self.cachedCloudProjectsById
+            for w in workspaces where mergedWorkspacesByUri[w.workspaceUri] == nil {
+                mergedWorkspacesByUri[w.workspaceUri] = w
+            }
+            for s in summaries + cloudSummaries {
+                Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: cloudProjectsSnapshot)
+            }
+        }
+
+        Self.reconcileBatchUnreadStates(&mergedSummariesById)
+
+        let sortedSummaries = mergedSummariesById.values.sorted { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.cascadeId < rhs.cascadeId
+        }
+        let sortedWorkspaces = Array(mergedWorkspacesByUri.values).sorted { $0.displayName < $1.displayName }
+        return (sortedWorkspaces, sortedSummaries, cloudProjects, cloudProjectOutcome.warmingUp)
+    }
+
+    internal func fetchCloudSummariesAcrossInstances(
+        candidates: [RelayInstanceInfo],
+        timeoutInterval: TimeInterval?
+    ) async -> [CascadeSummary] {
+        let cloudProjectsSnapshot = self.cachedCloudProjectsById
+        for inst in candidates {
+            async let jbTask = fetchJetboxSummariesSnapshot(
+                cloud: true,
+                instanceUuidOverride: inst.uuid,
+                originHostName: "Antigravity",
+                snapshotTimeout: 4.5
+            )
+            async let unaryTask = getAllCascadeTrajectoriesCloud(
+                instanceUuidOverride: inst.uuid,
+                timeoutInterval: timeoutInterval ?? 8.0
+            )
+            let jbCloud = await jbTask
+            let unaryCloud = await unaryTask
+            var combined: [String: CascadeSummary] = [:]
+            for s in unaryCloud + jbCloud {
+                Self.mergeSummaryEntry(s, into: &combined, cloudProjectsById: cloudProjectsSnapshot)
+            }
+            if !combined.isEmpty {
+                self.preferredCloudInstanceUuid = inst.uuid
+                return Array(combined.values)
+            }
+        }
+        return []
+    }
+
+    /// Resolves the canonical Antigravity Cloud `ProjectWorkspace` matching `summary` by:
+    /// 1. Exact or `projects/`-normalized `cloudProjectId`,
+    /// 2. Case-insensitive `workspaceUri` (`cloud://owner/repo`),
+    /// 3. Normalized Cloud location label (`owner/repo`), or
+    /// 4. Unique repo short-name suffix when `summary.isCloud == true`.
+    internal static func matchCloudProject(
+        for summary: CascadeSummary,
+        cloudProjects: [ProjectWorkspace]
+    ) -> ProjectWorkspace? {
+        guard !cloudProjects.isEmpty else { return nil }
+
+        func normalizeProjectId(_ raw: String) -> String {
+            var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if trimmed.hasPrefix("projects/") {
+                trimmed = String(trimmed.dropFirst("projects/".count))
+            }
+            return trimmed
+        }
+
+        if let rawCpid = summary.cloudProjectId, !rawCpid.isEmpty {
+            let normCpid = normalizeProjectId(rawCpid)
+            if let exact = cloudProjects.first(where: { cp in
+                let cpId = cp.cloudProjectId ?? cp.id
+                return cpId == rawCpid || cp.id == rawCpid
+                    || normalizeProjectId(cpId) == normCpid
+                    || normalizeProjectId(cp.id) == normCpid
+            }) {
+                return exact
+            }
+        }
+
+        if !summary.workspaceUri.isEmpty {
+            if let byUri = cloudProjects.first(where: {
+                !$0.workspaceUri.isEmpty
+                    && $0.workspaceUri.caseInsensitiveCompare(summary.workspaceUri) == .orderedSame
+            }) {
+                return byUri
+            }
+            if let summaryLabel = AntigravityCloudDetector.extractCloudLocationLabel(summary.workspaceUri) {
+                if let byLabel = cloudProjects.first(where: { cp in
+                    if let cpLabel = AntigravityCloudDetector.extractCloudLocationLabel(cp.workspaceUri),
+                       cpLabel.caseInsensitiveCompare(summaryLabel) == .orderedSame {
+                        return true
+                    }
+                    return cp.name.caseInsensitiveCompare(summaryLabel) == .orderedSame
+                }) {
+                    return byLabel
+                }
+            }
+        }
+
+        if summary.isCloud && !AntigravityCloudDetector.isNoProjectSlug(summary.projectSlug) {
+            let cleanSlug = summary.projectSlug.lowercased().hasPrefix("cloud:")
+                ? String(summary.projectSlug.dropFirst("cloud:".count))
+                : summary.projectSlug
+            if let exactName = cloudProjects.first(where: {
+                $0.name.caseInsensitiveCompare(cleanSlug) == .orderedSame
+            }) {
+                return exactName
+            }
+            let suffixMatches = cloudProjects.filter { cp in
+                let repoFromName = cp.name.split(separator: "/").last.map(String.init) ?? cp.name
+                let repoFromUri = AntigravityCloudDetector.extractCloudLocationLabel(cp.workspaceUri)?
+                    .split(separator: "/").last.map(String.init)
+                return repoFromName.caseInsensitiveCompare(cleanSlug) == .orderedSame
+                    || (repoFromUri?.caseInsensitiveCompare(cleanSlug) == .orderedSame)
+            }
+            if suffixMatches.count == 1 {
+                return suffixMatches[0]
+            }
+        }
+
+        return nil
+    }
+
+    internal static func summaryStatusPriority(_ status: CortexStepStatus) -> Int {
+        switch status {
+        case .waiting, .blocked: return 4
+        case .inProgress, .pending: return 3
+        case .error, .cancelled: return 2
+        case .done: return 1
+        case .unspecified: return 0
+        }
+    }
+
+    internal static func mergeSummaryEntry(
+        _ incoming: CascadeSummary,
+        into map: inout [String: CascadeSummary],
+        cloudProjectsById: [String: ProjectWorkspace]
+    ) {
+        let allCloudProjects = Array(cloudProjectsById.values)
+        var resolved = incoming
+        if let cp = matchCloudProject(for: resolved, cloudProjects: allCloudProjects) {
+            resolved.isCloud = true
+            resolved.cloudProjectId = cp.cloudProjectId ?? cp.id
+            resolved.projectSlug = cp.name
+            resolved.workspaceUri = cp.workspaceUri
+            resolved.originHostName = "Antigravity"
+        }
+
+        guard let existing = map[resolved.cascadeId] else {
+            map[resolved.cascadeId] = resolved
+            return
+        }
+
+        var merged = resolved.stepCount >= existing.stepCount && resolved.updatedAt >= existing.updatedAt
+            ? resolved
+            : existing
+
+        // 1. Title: never let default placeholder overwrite a real title
+        if existing.title != "New Conversation" && resolved.title == "New Conversation" {
+            merged.title = existing.title
+        } else if resolved.title != "New Conversation" && existing.title == "New Conversation" {
+            merged.title = resolved.title
+        } else if resolved.title != "New Conversation" && resolved.updatedAt >= existing.updatedAt {
+            merged.title = resolved.title
+        } else {
+            merged.title = existing.title
+        }
+
+        // 2. Cloud identity & canonical project binding
+        merged.isCloud = existing.isCloud || resolved.isCloud
+        merged.cloudProjectId = nonEmptyString(resolved.cloudProjectId) ?? nonEmptyString(existing.cloudProjectId)
+        if merged.isCloud {
+            merged.originHostName = "Antigravity"
+        }
+        if !AntigravityCloudDetector.isNoProjectSlug(existing.projectSlug)
+            && AntigravityCloudDetector.isNoProjectSlug(merged.projectSlug) {
+            merged.projectSlug = existing.projectSlug
+            if merged.workspaceUri.isEmpty {
+                merged.workspaceUri = existing.workspaceUri
+            }
+        }
+        if !AntigravityCloudDetector.isNoProjectSlug(resolved.projectSlug)
+            && AntigravityCloudDetector.isNoProjectSlug(merged.projectSlug) {
+            merged.projectSlug = resolved.projectSlug
+            if merged.workspaceUri.isEmpty {
+                merged.workspaceUri = resolved.workspaceUri
+            }
+        }
+        if let cp = matchCloudProject(for: merged, cloudProjects: allCloudProjects) {
+            merged.isCloud = true
+            merged.cloudProjectId = cp.cloudProjectId ?? cp.id
+            merged.projectSlug = cp.name
+            merged.workspaceUri = cp.workspaceUri
+            merged.originHostName = "Antigravity"
+        }
+
+        // 3. Step count & timestamps
+        merged.stepCount = max(existing.stepCount, resolved.stepCount)
+        merged.currentStepIndex = max(1, merged.stepCount)
+        merged.totalSteps = max(1, merged.stepCount)
+        if resolved.updatedAt >= existing.updatedAt {
+            merged.updatedAt = resolved.updatedAt
+            merged.relativeTimeLabel = resolved.relativeTimeLabel
+        } else {
+            merged.updatedAt = existing.updatedAt
+            merged.relativeTimeLabel = existing.relativeTimeLabel
+        }
+
+        // 4. Status: prioritize live RUNNING / WAITING over stale IDLE across multi-window & Jetbox merges
+        let chosenStatus: CortexStepStatus
+        if resolved.stepCount > existing.stepCount {
+            if resolved.status == .unspecified
+                && (existing.status == .waiting || existing.status == .blocked)
+                && resolved.updatedAt <= existing.updatedAt {
+                chosenStatus = existing.status
+            } else {
+                chosenStatus = resolved.status
+            }
+        } else if existing.stepCount > resolved.stepCount {
+            if existing.status == .unspecified
+                && (resolved.status == .waiting || resolved.status == .blocked)
+                && resolved.updatedAt >= existing.updatedAt {
+                chosenStatus = resolved.status
+            } else {
+                chosenStatus = existing.status
+            }
+        } else {
+            let pResolved = summaryStatusPriority(resolved.status)
+            let pExisting = summaryStatusPriority(existing.status)
+            if pResolved > pExisting {
+                if (resolved.status == .inProgress || resolved.status == .pending)
+                    && existing.updatedAt > resolved.updatedAt.addingTimeInterval(2.0) {
+                    chosenStatus = existing.status
+                } else {
+                    chosenStatus = resolved.status
+                }
+            } else if pExisting > pResolved {
+                if (existing.status == .waiting || existing.status == .blocked
+                    || existing.status == .inProgress || existing.status == .pending)
+                    && resolved.updatedAt <= existing.updatedAt.addingTimeInterval(2.0) {
+                    chosenStatus = existing.status
+                } else {
+                    chosenStatus = resolved.updatedAt >= existing.updatedAt ? resolved.status : existing.status
+                }
+            } else {
+                chosenStatus = resolved.updatedAt >= existing.updatedAt ? resolved.status : existing.status
+            }
+        }
+        merged.status = chosenStatus
+
+        // 5. Route origin instance to whichever peer owns the active run or higher step count
+        if !merged.isCloud {
+            let resolvedIsMoreActive = summaryStatusPriority(resolved.status) > summaryStatusPriority(existing.status)
+                || resolved.stepCount > existing.stepCount
+            if resolvedIsMoreActive, let rUuid = resolved.originInstanceUuid, !rUuid.isEmpty {
+                merged.originInstanceUuid = rUuid
+                merged.originHostName = resolved.originHostName ?? existing.originHostName
+            } else if let eUuid = existing.originInstanceUuid, !eUuid.isEmpty,
+                      (summaryStatusPriority(existing.status) > summaryStatusPriority(resolved.status)
+                       || existing.stepCount > resolved.stepCount
+                       || resolved.originInstanceUuid == nil) {
+                merged.originInstanceUuid = eUuid
+                merged.originHostName = existing.originHostName ?? resolved.originHostName
+            } else {
+                merged.originInstanceUuid = resolved.originInstanceUuid ?? existing.originInstanceUuid
+                merged.originHostName = resolved.originHostName ?? existing.originHostName
+            }
+        } else {
+            merged.originInstanceUuid = resolved.originInstanceUuid ?? existing.originInstanceUuid
+            merged.originHostName = "Antigravity"
+        }
+
+        // 6. Annotations (`isPinned`, `isArchived`, `lastUserViewTime`, `isUnread`)
+        merged.isPinned = existing.isPinned || resolved.isPinned
+        merged.isArchived = existing.isArchived || resolved.isArchived
+        let latestViewed = [existing.lastUserViewTime, resolved.lastUserViewTime].compactMap { $0 }.max()
+        merged.lastUserViewTime = latestViewed
+
+        if merged.status == .inProgress || merged.status == .pending {
+            merged.isUnread = false
+        } else if let latestViewed {
+            merged.isUnread = merged.updatedAt.timeIntervalSince(latestViewed) > 0.5
+                || merged.status == .waiting
+                || merged.status == .blocked
+        } else {
+            merged.isUnread = existing.isUnread || resolved.isUnread
+                || merged.status == .waiting
+                || merged.status == .blocked
+        }
+
+        merged.statusSubtitle = Self.buildLiveStatusSubtitle(
+            status: merged.status,
+            stepCount: merged.stepCount,
+            isUnread: merged.isUnread
+        )
+        map[resolved.cascadeId] = merged
+    }
+
+    /// Reconciles unread flags per host/cloud bucket when Desktop emits `lastUserViewTime` on viewed
+    /// conversations and omits `lastUserViewTime` on newly completed conversations never opened yet.
+    internal static func reconcileBatchUnreadStates(
+        _ map: inout [String: CascadeSummary],
+        now: Date = Date()
+    ) {
+        var buckets: [String: [String]] = [:]
+        for (cid, summary) in map {
+            let bucketKey = summary.isCloud ? "__cloud__" : (summary.originInstanceUuid ?? "__local__")
+            buckets[bucketKey, default: []].append(cid)
+        }
+        let maxInferredUnreadAgeSeconds: TimeInterval = 7 * 86_400
+        for (_, cids) in buckets {
+            let bucketTracksViewTime = cids.contains { map[$0]?.lastUserViewTime != nil }
+            guard bucketTracksViewTime else { continue }
+            for cid in cids {
+                guard var s = map[cid] else { continue }
+                guard s.lastUserViewTime == nil,
+                      !s.isUnread,
+                      !s.isArchived,
+                      s.stepCount > 0,
+                      s.status != .inProgress,
+                      s.status != .pending,
+                      s.status != .cancelled,
+                      now.timeIntervalSince(s.updatedAt) <= maxInferredUnreadAgeSeconds else {
+                    continue
+                }
+                s.isUnread = true
+                s.statusSubtitle = Self.buildLiveStatusSubtitle(
+                    status: s.status,
+                    stepCount: s.stepCount,
+                    isUnread: true
+                )
+                map[cid] = s
+            }
+        }
+    }
+
+    internal func getWorkspaceInfosOptional(timeoutInterval: TimeInterval?) async throws -> [WorkspaceInfo] {
+        do {
+            return try await getWorkspaceInfos(timeoutInterval: timeoutInterval)
+        } catch let AntigravityRPCError.httpError(statusCode, _) where statusCode == 404 {
+            return []
+        } catch {
+            if channel == .cloudRelay {
+                return []
+            }
+            throw error
+        }
+    }
+
+    internal func ensureUpstreamModelCatalog() async -> (defaultModel: String?, validModels: Set<String>) {
+        if let cachedValidUpstreamModels {
+            return (cachedDefaultUpstreamModel, cachedValidUpstreamModels)
+        }
+        let result = await fetchModelCatalog()
+        if let cachedValidUpstreamModels {
+            return (cachedDefaultUpstreamModel, cachedValidUpstreamModels)
+        }
+        let ids = Set(result.models.map(\.modelId).filter { $0.hasPrefix("MODEL_") })
+        return (result.defaultModelId, ids)
+    }
+
+    /// Queries the connected `language_server` / `agy` daemon for its live model, custom agent catalog,
+    /// and dual-pool usage quota via `GetCascadeModelConfigs`, `GetCascadeModelConfigData`, `GetAvailableModels`,
+    /// and `GetAllCustomAgentConfigs`.
+    public func fetchModelCatalog(forceRefresh: Bool = false) async -> LiveModelCatalogResult {
+        if forceRefresh {
+            self.cachedValidUpstreamModels = nil
+            self.cachedDefaultUpstreamModel = nil
+        }
+        var parsedModels: [CascadeModelConfig] = []
+        var validIds = Set<String>()
+        var defaultModelId: String? = nil
+        var parsedQuota: ModelUsageQuota? = nil
+
+        let metaReq: [String: JSONValue] = [
+            "forceRefresh": .bool(forceRefresh),
+            "metadata": .object([
+                "ideName": .string("antigravity"),
+                "extensionName": .string("antigravity"),
+                "locale": .string("en")
+            ])
+        ]
+        for method in ["GetCascadeModelConfigs", "GetCascadeModelConfigData"] {
+            if let obj = try? await callUnaryJSON(method: method, body: metaReq, timeoutInterval: 8.0),
+               let configs = obj["clientModelConfigs"]?.arrayValue,
+               !configs.isEmpty {
+                if let quotaObj = obj["usageQuota"]?.objectValue ?? obj["quotaSummary"]?.objectValue {
+                    parsedQuota = Self.parseUsageQuota(quotaObj)
+                }
+                for entry in configs {
+                    guard let cfg = entry.objectValue else { continue }
+                    if cfg["disabled"]?.boolValue == true { continue }
+                    let label = (cfg["label"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !label.isEmpty else { continue }
+                    let moa = cfg["modelOrAlias"]?.objectValue
+                    let rawModel = moa?["model"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let rawAlias = moa?["alias"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let isAlias = (rawModel == nil || rawModel == "MODEL_UNSPECIFIED" || rawModel?.isEmpty == true) && (rawAlias?.isEmpty == false)
+                    guard let modelId = isAlias ? rawAlias : rawModel,
+                          !modelId.isEmpty,
+                          modelId != "MODEL_UNSPECIFIED",
+                          !validIds.contains(modelId) else {
+                        continue
+                    }
+                    validIds.insert(modelId)
+
+                    let lowerLabel = label.lowercased()
+                    let isOrchestrator = (cfg["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
+                    let supportsThinking = (cfg["supportsThoughtCirculation"]?.boolValue ?? false)
+                        || (cfg["supportsThinking"]?.boolValue ?? false)
+                        || lowerLabel.contains("thinking")
+                        || lowerLabel.contains("neon")
+                        || lowerLabel.contains("carbon")
+                        || lowerLabel.contains("argon")
+                        || lowerLabel.contains("hydrogen")
+                        || lowerLabel.contains("pro")
+                        || lowerLabel.contains("opus")
+                    let supportedEfforts: [ThinkingEffortLevel] = {
+                        if let rawEfforts = cfg["supportedEfforts"]?.arrayValue {
+                            let mapped = rawEfforts.compactMap { val -> ThinkingEffortLevel? in
+                                guard let s = val.stringValue?.lowercased() else { return nil }
+                                if s == "xhigh" || s == "extra" { return .extra }
+                                return ThinkingEffortLevel.allCases.first { $0.rawValue.lowercased() == s }
+                            }
+                            if !mapped.isEmpty { return mapped }
+                        }
+                        if isOrchestrator { return [.high] }
+                        if lowerLabel.contains("neon") || lowerLabel.contains("hydrogen") {
+                            return [.low, .medium, .high, .extra]
+                        }
+                        return [.low, .medium, .high]
+                    }()
+                    let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
+                            return .extra
+                        }
+                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                            return .low
+                        }
+                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                            return .medium
+                        }
+                        return .high
+                    }()
+                    let rawTag = Self.nonEmptyString(cfg["tagTitle"]?.stringValue)
+                    let rawDesc = Self.nonEmptyString(cfg["description"]?.stringValue)
+                    let cleanDesc: String? = {
+                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                        return rawDesc
+                    }()
+                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+                    let baseSubtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
+                    let quotaSuffix: String? = {
+                        if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue, rem < 0.99 {
+                            let pct = max(0, min(100, Int((rem * 100.0).rounded())))
+                            return pct == 0 ? "Quota exhausted" : "\(pct)% quota left"
+                        }
+                        return nil
+                    }()
+                    let desc = quotaSuffix.map { "\(baseSubtitle) · \($0)" } ?? baseSubtitle
+
+                    parsedModels.append(
+                        CascadeModelConfig(
+                            modelId: modelId,
+                            displayName: label,
+                            subtitle: desc,
+                            hasThinkingBadge: supportsThinking,
+                            requiresUpgradeNote: Self.nonEmptyString(cfg["upgradeNote"]?.stringValue),
+                            mode: .planning,
+                            agentPersona: "Default",
+                            effort: effort,
+                            isModelAlias: isAlias,
+                            badgeTitle: badgeTitle,
+                            isOrchestrator: isOrchestrator,
+                            plannerModelName: Self.nonEmptyString(cfg["plannerModelName"]?.stringValue),
+                            executorModelName: Self.nonEmptyString(cfg["executorModelName"]?.stringValue),
+                            supportedEfforts: supportedEfforts,
+                            isNewBadge: (cfg["isNew"]?.boolValue ?? false) || lowerLabel.contains("gemini 4") || isOrchestrator
+                        )
+                    )
+                    if cfg["isRecommended"]?.boolValue == true && defaultModelId == nil {
+                        defaultModelId = modelId
+                    }
+                }
+                let overrideMoa = obj["defaultOverrideModelConfig"]?.objectValue?["modelOrAlias"]?.objectValue
+                if let defM = Self.nonEmptyString(overrideMoa?["model"]?.stringValue), defM != "MODEL_UNSPECIFIED" {
+                    defaultModelId = defM
+                } else if let defA = Self.nonEmptyString(overrideMoa?["alias"]?.stringValue) {
+                    defaultModelId = defA
+                }
+                if !parsedModels.isEmpty {
+                    break
+                }
+            }
+        }
+
+        if parsedModels.isEmpty,
+           let availWrapper = try? await callUnaryJSON(
+               method: "GetAvailableModels",
+               body: ["forceRefresh": .bool(forceRefresh)],
+               timeoutInterval: 8.0
+           ) {
+            let resp = availWrapper["response"]?.objectValue ?? availWrapper
+            if parsedQuota == nil, let quotaObj = resp["usageQuota"]?.objectValue {
+                parsedQuota = Self.parseUsageQuota(quotaObj)
+            }
+            if let modelsMap = resp["models"]?.objectValue, !modelsMap.isEmpty {
+                var orderedKeys: [String] = []
+                let sorts = resp["agentModelSorts"]?.arrayValue ?? resp["battleModeModelSorts"]?.arrayValue ?? []
+                for sort in sorts {
+                    for grp in sort.objectValue?["groups"]?.arrayValue ?? [] {
+                        for midVal in grp.objectValue?["modelIds"]?.arrayValue ?? [] {
+                            if let mid = Self.nonEmptyString(midVal.stringValue), !orderedKeys.contains(mid) {
+                                orderedKeys.append(mid)
+                            }
+                        }
+                    }
+                }
+                if orderedKeys.isEmpty {
+                    orderedKeys = modelsMap.keys.sorted()
+                }
+                for key in orderedKeys {
+                    guard let details = modelsMap[key]?.objectValue else { continue }
+                    if details["disabled"]?.boolValue == true || details["isInternal"]?.boolValue == true {
+                        continue
+                    }
+                    let displayName = Self.nonEmptyString(details["displayName"]?.stringValue) ?? key
+                    let protoEnum = Self.nonEmptyString(details["model"]?.stringValue)
+                    let modelId = (protoEnum != nil && protoEnum != "MODEL_UNSPECIFIED") ? protoEnum! : key
+                    guard !validIds.contains(modelId) else { continue }
+                    validIds.insert(modelId)
+
+                    let lowerLabel = displayName.lowercased()
+                    let isOrchestrator = (details["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
+                    let supportsThinking = (details["supportsThinking"]?.boolValue ?? false)
+                        || lowerLabel.contains("thinking")
+                        || lowerLabel.contains("neon")
+                    let effort: ThinkingEffortLevel = {
+                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
+                            return .extra
+                        }
+                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                            return .low
+                        }
+                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                            return .medium
+                        }
+                        return .high
+                    }()
+                    let rawTag = Self.nonEmptyString(details["tagTitle"]?.stringValue)
+                        ?? Self.nonEmptyString(details["badge"]?.stringValue)
+                    let rawDesc = Self.nonEmptyString(details["description"]?.stringValue)
+                    let cleanDesc: String? = {
+                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                        return rawDesc
+                    }()
+                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+                    let subtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: displayName)
+
+                    parsedModels.append(
+                        CascadeModelConfig(
+                            modelId: modelId,
+                            displayName: displayName,
+                            subtitle: subtitle,
+                            hasThinkingBadge: supportsThinking,
+                            requiresUpgradeNote: nil,
+                            mode: .planning,
+                            agentPersona: "Default",
+                            effort: effort,
+                            isModelAlias: !modelId.hasPrefix("MODEL_"),
+                            badgeTitle: badgeTitle,
+                            isOrchestrator: isOrchestrator,
+                            supportedEfforts: (lowerLabel.contains("neon") || lowerLabel.contains("hydrogen"))
+                                ? [.low, .medium, .high, .extra] : [.low, .medium, .high],
+                            isNewBadge: lowerLabel.contains("gemini 4") || isOrchestrator
+                        )
+                    )
+                }
+            }
+        }
+
+        if !validIds.isEmpty {
+            self.cachedValidUpstreamModels = validIds
+            self.cachedDefaultUpstreamModel = defaultModelId ?? parsedModels.first?.modelId
+        } else {
+            self.cachedValidUpstreamModels = []
+            self.cachedDefaultUpstreamModel = nil
+        }
+
+        var agents: [String] = ["Default"]
+        if let agentResp = try? await callUnaryJSON(method: "GetAllCustomAgentConfigs", body: [:], timeoutInterval: 5.0) {
+            let rawAgents = agentResp["customAgentConfigs"]?.arrayValue
+                ?? agentResp["agents"]?.arrayValue
+                ?? agentResp["configs"]?.arrayValue
+                ?? []
+            for item in rawAgents {
+                if let name = Self.nonEmptyString(item.objectValue?["name"]?.stringValue)
+                    ?? Self.nonEmptyString(item.objectValue?["displayName"]?.stringValue)
+                    ?? Self.nonEmptyString(item.objectValue?["id"]?.stringValue),
+                   !agents.contains(name) {
+                    agents.append(name)
+                }
+            }
+        }
+
+        let finalModels = parsedModels.isEmpty ? CascadeModelConfig.liveDefaultCatalog : parsedModels
+        return LiveModelCatalogResult(
+            models: finalModels,
+            defaultModelId: defaultModelId ?? finalModels.first?.modelId,
+            agents: agents,
+            usageQuota: parsedQuota
+        )
+    }
+
+    internal static func parseUsageQuota(_ obj: [String: JSONValue]) -> ModelUsageQuota {
+        ModelUsageQuota(
+            geminiWeeklyRemaining: obj["geminiWeeklyRemaining"]?.doubleValue ?? 0.85,
+            geminiFiveHourRemaining: obj["geminiFiveHourRemaining"]?.doubleValue ?? 0.92,
+            partnerWeeklyRemaining: obj["partnerWeeklyRemaining"]?.doubleValue ?? 0.70,
+            partnerFiveHourRemaining: obj["partnerFiveHourRemaining"]?.doubleValue ?? 0.80,
+            aiCreditOveragesEnabled: obj["aiCreditOveragesEnabled"]?.boolValue ?? obj["hasExtraCredits"]?.boolValue ?? false,
+            planDisplayName: obj["planDisplayName"]?.stringValue ?? obj["planTier"]?.stringValue ?? "Google AI Ultra"
+        )
+    }
+
+    internal static func defaultSubtitle(forModelLabel label: String) -> String {
+        CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
+    }
+
+    // MARK: - Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) Projects & Summaries
+
+    /// Lists and reads Antigravity Cloud ("Remote Agents") projects via `ListProjects` + `ReadProject`.
+    public func fetchCloudProjects(
+        candidateInstances: [RelayInstanceInfo] = [],
+        timeoutInterval: TimeInterval? = nil
+    ) async -> (projects: [ProjectWorkspace], warmingUp: Bool) {
+        let targetUuids: [String?] = {
+            if channel == .cloudRelay && !candidateInstances.isEmpty {
+                if let pref = preferredCloudInstanceUuid,
+                   candidateInstances.contains(where: { $0.uuid == pref }) {
+                    let rest = candidateInstances.filter { $0.uuid != pref }.map { Optional($0.uuid) }
+                    return [Optional(pref)] + rest
+                }
+                return candidateInstances.map { Optional($0.uuid) }
+            }
+            return [nil]
+        }()
+
+        var sawWarmingUp = false
+        for targetUuid in targetUuids {
+            do {
+                let listResp = try await callUnaryJSON(
+                    method: "ListProjects",
+                    body: ["backend": .string("BACKEND_TYPE_REMOTE_AICODE")],
+                    instanceUuidOverride: targetUuid,
+                    timeoutInterval: timeoutInterval ?? 8.0
+                )
+                let ids = listResp["projectIds"]?.arrayValue?.compactMap(\.stringValue).filter { !$0.isEmpty } ?? []
+                guard !ids.isEmpty else { continue }
+
+                var loaded: [ProjectWorkspace] = []
+                for pid in ids {
+                    if let readResp = try? await callUnaryJSON(
+                        method: "ReadProject",
+                        body: ["id": .string(pid)],
+                        instanceUuidOverride: targetUuid,
+                        timeoutInterval: timeoutInterval ?? 8.0
+                    ),
+                    let projObj = readResp["project"]?.objectValue {
+                        let parsed = Self.decodeCloudProjectObject(projObj, fallbackId: pid, originInstanceUuid: targetUuid)
+                        cachedCloudProjectsById[parsed.id] = parsed
+                        loaded.append(parsed)
+                    }
+                }
+                if !loaded.isEmpty {
+                    if let effectiveUuid = targetUuid ?? resolvedInstanceUuid, !effectiveUuid.isEmpty {
+                        self.preferredCloudInstanceUuid = effectiveUuid
+                    }
+                    return (loaded, false)
+                }
+            } catch let AntigravityRPCError.httpError(_, body) {
+                let lower = body.lowercased()
+                if lower.contains("failed_precondition") || lower.contains("not enabled") || lower.contains("precondition") {
+                    sawWarmingUp = true
+                }
+            } catch {
+                continue
+            }
+        }
+        return ([], sawWarmingUp)
+    }
+
+    internal static func decodeCloudProjectObject(
+        _ projObj: [String: JSONValue],
+        fallbackId: String,
+        originInstanceUuid: String?
+    ) -> ProjectWorkspace {
+        let pid = nonEmptyString(projObj["id"]?.stringValue) ?? fallbackId
+        let name = nonEmptyString(projObj["name"]?.stringValue) ?? "Antigravity Cloud"
+        let resources = projObj["projectResources"]?.objectValue?["resources"]?.arrayValue ?? []
+        var repoDisplay: String? = nil
+        for resEntry in resources {
+            guard let resObj = resEntry.objectValue else { continue }
+            let nestedCandidates: [[String: JSONValue]?] = [
+                resObj["remoteResource"]?.objectValue,
+                resObj["githubRepo"]?.objectValue,
+                resObj["githubRepository"]?.objectValue,
+                resObj["gitFolder"]?.objectValue
+            ]
+            if let rr = nestedCandidates.compactMap({ $0 }).first {
+                let displayNameCandidates: [String?] = [
+                    rr["displayName"]?.stringValue,
+                    rr["fullName"]?.stringValue,
+                    rr["name"]?.stringValue,
+                    rr["uri"]?.stringValue,
+                    rr["folderUri"]?.stringValue
+                ]
+                if let dn = displayNameCandidates.compactMap(nonEmptyString).first {
+                    var normalized = dn
+                        .replacingOccurrences(of: "https://github.com/", with: "")
+                        .replacingOccurrences(of: "http://github.com/", with: "")
+                        .replacingOccurrences(of: "cloud://", with: "")
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    if normalized.hasSuffix(".git") {
+                        normalized = String(normalized.dropLast(4))
+                    }
+                    if !normalized.isEmpty {
+                        repoDisplay = normalized
+                        break
+                    }
+                }
+            }
+        }
+        if repoDisplay == nil {
+            if let fallbackRepo = nonEmptyString(projObj["repository"]?.stringValue)
+                ?? nonEmptyString(projObj["repo"]?.stringValue) {
+                repoDisplay = fallbackRepo
+                    .replacingOccurrences(of: "https://github.com/", with: "")
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            }
+        }
+        let cloudSlug = repoDisplay ?? name
+        let workspaceUri = "cloud://\(cloudSlug)"
+        return ProjectWorkspace(
+            id: pid,
+            name: name,
+            pathDisplay: workspaceUri,
+            workspaceUri: workspaceUri,
+            runtime: .cloud,
+            hostName: "Antigravity",
+            activeBranch: "main",
+            cloudProjectId: pid,
+            originInstanceUuid: originInstanceUuid
+        )
+    }
+
+    /// Queries connected GitHub repositories available to Antigravity Cloud (`ListAvailableResources`).
+    public func fetchCloudGitHubRepos() async -> [GitHubRepoItem] {
+        guard let resp = try? await callUnaryJSON(
+            method: "ListAvailableResources",
+            body: [
+                "backend": .string("BACKEND_TYPE_REMOTE_AICODE"),
+                "type": .string("github")
+            ],
+            timeoutInterval: 8.0
+        ),
+        let resources = resp["resources"]?.arrayValue else {
+            return []
+        }
+        return resources.compactMap { entry -> GitHubRepoItem? in
+            guard let obj = entry.objectValue else { return nil }
+            guard let fullName = Self.nonEmptyString(obj["displayName"]?.stringValue)
+                ?? Self.nonEmptyString(obj["name"]?.stringValue) else {
+                return nil
+            }
+            let branch = Self.nonEmptyString(obj["defaultBranch"]?.stringValue) ?? "main"
+            return GitHubRepoItem(
+                id: "repo-\(fullName)",
+                fullName: fullName,
+                visibilityLabel: obj["isPrivate"]?.boolValue == true ? "Private" : "GitHub",
+                defaultBranch: branch
+            )
+        }
+    }
+
+    internal actor JetboxSnapshotAccumulator {
+        private var byId: [String: CascadeSummary] = [:]
+        private var finished: Bool = false
+        private var recordedError: Error? = nil
+
+        func merge(_ items: [CascadeSummary], cloudProjectsById: [String: ProjectWorkspace]) {
+            for item in items {
+                AntigravityRPCClient.mergeSummaryEntry(item, into: &byId, cloudProjectsById: cloudProjectsById)
+            }
+        }
+
+        func markFinished(error: Error? = nil) {
+            finished = true
+            if let error, recordedError == nil {
+                recordedError = error
+            }
+        }
+
+        func status() -> (hasEntries: Bool, isFinished: Bool, error: Error?) {
+            (!byId.isEmpty, finished, recordedError)
+        }
+
+        func values() -> [CascadeSummary] {
+            Array(byId.values)
+        }
+    }
+
+    /// Unary Cloud companion query (`GetAllCascadeTrajectories` with `BACKEND_TYPE_REMOTE_AICODE`).
+    /// Never silently strips `backend` so local-only trajectories cannot leak into Cloud results.
+    internal func getAllCascadeTrajectoriesCloud(
+        instanceUuidOverride: String? = nil,
+        timeoutInterval: TimeInterval? = nil
+    ) async -> [CascadeSummary] {
+        let candidatePayloads: [[String: JSONValue]] = [
+            ["backend": .string("BACKEND_TYPE_REMOTE_AICODE")],
+            ["backendType": .string("BACKEND_TYPE_REMOTE_AICODE")]
+        ]
+        let cloudProjectsSnapshot = self.cachedCloudProjectsById
+        let allCloudProjects = Array(cloudProjectsSnapshot.values)
+        let effectiveUuid = instanceUuidOverride ?? resolvedInstanceUuid
+
+        for (idx, payload) in candidatePayloads.enumerated() {
+            do {
+                let res: [String: JSONValue]
+                if channel == .cloudRelay {
+                    res = try await callCloudRelayUnaryJSON(
+                        method: "GetAllCascadeTrajectories",
+                        body: payload,
+                        instanceUuidOverride: instanceUuidOverride,
+                        timeoutInterval: timeoutInterval ?? 8.0,
+                        allowStripUnknownFields: false
+                    )
+                } else {
+                    res = try await callUnaryJSON(
+                        method: "GetAllCascadeTrajectories",
+                        body: payload,
+                        instanceUuidOverride: instanceUuidOverride,
+                        timeoutInterval: timeoutInterval ?? 4.0
+                    )
+                }
+                let decoded = Self.decodeJetboxSummariesEvent(
+                    res,
+                    forceCloud: true,
+                    originInstanceUuid: effectiveUuid,
+                    originHostName: "Antigravity",
+                    cloudProjectsById: cloudProjectsSnapshot
+                ).upserts.map { item -> CascadeSummary in
+                    var copy = item
+                    if let cp = Self.matchCloudProject(for: copy, cloudProjects: allCloudProjects) {
+                        copy.isCloud = true
+                        copy.cloudProjectId = cp.cloudProjectId ?? cp.id
+                        copy.projectSlug = cp.name
+                        copy.workspaceUri = cp.workspaceUri
+                        copy.originHostName = "Antigravity"
+                    }
+                    return copy
+                }
+                return decoded
+            } catch let AntigravityRPCError.httpError(_, body) {
+                if idx == 0 && body.lowercased().contains("unknown field \"backend\"") {
+                    continue
+                }
+                return []
+            } catch {
+                return []
+            }
+        }
+        return []
+    }
+
+    internal func readJetboxSnapshotOnce(
+        requestPayload: [String: JSONValue],
+        cloud: Bool,
+        instanceUuidOverride: String?,
+        originHostName: String?,
+        snapshotTimeout: TimeInterval,
+        cloudProjectsSnapshot: [String: ProjectWorkspace]
+    ) async throws -> [CascadeSummary] {
+        let stream = try subscribeEnvelopeStream(
+            method: "JetboxSubscribeToSummaries",
+            requestPayload: requestPayload,
+            instanceUuidOverride: instanceUuidOverride
+        )
+        let accumulator = JetboxSnapshotAccumulator()
+        let readerTask = Task {
+            do {
+                for try await event in stream {
+                    let parsed = Self.decodeJetboxSummariesEvent(
+                        event,
+                        forceCloud: cloud,
+                        originInstanceUuid: instanceUuidOverride,
+                        originHostName: originHostName,
+                        cloudProjectsById: cloudProjectsSnapshot
+                    )
+                    if !parsed.upserts.isEmpty {
+                        await accumulator.merge(parsed.upserts, cloudProjectsById: cloudProjectsSnapshot)
+                    }
+                }
+                await accumulator.markFinished()
+            } catch {
+                await accumulator.markFinished(error: error)
+            }
+        }
+        defer { readerTask.cancel() }
+
+        let deadline = Date().addingTimeInterval(max(0.5, snapshotTimeout))
+        while Date() < deadline {
+            let st = await accumulator.status()
+            if st.hasEntries {
+                // Allow a brief settle window so any back-to-back initial snapshot frames arrive together
+                let remaining = deadline.timeIntervalSinceNow
+                if !st.isFinished && remaining > 0.05 {
+                    let settleSeconds = min(0.22, remaining)
+                    try? await Task.sleep(nanoseconds: UInt64(settleSeconds * 1_000_000_000))
+                }
+                return await accumulator.values()
+            }
+            if st.isFinished {
+                if let err = st.error {
+                    throw err
+                }
+                return await accumulator.values()
+            }
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+        return await accumulator.values()
+    }
+
+    /// Reads the initial snapshot frame(s) emitted by `JetboxSubscribeToSummaries` (either local or `BACKEND_TYPE_REMOTE_AICODE` Cloud),
+    /// skipping empty initial ack frames and retrying `backendType` if the server rejects `"backend"`, then closes the temporary stream.
+    public func fetchJetboxSummariesSnapshot(
+        cloud: Bool,
+        instanceUuidOverride: String? = nil,
+        originHostName: String? = nil,
+        snapshotTimeout: TimeInterval = 4.0
+    ) async -> [CascadeSummary] {
+        let cloudProjectsSnapshot = self.cachedCloudProjectsById
+        let primaryPayload: [String: JSONValue] = cloud
+            ? ["backend": .string("BACKEND_TYPE_REMOTE_AICODE")]
+            : [:]
+        do {
+            let primary = try await readJetboxSnapshotOnce(
+                requestPayload: primaryPayload,
+                cloud: cloud,
+                instanceUuidOverride: instanceUuidOverride,
+                originHostName: originHostName,
+                snapshotTimeout: snapshotTimeout,
+                cloudProjectsSnapshot: cloudProjectsSnapshot
+            )
+            if !primary.isEmpty || !cloud {
+                return primary
+            }
+        } catch let AntigravityRPCError.httpError(_, body) where cloud && body.lowercased().contains("unknown field \"backend\"") {
+            if let fallback = try? await readJetboxSnapshotOnce(
+                requestPayload: ["backendType": .string("BACKEND_TYPE_REMOTE_AICODE")],
+                cloud: true,
+                instanceUuidOverride: instanceUuidOverride,
+                originHostName: originHostName,
+                snapshotTimeout: snapshotTimeout,
+                cloudProjectsSnapshot: cloudProjectsSnapshot
+            ) {
+                return fallback
+            }
+        } catch {
+            return []
+        }
+        return []
+    }
+
+    /// Decodes a `JetboxSubscribeToSummariesResponse` (`updates` map + `deletes` array, `trajectorySummaries` map, or mock `summaries` array).
+    public static func decodeJetboxSummariesEvent(
+        _ event: [String: JSONValue],
+        forceCloud: Bool = false,
+        originInstanceUuid: String? = nil,
+        originHostName: String? = nil,
+        cloudProjectsById: [String: ProjectWorkspace] = [:]
+    ) -> (upserts: [CascadeSummary], deletes: [String]) {
+        let now = Date()
+        var upserts: [CascadeSummary] = []
+        let deletes = event["deletes"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        let allCloudProjects = Array(cloudProjectsById.values)
+
+        func finalizeDecodedSummary(_ rawSummary: CascadeSummary) -> CascadeSummary? {
+            var summary = rawSummary
+            if forceCloud {
+                // Ignore local `file://` workspaces echoed by older/mock servers that do not filter by `backend`,
+                // while keeping Cloud `No Project` sessions (`summary.workspaceUri.isEmpty`).
+                if !summary.workspaceUri.isEmpty
+                    && !AntigravityCloudDetector.isPlaygroundScratchURI(summary.workspaceUri)
+                    && !summary.isCloud
+                    && (summary.cloudProjectId ?? "").isEmpty {
+                    return nil
+                }
+                summary.isCloud = true
+                summary.originHostName = "Antigravity"
+            } else if !summary.isCloud {
+                summary.originHostName = originHostName
+            }
+            summary.originInstanceUuid = originInstanceUuid
+            if let cp = Self.matchCloudProject(for: summary, cloudProjects: allCloudProjects) {
+                summary.isCloud = true
+                summary.cloudProjectId = cp.cloudProjectId ?? cp.id
+                summary.projectSlug = cp.name
+                summary.workspaceUri = cp.workspaceUri
+                summary.originHostName = "Antigravity"
+            }
+            return summary
+        }
+
+        if let updatesMap = event["updates"]?.objectValue ?? event["trajectorySummaries"]?.objectValue {
+            for (cid, val) in updatesMap {
+                if let obj = val.objectValue,
+                   obj["killed"]?.boolValue == true,
+                   (obj["status"]?.stringValue ?? "").contains("UNSPECIFIED") {
+                    continue
+                }
+                if let decoded = Self.decodeTrajectorySummaryEntry(
+                    cascadeId: cid,
+                    value: val,
+                    now: now,
+                    forceCloud: forceCloud
+                ), let finalized = finalizeDecodedSummary(decoded) {
+                    upserts.append(finalized)
+                }
+            }
+        } else if let summariesArr = event["summaries"]?.arrayValue ?? event["trajectories"]?.arrayValue {
+            for val in summariesArr {
+                guard let cid = val.objectValue?["cascadeId"]?.stringValue else { continue }
+                if let decoded = Self.decodeTrajectorySummaryEntry(
+                    cascadeId: cid,
+                    value: val,
+                    now: now,
+                    forceCloud: forceCloud
+                ), let finalized = finalizeDecodedSummary(decoded) {
+                    upserts.append(finalized)
+                }
+            }
+        }
+        return (upserts, deletes)
+    }
+
+    internal static func extractUnknownProtoFieldName(from message: String) -> String? {
+        guard let markerRange = message.range(of: "unknown field \"") else { return nil }
+        let rest = message[markerRange.upperBound...]
+        guard let endQuote = rest.firstIndex(of: "\"") else { return nil }
+        return String(rest[..<endQuote])
+    }
+}

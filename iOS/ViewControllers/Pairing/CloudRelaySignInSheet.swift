@@ -105,7 +105,7 @@ public struct CloudRelaySignInSheet: View {
                 } label: {
                     Text("Cancel")
                         .font(.system(size: 15.5, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 }
                 .buttonStyle(.plain)
@@ -123,7 +123,7 @@ public struct CloudRelaySignInSheet: View {
                     }
                     Text(currentURLDisplay)
                         .font(.system(size: 11, weight: .regular, design: .monospaced))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .lineLimit(1)
                 }
 
@@ -144,7 +144,7 @@ public struct CloudRelaySignInSheet: View {
                         .foregroundStyle(
                             detectedCookiesReady
                                 ? AntigravityTheme.accentPeriwinkle
-                                : UEChromePalette.textMuted
+                                : AntigravityTheme.textMuted
                         )
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 }
@@ -183,7 +183,7 @@ public struct CloudRelaySignInSheet: View {
                 Spacer()
                 Text("WebKit Sign-In is available on iOS.")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(UEChromePalette.textSecondary)
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                 Spacer()
             }
             #endif

@@ -176,11 +176,11 @@ public struct ProjectDetailViewController: View {
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                     .background(
                         Circle()
-                            .fill(UEChromePalette.surfacePill)
+                            .fill(AntigravityTheme.surfacePill)
                     )
                     .overlay(
                         Circle()
-                            .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
             }
             .accessibilityIdentifier("btn-project-more")
@@ -333,16 +333,16 @@ public struct ProjectDetailViewController: View {
 
         return HStack(spacing: 14) {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(UEChromePalette.surfacePill)
+                .fill(AntigravityTheme.surfacePill)
                 .frame(width: 56, height: 56)
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
                 .overlay(
                     Image(systemName: heroIconName)
                         .font(.system(size: 23, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textBody)
+                        .foregroundStyle(AntigravityTheme.textBody)
                 )
 
             VStack(alignment: .leading, spacing: 4) {
@@ -354,7 +354,7 @@ public struct ProjectDetailViewController: View {
 
                 Text(effectivePathDisplay)
                     .font(.system(size: 13.5, weight: .regular, design: isNoProject ? .default : .monospaced))
-                    .foregroundStyle(UEChromePalette.textSecondary)
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -377,35 +377,35 @@ public struct ProjectDetailViewController: View {
                         .frame(width: 7, height: 7)
                     Text(effectiveHostBadgeText)
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(UEChromePalette.textBody)
+                        .foregroundStyle(AntigravityTheme.textBody)
                 }
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
-                .background(Capsule().fill(UEChromePalette.surfacePill))
-                .overlay(Capsule().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                .background(Capsule().fill(AntigravityTheme.surfacePill))
+                .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
 
                 if !effectiveBranchName.isEmpty {
                     HStack(spacing: 5) {
                         Image(systemName: "arrow.triangle.branch")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                         Text(effectiveBranchName)
                             .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textBody)
+                            .foregroundStyle(AntigravityTheme.textBody)
                     }
                     .padding(.horizontal, 11)
                     .padding(.vertical, 7)
-                    .background(Capsule().fill(UEChromePalette.surfacePill))
-                    .overlay(Capsule().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                    .background(Capsule().fill(AntigravityTheme.surfacePill))
+                    .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                 }
 
                 Text("\(totalConvCount) conversations")
                     .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(UEChromePalette.textBody)
+                    .foregroundStyle(AntigravityTheme.textBody)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 7)
-                    .background(Capsule().fill(UEChromePalette.surfacePill))
-                    .overlay(Capsule().strokeBorder(UEChromePalette.cardBorder, lineWidth: 1))
+                    .background(Capsule().fill(AntigravityTheme.surfacePill))
+                    .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
             }
         }
     }
@@ -434,7 +434,7 @@ public struct ProjectDetailViewController: View {
                 Text(isNoProject ? "New Conversation" : "New Conversation in Project")
                     .font(.system(size: 16, weight: .semibold))
             }
-            .foregroundStyle(UEChromePalette.inkOnPrimaryCTA)
+            .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
             .frame(maxWidth: .infinity, minHeight: 50)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -474,7 +474,7 @@ public struct ProjectDetailViewController: View {
                 Spacer(minLength: 0)
             }
             Rectangle()
-                .fill(UEChromePalette.cardBorder)
+                .fill(AntigravityTheme.cardBorder)
                 .frame(height: 1)
         }
     }
@@ -493,11 +493,11 @@ public struct ProjectDetailViewController: View {
                 HStack(spacing: 5) {
                     Text(title)
                         .font(.system(size: 15, weight: isSelected ? .semibold : .medium))
-                        .foregroundStyle(isSelected ? Color.white : UEChromePalette.textMuted)
+                        .foregroundStyle(isSelected ? Color.white : AntigravityTheme.textMuted)
                         .lineLimit(1)
                     Text(count)
                         .font(.system(size: 14.5, weight: .medium))
-                        .foregroundStyle(isSelected ? UEChromePalette.textSecondary : UEChromePalette.textMuted)
+                        .foregroundStyle(isSelected ? AntigravityTheme.textSecondary : AntigravityTheme.textMuted)
                         .lineLimit(1)
                 }
                 .fixedSize(horizontal: true, vertical: false)
@@ -524,7 +524,7 @@ public struct ProjectDetailViewController: View {
                 if effectiveProjectAutomations.isEmpty {
                     Text("No automations configured for \(projectSlug) yet.")
                         .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(UEChromePalette.textSecondary)
+                        .foregroundStyle(AntigravityTheme.textSecondary)
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -536,7 +536,7 @@ public struct ProjectDetailViewController: View {
                                     .foregroundStyle(Color.white)
                                 Text("\(auto.scheduleSummary) · \(auto.lastRunText)")
                                     .font(.system(size: 13, weight: .regular))
-                                    .foregroundStyle(auto.needsReview ? AntigravityTheme.statusWaiting : UEChromePalette.textSecondary)
+                                    .foregroundStyle(auto.needsReview ? AntigravityTheme.statusWaiting : AntigravityTheme.textSecondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
@@ -573,7 +573,7 @@ public struct ProjectDetailViewController: View {
 
                         if idx < effectiveProjectAutomations.count - 1 {
                             Divider()
-                                .overlay(UEChromePalette.subtleDivider)
+                                .overlay(AntigravityTheme.subtleDivider)
                                 .padding(.leading, 14)
                         }
                     }
@@ -585,14 +585,14 @@ public struct ProjectDetailViewController: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("project-conv-list")
         } else if usesPairedStoreData && rows.isEmpty {
             Text(selectedTab == .archived ? "No archived conversations in \(projectSlug)." : "No active conversations in \(projectSlug).")
                 .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(UEChromePalette.textSecondary)
+                .foregroundStyle(AntigravityTheme.textSecondary)
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
@@ -601,7 +601,7 @@ public struct ProjectDetailViewController: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("project-conv-list")
@@ -632,7 +632,7 @@ public struct ProjectDetailViewController: View {
                                         } else {
                                             Text(row.timestamp)
                                                 .font(.system(size: 12.5, weight: .regular))
-                                                .foregroundStyle(UEChromePalette.textMuted)
+                                                .foregroundStyle(AntigravityTheme.textMuted)
                                         }
                                     }
 
@@ -657,7 +657,7 @@ public struct ProjectDetailViewController: View {
                             if store.isLiveBackendConnected && row.indicator != .runningArc {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 11.5, weight: .semibold))
-                                    .foregroundStyle(UEChromePalette.textMuted.opacity(0.65))
+                                    .foregroundStyle(AntigravityTheme.textMuted.opacity(0.65))
                             }
                         }
                         .padding(.horizontal, 14)
@@ -669,7 +669,7 @@ public struct ProjectDetailViewController: View {
 
                     if index < rows.count - 1 {
                         Divider()
-                            .overlay(UEChromePalette.subtleDivider)
+                            .overlay(AntigravityTheme.subtleDivider)
                             .padding(.leading, 44)
                     }
                 }
@@ -678,7 +678,7 @@ public struct ProjectDetailViewController: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("project-conv-list")
@@ -721,7 +721,7 @@ public struct ProjectDetailViewController: View {
         switch kind {
         case .runningArc:      return AntigravityTheme.statusRunning
         case .needsReviewHalo: return AntigravityTheme.statusWaiting
-        case .unreadDot, .none: return UEChromePalette.textSecondary
+        case .unreadDot, .none: return AntigravityTheme.textSecondary
         }
     }
 
@@ -733,7 +733,7 @@ public struct ProjectDetailViewController: View {
             Text("THIS PROJECT")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
-                .foregroundStyle(UEChromePalette.textMuted)
+                .foregroundStyle(AntigravityTheme.textMuted)
                 .padding(.leading, 2)
                 .padding(.top, 2)
 
@@ -744,23 +744,23 @@ public struct ProjectDetailViewController: View {
                     HStack(spacing: 12) {
                         Image(systemName: "clock.arrow.circlepath")
                             .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                             .frame(width: 22)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(usesPairedStoreData ? (firstAuto?.title ?? "Project automations") : "Nightly dependency audit")
                                 .font(.system(size: 15.5, weight: .medium))
-                                .foregroundStyle(UEChromePalette.textPrimary)
+                                .foregroundStyle(AntigravityTheme.textPrimary)
                             Text(usesPairedStoreData ? (firstAuto?.scheduleSummary ?? "0 active · Tap to inspect") : "Daily 02:00 · Next run in 6h")
                                 .font(.system(size: 13, weight: .regular))
-                                .foregroundStyle(UEChromePalette.textMuted)
+                                .foregroundStyle(AntigravityTheme.textMuted)
                         }
 
                         Spacer()
 
                         Image(systemName: "chevron.right")
                             .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(UEChromePalette.textMuted)
+                            .foregroundStyle(AntigravityTheme.textMuted)
                     }
                     .padding(.horizontal, 14)
                     .frame(minHeight: 54)
@@ -770,7 +770,7 @@ public struct ProjectDetailViewController: View {
                 .accessibilityIdentifier("project-row-automation")
 
                 Divider()
-                    .overlay(UEChromePalette.subtleDivider)
+                    .overlay(AntigravityTheme.subtleDivider)
                     .padding(.leading, 48)
 
                 Button {
@@ -780,12 +780,12 @@ public struct ProjectDetailViewController: View {
                     HStack(spacing: 12) {
                         Image(systemName: "laptopcomputer")
                             .font(.system(size: 15.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                             .frame(width: 22)
 
                         Text(finderFeedbackBanner ? "Opened in Finder on \(usesPairedStoreData ? store.activeHost.hostname : "MacBook Pro")" : "Reveal in Finder on Mac")
                             .font(.system(size: 15.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textPrimary)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
 
                         Spacer()
                     }
@@ -797,25 +797,25 @@ public struct ProjectDetailViewController: View {
                 .accessibilityIdentifier("project-row-finder")
 
                 Divider()
-                    .overlay(UEChromePalette.subtleDivider)
+                    .overlay(AntigravityTheme.subtleDivider)
                     .padding(.leading, 48)
 
                 Button {} label: {
                     HStack(spacing: 12) {
                         Image(systemName: "doc")
                             .font(.system(size: 15.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textSecondary)
+                            .foregroundStyle(AntigravityTheme.textSecondary)
                             .frame(width: 22)
 
                         Text("Project rules & skills")
                             .font(.system(size: 15.5, weight: .medium))
-                            .foregroundStyle(UEChromePalette.textPrimary)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
 
                         Spacer()
 
                         Text("4")
                             .font(.system(size: 15, weight: .regular))
-                            .foregroundStyle(UEChromePalette.textMuted)
+                            .foregroundStyle(AntigravityTheme.textMuted)
                     }
                     .padding(.horizontal, 14)
                     .frame(minHeight: 48)
@@ -830,7 +830,7 @@ public struct ProjectDetailViewController: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(UEChromePalette.cardBorder, lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
         }
     }
