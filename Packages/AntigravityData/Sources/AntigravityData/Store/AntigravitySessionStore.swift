@@ -250,8 +250,10 @@ public final class AntigravitySessionStore {
     private let projectionStore: LocalProjectionStore
     private let networkPathObserver = NetworkPathObserver()
     private var rpcClient: AntigravityRPCClient?
-    private var summaryStreamTask: Task<Void, Never>? = nil
+    private var localSummaryStreamTasks: [String: Task<Void, Never>] = [:]
     private var cloudSummaryStreamTask: Task<Void, Never>? = nil
+    private var hasReceivedLocalStreamEvent: Bool = false
+    private var hasReceivedCloudStreamEvent: Bool = false
     private var summaryPollingTask: Task<Void, Never>? = nil
     private var stepPollingTask: Task<Void, Never>? = nil
     private var locallyViewedAtByCascadeId: [String: Date] = [:]
@@ -268,6 +270,28 @@ public final class AntigravitySessionStore {
     private var lastStreamReopenAttemptAt: Date = .distantPast
     private var isReplayingOutbox: Bool = false
     internal var lowPowerModeOverrideForTesting: Bool? = nil
+
+    private var summaryStreamGeneration: UInt64 = 0
+
+    private var isSummaryStreamHealthy: Bool {
+        if activeHost.channel == .cloudRelay {
+            return (!localSummaryStreamTasks.isEmpty && hasReceivedLocalStreamEvent)
+                || (cloudSummaryStreamTask != nil && hasReceivedCloudStreamEvent)
+        }
+        return !localSummaryStreamTasks.isEmpty && hasReceivedLocalStreamEvent
+    }
+
+    private func cancelAllSummaryStreams() {
+        summaryStreamGeneration &+= 1
+        for task in localSummaryStreamTasks.values {
+            task.cancel()
+        }
+        localSummaryStreamTasks.removeAll()
+        cloudSummaryStreamTask?.cancel()
+        cloudSummaryStreamTask = nil
+        hasReceivedLocalStreamEvent = false
+        hasReceivedCloudStreamEvent = false
+    }
 
     public var isLowPowerModeEnabled: Bool {
         if let override = lowPowerModeOverrideForTesting {
@@ -1008,10 +1032,7 @@ public final class AntigravitySessionStore {
     }
 
     public func disconnectBackendAndClearKeychain() async {
-        summaryStreamTask?.cancel()
-        summaryStreamTask = nil
-        cloudSummaryStreamTask?.cancel()
-        cloudSummaryStreamTask = nil
+        cancelAllSummaryStreams()
         summaryPollingTask?.cancel()
         summaryPollingTask = nil
         stepPollingTask?.cancel()
@@ -1066,10 +1087,7 @@ public final class AntigravitySessionStore {
         guard !isVerificationMode else { return }
         guard !isNetworkingSuspended else { return }
         isNetworkingSuspended = true
-        summaryStreamTask?.cancel()
-        summaryStreamTask = nil
-        cloudSummaryStreamTask?.cancel()
-        cloudSummaryStreamTask = nil
+        cancelAllSummaryStreams()
         summaryPollingTask?.cancel()
         summaryPollingTask = nil
         stepPollingTask?.cancel()
@@ -1177,10 +1195,7 @@ public final class AntigravitySessionStore {
 
         if !status.isSatisfied {
             // Device lost IP connectivity (e.g. elevator / Airplane Mode): stop all timers & streams (0 packets)
-            summaryStreamTask?.cancel()
-            summaryStreamTask = nil
-            cloudSummaryStreamTask?.cancel()
-            cloudSummaryStreamTask = nil
+            cancelAllSummaryStreams()
             summaryPollingTask?.cancel()
             summaryPollingTask = nil
             stepPollingTask?.cancel()
@@ -1205,10 +1220,7 @@ public final class AntigravitySessionStore {
         }()
 
         if recoveredFromNoNetwork || interfaceSwitched {
-            summaryStreamTask?.cancel()
-            summaryStreamTask = nil
-            cloudSummaryStreamTask?.cancel()
-            cloudSummaryStreamTask = nil
+            cancelAllSummaryStreams()
             Task { [weak self] in
                 await self?.reconnectNow(userInitiated: false)
             }
@@ -1311,10 +1323,7 @@ public final class AntigravitySessionStore {
 
     internal func markBackendOffline(error: Error) {
         guard hasPairedBackend || isLiveBackendConnected else { return }
-        summaryStreamTask?.cancel()
-        summaryStreamTask = nil
-        cloudSummaryStreamTask?.cancel()
-        cloudSummaryStreamTask = nil
+        cancelAllSummaryStreams()
         isLiveBackendConnected = false
         lastPingLatencyMs = nil
 
@@ -1413,10 +1422,6 @@ public final class AntigravitySessionStore {
             existingById[p.id] = p
         }
 
-        let cloudProjById: [String: ProjectWorkspace] = Dictionary(
-            cloudProjects.map { ($0.cloudProjectId ?? $0.id, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
         let cloudProjByName = Dictionary(grouping: cloudProjects, by: \.name)
 
         func baseSlug(for rawSlug: String) -> String {
@@ -1426,11 +1431,12 @@ public final class AntigravitySessionStore {
             return rawSlug
         }
 
-        // Link summaries that carry a `cloudProjectId` to their canonical Cloud project name & URI,
+        // Link Cloud summaries (by projectId, workspaceUri, or owner/repo label) to their canonical Cloud project,
         // and normalize unassigned / legacy `"workspace"` / scratch playground summaries to `"No Project"`.
         for idx in summaries.indices {
-            if let cpid = summaries[idx].cloudProjectId, let cp = cloudProjById[cpid] {
+            if let cp = AntigravityRPCClient.matchCloudProject(for: summaries[idx], cloudProjects: cloudProjects) {
                 summaries[idx].isCloud = true
+                summaries[idx].cloudProjectId = cp.cloudProjectId ?? cp.id
                 summaries[idx].projectSlug = cp.name
                 summaries[idx].workspaceUri = cp.workspaceUri
                 summaries[idx].originHostName = "Antigravity"
@@ -1641,7 +1647,11 @@ public final class AntigravitySessionStore {
         // Append any 0-conversation Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects
         for cp in cloudProjects {
             let cpid = cp.cloudProjectId ?? cp.id
-            if let existingIdx = reconciled.firstIndex(where: { $0.cloudProjectId == cpid || ($0.runtime == .cloud && $0.name == cp.name) }) {
+            if let existingIdx = reconciled.firstIndex(where: {
+                $0.cloudProjectId == cpid
+                    || ($0.runtime == .cloud && $0.name.caseInsensitiveCompare(cp.name) == .orderedSame)
+                    || ($0.runtime == .cloud && !cp.workspaceUri.isEmpty && $0.workspaceUri.caseInsensitiveCompare(cp.workspaceUri) == .orderedSame)
+            }) {
                 reconciled[existingIdx].cloudProjectId = reconciled[existingIdx].cloudProjectId ?? cpid
                 reconciled[existingIdx].originInstanceUuid = reconciled[existingIdx].originInstanceUuid ?? cp.originInstanceUuid
                 continue
@@ -1852,34 +1862,86 @@ public final class AntigravitySessionStore {
         guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
         guard let client = rpcClient else { return }
 
-        if summaryStreamTask == nil && cloudSummaryStreamTask == nil {
+        if localSummaryStreamTasks.isEmpty && cloudSummaryStreamTask == nil {
             let sinceLastOpen = Date().timeIntervalSince(lastStreamReopenAttemptAt)
             guard sinceLastOpen >= ConnectionPowerPolicy.minStreamReopenSpacingSeconds else { return }
             lastStreamReopenAttemptAt = Date()
         }
 
-        if summaryStreamTask == nil {
-            summaryStreamTask = Task { [weak self] in
-                defer {
-                    self?.summaryStreamTask = nil
+        let localTargets: [(key: String, uuid: String?, hostName: String)] = {
+            if activeHost.channel == .cloudRelay {
+                let reachable = availableRelayInstances.filter(\.status.isReachable)
+                if !reachable.isEmpty {
+                    return reachable.map { ($0.uuid, $0.uuid, $0.name) }
                 }
-                guard let stream = try? await client.subscribeEnvelopeStream(method: "JetboxSubscribeToSummaries") else {
+                if !activeHost.instanceId.isEmpty && activeHost.instanceId != "unpaired" {
+                    return [(activeHost.instanceId, activeHost.instanceId, activeHost.hostname)]
+                }
+                return []
+            }
+            return [("direct", nil, activeHost.hostname)]
+        }()
+
+        // Cancel local streams for instances that are no longer reachable
+        let activeTargetKeys = Set(localTargets.map(\.key))
+        for (existingKey, existingTask) in localSummaryStreamTasks where !activeTargetKeys.contains(existingKey) {
+            existingTask.cancel()
+            localSummaryStreamTasks.removeValue(forKey: existingKey)
+        }
+        if localSummaryStreamTasks.isEmpty {
+            hasReceivedLocalStreamEvent = false
+        }
+
+        let generation = self.summaryStreamGeneration
+
+        for target in localTargets where localSummaryStreamTasks[target.key] == nil {
+            let targetKey = target.key
+            let targetUuid = target.uuid
+            let targetHostName = target.hostName
+            localSummaryStreamTasks[targetKey] = Task { [weak self] in
+                guard let stream = try? await client.subscribeEnvelopeStream(
+                    method: "JetboxSubscribeToSummaries",
+                    instanceUuidOverride: targetUuid
+                ) else {
+                    if let self, self.summaryStreamGeneration == generation {
+                        self.localSummaryStreamTasks.removeValue(forKey: targetKey)
+                        if self.localSummaryStreamTasks.isEmpty {
+                            self.hasReceivedLocalStreamEvent = false
+                        }
+                    }
                     return
                 }
                 do {
                     for try await event in stream {
-                        guard let self, !Task.isCancelled else { break }
+                        guard let self, !Task.isCancelled, self.summaryStreamGeneration == generation else { break }
+                        self.hasReceivedLocalStreamEvent = true
                         self.lastBackendActivityAt = Date()
-                        self.applyJetboxSummaryEvent(event, forceCloud: false)
+                        self.applyJetboxSummaryEvent(
+                            event,
+                            forceCloud: false,
+                            originInstanceUuid: targetUuid,
+                            originHostName: targetHostName
+                        )
+                    }
+                    if let self, self.summaryStreamGeneration == generation {
+                        self.localSummaryStreamTasks.removeValue(forKey: targetKey)
+                        if self.localSummaryStreamTasks.isEmpty {
+                            self.hasReceivedLocalStreamEvent = false
+                        }
                     }
                 } catch {
-                    // Stream closed with error while foregrounded -> run a single lightweight passive probe immediately
-                    if let self,
-                       !Task.isCancelled,
-                       !self.isNetworkingSuspended,
-                       self.isDeviceNetworkReachable,
-                       self.isLiveBackendConnected {
-                        await self.performLightweightHeartbeatTick(allowFullReconciliation: false)
+                    // Clear dead stream reference BEFORE running passive probe so it can reopen cleanly
+                    if let self, self.summaryStreamGeneration == generation {
+                        self.localSummaryStreamTasks.removeValue(forKey: targetKey)
+                        if self.localSummaryStreamTasks.isEmpty {
+                            self.hasReceivedLocalStreamEvent = false
+                        }
+                        if !Task.isCancelled,
+                           !self.isNetworkingSuspended,
+                           self.isDeviceNetworkReachable,
+                           self.isLiveBackendConnected {
+                            await self.performLightweightHeartbeatTick(allowFullReconciliation: false)
+                        }
                     }
                 }
             }
@@ -1887,23 +1949,53 @@ public final class AntigravitySessionStore {
 
         if cloudSummaryStreamTask == nil {
             cloudSummaryStreamTask = Task { [weak self] in
-                defer {
-                    self?.cloudSummaryStreamTask = nil
+                let cloudTargetUuid: String? = {
+                    guard let self else { return nil }
+                    return self.activeHost.channel == .cloudRelay ? self.activeHost.instanceId : nil
+                }()
+                let resolvedCloudTarget: String?
+                if cloudTargetUuid != nil {
+                    resolvedCloudTarget = await client.currentPreferredCloudInstanceUuid() ?? cloudTargetUuid
+                } else {
+                    resolvedCloudTarget = nil
                 }
-                guard let stream = try? await client.subscribeEnvelopeStream(
-                    method: "JetboxSubscribeToSummaries",
-                    requestPayload: ["backend": .string("BACKEND_TYPE_REMOTE_AICODE")]
-                ) else {
-                    return
-                }
-                do {
-                    for try await event in stream {
-                        guard let self, !Task.isCancelled else { break }
-                        self.lastBackendActivityAt = Date()
-                        self.applyJetboxSummaryEvent(event, forceCloud: true)
+
+                let payloads: [[String: JSONValue]] = [
+                    ["backend": .string("BACKEND_TYPE_REMOTE_AICODE")],
+                    ["backendType": .string("BACKEND_TYPE_REMOTE_AICODE")]
+                ]
+                for (idx, payload) in payloads.enumerated() {
+                    guard !Task.isCancelled else { break }
+                    guard let stream = try? await client.subscribeEnvelopeStream(
+                        method: "JetboxSubscribeToSummaries",
+                        requestPayload: payload,
+                        instanceUuidOverride: resolvedCloudTarget
+                    ) else {
+                        break
                     }
-                } catch {
-                    // Cloud summary stream ended or unsupported on mock server.
+                    do {
+                        for try await event in stream {
+                            guard let self, !Task.isCancelled, self.summaryStreamGeneration == generation else { break }
+                            self.hasReceivedCloudStreamEvent = true
+                            self.lastBackendActivityAt = Date()
+                            self.applyJetboxSummaryEvent(
+                                event,
+                                forceCloud: true,
+                                originInstanceUuid: resolvedCloudTarget,
+                                originHostName: "Antigravity"
+                            )
+                        }
+                        break
+                    } catch let AntigravityRPCError.httpError(_, body)
+                        where idx == 0 && body.lowercased().contains("unknown field \"backend\"") {
+                        continue
+                    } catch {
+                        break
+                    }
+                }
+                if let self, self.summaryStreamGeneration == generation {
+                    self.cloudSummaryStreamTask = nil
+                    self.hasReceivedCloudStreamEvent = false
                 }
             }
         }
@@ -1916,10 +2008,7 @@ public final class AntigravitySessionStore {
     /// - Online idle: relies on push stream + lightweight single-RPC heartbeat (`30s–60s` Relay / `15s–30s` LAN).
     /// - Host offline: exponential backoff with jitter (`3s → 6s → 12s → 24s → 45s → 60s`, ×2 in Low Power Mode).
     public func startSummarySubscriptionStream() {
-        summaryStreamTask?.cancel()
-        summaryStreamTask = nil
-        cloudSummaryStreamTask?.cancel()
-        cloudSummaryStreamTask = nil
+        cancelAllSummaryStreams()
         summaryPollingTask?.cancel()
         summaryPollingTask = nil
 
@@ -1954,7 +2043,7 @@ public final class AntigravitySessionStore {
                             channel: self.activeHost.channel,
                             isLowPowerMode: isLowPower,
                             isExpensiveNetwork: self.isNetworkExpensiveOrConstrained,
-                            isStreamHealthy: self.summaryStreamTask != nil
+                            isStreamHealthy: self.isSummaryStreamHealthy
                         )
                         let elapsedSinceActivity = Date().timeIntervalSince(self.lastBackendActivityAt)
                         return max(2.0, heartbeatInterval - elapsedSinceActivity)
@@ -1985,18 +2074,19 @@ public final class AntigravitySessionStore {
                 }
 
                 if self.isLiveBackendConnected && self.activeHost.isOnline {
+                    let streamHealthy = self.isSummaryStreamHealthy
                     let heartbeatInterval = ConnectionPowerPolicy.onlineHeartbeatInterval(
                         channel: self.activeHost.channel,
                         isLowPowerMode: self.isLowPowerModeEnabled,
                         isExpensiveNetwork: self.isNetworkExpensiveOrConstrained,
-                        isStreamHealthy: self.summaryStreamTask != nil
+                        isStreamHealthy: streamHealthy
                     )
                     let fullSyncInterval = ConnectionPowerPolicy.onlineFullSyncInterval(
                         channel: self.activeHost.channel,
                         isLowPowerMode: self.isLowPowerModeEnabled
                     )
                     let needsFullSync = Date().timeIntervalSince(self.lastFullSyncAt) >= fullSyncInterval
-                        || self.summaryStreamTask == nil
+                        || !streamHealthy
                     let refreshedElapsed = Date().timeIntervalSince(self.lastBackendActivityAt)
 
                     // Skip redundant heartbeat if push events or user RPCs already proved liveness recently
@@ -2095,15 +2185,15 @@ public final class AntigravitySessionStore {
             }
 
             if probe.relayTopologyChanged {
-                summaryStreamTask?.cancel()
-                summaryStreamTask = nil
-                cloudSummaryStreamTask?.cancel()
-                cloudSummaryStreamTask = nil
+                cancelAllSummaryStreams()
                 lastStreamReopenAttemptAt = .distantPast
                 ensureSummaryEnvelopeStreamRunning()
                 await refreshWorkspacesAndSummaries(forceFullSync: true, includeAutomations: false)
             } else {
-                if summaryStreamTask == nil {
+                let missingLocalStream = localSummaryStreamTasks.isEmpty
+                    || (isRelay && availableRelayInstances.contains { $0.status.isReachable && localSummaryStreamTasks[$0.uuid] == nil })
+                let missingCloudStream = (cloudSummaryStreamTask == nil)
+                if missingLocalStream || missingCloudStream {
                     ensureSummaryEnvelopeStreamRunning()
                 }
                 if allowFullReconciliation {
@@ -2166,57 +2256,139 @@ public final class AntigravitySessionStore {
 
     /// Handles both Antigravity 2.0.11+ `{"updates": {"<cascadeId>": {...}}, "deletes": [...]}` frames
     /// and single-cascade `{"cascadeId": "...", "status": "..."}` frames.
-    private func applyJetboxSummaryEvent(_ event: [String: JSONValue], forceCloud: Bool = false) {
+    private func applyJetboxSummaryEvent(
+        _ event: [String: JSONValue],
+        forceCloud: Bool = false,
+        originInstanceUuid: String? = nil,
+        originHostName: String? = nil
+    ) {
         var changedIds = Set<String>()
-        let existingCloudProjects = projects.filter { $0.runtime == .cloud && $0.cloudProjectId != nil }
+        let existingCloudProjects = projects.filter { $0.runtime == .cloud }
         let cloudProjById: [String: ProjectWorkspace] = Dictionary(
-            existingCloudProjects.compactMap { cp in
-                guard let cpid = cp.cloudProjectId, !cpid.isEmpty else { return nil }
-                return (cpid, cp)
-            },
+            existingCloudProjects.map { cp in (cp.cloudProjectId ?? cp.id, cp) },
             uniquingKeysWith: { first, _ in first }
         )
+
+        let effectiveOriginUuid = originInstanceUuid ?? activeHost.instanceId
+        let effectiveOriginHost = forceCloud ? "Antigravity" : (originHostName ?? activeHost.hostname)
 
         let decodedBatch = AntigravityRPCClient.decodeJetboxSummariesEvent(
             event,
             forceCloud: forceCloud,
-            originInstanceUuid: activeHost.instanceId,
-            originHostName: forceCloud ? "Antigravity" : activeHost.hostname,
+            originInstanceUuid: effectiveOriginUuid,
+            originHostName: effectiveOriginHost,
             cloudProjectsById: cloudProjById
         )
         if !decodedBatch.upserts.isEmpty {
+            let now = Date()
             for decoded in decodedBatch.upserts {
                 let cid = decoded.cascadeId
                 changedIds.insert(cid)
                 if let idx = summaries.firstIndex(where: { $0.cascadeId == cid }) {
-                    let prevStepCount = summaries[idx].stepCount
+                    let existing = summaries[idx]
+                    let prevStepCount = existing.stepCount
                     var merged = decoded
-                    if summaries[idx].title != "New Conversation" && merged.title == "New Conversation" {
-                        merged.title = summaries[idx].title
+                    if existing.title != "New Conversation" && merged.title == "New Conversation" {
+                        merged.title = existing.title
                     }
-                    if summaries[idx].isCloud && !merged.isCloud {
+                    if existing.isCloud && !merged.isCloud {
                         merged.isCloud = true
                         merged.originHostName = "Antigravity"
                     }
-                    merged.isPinned = summaries[idx].isPinned || decoded.isPinned
-                    merged.isArchived = summaries[idx].isArchived || decoded.isArchived
+                    merged.isPinned = existing.isPinned || decoded.isPinned
+                    merged.isArchived = existing.isArchived || decoded.isArchived
                     merged.stepCount = max(prevStepCount, decoded.stepCount)
-                    merged.cloudProjectId = decoded.cloudProjectId ?? summaries[idx].cloudProjectId
+                    merged.currentStepIndex = max(1, merged.stepCount)
+                    merged.totalSteps = max(1, merged.stepCount)
+                    merged.cloudProjectId = decoded.cloudProjectId ?? existing.cloudProjectId
+
+                    // Prevent a different peer window's stale IDLE snapshot from clobbering an active run at equal stepCount
+                    let sameOrigin = (decoded.originInstanceUuid == nil)
+                        || (existing.originInstanceUuid == nil)
+                        || (decoded.originInstanceUuid == existing.originInstanceUuid)
+                    if !sameOrigin
+                        && decoded.stepCount <= prevStepCount
+                        && (existing.status == .inProgress || existing.status == .pending || existing.status == .waiting || existing.status == .blocked)
+                        && (merged.status == .unspecified || merged.status == .done) {
+                        merged.status = existing.status
+                        merged.originInstanceUuid = existing.originInstanceUuid
+                        merged.originHostName = existing.originHostName
+                    }
+
                     if let optimisticExpiry = optimisticActiveUntilByCascadeId[cid],
-                       optimisticExpiry > Date(),
+                       optimisticExpiry > now,
                        merged.status != .waiting && merged.status != .blocked && merged.status != .error {
                         merged.status = .inProgress
                     }
-                    if merged.stepCount > prevStepCount && activeRoute != .cascadeChat(cid) {
-                        merged.isUnread = true
-                        locallyViewedAtByCascadeId.removeValue(forKey: cid)
+
+                    let latestViewed = [existing.lastUserViewTime, decoded.lastUserViewTime].compactMap { $0 }.max()
+                    merged.lastUserViewTime = latestViewed
+
+                    let hasNewActivity = merged.stepCount > prevStepCount
+                        || decoded.updatedAt.timeIntervalSince(existing.updatedAt) > 0.5
+                    if hasNewActivity {
+                        if activeRoute != .cascadeChat(cid) {
+                            merged.isUnread = (merged.status != .inProgress && merged.status != .pending)
+                            locallyViewedAtByCascadeId.removeValue(forKey: cid)
+                        } else {
+                            merged.isUnread = false
+                            locallyViewedAtByCascadeId[cid] = now
+                        }
+                    } else if merged.status == .inProgress || merged.status == .pending {
+                        merged.isUnread = false
+                    } else if let latestViewed {
+                        merged.isUnread = merged.updatedAt.timeIntervalSince(latestViewed) > 0.5
+                            || merged.status == .waiting
+                            || merged.status == .blocked
+                    } else {
+                        merged.isUnread = decoded.isUnread || existing.isUnread
                     }
+
+                    if let localViewed = locallyViewedAtByCascadeId[cid], merged.updatedAt <= localViewed {
+                        merged.isUnread = false
+                    }
+
+                    merged.statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                        status: merged.status,
+                        stepCount: merged.stepCount,
+                        isUnread: merged.isUnread
+                    )
                     summaries[idx] = merged
                 } else {
-                    summaries.insert(decoded, at: 0)
+                    var fresh = decoded
+                    if let localViewed = locallyViewedAtByCascadeId[cid], fresh.updatedAt <= localViewed {
+                        fresh.isUnread = false
+                        fresh.statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                            status: fresh.status,
+                            stepCount: fresh.stepCount,
+                            isUnread: false
+                        )
+                    }
+                    summaries.insert(fresh, at: 0)
                 }
             }
-            var updatedSummaries = summaries
+
+            var byIdMap: [String: CascadeSummary] = Dictionary(
+                summaries.map { ($0.cascadeId, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            AntigravityRPCClient.reconcileBatchUnreadStates(&byIdMap, now: now)
+            for idx in summaries.indices {
+                if let reconciled = byIdMap[summaries[idx].cascadeId] {
+                    if let localViewed = locallyViewedAtByCascadeId[reconciled.cascadeId],
+                       reconciled.updatedAt <= localViewed {
+                        continue
+                    }
+                    summaries[idx] = reconciled
+                }
+            }
+
+            var updatedSummaries = summaries.sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return lhs.cascadeId < rhs.cascadeId
+            }
             projects = Self.reconcileLiveProjects(
                 workspaces: workspaces,
                 summaries: &updatedSummaries,
@@ -2251,6 +2423,10 @@ public final class AntigravitySessionStore {
                     explicitSubtitle: event["summary"]?.stringValue
                 )
             }
+        }
+
+        if isLiveBackendConnected && activeHost.isOnline {
+            connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
         }
 
         if !activeCascadeId.isEmpty && changedIds.contains(activeCascadeId) {
@@ -2540,7 +2716,7 @@ public final class AntigravitySessionStore {
                 } else {
                     guard isViewingThisChat,
                           let fallbackInterval = ConnectionPowerPolicy.idleChatFallbackStepPollInterval(
-                              isStreamHealthy: self.summaryStreamTask != nil,
+                              isStreamHealthy: self.isSummaryStreamHealthy,
                               isLowPowerMode: self.isLowPowerModeEnabled
                           ) else {
                         // Idle chat with healthy push stream -> stop polling completely (0 idle RPCs)
@@ -2599,9 +2775,15 @@ public final class AntigravitySessionStore {
 
     public func selectCascade(_ cascadeId: String) {
         activeCascadeId = cascadeId
-        locallyViewedAtByCascadeId[cascadeId] = Date()
+        let viewedNow = Date()
+        locallyViewedAtByCascadeId[cascadeId] = viewedNow
+        var shouldSyncViewedAnnotation = false
+        var originUuidForViewSync: String? = nil
         if let idx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
+            shouldSyncViewedAnnotation = summaries[idx].isUnread
+            originUuidForViewSync = summaries[idx].originInstanceUuid
             summaries[idx].isUnread = false
+            summaries[idx].lastUserViewTime = viewedNow
             selectedWorkspaceUri = summaries[idx].workspaceUri
             selectedProjectId = summaries[idx].projectSlug
             if hasPairedBackend || isLiveBackendConnected {
@@ -2622,6 +2804,20 @@ public final class AntigravitySessionStore {
         unreadStreamingStepCount = 0
         isAutoScrollPinnedToBottom = true
         if hasPairedBackend || isLiveBackendConnected {
+            if shouldSyncViewedAnnotation,
+               !isVerificationMode,
+               !cascadeId.hasPrefix("cas-") || Self.esddFixtureCascadeIds.contains(cascadeId),
+               activeHost.channel == .cloudRelay,
+               let clientRef = rpcClient {
+                let targetUuid = originUuidForViewSync
+                Task {
+                    try? await clientRef.markCascadeViewed(
+                        cascadeId: cascadeId,
+                        viewedAt: viewedNow,
+                        instanceUuidOverride: targetUuid
+                    )
+                }
+            }
             syncStepsForCascade(cascadeId, pollUntilIdle: true)
         }
     }
@@ -2637,14 +2833,39 @@ public final class AntigravitySessionStore {
 
     public func markAllConversationsAsRead() {
         let now = Date()
+        var targetsToSync: [(cascadeId: String, originUuid: String?)] = []
         for idx in summaries.indices {
+            if summaries[idx].isUnread {
+                targetsToSync.append((summaries[idx].cascadeId, summaries[idx].originInstanceUuid))
+            }
             summaries[idx].isUnread = false
+            summaries[idx].lastUserViewTime = now
+            if hasPairedBackend || isLiveBackendConnected {
+                summaries[idx].statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                    status: summaries[idx].status,
+                    stepCount: summaries[idx].stepCount,
+                    isUnread: false
+                )
+            }
             locallyViewedAtByCascadeId[summaries[idx].cascadeId] = now
         }
         let snapshot = summaries
         let storeRef = projectionStore
+        let shouldSyncRemote = !isVerificationMode
+            && (hasPairedBackend || isLiveBackendConnected)
+            && activeHost.channel == .cloudRelay
+        let clientRef = shouldSyncRemote ? rpcClient : nil
         Task {
             await storeRef.saveProjectedSummaries(snapshot)
+            if let clientRef {
+                for item in targetsToSync where !item.cascadeId.hasPrefix("cas-") {
+                    try? await clientRef.markCascadeViewed(
+                        cascadeId: item.cascadeId,
+                        viewedAt: now,
+                        instanceUuidOverride: item.originUuid
+                    )
+                }
+            }
         }
     }
 
@@ -2667,15 +2888,39 @@ public final class AntigravitySessionStore {
     public func toggleUnreadCascade(_ cascadeId: String) {
         guard let idx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) else { return }
         summaries[idx].isUnread.toggle()
-        if summaries[idx].isUnread {
+        let now = Date()
+        let nowUnread = summaries[idx].isUnread
+        let originUuid = summaries[idx].originInstanceUuid
+        if nowUnread {
             locallyViewedAtByCascadeId.removeValue(forKey: cascadeId)
         } else {
-            locallyViewedAtByCascadeId[cascadeId] = Date()
+            locallyViewedAtByCascadeId[cascadeId] = now
+            summaries[idx].lastUserViewTime = now
+        }
+        if hasPairedBackend || isLiveBackendConnected {
+            summaries[idx].statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                status: summaries[idx].status,
+                stepCount: summaries[idx].stepCount,
+                isUnread: nowUnread
+            )
         }
         let snapshot = summaries
         let storeRef = projectionStore
+        let shouldSyncViewed = !nowUnread
+            && !isVerificationMode
+            && (hasPairedBackend || isLiveBackendConnected)
+            && activeHost.channel == .cloudRelay
+            && !cascadeId.hasPrefix("cas-")
+        let clientRef = shouldSyncViewed ? rpcClient : nil
         Task {
             await storeRef.saveProjectedSummaries(snapshot)
+            if let clientRef {
+                try? await clientRef.markCascadeViewed(
+                    cascadeId: cascadeId,
+                    viewedAt: now,
+                    instanceUuidOverride: originUuid
+                )
+            }
         }
     }
 
@@ -2987,7 +3232,7 @@ public final class AntigravitySessionStore {
         backgroundPollCounter += 1
         let isRelay = (activeHost.channel == .cloudRelay)
         let syncTimeout: TimeInterval = isRelay ? 14.0 : 3.5
-        let useLightweight = !forceFullSync && isRelay && (backgroundPollCounter % 4 != 1) && summaryStreamTask != nil
+        let useLightweight = !forceFullSync && isRelay && (backgroundPollCounter % 4 != 1) && isSummaryStreamHealthy
         do {
             let federated = try await client.fetchFederatedWorkspacesAndSummaries(
                 timeoutInterval: syncTimeout,
@@ -3029,7 +3274,10 @@ public final class AntigravitySessionStore {
                     copy.isPinned = existing.isPinned || remote.isPinned
                     copy.isArchived = existing.isArchived || remote.isArchived
                     copy.stepCount = max(existing.stepCount, remote.stepCount)
+                    copy.currentStepIndex = max(1, copy.stepCount)
+                    copy.totalSteps = max(1, copy.stepCount)
                     copy.cloudProjectId = remote.cloudProjectId ?? existing.cloudProjectId
+                    copy.lastUserViewTime = [existing.lastUserViewTime, remote.lastUserViewTime].compactMap { $0 }.max()
                     if copy.originInstanceUuid == nil {
                         copy.originInstanceUuid = existing.originInstanceUuid
                         copy.originHostName = copy.originHostName ?? existing.originHostName
@@ -3041,12 +3289,16 @@ public final class AntigravitySessionStore {
                     }
                     if hasNewActivity {
                         if activeRoute != .cascadeChat(remote.cascadeId) {
-                            copy.isUnread = true
+                            copy.isUnread = (copy.status != .inProgress && copy.status != .pending)
                             locallyViewedAtByCascadeId.removeValue(forKey: remote.cascadeId)
                         } else {
                             copy.isUnread = false
                             locallyViewedAtByCascadeId[remote.cascadeId] = now
                         }
+                    } else if copy.status == .inProgress || copy.status == .pending {
+                        copy.isUnread = false
+                    } else if remote.lastUserViewTime == nil && existing.isUnread {
+                        copy.isUnread = true
                     }
                     if remote.cascadeId == activeCascadeId && (
                         hasNewActivity
@@ -3060,12 +3312,16 @@ public final class AntigravitySessionStore {
                     shouldResyncActiveCascade = true
                 }
                 if let viewedAt = locallyViewedAtByCascadeId[remote.cascadeId],
-                   remote.updatedAt <= viewedAt {
+                   copy.updatedAt <= viewedAt {
                     copy.isUnread = false
+                }
+                if copy.isUnread != remote.isUnread
+                    || copy.status != remote.status
+                    || copy.stepCount != remote.stepCount {
                     copy.statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
                         status: copy.status,
                         stepCount: copy.stepCount,
-                        isUnread: false
+                        isUnread: copy.isUnread
                     )
                 }
                 return copy

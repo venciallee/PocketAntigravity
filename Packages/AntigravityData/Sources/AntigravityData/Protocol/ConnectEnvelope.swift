@@ -135,6 +135,36 @@ public struct ConnectStreamParser: Sendable {
 
     public init() {}
 
+    public var hasBufferedBytes: Bool {
+        !buffer.isEmpty
+    }
+
+    public mutating func feedByte(_ byte: UInt8) -> ConnectEnvelopeFrame? {
+        buffer.append(byte)
+        guard buffer.count >= 5 else { return nil }
+        let startIndex = buffer.startIndex
+        let flagByte = buffer[startIndex]
+        let b1 = UInt32(buffer[startIndex + 1]) << 24
+        let b2 = UInt32(buffer[startIndex + 2]) << 16
+        let b3 = UInt32(buffer[startIndex + 3]) << 8
+        let b4 = UInt32(buffer[startIndex + 4])
+        let payloadLength = Int(b1 | b2 | b3 | b4)
+
+        guard buffer.count >= 5 + payloadLength else {
+            return nil
+        }
+
+        let payloadStart = startIndex + 5
+        let payloadEnd = payloadStart + payloadLength
+        let payload = Data(buffer[payloadStart..<payloadEnd])
+        buffer.removeSubrange(startIndex..<payloadEnd)
+
+        return ConnectEnvelopeFrame(
+            flags: ConnectEnvelopeFrame.Flags(rawValue: flagByte),
+            payload: payload
+        )
+    }
+
     public mutating func feed(_ chunk: Data) -> [ConnectEnvelopeFrame] {
         buffer.append(chunk)
         var frames: [ConnectEnvelopeFrame] = []

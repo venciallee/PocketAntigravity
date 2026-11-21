@@ -539,9 +539,18 @@ public struct AgentsHomeViewController: View {
 
     private var filterPillStrip: some View {
         let usesPairedCounts = usesLiveStoreData
-        let runningBadge = usesPairedCounts ? store.runningCount : 2
-        let needsYouBadge = usesPairedCounts ? store.needsYouCount : 1
-        let unreadBadge = usesPairedCounts ? store.unreadCount : 3
+        let scopedSummaries = usesPairedCounts
+            ? store.summaries.filter { !$0.isArchived && summaryMatchesHostFilter($0) }
+            : []
+        let runningBadge = usesPairedCounts
+            ? scopedSummaries.filter { $0.status == .inProgress || $0.status == .pending }.count
+            : 2
+        let needsYouBadge = usesPairedCounts
+            ? scopedSummaries.filter { $0.status == .waiting || $0.status == .blocked }.count
+            : 1
+        let unreadBadge = usesPairedCounts
+            ? scopedSummaries.filter(\.isUnread).count
+            : 3
 
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {

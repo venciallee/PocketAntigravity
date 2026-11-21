@@ -75,6 +75,17 @@ public enum CortexStepStatus: Int, Codable, Sendable, CaseIterable {
         // Maps `CASCADE_RUN_STATUS_IDLE` and `UNSPECIFIED` cleanly to `.unspecified` (`IDLE`)
         return .unspecified
     }
+
+    /// Maps upstream numeric `CascadeRunStatus` enum values:
+    /// `0 = UNSPECIFIED`, `1 = IDLE`, `2 = RUNNING`, `3 = WAITING_FOR_USER`, `4 = CANCELLED`.
+    public static func from(cascadeRunStatusCode code: Int) -> CortexStepStatus {
+        switch code {
+        case 2: return .inProgress
+        case 3: return .waiting
+        case 4: return .cancelled
+        default: return .unspecified
+        }
+    }
 }
 
 /// Maps to `exa.cortex_pb.CortexStepType` (binary field 1 on `gemini_coder.Step`).
@@ -537,6 +548,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
     public var cloudProjectId: String?
     public var originInstanceUuid: String?
     public var originHostName: String?
+    public var lastUserViewTime: Date?
 
     public init(
         cascadeId: String,
@@ -562,7 +574,8 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         isCloud: Bool? = nil,
         cloudProjectId: String? = nil,
         originInstanceUuid: String? = nil,
-        originHostName: String? = nil
+        originHostName: String? = nil,
+        lastUserViewTime: Date? = nil
     ) {
         self.cascadeId = cascadeId
         self.title = title
@@ -588,6 +601,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         self.cloudProjectId = cloudProjectId
         self.originInstanceUuid = originInstanceUuid
         self.originHostName = originHostName
+        self.lastUserViewTime = lastUserViewTime
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -615,6 +629,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         case cloudProjectId
         case originInstanceUuid
         case originHostName
+        case lastUserViewTime
     }
 
     public init(from decoder: Decoder) throws {
@@ -649,5 +664,6 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         self.cloudProjectId = try container.decodeIfPresent(String.self, forKey: .cloudProjectId)
         self.originInstanceUuid = try container.decodeIfPresent(String.self, forKey: .originInstanceUuid)
         self.originHostName = try container.decodeIfPresent(String.self, forKey: .originHostName)
+        self.lastUserViewTime = try container.decodeIfPresent(Date.self, forKey: .lastUserViewTime)
     }
 }

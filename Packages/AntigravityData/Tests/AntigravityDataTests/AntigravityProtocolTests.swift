@@ -1647,6 +1647,205 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertEqual(store.remotePermissionPreset, .defaultPolicy)
         XCTAssertEqual(store.localPermissionPreset, .requestReview)
     }
+
+    @MainActor
+    func testOpenBoqStreamingParserCloudSyncStatusPriorityAndUnreadReconciliation() throws {
+        // 1. Google Boq open infinite outer array (`[[["<b64>", headers]],[["<b64_2>"]],` with NO outer closing `]`)
+        let cloudFrame1 = ConnectEnvelope.encode(
+            payload: Data(#"{"updates":{"v1/default/jetski_remote_agents_3p/aaa":{"summary":"Cloud Build Fix","stepCount":12,"status":"CASCADE_RUN_STATUS_RUNNING","workspaces":[{"workspaceFolderAbsoluteUri":"file:///home/antigravity/venciallee/iOSAntigravity"}]}}}"#.utf8)
+        )
+        let cloudFrame2 = ConnectEnvelope.encode(
+            payload: Data(#"{"updates":{"v1/default/jetski_remote_agents_3p/bbb":{"summary":"Cloud Diff Audit","stepCount":4,"status":2}}}"#.utf8)
+        )
+        let b64OneEscaped = cloudFrame1.base64EncodedString()
+            .replacingOccurrences(of: "/", with: "\\/")
+            .replacingOccurrences(of: "=", with: "\\u003d")
+        let b64Two = cloudFrame2.base64EncodedString()
+
+        var boqParser = CloudRelayJSPBStreamParser()
+        var connectParser = ConnectStreamParser()
+
+        // First network delivery opens outer `[` + sends header-only frame + first Cloud payload, outer `[` stays OPEN!
+        let openChunk1 = Data(
+            ")]}'\n[[[null,[[\"content-type\",\"application/connect+json\"]]]],[[\"\(b64OneEscaped)\",[[\"content-type\",\"application/connect+json\"]]]]"
+                .utf8
+        )
+        let emittedA = boqParser.feed(openChunk1)
+        XCTAssertEqual(emittedA.count, 1, "Must emit first Boq payload immediately even though outer `[` is still open")
+        let decodedFramesA = connectParser.feed(emittedA[0])
+        XCTAssertEqual(decodedFramesA.count, 1)
+        let eventA = try JSONDecoder().decode([String: JSONValue].self, from: decodedFramesA[0].payload)
+        XCTAssertNotNil(eventA["updates"]?.objectValue?["v1/default/jetski_remote_agents_3p/aaa"])
+
+        // Second network delivery arrives later on the same open outer array
+        let openChunk2 = Data(",[[\"\(b64Two)\"]]".utf8)
+        let emittedB = boqParser.feed(openChunk2)
+        XCTAssertEqual(emittedB.count, 1, "Must emit subsequent Boq payloads immediately while outer `[` remains open")
+        let decodedFramesB = connectParser.feed(emittedB[0])
+        XCTAssertEqual(decodedFramesB.count, 1)
+        let eventB = try JSONDecoder().decode([String: JSONValue].self, from: decodedFramesB[0].payload)
+        let batchB = AntigravityRPCClient.decodeJetboxSummariesEvent(eventB, forceCloud: true)
+        XCTAssertEqual(batchB.upserts.count, 1)
+        XCTAssertEqual(batchB.upserts[0].status, .inProgress, "Numeric status 2 must decode to RUNNING (.inProgress)")
+
+        // Boq error trailer must never emit as payload and must populate `lastErrorTrailer`
+        let errTrailer = Data(",[null,[13,\"upstream relay disconnected\"]]".utf8)
+        let emittedErr = boqParser.feed(errTrailer)
+        XCTAssertTrue(emittedErr.isEmpty)
+        XCTAssertEqual(boqParser.lastErrorTrailer, "Boq status 13: upstream relay disconnected")
+
+        // 2. StreamingBase64Decoder incrementally decodes outer Base64-wrapped Boq streams
+        let rawOpenStream = ")]}'\n[[\"\(b64Two)\",null],"
+        let b64WrappedStream = Data(Data(rawOpenStream.utf8).base64EncodedString().utf8)
+        var b64Decoder = StreamingBase64Decoder()
+        var innerParser = CloudRelayJSPBStreamParser()
+        var decodedPayloads: [Data] = []
+        for byte in b64WrappedStream {
+            if let chunk = b64Decoder.feedByte(byte) {
+                decodedPayloads.append(contentsOf: innerParser.feed(chunk))
+            }
+        }
+        decodedPayloads.append(contentsOf: innerParser.feed(b64Decoder.flush()))
+        XCTAssertEqual(decodedPayloads.count, 1)
+        XCTAssertEqual(decodedPayloads[0], cloudFrame2)
+
+        // 3. `mergeSummaryEntry` must NEVER let stale IDLE or stripped annotations clobber RUNNING / WAITING / isUnread
+        let refNow = try XCTUnwrap(AntigravityRPCClient.parseProtoTimestamp(.string("2026-11-20T10:00:00Z")))
+        let dshUnreadJSON: JSONValue = .object([
+            "summary": .string("Go Version Of DSH Superagent"),
+            "stepCount": .int(69),
+            "status": .string("CASCADE_RUN_STATUS_IDLE"),
+            "lastModifiedTime": .string("2026-11-20T09:00:00Z"),
+            "annotations": .object([
+                "lastUserViewTime": .string("2026-11-20T08:45:00Z")
+            ]),
+            "workspaces": .array([
+                .object(["workspaceFolderAbsoluteUri": .string("file:///Users/dev/dsh-superagent-prototype")])
+            ])
+        ])
+        let dshUnread = try XCTUnwrap(
+            AntigravityRPCClient.decodeTrajectorySummaryEntry(
+                cascadeId: "cid-dsh-go",
+                value: dshUnreadJSON,
+                now: refNow
+            )
+        )
+        XCTAssertEqual(dshUnread.status, .unspecified)
+        XCTAssertTrue(dshUnread.isUnread, "Idle conversation modified after lastUserViewTime must be marked unread")
+        XCTAssertEqual(dshUnread.statusSubtitle, "New reply · 69 steps")
+
+        // Annotation-stripped Jetbox frame with same stepCount must NOT clear unread or lastUserViewTime
+        let dshStripped = CascadeSummary(
+            cascadeId: "cid-dsh-go",
+            title: "Go Version Of DSH Superagent",
+            projectSlug: "dsh-superagent-prototype",
+            workspaceUri: "file:///Users/dev/dsh-superagent-prototype",
+            status: .unspecified,
+            stepCount: 69,
+            updatedAt: refNow.addingTimeInterval(-3600),
+            isUnread: false,
+            lastUserViewTime: nil
+        )
+        var mergedMap: [String: CascadeSummary] = [:]
+        AntigravityRPCClient.mergeSummaryEntry(dshUnread, into: &mergedMap, cloudProjectsById: [:])
+        AntigravityRPCClient.mergeSummaryEntry(dshStripped, into: &mergedMap, cloudProjectsById: [:])
+        let mergedDsh = try XCTUnwrap(mergedMap["cid-dsh-go"])
+        XCTAssertTrue(mergedDsh.isUnread)
+        XCTAssertNotNil(mergedDsh.lastUserViewTime)
+        XCTAssertEqual(mergedDsh.statusSubtitle, "New reply · 69 steps")
+
+        // Active RUNNING session must NOT be clobbered by stale IDLE entry at equal stepCount
+        let runningSummary = CascadeSummary(
+            cascadeId: "cid-running-agent",
+            title: "Build iOS Sync Fix",
+            projectSlug: "iOSAntigravity",
+            workspaceUri: "cloud://venciallee/iOSAntigravity",
+            status: .inProgress,
+            stepCount: 15,
+            updatedAt: refNow,
+            isCloud: true
+        )
+        let staleIdleSummary = CascadeSummary(
+            cascadeId: "cid-running-agent",
+            title: "Build iOS Sync Fix",
+            projectSlug: "iOSAntigravity",
+            workspaceUri: "cloud://venciallee/iOSAntigravity",
+            status: .unspecified,
+            stepCount: 15,
+            updatedAt: refNow,
+            isCloud: true
+        )
+        AntigravityRPCClient.mergeSummaryEntry(runningSummary, into: &mergedMap, cloudProjectsById: [:])
+        AntigravityRPCClient.mergeSummaryEntry(staleIdleSummary, into: &mergedMap, cloudProjectsById: [:])
+        XCTAssertEqual(mergedMap["cid-running-agent"]?.status, .inProgress)
+
+        // 4. Per-instance `reconcileBatchUnreadStates` marks recent never-viewed IDLE conversation unread when siblings have lastUserViewTime
+        let viewedSibling = CascadeSummary(
+            cascadeId: "cid-viewed-sib",
+            title: "Viewed Chat",
+            projectSlug: "dsh-superagent-prototype",
+            workspaceUri: "file:///Users/dev/dsh-superagent-prototype",
+            status: .unspecified,
+            stepCount: 10,
+            updatedAt: refNow.addingTimeInterval(-7200),
+            isUnread: false,
+            originInstanceUuid: "mac-1",
+            lastUserViewTime: refNow.addingTimeInterval(-3600)
+        )
+        let unviewedRecent = CascadeSummary(
+            cascadeId: "cid-unviewed-recent",
+            title: "Unopened Reply",
+            projectSlug: "dsh-superagent-prototype",
+            workspaceUri: "file:///Users/dev/dsh-superagent-prototype",
+            status: .unspecified,
+            stepCount: 22,
+            updatedAt: refNow.addingTimeInterval(-1800),
+            isUnread: false,
+            originInstanceUuid: "mac-1",
+            lastUserViewTime: nil
+        )
+        var batchMap: [String: CascadeSummary] = [
+            viewedSibling.cascadeId: viewedSibling,
+            unviewedRecent.cascadeId: unviewedRecent
+        ]
+        AntigravityRPCClient.reconcileBatchUnreadStates(&batchMap, now: refNow)
+        XCTAssertFalse(batchMap["cid-viewed-sib"]?.isUnread ?? true)
+        XCTAssertTrue(batchMap["cid-unviewed-recent"]?.isUnread ?? false)
+        XCTAssertEqual(batchMap["cid-unviewed-recent"]?.statusSubtitle, "New reply · 22 steps")
+
+        // 5. Cloud summary (`file:///home/antigravity/venciallee/iOSAntigravity`, no projectId) links directly to `venciallee/iOSAntigravity` Cloud project
+        let cloudProject = ProjectWorkspace(
+            id: "cloud-proj-uuid-ios",
+            name: "venciallee/iOSAntigravity",
+            pathDisplay: "cloud://venciallee/iOSAntigravity",
+            workspaceUri: "cloud://venciallee/iOSAntigravity",
+            runtime: .cloud,
+            hostName: "Antigravity",
+            activeBranch: "main",
+            cloudProjectId: "cloud-proj-uuid-ios"
+        )
+        let decodedCloud = AntigravityRPCClient.decodeJetboxSummariesEvent(
+            eventA,
+            forceCloud: true,
+            originInstanceUuid: "inst-1",
+            originHostName: "Antigravity",
+            cloudProjectsById: [cloudProject.id: cloudProject]
+        )
+        XCTAssertEqual(decodedCloud.upserts.count, 1)
+        var cloudSummaries = decodedCloud.upserts
+        let reconciledProjects = AntigravitySessionStore.reconcileLiveProjects(
+            workspaces: [],
+            summaries: &cloudSummaries,
+            existingProjects: [],
+            hostName: "lt74xt6l0m-golden-star",
+            cloudProjects: [cloudProject]
+        )
+        XCTAssertEqual(reconciledProjects.count, 1, "Must NOT duplicate Cloud project into both venciallee/iOSAntigravity and iOSAntigravity")
+        XCTAssertEqual(reconciledProjects[0].name, "venciallee/iOSAntigravity")
+        XCTAssertEqual(cloudSummaries[0].projectSlug, "venciallee/iOSAntigravity")
+        XCTAssertEqual(cloudSummaries[0].cloudProjectId, "cloud-proj-uuid-ios")
+        XCTAssertEqual(cloudSummaries[0].status, .inProgress)
+    }
 }
 
 private extension AntigravitySessionStore {
