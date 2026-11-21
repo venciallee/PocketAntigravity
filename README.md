@@ -139,7 +139,7 @@ swift test --package-path apps/ios/Packages/AntigravityData
 1. **Fork** the repository and create a clean branch off `main` (`feat/<topic>`, `fix/<topic>`, or `docs/<topic>`).
 2. Follow the architectural boundaries and ESDD guidelines documented in [`AGENTS.md`](AGENTS.md) and [`specs/`](specs/).
 3. Ensure zero hardcoded secrets/API keys and verify all local gates pass.
-4. Open a **Pull Request** targeting `main` with a concise summary and verification checklist. GitHub Actions automatically runs the appropriate CI pipelines on demand (`macos-xcode-verify.yml` for app/protocol/test changes, `kmp-verify.yml` for `shared/**` changes — pure documentation edits skip heavy macOS simulator runs).
+4. Open a **Pull Request** targeting `main` with a concise summary and verification checklist. GitHub Actions automatically runs impact-scoped verification on PRs (`macos-xcode-verify.yml` skips macOS entirely on pure documentation/Android/KMP-only changes and runs only impacted gates/screens; `kmp-verify.yml` runs when `shared/**` changes; releases always enforce 100% full E2E).
 
 ### Great Areas to Help Out
 

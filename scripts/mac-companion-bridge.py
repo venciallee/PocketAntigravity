@@ -76,6 +76,7 @@ BRIDGE_ENUM_DOWNGRADES = {
     "PERMISSION_SCOPE_TURN": "PERMISSION_SCOPE_ONCE",
     "ARTIFACT_REVIEW_MODE_TURBO": "ARTIFACT_REVIEW_MODE_AUTO",
     "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER": "CASCADE_COMMANDS_AUTO_EXECUTION_AUTO",
+    "PERMISSION_PRESET_DEFAULT": "PERMISSION_PRESET_AUTO",
 }
 
 
@@ -198,6 +199,34 @@ def recursively_downgrade_enum(obj, invalid_val: str, replacement: str) -> tuple
                 replaced = True
             out.append(ne)
         return out, replaced
+    return obj, False
+
+
+def recursively_strip_keys_with_value(obj, target_val: str) -> tuple[object, bool]:
+    """Secondary fallback for unknown future enum values not present in BRIDGE_ENUM_DOWNGRADES:
+    recursively removes any dict key whose string value equals `target_val` so older Desktop hosts
+    fall back to protobuf defaults."""
+    if isinstance(obj, dict):
+        removed = False
+        out = {}
+        for k, v in obj.items():
+            if isinstance(v, str) and v == target_val:
+                removed = True
+                continue
+            nv, r = recursively_strip_keys_with_value(v, target_val)
+            if r:
+                removed = True
+            out[k] = nv
+        return out, removed
+    if isinstance(obj, list):
+        removed = False
+        out = []
+        for elem in obj:
+            ne, r = recursively_strip_keys_with_value(elem, target_val)
+            if r:
+                removed = True
+            out.append(ne)
+        return out, removed
     return obj, False
 
 
@@ -2475,10 +2504,17 @@ def create_bridge_server(
                             err_search,
                             re.IGNORECASE,
                         )
-                        if enum_m and enum_m.group(1) in BRIDGE_ENUM_DOWNGRADES:
-                            replacement = BRIDGE_ENUM_DOWNGRADES[enum_m.group(1)]
-                            updated_obj, did_replace = recursively_downgrade_enum(req_obj, enum_m.group(1), replacement)
-                            if did_replace and isinstance(updated_obj, dict):
+                        if enum_m:
+                            invalid_enum = enum_m.group(1)
+                            if invalid_enum in BRIDGE_ENUM_DOWNGRADES:
+                                replacement = BRIDGE_ENUM_DOWNGRADES[invalid_enum]
+                                updated_obj, did_replace = recursively_downgrade_enum(req_obj, invalid_enum, replacement)
+                                if did_replace and isinstance(updated_obj, dict):
+                                    req_obj = updated_obj
+                                    forward_body = json.dumps(req_obj).encode("utf-8")
+                                    continue
+                            updated_obj, did_strip_enum = recursively_strip_keys_with_value(req_obj, invalid_enum)
+                            if did_strip_enum and isinstance(updated_obj, dict):
                                 req_obj = updated_obj
                                 forward_body = json.dumps(req_obj).encode("utf-8")
                                 continue

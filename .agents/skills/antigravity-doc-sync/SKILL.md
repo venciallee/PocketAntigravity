@@ -26,15 +26,16 @@ Use this skill whenever `scripts/sync-antigravity-docs.py` detects a new Google 
 ### Stage 2 — Technical Design (`specs/deltas/<version>/02-tech-design.md`)
 - Respect all `AGENTS.md` invariants:
   - `apps/ios/Packages/AntigravityData` is pure Swift 6 and **NEVER** imports `UIKit`, `WebKit`, or `AVFoundation`.
-  - All shared state models must conform to `Sendable`, `Equatable`, and `Codable` where persisted.
+  - All shared state models must conform to `Sendable`, `Equatable`, and `Codable` where persisted; all `String`-backed `Codable` enums in `Models/` must conform to `ResilientStringEnum`.
+  - Register every newly added Connect-RPC method in `HostCapabilityRegistry.swift` (`HostCapability.rpcMethods`, `coreBaselineMethods`, or `legacyAliasMethods`), sync any new enum downgrade mappings into `scripts/mac-companion-bridge.py`, and use `performLiveCapabilityWrite(...)` (zero silent `try?`) for mutating Store RPCs.
   - Preserve all 13 UE states, 13 transitions, 13 claims, 10 color tokens, and 5 typography tiers in `specs/esdd-ir.json`.
   - Gate live-only UI changes safely so `--ui-verify` deterministic UE screenshots remain 1:1 compliant.
 
 ### Stage 3 — Executable Test Plan (`specs/deltas/<version>/03-test-plan.md`)
 - Define concrete acceptance test cases covering:
-  - Pure Swift 6 `XCTest` cases in `apps/ios/Packages/AntigravityData/Tests/AntigravityDataTests/`
+  - Pure Swift 6 `XCTest` cases in `apps/ios/Packages/AntigravityData/Tests/AntigravityDataTests/` (including legacy/future compatibility cases in `AntigravityCompatibilityTests.swift`)
   - KMP shared core tests in `shared/*/src/{commonTest,jvmTest}/`
-  - Mock Connect-RPC & Binary Protobuf flows in `verification/mock_language_server.py`, `scripts/mac-companion-bridge.py`, and `verification/verify-v233-capabilities.py`
+  - Mock Connect-RPC & Binary Protobuf flows in `verification/mock_language_server.py`, `scripts/mac-companion-bridge.py`, `verification/verify-v233-capabilities.py`, and `verification/verify-compat-matrix.py`
   - Real Simulator UI assertions in `tests/ios-ui/AntigravityInteractiveUITests.swift`.
 
 ### Stage 4 — Synchronous Implementation & Verification Gates
@@ -43,8 +44,10 @@ Use this skill whenever `scripts/sync-antigravity-docs.py` detects a new Google 
 3. Run ALL local verification gates and confirm exit code `0`:
    ```bash
    python3 scripts/sync-antigravity-docs.py --self-test
+   python3 verification/verify_compat_guardrails.py
    python3 verification/verify-live-rpc-flow.py
    python3 verification/verify-v233-capabilities.py
+   python3 verification/verify-compat-matrix.py
    python3 verification/esdd-verify.py
    ```
 4. Open a Pull Request (Ready for Tier 1, Draft for Tier 2) so `.github/workflows/macos-xcode-verify.yml` runs real `macos-15` Swift 6 `swift test`, `XcodeGen`, `xcodebuild`, and iOS Simulator `XCUITest`. Never push directly to `main`.

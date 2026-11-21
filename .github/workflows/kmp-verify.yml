@@ -20,6 +20,8 @@ on:
       - "gradle.properties"
       - "verification/mock_language_server.py"
       - ".github/workflows/kmp-verify.yml"
+  release:
+    types: [created, published, prereleased]
   workflow_dispatch:
 
 concurrency:
