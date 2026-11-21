@@ -1895,6 +1895,9 @@ public final class AntigravitySessionStore {
                     continue
                 }
                 if !isCloud {
+                    guard reconciled.contains(where: { $0.runtime == .macBookPro && $0.name == slug }) else {
+                        continue
+                    }
                     let wsHostKey = (ws.originInstanceUuid?.isEmpty == false) ? ws.originInstanceUuid! : wsHostName
                     let namespacedId = "host:\(wsHostKey):\(slug)"
                     let existingSameHost = reconciled.contains { existing in
