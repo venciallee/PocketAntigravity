@@ -3,16 +3,17 @@ import Foundation
 // MARK: - Top-Level Navigation, ESDD Scene & Filter Enumerations
 
 /// Primary bottom Liquid Glass navigation tab (`UE01`, `UE06`).
-public enum PrimaryTab: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum PrimaryTab: String, ResilientStringEnum, CaseIterable, Identifiable {
     case agents = "Agents"
     case automations = "Automations"
     case settings = "Settings"
 
     public var id: String { rawValue }
+    public static var unknownFallback: PrimaryTab { .agents }
 }
 
 /// Deterministic ESDD verification scene identifiers (`UE01` .. `UE13`).
-public enum ESDDVerifySceneCase: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum ESDDVerifySceneCase: String, ResilientStringEnum, CaseIterable, Identifiable {
     case agentsHome = "UE01_AGENTS_HOME"
     case displayOptions = "UE02_DISPLAY_OPTIONS"
     case contextMenuPin = "UE03_CONTEXT_MENU_PIN"
@@ -28,16 +29,18 @@ public enum ESDDVerifySceneCase: String, Codable, CaseIterable, Sendable, Identi
     case liveActivitySpec = "UE13_LIVE_ACTIVITY_SPEC"
 
     public var id: String { rawValue }
+    public static var unknownFallback: ESDDVerifySceneCase { .agentsHome }
 }
 
 /// Quick filter pills on `AgentsHomeViewController` (`UE01`).
-public enum AgentsQuickFilter: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum AgentsQuickFilter: String, ResilientStringEnum, CaseIterable, Identifiable {
     case all = "All"
     case running = "Running"
     case needsYou = "Needs you"
     case unread = "Unread"
 
     public var id: String { rawValue }
+    public static var unknownFallback: AgentsQuickFilter { .all }
 }
 
 /// Active host filter scope shared by `AntigravitySessionStore` and `AgentsHomeViewController`.
@@ -76,21 +79,23 @@ public enum AgentsHostFilterScope: Codable, Sendable, Equatable, Hashable, Ident
 }
 
 /// Grouping dimension in `DisplayOptionsSheetView` (`UE02`).
-public enum DisplayGroupBy: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum DisplayGroupBy: String, ResilientStringEnum, CaseIterable, Identifiable {
     case project = "Project"
     case host = "Host"
     case none = "None"
 
     public var id: String { rawValue }
+    public static var unknownFallback: DisplayGroupBy { .project }
 }
 
 /// Conversation sort field in `DisplayOptionsSheetView` (`UE02`).
-public enum ConversationSortField: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum ConversationSortField: String, ResilientStringEnum, CaseIterable, Identifiable {
     case lastUpdated = "Last Updated"
     case dateCreated = "Date Created"
     case title = "Title"
 
     public var id: String { rawValue }
+    public static var unknownFallback: ConversationSortField { .lastUpdated }
 }
 
 /// Persisted display & sorting preferences for `AgentsHomeViewController` (`UE02`).
@@ -131,11 +136,12 @@ public struct AgentDisplayOptions: Codable, Sendable, Equatable {
 }
 
 /// Execution host target for a project (`UE01`, `UE04`, `UE05`).
-public enum ProjectRuntimeTarget: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum ProjectRuntimeTarget: String, ResilientStringEnum, CaseIterable, Identifiable {
     case macBookPro = "MacBook Pro"
     case cloud = "Cloud"
 
     public var id: String { rawValue }
+    public static var unknownFallback: ProjectRuntimeTarget { .macBookPro }
 
     public var descriptionText: String {
         switch self {
@@ -148,20 +154,22 @@ public enum ProjectRuntimeTarget: String, Codable, CaseIterable, Sendable, Ident
 }
 
 /// Repository or folder source when creating a project (`UE05`).
-public enum ProjectSourceKind: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum ProjectSourceKind: String, ResilientStringEnum, CaseIterable, Identifiable {
     case githubRepo = "GitHub repository"
     case driveFolder = "Drive folder"
 
     public var id: String { rawValue }
+    public static var unknownFallback: ProjectSourceKind { .githubRepo }
 }
 
 /// Underline section tab in `ProjectDetailViewController` (`UE04`).
-public enum ProjectDetailTab: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum ProjectDetailTab: String, ResilientStringEnum, CaseIterable, Identifiable {
     case active = "Active"
     case archived = "Archived"
     case automations = "Automations"
 
     public var id: String { rawValue }
+    public static var unknownFallback: ProjectDetailTab { .active }
 }
 
 /// GitHub repository candidate row in `CreateProjectSheetView` (`UE05`).
@@ -535,11 +543,13 @@ public struct ProjectWorkspace: Codable, Sendable, Equatable, Identifiable {
 // MARK: - Remote Host & Workspace Info
 
 /// Connection transport channel for Antigravity Remote Control.
-public enum RemoteConnectionChannel: String, Codable, Sendable, CaseIterable {
+public enum RemoteConnectionChannel: String, ResilientStringEnum, CaseIterable {
     /// Connects via `https://antigravity.google.com/r/<instance-id>` QR link & Google OAuth session.
     case cloudRelay
     /// Connects directly to local/Tailscale `language_server` HTTPS port with `x-codeium-csrf-token`.
     case directHost
+
+    public static var unknownFallback: RemoteConnectionChannel { .directHost }
 
     public var displayName: String {
         switch self {
@@ -1139,7 +1149,7 @@ public struct WorkspaceInfo: Codable, Sendable, Equatable, Identifiable {
 }
 
 /// Legacy filter category retained for compatibility.
-public enum SessionFilterCategory: String, Codable, Sendable, CaseIterable, Identifiable {
+public enum SessionFilterCategory: String, ResilientStringEnum, CaseIterable, Identifiable {
     case all = "All"
     case waitingApproval = "Waiting"
     case running = "Running"
@@ -1147,17 +1157,19 @@ public enum SessionFilterCategory: String, Codable, Sendable, CaseIterable, Iden
     case done = "Completed"
 
     public var id: String { rawValue }
+    public static var unknownFallback: SessionFilterCategory { .all }
 }
 
 // MARK: - Model, Mode & Agent Configuration (UE09 + v2.31-v2.33)
 
-public enum ThinkingEffortLevel: String, Codable, Sendable, CaseIterable, Identifiable {
+public enum ThinkingEffortLevel: String, ResilientStringEnum, CaseIterable, Identifiable {
     case low = "Low"
     case medium = "Medium"
     case high = "High"
     case extra = "Extra"
 
     public var id: String { rawValue }
+    public static var unknownFallback: ThinkingEffortLevel { .high }
 
     /// CLI / wire identifier (`low`, `medium`, `high`, `xhigh` per v2.33 Gemini 4 Neon/Hydrogen docs).
     public var cliValue: String {
@@ -1179,11 +1191,12 @@ public enum ThinkingEffortLevel: String, Codable, Sendable, CaseIterable, Identi
     }
 }
 
-public enum CascadeExecutionMode: String, Codable, Sendable, CaseIterable, Identifiable {
+public enum CascadeExecutionMode: String, ResilientStringEnum, CaseIterable, Identifiable {
     case planning = "Planning"
     case fast = "Fast"
 
     public var id: String { rawValue }
+    public static var unknownFallback: CascadeExecutionMode { .planning }
 
     public var summaryDescription: String {
         switch self {
@@ -1197,7 +1210,7 @@ public enum CascadeExecutionMode: String, Codable, Sendable, CaseIterable, Ident
 
 /// Permission preset controlling terminal command execution and tool approvals
 /// (`Request Review`, `Default`, `Auto`, `Turbo`) in Antigravity 2.x Local & Remote sessions.
-public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIterable, Identifiable {
+public enum AgentPermissionPreset: String, ResilientStringEnum, Equatable, CaseIterable, Identifiable {
     case requestReview = "request_review"
     case defaultPolicy = "default"
     case auto = "auto"
@@ -1206,6 +1219,7 @@ public enum AgentPermissionPreset: String, Codable, Sendable, Equatable, CaseIte
 
     /// Source-compatibility alias for `.defaultPolicy` (sandboxed Default preset).
     public static var defaultSandbox: AgentPermissionPreset { .defaultPolicy }
+    public static var unknownFallback: AgentPermissionPreset { .auto }
 
     public var id: String { rawValue }
 
@@ -1624,11 +1638,13 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
 
 // MARK: - Composer Slash Commands & Attachment Chips (UE07, UE08, v2.33)
 
-public enum SlashCommandCategory: String, Codable, Sendable, CaseIterable {
+public enum SlashCommandCategory: String, ResilientStringEnum, CaseIterable {
     case featured = "Featured"
     case appAndCLI = "App & CLI"
     case appOnly = "App Only"
     case customSkill = "Skill"
+
+    public static var unknownFallback: SlashCommandCategory { .featured }
 }
 
 /// Represents a `/slash` workflow command available in `ChatComposerView`.
@@ -1805,7 +1821,7 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
 
 /// Represents a context chip attached to the Composer Input Box (`@ratelimit.go`, skill, audio, PDF, quote, etc.).
 public struct ComposerAttachmentChip: Codable, Sendable, Equatable, Identifiable {
-    public enum Kind: String, Codable, Sendable {
+    public enum Kind: String, ResilientStringEnum {
         case fileMention
         case folder
         case conversationMention
@@ -1820,6 +1836,8 @@ public struct ComposerAttachmentChip: Codable, Sendable, Equatable, Identifiable
         case videoClip
         case codeQuote
         case pluginMention
+
+        public static var unknownFallback: Kind { .genericFile }
     }
 
     public var id: String

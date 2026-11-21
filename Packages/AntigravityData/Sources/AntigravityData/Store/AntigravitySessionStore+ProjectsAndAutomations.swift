@@ -52,14 +52,26 @@ extension AntigravitySessionStore {
         let projectsSnapshot = projects
         let storeRef = projectionStore
         let clientRef = rpcClient
+        let isLive = isLiveBackendActive
         Task { [weak self] in
             await storeRef.saveProjects(projectsSnapshot)
-            if let remoteCreated = try? await clientRef?.createProjectWorkspace(draft: draft),
-               let self,
-               let idx = self.projects.firstIndex(where: { $0.id == slug }) {
-                self.projects[idx].cloudProjectId = remoteCreated.cloudProjectId ?? self.projects[idx].cloudProjectId
-                self.projects[idx].originInstanceUuid = remoteCreated.originInstanceUuid ?? self.projects[idx].originInstanceUuid
-                await storeRef.saveProjects(self.projects)
+            guard let clientRef else { return }
+            do {
+                let remoteCreated = try await clientRef.createProjectWorkspace(draft: draft)
+                await self?.refreshHostCapabilitiesFromClient()
+                if let self,
+                   let idx = self.projects.firstIndex(where: { $0.id == slug }) {
+                    self.projects[idx].cloudProjectId = remoteCreated.cloudProjectId ?? self.projects[idx].cloudProjectId
+                    self.projects[idx].originInstanceUuid = remoteCreated.originInstanceUuid ?? self.projects[idx].originInstanceUuid
+                    await storeRef.saveProjects(self.projects)
+                }
+            } catch {
+                guard let self, isLive else { return }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: "Creating project workspace"
+                )
             }
         }
         return created
@@ -194,54 +206,65 @@ extension AntigravitySessionStore {
         let modelId = selectedModelConfig.modelId
         let shouldCallLiveBackend = (hasPairedBackend || isLiveBackendConnected)
 
+        let isLive = isLiveBackendActive
         Task { [weak self] in
-            if shouldCallLiveBackend,
-               let clientRef,
-               let realCascadeId = try? await clientRef.startCascade(
-                   workspaceUri: workspaceUri,
-                   initialPrompt: initialPrompt ?? "",
-                   modelId: modelId,
-                   cloudProjectId: cloudProjId,
-                   isCloud: isCloudProj,
-                   instanceUuidOverride: originUuid
-               ),
-               !realCascadeId.isEmpty {
-                guard let self else { return }
-                let belongsToActiveHost = !isCloudProj && (
-                    originUuid == nil
-                        || originUuid?.isEmpty == true
-                        || originUuid == self.activeHost.instanceId
-                )
-                if belongsToActiveHost && self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
-                    self.markBackendReconnected()
-                }
-                let wasEmptyNew = self.locallyCreatedEmptyCascadeIds.remove(optimisticId) != nil
-                let existingSteps = self.stepsByCascadeId.removeValue(forKey: optimisticId) ?? []
-                if wasEmptyNew && existingSteps.isEmpty && (initialPrompt == nil || initialPrompt?.isEmpty == true) {
-                    self.locallyCreatedEmptyCascadeIds.insert(realCascadeId)
-                }
-                self.stepsByCascadeId[realCascadeId] = existingSteps.map { step in
-                    var copy = step
-                    copy.cascadeId = realCascadeId
-                    return copy
-                }
-                if let idx = self.summaries.firstIndex(where: { $0.cascadeId == optimisticId }) {
-                    self.summaries[idx].cascadeId = realCascadeId
-                }
-                if self.activeCascadeId == optimisticId {
-                    self.activeCascadeId = realCascadeId
-                    if case .cascadeChat = self.activeRoute {
-                        self.activeRoute = .cascadeChat(realCascadeId)
+            if shouldCallLiveBackend, let clientRef {
+                do {
+                    let realCascadeId = try await clientRef.startCascade(
+                        workspaceUri: workspaceUri,
+                        initialPrompt: initialPrompt ?? "",
+                        modelId: modelId,
+                        cloudProjectId: cloudProjId,
+                        isCloud: isCloudProj,
+                        instanceUuidOverride: originUuid
+                    )
+                    if !realCascadeId.isEmpty {
+                        guard let self else { return }
+                        let belongsToActiveHost = !isCloudProj && (
+                            originUuid == nil
+                                || originUuid?.isEmpty == true
+                                || originUuid == self.activeHost.instanceId
+                        )
+                        if belongsToActiveHost && self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
+                            self.markBackendReconnected()
+                        }
+                        let wasEmptyNew = self.locallyCreatedEmptyCascadeIds.remove(optimisticId) != nil
+                        let existingSteps = self.stepsByCascadeId.removeValue(forKey: optimisticId) ?? []
+                        if wasEmptyNew && existingSteps.isEmpty && (initialPrompt == nil || initialPrompt?.isEmpty == true) {
+                            self.locallyCreatedEmptyCascadeIds.insert(realCascadeId)
+                        }
+                        self.stepsByCascadeId[realCascadeId] = existingSteps.map { step in
+                            var copy = step
+                            copy.cascadeId = realCascadeId
+                            return copy
+                        }
+                        if let idx = self.summaries.firstIndex(where: { $0.cascadeId == optimisticId }) {
+                            self.summaries[idx].cascadeId = realCascadeId
+                        }
+                        if self.activeCascadeId == optimisticId {
+                            self.activeCascadeId = realCascadeId
+                            if case .cascadeChat = self.activeRoute {
+                                self.activeRoute = .cascadeChat(realCascadeId)
+                            }
+                        }
+                        if let prompt = initialPrompt, !prompt.isEmpty {
+                            self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
+                            self.composerDraftText = prompt
+                            self.sendCurrentDraft()
+                        } else {
+                            self.syncStepsForCascade(realCascadeId, pollUntilIdle: false)
+                        }
+                        return
+                    }
+                } catch {
+                    if let self, isLive {
+                        await self.handleLiveCapabilityWriteError(
+                            error,
+                            capability: .conversationAnnotations,
+                            fallbackActionLabel: "Starting conversation"
+                        )
                     }
                 }
-                if let prompt = initialPrompt, !prompt.isEmpty {
-                    self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
-                    self.composerDraftText = prompt
-                    self.sendCurrentDraft()
-                } else {
-                    self.syncStepsForCascade(realCascadeId, pollUntilIdle: false)
-                }
-                return
             }
 
             if let prompt = initialPrompt, !prompt.isEmpty {
@@ -293,8 +316,20 @@ extension AntigravitySessionStore {
               !project.workspaceUri.isEmpty else { return }
         let uri = project.workspaceUri
         let clientRef = rpcClient
-        Task {
-            try? await clientRef?.openWorkspaceInFinder(workspaceUri: uri)
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
+            guard let clientRef else { return }
+            do {
+                try await clientRef.openWorkspaceInFinder(workspaceUri: uri)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: "Opening workspace in Finder"
+                )
+            }
         }
     }
 

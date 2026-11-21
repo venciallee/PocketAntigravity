@@ -5,7 +5,7 @@ import Foundation
 /// Each native UI layer maps `SemanticIcon` to its platform iconography:
 /// - iOS: SF Symbols (`Shared/DesignSystem/SemanticIcon+SFSymbol.swift`)
 /// - Android (KMP Phase 1+): Material Symbols / Compose vector icons
-public enum SemanticIcon: String, Codable, Sendable, Equatable, Hashable, CaseIterable {
+public enum SemanticIcon: String, ResilientStringEnum, Equatable, Hashable, CaseIterable {
     // Markdown Alert Callouts
     case alertInfo
     case alertTip
@@ -47,4 +47,6 @@ public enum SemanticIcon: String, Codable, Sendable, Equatable, Hashable, CaseIt
     case commandGenerativeUI
     case commandVoice
     case commandCustomSkill
+
+    public static var unknownFallback: SemanticIcon { .embedArtifact }
 }

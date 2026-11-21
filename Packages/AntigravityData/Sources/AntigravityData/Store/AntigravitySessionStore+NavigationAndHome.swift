@@ -1165,12 +1165,16 @@ extension AntigravitySessionStore {
                activeHost.channel == .cloudRelay,
                let clientRef = rpcClient {
                 let targetUuid = originUuidForViewSync
-                Task {
-                    try? await clientRef.markCascadeViewed(
-                        cascadeId: cascadeId,
-                        viewedAt: viewedNow,
-                        instanceUuidOverride: targetUuid
-                    )
+                Task { [weak self] in
+                    do {
+                        try await clientRef.markCascadeViewed(
+                            cascadeId: cascadeId,
+                            viewedAt: viewedNow,
+                            instanceUuidOverride: targetUuid
+                        )
+                    } catch {
+                        await self?.refreshHostCapabilitiesFromClient()
+                    }
                 }
             }
             syncStepsForCascade(cascadeId, pollUntilIdle: true)
@@ -1182,15 +1186,32 @@ extension AntigravitySessionStore {
 
     public func togglePinCascade(_ cascadeId: String) {
         guard let idx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) else { return }
+        let previousPinned = summaries[idx].isPinned
         summaries[idx].isPinned.toggle()
         let isPinned = summaries[idx].isPinned
         let originUuid = summaries[idx].originInstanceUuid
         let snapshot = summaries
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
             await storeRef.saveProjectedSummaries(snapshot)
-            try? await clientRef?.pinCascade(cascadeId: cascadeId, isPinned: isPinned, instanceUuidOverride: originUuid)
+            guard let clientRef else { return }
+            do {
+                try await clientRef.pinCascade(cascadeId: cascadeId, isPinned: isPinned, instanceUuidOverride: originUuid)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let rIdx = self.summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
+                    self.summaries[rIdx].isPinned = previousPinned
+                    await storeRef.saveProjectedSummaries(self.summaries)
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: isPinned ? "Pinning conversation" : "Unpinning conversation"
+                )
+            }
         }
     }
 
@@ -1221,14 +1242,18 @@ extension AntigravitySessionStore {
             && activeHost.channel == .cloudRelay
             && !cascadeId.hasPrefix("cas-")
         let clientRef = shouldSyncViewed ? rpcClient : nil
-        Task {
+        Task { [weak self] in
             await storeRef.saveProjectedSummaries(snapshot)
             if let clientRef {
-                try? await clientRef.markCascadeViewed(
-                    cascadeId: cascadeId,
-                    viewedAt: now,
-                    instanceUuidOverride: originUuid
-                )
+                do {
+                    try await clientRef.markCascadeViewed(
+                        cascadeId: cascadeId,
+                        viewedAt: now,
+                        instanceUuidOverride: originUuid
+                    )
+                } catch {
+                    await self?.refreshHostCapabilitiesFromClient()
+                }
             }
         }
     }
@@ -1237,19 +1262,38 @@ extension AntigravitySessionStore {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let idx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) else { return }
+        let previousTitle = summaries[idx].title
         summaries[idx].title = trimmed
         let originUuid = summaries[idx].originInstanceUuid
         let snapshot = summaries
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
             await storeRef.saveProjectedSummaries(snapshot)
-            try? await clientRef?.renameCascade(cascadeId: cascadeId, newTitle: trimmed, instanceUuidOverride: originUuid)
+            guard let clientRef else { return }
+            do {
+                try await clientRef.renameCascade(cascadeId: cascadeId, newTitle: trimmed, instanceUuidOverride: originUuid)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let rIdx = self.summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
+                    self.summaries[rIdx].title = previousTitle
+                    await storeRef.saveProjectedSummaries(self.summaries)
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: "Renaming conversation"
+                )
+            }
         }
     }
 
     public func moveCascade(_ cascadeId: String, toProject projectSlug: String) {
         guard let idx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) else { return }
+        let previousSlug = summaries[idx].projectSlug
+        let previousUri = summaries[idx].workspaceUri
         summaries[idx].projectSlug = projectSlug
         let targetUri = projects.first(where: { $0.id == projectSlug })?.workspaceUri ?? summaries[idx].workspaceUri
         summaries[idx].workspaceUri = targetUri
@@ -1257,14 +1301,32 @@ extension AntigravitySessionStore {
         let snapshot = summaries
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
             await storeRef.saveProjectedSummaries(snapshot)
-            try? await clientRef?.moveCascadeToWorkspace(cascadeId: cascadeId, workspaceUri: targetUri, instanceUuidOverride: originUuid)
+            guard let clientRef else { return }
+            do {
+                try await clientRef.moveCascadeToWorkspace(cascadeId: cascadeId, workspaceUri: targetUri, instanceUuidOverride: originUuid)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let rIdx = self.summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
+                    self.summaries[rIdx].projectSlug = previousSlug
+                    self.summaries[rIdx].workspaceUri = previousUri
+                    await storeRef.saveProjectedSummaries(self.summaries)
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: "Moving conversation"
+                )
+            }
         }
     }
 
     public func archiveCascade(_ cascadeId: String) {
         guard let idx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) else { return }
+        let previousArchived = summaries[idx].isArchived
         summaries[idx].isArchived = true
         let originUuid = summaries[idx].originInstanceUuid
         if activeCascadeId == cascadeId, let next = filteredSummaries.first {
@@ -1273,25 +1335,62 @@ extension AntigravitySessionStore {
         let snapshot = summaries
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
             await storeRef.saveProjectedSummaries(snapshot)
-            try? await clientRef?.archiveCascade(cascadeId: cascadeId, isArchived: true, instanceUuidOverride: originUuid)
+            guard let clientRef else { return }
+            do {
+                try await clientRef.archiveCascade(cascadeId: cascadeId, isArchived: true, instanceUuidOverride: originUuid)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let rIdx = self.summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
+                    self.summaries[rIdx].isArchived = previousArchived
+                    await storeRef.saveProjectedSummaries(self.summaries)
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: "Archiving conversation"
+                )
+            }
         }
     }
 
     public func deleteCascade(_ cascadeId: String) {
-        let originUuid = summaries.first(where: { $0.cascadeId == cascadeId })?.originInstanceUuid
-        summaries.removeAll { $0.cascadeId == cascadeId }
-        stepsByCascadeId.removeValue(forKey: cascadeId)
+        guard let removedIdx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) else { return }
+        let removedSummary = summaries.remove(at: removedIdx)
+        let removedSteps = stepsByCascadeId.removeValue(forKey: cascadeId)
+        let originUuid = removedSummary.originInstanceUuid
         if activeCascadeId == cascadeId, let next = filteredSummaries.first {
             activeCascadeId = next.cascadeId
         }
         let snapshot = summaries
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
             await storeRef.saveProjectedSummaries(snapshot)
-            try? await clientRef?.deleteCascade(cascadeId: cascadeId, instanceUuidOverride: originUuid)
+            guard let clientRef else { return }
+            do {
+                try await clientRef.deleteCascade(cascadeId: cascadeId, instanceUuidOverride: originUuid)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if !self.summaries.contains(where: { $0.cascadeId == cascadeId }) {
+                    let insertIdx = min(removedIdx, self.summaries.count)
+                    self.summaries.insert(removedSummary, at: insertIdx)
+                    if let removedSteps {
+                        self.stepsByCascadeId[cascadeId] = removedSteps
+                    }
+                    await storeRef.saveProjectedSummaries(self.summaries)
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: "Deleting conversation"
+                )
+            }
         }
     }
 

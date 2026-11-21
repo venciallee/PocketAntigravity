@@ -74,11 +74,13 @@ Allowed Implementation Ceiling: `{max_tier}`
 
 Execute the 4 stages strictly in order:
 1. Write `{target_rel}/01-prd-gap-analysis.md` (with Tier 1 / Tier 2 / Tier 3 classification).
-2. Write `{target_rel}/02-tech-design.md` (pure Swift 6 in `Packages/AntigravityData`, zero UIKit/WebKit/AVFoundation imports, preserving 13 states in `specs/esdd-ir.json`).
-3. Write `{target_rel}/03-test-plan.md` (XCTest + mock Connect-RPC + ESDD test cases).
+2. Write `{target_rel}/02-tech-design.md` (pure Swift 6 in `Packages/AntigravityData`, zero UIKit/WebKit/AVFoundation imports, preserving 13 states in `specs/esdd-ir.json`, registering new RPCs in `HostCapabilityRegistry.swift`, conforming new String Codable enums to `ResilientStringEnum`, and using `performLiveCapabilityWrite` without silent `try?`).
+3. Write `{target_rel}/03-test-plan.md` (XCTest + mock Connect-RPC + 3-version compatibility matrix + ESDD test cases).
 4. Implement all items at or below `{max_tier}` (leave Tier 3 items as RFC specs only), update unit & mock tests, and run:
+   - `python3 verification/verify_compat_guardrails.py`
    - `python3 verification/verify-live-rpc-flow.py`
    - `python3 verification/verify-v233-capabilities.py`
+   - `python3 verification/verify-compat-matrix.py`
    - `python3 verification/esdd-verify.py`
 Do not commit broken code. Summarize exact changed files and verification results when finished.
 """
@@ -116,9 +118,15 @@ def scaffold_dry_run_specs(delta_report: dict, delta_summary_md: str, output_roo
         f"# Auto-Generated Technical Design — Antigravity {version}",
         "",
         "## Module Mapping",
-        "- `Packages/AntigravityData/`: Pure Swift 6 domain models, RPC payloads, Protobuf decoding (zero UIKit/WebKit/AVFoundation).",
-        "- `iOS/`: SwiftUI views & sheets bound to `AntigravitySessionStore` (dual-track live vs `--ui-verify`).",
-        "- `verification/`: `mock_language_server.py`, `verify-v233-capabilities.py`, and `esdd-verify.py`.",
+        "- `Packages/AntigravityData/`: Pure Swift 6 domain models (`ResilientStringEnum`), RPC payloads (`HostCapabilityRegistry`), Protobuf decoding (zero UIKit/WebKit/AVFoundation).",
+        "- `iOS/`: SwiftUI views & sheets bound to `AntigravitySessionStore` (dual-track live vs `--ui-verify`, using `performLiveCapabilityWrite`).",
+        "- `verification/`: `mock_language_server.py`, `verify-v233-capabilities.py`, `verify-compat-matrix.py`, and `esdd-verify.py`.",
+        "",
+        "## Bidirectional Compatibility Checklist",
+        "- [ ] Register any newly added Connect-RPC methods in `HostCapabilityRegistry.swift`.",
+        "- [ ] Conform all newly added `String, Codable` model enums to `ResilientStringEnum`.",
+        "- [ ] Mirror any new enum downgrade mappings between `HostCapabilityRegistry.swift` and `scripts/mac-companion-bridge.py`.",
+        "- [ ] Use `performLiveCapabilityWrite(...)` for mutating Store RPCs (zero silent `try?`).",
         "",
         "## Tier 2 Protocol Probe Checklist",
         *tier2_lines,
@@ -131,10 +139,12 @@ def scaffold_dry_run_specs(delta_report: dict, delta_summary_md: str, output_roo
         "",
         "## Verification Gates",
         "1. `python3 scripts/sync-antigravity-docs.py --self-test`",
-        "2. `python3 verification/verify-live-rpc-flow.py`",
-        "3. `python3 verification/verify-v233-capabilities.py`",
-        "4. `python3 verification/esdd-verify.py`",
-        "5. GitHub Actions `macos-15` `swift test` + `xcodebuild` + `XCUITest` (`macos-xcode-verify.yml`)",
+        "2. `python3 verification/verify_compat_guardrails.py`",
+        "3. `python3 verification/verify-live-rpc-flow.py`",
+        "4. `python3 verification/verify-v233-capabilities.py`",
+        "5. `python3 verification/verify-compat-matrix.py`",
+        "6. `python3 verification/esdd-verify.py`",
+        "7. GitHub Actions `macos-15` `swift test` + `xcodebuild` + `XCUITest` (`macos-xcode-verify.yml`)",
         "",
     ]
     (target_dir / "03-test-plan.md").write_text("\n".join(test_plan), encoding="utf-8")

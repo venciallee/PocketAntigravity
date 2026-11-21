@@ -167,15 +167,19 @@ extension AntigravitySessionStore {
             && (hasPairedBackend || isLiveBackendConnected)
             && activeHost.channel == .cloudRelay
         let clientRef = shouldSyncRemote ? rpcClient : nil
-        Task {
+        Task { [weak self] in
             await storeRef.saveProjectedSummaries(snapshot)
             if let clientRef {
                 for item in targetsToSync where !item.cascadeId.hasPrefix("cas-") {
-                    try? await clientRef.markCascadeViewed(
-                        cascadeId: item.cascadeId,
-                        viewedAt: now,
-                        instanceUuidOverride: item.originUuid
-                    )
+                    do {
+                        try await clientRef.markCascadeViewed(
+                            cascadeId: item.cascadeId,
+                            viewedAt: now,
+                            instanceUuidOverride: item.originUuid
+                        )
+                    } catch {
+                        await self?.refreshHostCapabilitiesFromClient()
+                    }
                 }
             }
         }
@@ -220,15 +224,33 @@ extension AntigravitySessionStore {
 
         let storeRef = projectionStore
         let clientRef = rpcClient
+        let isLive = isLiveBackendActive
         let entry = OutboxEntry(
             cascadeId: cid,
             kind: .planComments,
             messageText: "Sent \(commentsSnapshot.count) plan review comments"
         )
-        Task {
+        Task { [weak self] in
             await storeRef.enqueueOutbox(entry)
-            try? await clientRef?.sendPlanReviewComments(cascadeId: cid, comments: commentsSnapshot)
-            await storeRef.removeOutboxEntry(id: entry.id)
+            if let clientRef {
+                do {
+                    try await clientRef.sendPlanReviewComments(cascadeId: cid, comments: commentsSnapshot)
+                    await self?.refreshHostCapabilitiesFromClient()
+                    await storeRef.removeOutboxEntry(id: entry.id)
+                } catch {
+                    if !isLive {
+                        await storeRef.removeOutboxEntry(id: entry.id)
+                        return
+                    }
+                    await self?.handleLiveCapabilityWriteError(
+                        error,
+                        capability: .turnDiff,
+                        fallbackActionLabel: "Sending plan review comments"
+                    )
+                }
+            } else {
+                await storeRef.removeOutboxEntry(id: entry.id)
+            }
         }
     }
 
@@ -281,11 +303,29 @@ extension AntigravitySessionStore {
             let cid = activeCascadeId
             let clientRef = rpcClient
             let storeRef = projectionStore
+            let isLive = isLiveBackendActive
             let entry = OutboxEntry(cascadeId: cid, kind: .diffComments, messageText: comment.body)
-            Task {
+            Task { [weak self] in
                 await storeRef.enqueueOutbox(entry)
-                try? await clientRef?.sendDiffReviewComments(cascadeId: cid, comments: [comment])
-                await storeRef.removeOutboxEntry(id: entry.id)
+                if let clientRef {
+                    do {
+                        try await clientRef.sendDiffReviewComments(cascadeId: cid, comments: [comment])
+                        await self?.refreshHostCapabilitiesFromClient()
+                        await storeRef.removeOutboxEntry(id: entry.id)
+                    } catch {
+                        if !isLive {
+                            await storeRef.removeOutboxEntry(id: entry.id)
+                            return
+                        }
+                        await self?.handleLiveCapabilityWriteError(
+                            error,
+                            capability: .turnDiff,
+                            fallbackActionLabel: "Sending diff review comment"
+                        )
+                    }
+                } else {
+                    await storeRef.removeOutboxEntry(id: entry.id)
+                }
             }
         }
     }
@@ -317,18 +357,32 @@ extension AntigravitySessionStore {
         guard let current = currentDiffFile else { return }
         let cid = activeCascadeId
         let clientRef = rpcClient
-        Task {
-            try? await clientRef?.revertDiffHunk(
-                cascadeId: cid,
-                filePath: current.filePath,
-                hunkHeader: current.hunkHeader
-            )
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
+            guard let clientRef else { return }
+            do {
+                try await clientRef.revertDiffHunk(
+                    cascadeId: cid,
+                    filePath: current.filePath,
+                    hunkHeader: current.hunkHeader
+                )
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .turnDiff,
+                    fallbackActionLabel: "Reverting diff hunk"
+                )
+            }
         }
     }
 
     public func revertCurrentDiffFile() {
         guard activeTurnDiffs.indices.contains(selectedDiffFileIndex) else { return }
-        let removed = activeTurnDiffs.remove(at: selectedDiffFileIndex)
+        let removedIdx = selectedDiffFileIndex
+        let removed = activeTurnDiffs.remove(at: removedIdx)
+        let previousRoute = activeRoute
         if let sumIdx = summaries.firstIndex(where: { $0.cascadeId == activeCascadeId }) {
             summaries[sumIdx].totalAdditions = max(0, summaries[sumIdx].totalAdditions - removed.additions)
             summaries[sumIdx].totalDeletions = max(0, summaries[sumIdx].totalDeletions - removed.deletions)
@@ -341,8 +395,30 @@ extension AntigravitySessionStore {
         }
         let cid = activeCascadeId
         let clientRef = rpcClient
-        Task {
-            try? await clientRef?.revertDiffHunk(cascadeId: cid, filePath: removed.filePath, hunkHeader: nil)
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
+            guard let clientRef else { return }
+            do {
+                try await clientRef.revertDiffHunk(cascadeId: cid, filePath: removed.filePath, hunkHeader: nil)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if !self.activeTurnDiffs.contains(where: { $0.filePath == removed.filePath }) {
+                    let restoreIdx = min(removedIdx, self.activeTurnDiffs.count)
+                    self.activeTurnDiffs.insert(removed, at: restoreIdx)
+                    self.selectedDiffFileIndex = restoreIdx
+                    if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == cid }) {
+                        self.summaries[sumIdx].totalAdditions += removed.additions
+                        self.summaries[sumIdx].totalDeletions += removed.deletions
+                    }
+                    self.activeRoute = previousRoute
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .turnDiff,
+                    fallbackActionLabel: "Reverting diff file"
+                )
+            }
         }
     }
 
@@ -552,64 +628,50 @@ extension AntigravitySessionStore {
         let draft = gitCommitDraft
         let cid = activeCascadeId
         let branch = activeSummary?.branchName ?? "main"
-        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
-        let result: GitCommitResult
-        if isLive, let client = rpcClient {
-            do {
-                result = try await client.gitCommitChanges(cascadeId: cid, draft: draft)
-                await refreshHostCapabilitiesFromClient()
-            } catch {
-                await handleLiveCapabilityWriteError(
-                    error,
-                    capability: .gitVcs,
-                    fallbackActionLabel: "Git commit"
+        return await performLiveCapabilityWrite(
+            capability: .gitVcs,
+            actionLabel: "Git commit",
+            offlineResult: {
+                GitCommitResult(
+                    commitSha: String(UUID().uuidString.prefix(7)).lowercased(),
+                    commitMessage: message,
+                    branchName: branch,
+                    pushed: false
                 )
-                return nil
+            },
+            remote: { client in
+                try await client.gitCommitChanges(cascadeId: cid, draft: draft)
+            },
+            onSuccess: { result in
+                self.lastCommitResult = result
+                self.gitCommitDraft.message = ""
+                if draft.includeUnstaged {
+                    self.activeTurnDiffs.removeAll()
+                } else {
+                    self.activeTurnDiffs.removeAll(where: \.isStaged)
+                }
+                self.selectedDiffFileIndex = 0
             }
-        } else {
-            result = GitCommitResult(
-                commitSha: String(UUID().uuidString.prefix(7)).lowercased(),
-                commitMessage: message,
-                branchName: branch,
-                pushed: false
-            )
-        }
-        lastCommitResult = result
-        gitCommitDraft.message = ""
-        if draft.includeUnstaged {
-            activeTurnDiffs.removeAll()
-        } else {
-            activeTurnDiffs.removeAll(where: \.isStaged)
-        }
-        selectedDiffFileIndex = 0
-        return result
+        )
     }
 
     public func pushCurrentDiffBranch() async -> Bool {
         let cid = activeCascadeId
         let branch = activeSummary?.branchName ?? "main"
-        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
-        let pushed: Bool
-        if isLive, let client = rpcClient {
-            do {
-                pushed = try await client.gitPushBranch(cascadeId: cid, branchName: branch)
-                await refreshHostCapabilitiesFromClient()
-            } catch {
-                await handleLiveCapabilityWriteError(
-                    error,
-                    capability: .gitVcs,
-                    fallbackActionLabel: "Git push"
-                )
-                return false
+        return await performLiveCapabilityWrite(
+            capability: .gitVcs,
+            actionLabel: "Git push",
+            offlineResult: { true },
+            remote: { client in
+                try await client.gitPushBranch(cascadeId: cid, branchName: branch)
+            },
+            onSuccess: { pushed in
+                if pushed, var last = self.lastCommitResult {
+                    last.pushed = true
+                    self.lastCommitResult = last
+                }
             }
-        } else {
-            pushed = true
-        }
-        if pushed, var last = lastCommitResult {
-            last.pushed = true
-            lastCommitResult = last
-        }
-        return pushed
+        ) ?? false
     }
 
     public func quoteDiffLinesToComposer(filePath: String, startLine: Int, endLine: Int, snippet: String) {

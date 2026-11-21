@@ -580,8 +580,20 @@ extension AntigravitySessionStore {
         }
         let cid = activeCascadeId
         let clientRef = rpcClient
-        Task {
-            try? await clientRef?.cancelCascadeInvocation(cascadeId: cid, instanceUuidOverride: originUuid)
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
+            guard let clientRef else { return }
+            do {
+                try await clientRef.cancelCascadeInvocation(cascadeId: cid, instanceUuidOverride: originUuid)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .backgroundTaskControl,
+                    fallbackActionLabel: "Stopping agent"
+                )
+            }
         }
     }
 
