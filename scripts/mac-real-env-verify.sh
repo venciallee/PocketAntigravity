@@ -55,7 +55,7 @@ fi
 
 echo "=== [1/5] Swift 6 Package Compilation & XCTest Suite (AntigravityData) ==="
 swift --version
-swift test --package-path Packages/AntigravityData
+swift test --package-path apps/ios/Packages/AntigravityData
 
 echo ""
 echo "=== [2/5] Live Antigravity Desktop Companion Bridge & Connect-RPC Handshake ==="

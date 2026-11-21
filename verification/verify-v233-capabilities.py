@@ -220,7 +220,7 @@ def verify_companion_bridge_module():
 
 def verify_swift_contracts_and_isolation():
     print("[3/4] Verifying Swift 6 AntigravityData isolation & v2.33 file/spec contracts...")
-    data_dir = ROOT / "Packages" / "AntigravityData" / "Sources" / "AntigravityData"
+    data_dir = ROOT / "apps" / "ios" / "Packages" / "AntigravityData" / "Sources" / "AntigravityData"
     forbidden = ("import UIKit", "import WebKit", "import AVFoundation", "import Speech", "import PDFKit", "import ActivityKit", "import WidgetKit")
     for swift_file in data_dir.rglob("*.swift"):
         txt = swift_file.read_text(encoding="utf-8")
@@ -231,18 +231,18 @@ def verify_swift_contracts_and_isolation():
         "specs/deltas/v2.33.0/01-prd-gap-analysis.md",
         "specs/deltas/v2.33.0/02-tech-design.md",
         "specs/deltas/v2.33.0/03-test-plan.md",
-        "Packages/AntigravityData/Sources/AntigravityData/Models/V233FeatureModels.swift",
-        "Packages/AntigravityData/Sources/AntigravityData/Store/SharedAppGroupBridge.swift",
-        "Packages/AntigravityData/Tests/AntigravityDataTests/AntigravityV233Tests.swift",
-        "iOS/Services/VoiceInputManager.swift",
-        "iOS/Services/LiveActivityCoordinator.swift",
-        "iOS/Services/NotificationCoordinator.swift",
-        "iOS/ViewControllers/Cascade/ConversationOverviewSheetView.swift",
-        "iOS/ViewControllers/Cascade/SideQuestionSheetView.swift",
-        "iOS/ViewControllers/Cascade/SwarmBoardSheetView.swift",
-        "iOS/ViewControllers/Cascade/VoiceModeSheetView.swift",
-        "iOS/ViewControllers/Inspector/RichArtifactViewerSheet.swift",
-        "iOS/ViewControllers/Pairing/CustomizationsSettingsView.swift",
+        "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Models/V233FeatureModels.swift",
+        "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Store/SharedAppGroupBridge.swift",
+        "apps/ios/Packages/AntigravityData/Tests/AntigravityDataTests/AntigravityV233Tests.swift",
+        "apps/ios/App/Services/VoiceInputManager.swift",
+        "apps/ios/App/Services/LiveActivityCoordinator.swift",
+        "apps/ios/App/Services/NotificationCoordinator.swift",
+        "apps/ios/App/ViewControllers/Cascade/ConversationOverviewSheetView.swift",
+        "apps/ios/App/ViewControllers/Cascade/SideQuestionSheetView.swift",
+        "apps/ios/App/ViewControllers/Cascade/SwarmBoardSheetView.swift",
+        "apps/ios/App/ViewControllers/Cascade/VoiceModeSheetView.swift",
+        "apps/ios/App/ViewControllers/Inspector/RichArtifactViewerSheet.swift",
+        "apps/ios/App/ViewControllers/Pairing/CustomizationsSettingsView.swift",
         "scripts/sync-antigravity-docs.py",
         "scripts/run-doc-sync-agent.py",
         ".github/workflows/antigravity-doc-sync.yml",
@@ -254,7 +254,7 @@ def verify_swift_contracts_and_isolation():
         assert_true((ROOT / rel).is_file(), f"Missing required v2.33 deliverable: {rel}")
 
     # Verify Share Extension never uses forbidden UIApplication.shared
-    share_src = (ROOT / "Extensions" / "Share" / "AntigravityShareViewController.swift").read_text(encoding="utf-8")
+    share_src = (ROOT / "apps" / "ios" / "Extensions" / "Share" / "AntigravityShareViewController.swift").read_text(encoding="utf-8")
     assert_true("UIApplication.shared" not in share_src, "AntigravityShare must not call UIApplication.shared")
     assert_true("SharedAppGroupBridge" in share_src, "AntigravityShare must use SharedAppGroupBridge")
     print("  ✓ Swift 6 isolation, App Extension safety, and all 21 v2.33 deliverable contracts PASSED")

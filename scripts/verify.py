@@ -134,7 +134,7 @@ SUITE_SPECS: dict[str, SuiteSpec] = {
     ),
     "swift": SuiteSpec(
         name="swift",
-        description="Swift 6 strict-concurrency build & XCTest suite (Packages/AntigravityData)",
+        description="Swift 6 strict-concurrency build & XCTest suite (apps/ios/Packages/AntigravityData)",
         in_fast=False,
         in_full=True,
         requires=("swift",),
@@ -458,7 +458,7 @@ def run_suite(
     if suite == "swift":
         res = run_command_gate(
             "swift",
-            ["swift", "test", "--package-path", "Packages/AntigravityData"],
+            ["swift", "test", "--package-path", "apps/ios/Packages/AntigravityData"],
             args,
             success_summary=lambda lines: next(
                 (l for l in reversed(lines) if "Executed " in l or "Test run" in l),
