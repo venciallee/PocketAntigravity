@@ -2425,6 +2425,109 @@ def create_bridge_server(
                 self._write_json(200, {"ok": True, "cascadeId": cid})
                 return
 
+            if method == "GetSidecars":
+                with state.lock:
+                    sidecars = []
+                    for a in state.automations:
+                        cron_expr = a.get("cronExpression") or "0 9 * * 1-5"
+                        prompt_text = a.get("prompt") or a.get("title") or "Scheduled Automation"
+                        enabled = a.get("section", "SCHEDULED") != "PAUSED"
+                        sidecars.append(
+                            {
+                                "sidecarId": a["id"],
+                                "status": "SIDECAR_STATUS_RUNNING" if enabled else "SIDECAR_STATUS_STOPPED",
+                                "config": {
+                                    "builtin": "schedule",
+                                    "restartPolicy": "always",
+                                    "displayName": a.get("title", a["id"]),
+                                    "description": a.get("descriptionText", ""),
+                                    "args": [cron_expr, "agentapi", "new-conversation", "--", prompt_text],
+                                },
+                                "userConfig": {
+                                    "enabled": enabled,
+                                    "projectId": a.get("projectSlug", ""),
+                                    "allProjects": bool(a.get("allProjects", False)),
+                                },
+                            }
+                        )
+                self._write_json(200, {"sidecars": sidecars})
+                return
+
+            if method == "GetSidecarEvents":
+                sid = req_obj.get("sidecarId", "")
+                events = []
+                with state.lock:
+                    for a in state.automations:
+                        if a["id"] == sid and a.get("lastRunCascadeId"):
+                            events.append(
+                                {
+                                    "timestampMs": str(int(time.time() * 1000)),
+                                    "payload": {
+                                        "newConversation": {
+                                            "conversationId": a["lastRunCascadeId"],
+                                            "prompt": a.get("prompt") or a.get("title") or "",
+                                        }
+                                    },
+                                }
+                            )
+                self._write_json(200, {"events": events})
+                return
+
+            if method == "ManageSidecar":
+                sid = req_obj.get("sidecarId") or f"auto-{uuid.uuid4().hex[:8]}"
+                action = str(req_obj.get("action", "")).upper()
+                cfg = req_obj.get("config") or {}
+                args = cfg.get("args") or []
+                cron_expr = args[0] if args else "0 9 * * 1-5"
+                prompt_text = args[-1] if args else cfg.get("displayName", "Scheduled Automation")
+                with state.lock:
+                    existing = next((a for a in state.automations if a["id"] == sid), None)
+                    if action == "SIDECAR_ACTION_CREATE":
+                        proj_slug = req_obj.get("projectId") or ("All projects" if req_obj.get("allProjects") else "This Computer")
+                        item = {
+                            "id": sid,
+                            "title": cfg.get("displayName") or prompt_text,
+                            "projectSlug": proj_slug,
+                            "scheduleSummary": f"{proj_slug} · Scheduled · Flash",
+                            "section": "SCHEDULED",
+                            "nextRunText": "Tomorrow, 09:00",
+                            "lastRunText": "Created just now",
+                            "cronExpression": cron_expr,
+                            "prompt": prompt_text,
+                            "descriptionText": cfg.get("description", ""),
+                            "allProjects": bool(req_obj.get("allProjects", False)),
+                        }
+                        state.automations = [a for a in state.automations if a["id"] != sid]
+                        state.automations.insert(0, item)
+                    elif action == "SIDECAR_ACTION_UPDATE" and existing is not None:
+                        existing["title"] = cfg.get("displayName") or existing["title"]
+                        existing["cronExpression"] = cron_expr
+                        existing["prompt"] = prompt_text
+                        existing["descriptionText"] = cfg.get("description", existing.get("descriptionText", ""))
+                    elif action == "SIDECAR_ACTION_SET_PROJECT" and existing is not None:
+                        existing["projectSlug"] = req_obj.get("projectId") or existing["projectSlug"]
+                        existing["allProjects"] = False
+                    elif action == "SIDECAR_ACTION_SET_ALL_PROJECTS" and existing is not None:
+                        existing["allProjects"] = bool(req_obj.get("allProjects", True))
+                        if existing["allProjects"]:
+                            existing["projectSlug"] = "All projects"
+                    elif action == "SIDECAR_ACTION_DISABLE" and existing is not None:
+                        existing["section"] = "PAUSED"
+                        existing["lastRunText"] = "Paused"
+                    elif action == "SIDECAR_ACTION_ENABLE" and existing is not None:
+                        existing["section"] = "SCHEDULED"
+                        existing["lastRunText"] = "Resumed · just now"
+                    elif action == "SIDECAR_ACTION_DELETE":
+                        state.automations = [a for a in state.automations if a["id"] != sid]
+                    elif action == "SIDECAR_ACTION_RUN_NOW" and existing is not None:
+                        existing["isRunningNow"] = True
+                        existing["lastRunText"] = "Running now..."
+                        first_cid = next(iter(state.trajectories.keys()), None)
+                        if first_cid:
+                            existing["lastRunCascadeId"] = first_cid
+                self._write_json(200, {"sidecarId": sid, "ok": True})
+                return
+
             self._write_json(200, {"ok": True, "method": method})
 
         def _parse_json(self, raw_body: bytes) -> dict:
