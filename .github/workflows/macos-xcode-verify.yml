@@ -36,7 +36,8 @@ jobs:
       - name: "[Gate 0] Pure-Cloud Doc-Sync Watcher Self-Test & Script Syntax Check"
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/sync-antigravity-docs.py scripts/run-doc-sync-agent.py scripts/mac-companion-bridge.py verification/mock_language_server.py verification/verify-v233-capabilities.py
+          python3 -m py_compile scripts/verify.py scripts/sync-antigravity-docs.py scripts/run-doc-sync-agent.py scripts/mac-companion-bridge.py verification/mock_language_server.py verification/verify-v233-capabilities.py
+          python3 scripts/verify.py --self-test
           python3 scripts/sync-antigravity-docs.py --self-test
 
       - name: "[Gate 1] Swift 6 Package Compilation & XCTest Suite (AntigravityData)"

@@ -87,8 +87,9 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 │   ├── core-model/             #   Canonical Cascade, Workspace, Artifact & Interaction models
 │   ├── core-protocol/          #   5B Connect framing, Binary Protobuf, Cloud Relay & PlatformPorts
 │   ├── core-markdown/          #   Cross-platform streaming Markdown AST parser
+│   ├── core-domain/            #   Coroutines & StateFlow domain stores and coordinator
 │   └── umbrella/               #   Unified facade exporting AntigravityShared.xcframework & JVM/Android
-├── scripts/                    # Mac Companion Bridge, icon renderer & upstream doc-sync automation
+├── scripts/                    # Unified verify CLI, Companion Bridge, icon renderer & doc-sync automation
 ├── specs/                      # Normative ESDD product, protocol & E2E test specifications
 └── verification/               # 4-gate ESDD verifier, mock LanguageServer & Simulator E2E runner
 ```
@@ -105,23 +106,23 @@ Contributions of all kinds are welcome — from Android Jetpack Compose screens 
 - **KMP / Android Shared Core**: JDK 21 and Gradle (`./gradlew` included).
 - **Protocol & ESDD Verification**: Python 3.10+ (zero external server dependencies for mock RPC tests).
 
-### Local Verification Commands
+### Local Verification CLI (Human & Coding-Agent Friendly)
 
-Before opening a pull request, run the relevant test suites locally:
+Use the single stateless [`scripts/verify.py`](scripts/verify.py) CLI from any directory — it auto-detects available toolchains on Linux/macOS, suppresses noisy HTTP logs, keeps `git status` clean, and supports machine-readable `--json` output:
 
 ```bash
-# 1. Live Connect-RPC E2E tests (Auth, StartCascade, SendMessage, Binary Protobuf >=600 steps, Face ID Gate)
-python3 verification/verify-live-rpc-flow.py
-python3 verification/verify-v233-capabilities.py
+# Fast default gates: Spec-DAG + secret hygiene + live mock Connect-RPC + v2.33 capabilities (~5s)
+./scripts/verify.py
 
-# 2. Full 4-gate ESDD verification suite (Spec-DAG, 16 E2E journeys, secret hygiene & HIG audit)
-python3 verification/esdd-verify.py
+# Full available suite: adds Chromium ESDD 16-TC/@3x audit, KMP JVM tests & Swift 6 XCTest (when installed)
+./scripts/verify.py --full
 
-# 3. KMP shared core tests (JVM + Mock LanguageServer E2E — runs on Linux, macOS & Windows)
-./gradlew :shared:core-model:jvmTest :shared:core-protocol:jvmTest :shared:core-markdown:jvmTest :shared:umbrella:jvmTest --no-daemon
+# Machine-readable JSON report (ideal for coding agents & CI tooling)
+./scripts/verify.py --json
 
-# 4. Swift 6 strict-concurrency XCTest suite (macOS)
-swift test --package-path Packages/AntigravityData
+# Run specific suite(s) only: spec | rpc | v233 | esdd | kmp | swift | bridge | sim
+./scripts/verify.py --suite rpc,kmp
+./scripts/verify.py --list
 ```
 
 ### Pull Request Workflow
