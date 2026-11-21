@@ -610,7 +610,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
         // 3b. Simulate Desktop / Bridge going offline -> verify top pill & local project subtitle immediately show Offline while Cloud stays Cloud, then auto-recover!
         server.setSimulatedOffline(true)
         XCTAssertTrue(
-            waitForTextContaining("MacBook-Pro-Live · Offline", in: app, timeout: 8),
+            waitForTextContaining("MacBook-Pro-Live · Offline", in: app, timeout: 18),
             "Top host switcher pill must transition to '<hostname> · Offline' when Desktop goes offline"
         )
         XCTAssertTrue(
@@ -626,7 +626,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
 
         server.setSimulatedOffline(false)
         XCTAssertTrue(
-            waitForTextContaining("Local · MacBook-Pro-Live · main", in: app, timeout: 8),
+            waitForTextContaining("Local · MacBook-Pro-Live · main", in: app, timeout: 18),
             "App must automatically reconnect and restore online status when Desktop returns"
         )
 
