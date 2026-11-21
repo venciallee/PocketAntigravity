@@ -11,7 +11,7 @@ class AntigravitySharedFacadeTest {
     @Test
     fun testUmbrellaFacadeExportsAllCoreModulesAndCoordinator() = runTest {
         assertEquals("2.33.0-kmp-phase2", AntigravitySharedFacade.CORE_VERSION)
-        assertEquals(600, AntigravitySharedFacade.PROTOBUF_STEP_THRESHOLD)
+        assertEquals("binary-first-adaptive-json", AntigravitySharedFacade.TRAJECTORY_SYNC_STRATEGY)
         assertTrue(AntigravitySharedFacade.parseMarkdown("# Hello KMP Phase 2").isNotEmpty())
         assertEquals(5 + 2, AntigravitySharedFacade.encodeConnectFrame("{}".encodeToByteArray()).size)
         assertNotNull(

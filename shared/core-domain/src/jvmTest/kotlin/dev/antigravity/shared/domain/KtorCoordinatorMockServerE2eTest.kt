@@ -91,7 +91,7 @@ class KtorCoordinatorMockServerE2eTest {
             assertNotNull(rateLimiter)
             assertEquals(CortexStepStatus.WAITING, rateLimiter.status, "Delta frame should update cas-rate-limiter to WAITING")
 
-            // 2. Sync >600-step trajectory: JSON returns truncatedAt=600 -> auto-switches to Binary Protobuf (605 steps)
+            // 2. Sync >600-step trajectory: Local host uses Binary-first Protobuf directly (605 steps)
             val steps = coordinator.syncSteps("cas-rate-limiter", knownStepCount = 0)
             assertEquals(605, steps.size)
             assertEquals(605, coordinator.chatState.value.stepsByCascadeId["cas-rate-limiter"]?.size)

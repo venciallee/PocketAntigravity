@@ -24,7 +24,7 @@ import dev.antigravity.shared.protocol.SapisidHashGenerator
  */
 public object AntigravitySharedFacade {
     public const val CORE_VERSION: String = "2.33.0-kmp-phase2"
-    public const val PROTOBUF_STEP_THRESHOLD: Int = 600
+    public const val TRAJECTORY_SYNC_STRATEGY: String = "binary-first-adaptive-json"
 
     public fun createCoordinator(
         secretStore: SecretStore = InMemorySecretStore(),

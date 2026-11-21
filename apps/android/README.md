@@ -7,7 +7,7 @@ This directory is reserved for the native **Android** application built with **K
 The Android app consumes the repository's Kotlin Multiplatform shared core modules directly as Gradle project dependencies:
 
 - `:shared:core-model` — Canonical Cascade, Workspace, Artifact & Interaction data models.
-- `:shared:core-protocol` — Ktor OkHttp engine (with SHA-256 TLS pinning / LAN TOFU), 5-byte Connect-RPC streaming, Binary Protobuf (`>= 600` steps), and Google Cloud Relay (`SAPISIDHASH`).
+- `:shared:core-protocol` — Ktor OkHttp engine (with SHA-256 TLS pinning / LAN TOFU), 5-byte Connect-RPC streaming, Binary-first Protobuf (adaptive JSON fallback with runtime ceiling discovery), and Google Cloud Relay (`SAPISIDHASH`).
 - `:shared:core-markdown` — Cross-platform streaming Markdown AST parser.
 - `:shared:core-domain` — `StateFlow`-backed `ConnectionDomainStore`, `ConversationSyncStore`, `CascadeChatDomainStore`, `DurableOutbox`, and `AntigravityCoreCoordinator`.
 

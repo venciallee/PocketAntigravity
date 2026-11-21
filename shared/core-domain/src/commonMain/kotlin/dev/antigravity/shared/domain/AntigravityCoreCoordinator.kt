@@ -40,7 +40,7 @@ import kotlinx.coroutines.flow.StateFlow
  * Composes:
  * - [ConnectionDomainStore]: Direct LAN / Cloud Relay / Pairing URI / Keychain / Reachability
  * - [ConversationSyncStore]: Federated sync + per-host sharded offline cache + Jetbox stream
- * - [CascadeChatDomainStore]: `<600` JSON + `>=600` Binary Protobuf steps + Durable Outbox + PC interactions
+ * - [CascadeChatDomainStore]: Binary-first Protobuf + adaptive JSON ceiling trajectory sync + Durable Outbox + PC interactions
  */
 public class AntigravityCoreCoordinator(
     secretStore: SecretStore = InMemorySecretStore(),

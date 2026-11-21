@@ -32,10 +32,11 @@ import kotlin.math.max
 /**
  * Encodes and decodes binary Protobuf payloads for `GetCascadeTrajectorySteps`.
  *
- * Why binary Protobuf is required:
- * The JSON Connect-RPC endpoint caps `GetCascadeTrajectorySteps` at 600 steps.
- * Sending `Content-Type: application/proto` bypasses the 600-step ceiling and reduces
- * payload size by ~65% over mobile connections.
+ * Why binary Protobuf is the default transport on local hosts:
+ * Sending `Content-Type: application/proto` reduces payload size by ~65% over mobile connections
+ * and dynamically bypasses any server-side JSON truncation ceiling without hardcoded step thresholds,
+ * while targeted JSON `stepOffset` repair recovers rich metadata for unrecognized future wire
+ * step types and waiting interactions.
  */
 public object ProtobufStepCodec {
 
@@ -217,6 +218,8 @@ public object ProtobufStepCodec {
     ): CascadeStep? {
         val cursor = Cursor()
         var rawType = 0
+        var rawTypeName: String? = null
+        var fallbackSummary: String? = null
         var stepType = CortexStepType.UNSPECIFIED
         var stepStatus = CortexStepStatus.UNSPECIFIED
         var createdAtEpochMs = 0L
@@ -248,6 +251,9 @@ public object ProtobufStepCodec {
                     readVarint(data, cursor)?.let { raw ->
                         rawType = raw.toInt()
                         stepType = decodeStepType(rawType)
+                        if (rawType != 0 && stepType == CortexStepType.UNSPECIFIED) {
+                            rawTypeName = "STEP_TYPE_$rawType"
+                        }
                     }
                 }
                 fieldNumber == 4 && wireType == 0 -> {
@@ -461,7 +467,18 @@ public object ProtobufStepCodec {
                         stepType = CortexStepType.MCP_TOOL_CALL
                     }
                 }
-                else -> skipField(wireType, data, cursor)
+                else -> {
+                    if (wireType == 2 && fieldNumber >= 10 && fallbackSummary == null) {
+                        val nested = readLengthDelimited(data, cursor) ?: break
+                        val extracted = nonEmpty(extractStringField(nested, 1))
+                            ?: nonEmpty(extractStringField(nested, 2))
+                        if (extracted != null) {
+                            fallbackSummary = extracted.take(240)
+                        }
+                    } else {
+                        skipField(wireType, data, cursor)
+                    }
+                }
             }
         }
 
@@ -473,6 +490,13 @@ public object ProtobufStepCodec {
             (stepStatus == CortexStepStatus.IN_PROGRESS || stepStatus == CortexStepStatus.PENDING)
         ) {
             plannerPayload = PlannerResponsePayload(response = "")
+        }
+
+        val finalRawTypeName = if (stepType == CortexStepType.UNSPECIFIED) rawTypeName else null
+        val finalFallbackSummary = if (stepType == CortexStepType.UNSPECIFIED && plannerPayload == null) {
+            fallbackSummary
+        } else {
+            null
         }
 
         return CascadeStep(
@@ -496,6 +520,8 @@ public object ProtobufStepCodec {
             dynamicWorkflow = dynamicWorkflowPayload,
             swarmBoard = swarmBoardPayload,
             mcpToolCall = mcpToolCallPayload,
+            rawTypeName = finalRawTypeName,
+            fallbackSummary = finalFallbackSummary,
         )
     }
 
@@ -742,7 +768,11 @@ public object ProtobufStepCodec {
                         phaseNames = extractRepeatedStringField(nested, 3),
                     ),
                 )
-                else -> RequestedInteraction(kind = RequestedInteraction.MemberKind.APPROVAL_INTERACTION)
+                else -> RequestedInteraction(
+                    kind = RequestedInteraction.MemberKind.APPROVAL_INTERACTION,
+                    rawSummary = nonEmpty(extractStringField(nested, 1)) ?: nonEmpty(extractStringField(nested, 2)),
+                    rawWireFieldNumber = fieldNumber,
+                )
             }
         }
         return null

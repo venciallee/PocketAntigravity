@@ -671,6 +671,387 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertNotNil(liveStore.compatibilityNoticeText)
         XCTAssertFalse(liveStore.isCapabilitySupportedOnActiveHost(.gitVcs))
     }
+
+    // MARK: - 7. Binary-First Adaptive Trajectory Sync (Zero Hardcoded Thresholds)
+
+    private func makeBinaryPlannerSteps(count: Int, prefix: String = "Binary step") -> Data {
+        var out = Data()
+        for idx in 0..<count {
+            var stepBytes = Data()
+            stepBytes.append(encodeVarintField(1, value: 15)) // PLANNER_RESPONSE
+            stepBytes.append(encodeVarintField(4, value: 3))  // DONE
+            let planner = encodeStringField(1, string: "\(prefix) \(idx)")
+            stepBytes.append(encodeLengthField(20, payload: planner))
+            out.append(encodeLengthField(1, payload: stepBytes))
+        }
+        return out
+    }
+
+    private func makeJSONPlannerStepsPayload(range: Range<Int>, truncatedAt: Int? = nil) -> Data {
+        let stepsJSON = range.map { idx in
+            """
+            {"stepIndex":\(idx),"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"JSON step \(idx)"}}
+            """
+        }.joined(separator: ",")
+        if let truncatedAt {
+            return Data("{\"steps\":[\(stepsJSON)],\"truncatedAt\":\(truncatedAt)}".utf8)
+        }
+        return Data("{\"steps\":[\(stepsJSON)]}".utf8)
+    }
+
+    func testLocalHostDefaultsToBinaryProtobufAndRepairsUnknownStepTypeViaTargetedJSON() async throws {
+        let normalProtoBytes = makeBinaryPlannerSteps(count: 1, prefix: "Binary-first local reply")
+
+        var futureSubmsg = Data()
+        futureSubmsg.append(encodeStringField(1, string: "Binary Preview"))
+        var unknownStepBytes = Data()
+        unknownStepBytes.append(encodeVarintField(1, value: 199)) // Unknown CortexStepType 199
+        unknownStepBytes.append(encodeVarintField(4, value: 3))   // DONE
+        unknownStepBytes.append(encodeLengthField(199, payload: futureSubmsg))
+        let unknownProtoBytes = encodeLengthField(1, payload: unknownStepBytes)
+
+        let repairedStepJSON = Data("""
+        {
+          "steps": [
+            {
+              "stepIndex": 0,
+              "type": "CORTEX_STEP_TYPE_FUTURE_CANVAS_RENDER",
+              "status": "CORTEX_STEP_STATUS_DONE",
+              "futureCanvasRender": {
+                "title": "Interactive Architecture Map",
+                "summary": "Rendered 14 microservices"
+              }
+            }
+          ]
+        }
+        """.utf8)
+
+        let probe = CompatTrajectoryProbeState()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let contentType = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if path.hasSuffix("/GetCascadeTrajectorySteps") {
+                if contentType.contains("application/proto") {
+                    probe.recordProto()
+                    let payload = probe.shouldReturnUnknownStep() ? unknownProtoBytes : normalProtoBytes
+                    let resp = HTTPURLResponse(
+                        url: req.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/proto"]
+                    )!
+                    return (resp, payload)
+                } else {
+                    let bodyData = CompatMockURLProtocol.readBody(from: req)
+                    let bodyObj = (try? JSONDecoder().decode([String: JSONValue].self, from: bodyData)) ?? [:]
+                    probe.recordJSON(stepOffset: bodyObj["stepOffset"]?.intValue)
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, repairedStepJSON)
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "local-binary-default",
+            hostname: "Local Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18795")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        // 1. Normal binary step fetch on local direct host -> 1 application/proto request, 0 JSON requests
+        let normalSteps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "cas-local-binary",
+            knownStepCount: 1
+        )
+        XCTAssertEqual(normalSteps.count, 1)
+        XCTAssertEqual(normalSteps[0].type, .plannerResponse)
+        XCTAssertEqual(normalSteps[0].plannerResponse?.response, "Binary-first local reply 0")
+        XCTAssertEqual(probe.protoCount(), 1)
+        XCTAssertEqual(probe.jsonCount(), 0)
+
+        // 2. Binary unknown step type 199 triggers targeted JSON stepOffset repair and recovers exact metadata
+        probe.resetCounts()
+        probe.setReturnUnknownStep(true)
+        let repairedSteps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "cas-local-binary",
+            knownStepCount: 1
+        )
+        XCTAssertEqual(repairedSteps.count, 1)
+        XCTAssertEqual(repairedSteps[0].type, .unspecified)
+        XCTAssertEqual(repairedSteps[0].rawTypeName, "CORTEX_STEP_TYPE_FUTURE_CANVAS_RENDER")
+        XCTAssertEqual(repairedSteps[0].fallbackSummary, "Interactive Architecture Map")
+        XCTAssertEqual(probe.protoCount(), 1)
+        XCTAssertEqual(probe.jsonCount(), 1)
+        XCTAssertEqual(probe.lastJsonStepOffset(), 0)
+    }
+
+    func testBinaryProtobuf415FallsBackToJSONCachesAndResetsOnHostVersionChange() async throws {
+        let jsonFallbackBytes = makeJSONPlannerStepsPayload(range: 0..<1)
+        let probe = CompatTrajectoryProbeState()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let contentType = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if path.hasSuffix("/GetCascadeTrajectorySteps") {
+                if contentType.contains("application/proto") {
+                    probe.recordProto()
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 415, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, Data("{\"code\":\"unimplemented\",\"message\":\"unsupported media type application/proto\"}".utf8))
+                } else {
+                    probe.recordJSON(stepOffset: nil)
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, jsonFallbackBytes)
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "local-proto-415",
+            hostname: "JSON-Only Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18796")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        // 1. First fetch gets 415 on application/proto and falls back cleanly to JSON
+        let firstSteps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "cas-415",
+            knownStepCount: 1
+        )
+        XCTAssertEqual(firstSteps.count, 1)
+        XCTAssertEqual(firstSteps[0].plannerResponse?.response, "JSON step 0")
+        XCTAssertEqual(probe.protoCount(), 1)
+        XCTAssertEqual(probe.jsonCount(), 1)
+        let cachedProfile = await client.capabilityProfile()
+        XCTAssertTrue(cachedProfile.binaryProtobufStepsUnsupported)
+
+        // 2. Second fetch skips application/proto completely (0 proto requests)
+        probe.resetCounts()
+        let secondSteps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "cas-415",
+            knownStepCount: 1
+        )
+        XCTAssertEqual(secondSteps.count, 1)
+        XCTAssertEqual(probe.protoCount(), 0, "Cached binaryProtobufStepsUnsupported must skip application/proto")
+        XCTAssertEqual(probe.jsonCount(), 1)
+
+        // 3. Host version change clears both binaryProtobufStepsUnsupported and learnedJsonStepCeiling
+        var mutableProfile = HostCapabilityProfile(hostKey: "host-ver-reset", reportedVersion: "v2.34.0")
+        mutableProfile.recordBinaryProtobufStepsUnsupported()
+        mutableProfile.recordJsonStepCeiling(240)
+        XCTAssertTrue(mutableProfile.binaryProtobufStepsUnsupported)
+        XCTAssertEqual(mutableProfile.learnedJsonStepCeiling, 240)
+
+        mutableProfile.updateReportedVersion("2.35.0")
+        XCTAssertFalse(mutableProfile.binaryProtobufStepsUnsupported)
+        XCTAssertNil(mutableProfile.learnedJsonStepCeiling)
+        XCTAssertEqual(mutableProfile.reportedVersion, "2.35.0")
+
+        // 4. Legacy persisted HostCapabilityProfile JSON without the new fields still decodes cleanly
+        let legacyProfileJSON = Data("""
+        {
+          "hostKey": "legacy-host",
+          "reportedVersion": "v2.32.0",
+          "isCompanionBridge": false,
+          "bridgeSupportedMethods": [],
+          "supportedMethods": ["GetWorkspaceInfos"],
+          "unsupportedMethods": [],
+          "strippedFieldsByMethod": {},
+          "downgradedEnumsByMethod": {},
+          "passiveSignals": {},
+          "updatedAt": 0
+        }
+        """.utf8)
+        let decodedLegacy = try JSONDecoder().decode(HostCapabilityProfile.self, from: legacyProfileJSON)
+        XCTAssertEqual(decodedLegacy.hostKey, "legacy-host")
+        XCTAssertNil(decodedLegacy.learnedJsonStepCeiling)
+        XCTAssertFalse(decodedLegacy.binaryProtobufStepsUnsupported)
+    }
+
+    func testAdaptiveJsonLearnsArbitraryTruncatedAtCeilingWithoutHardcoded600() async throws {
+        let truncatedJsonBytes = makeJSONPlannerStepsPayload(range: 0..<2, truncatedAt: 240)
+        let smallJsonBytes = makeJSONPlannerStepsPayload(range: 0..<100)
+        let fullProtoBytes = makeBinaryPlannerSteps(count: 5, prefix: "Cloud binary step")
+
+        let probe = CompatTrajectoryProbeState()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let contentType = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if path.hasSuffix("/GetCascadeTrajectorySteps") {
+                if contentType.contains("application/proto") {
+                    probe.recordProto()
+                    let resp = HTTPURLResponse(
+                        url: req.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/proto"]
+                    )!
+                    return (resp, fullProtoBytes)
+                } else {
+                    let bodyData = CompatMockURLProtocol.readBody(from: req)
+                    let bodyObj = (try? JSONDecoder().decode([String: JSONValue].self, from: bodyData)) ?? [:]
+                    let cid = bodyObj["cascadeId"]?.stringValue ?? ""
+                    probe.recordJSON(stepOffset: bodyObj["stepOffset"]?.intValue)
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    if cid == "v1/cas-cloud-small-100" {
+                        return (resp, smallJsonBytes)
+                    }
+                    return (resp, truncatedJsonBytes)
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "cloud-ceiling-240",
+            hostname: "Cloud Proxy Host",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18797")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        // 1. First Cloud fetch observes JSON `truncatedAt: 240` -> learns ceiling 240 and upgrades to Binary Protobuf
+        let firstSteps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "v1/cas-cloud-240",
+            knownStepCount: 250,
+            isCloud: true
+        )
+        XCTAssertEqual(firstSteps.count, 5)
+        let learnedCeiling = await client.learnedJsonTrajectoryStepCeiling()
+        XCTAssertEqual(learnedCeiling, 240)
+        XCTAssertEqual(probe.jsonCount(), 1)
+        XCTAssertEqual(probe.protoCount(), 1)
+
+        // 2. Next fetch with knownStepCount 250 (>= 240) hits learned fast-path -> 0 JSON calls, 1 Protobuf call
+        probe.resetCounts()
+        let fastPathSteps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "v1/cas-cloud-240",
+            knownStepCount: 250,
+            isCloud: true
+        )
+        XCTAssertEqual(fastPathSteps.count, 5)
+        XCTAssertEqual(probe.jsonCount(), 0, "Learned ceiling 240 must skip JSON when knownStepCount >= 240")
+        XCTAssertEqual(probe.protoCount(), 1)
+
+        // 3. Smaller fetch with knownStepCount 100 (< learned 240) uses JSON normally without forcing Protobuf
+        probe.resetCounts()
+        let smallSteps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "v1/cas-cloud-small-100",
+            knownStepCount: 100,
+            isCloud: true
+        )
+        XCTAssertEqual(smallSteps.count, 100)
+        XCTAssertEqual(probe.jsonCount(), 1)
+        XCTAssertEqual(probe.protoCount(), 0)
+    }
+
+    func testAdaptiveJsonDetectsSilentPaginationStallAndLearnsCeiling() async throws {
+        let firstPageJson = makeJSONPlannerStepsPayload(range: 0..<5)
+        let emptyPageJson = Data("{\"steps\":[]}".utf8)
+        let fullProtoBytes = makeBinaryPlannerSteps(count: 12, prefix: "Recovered stall step")
+
+        let probe = CompatTrajectoryProbeState()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let contentType = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if path.hasSuffix("/GetCascadeTrajectorySteps") {
+                if contentType.contains("application/proto") {
+                    probe.recordProto()
+                    let resp = HTTPURLResponse(
+                        url: req.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/proto"]
+                    )!
+                    return (resp, fullProtoBytes)
+                } else {
+                    let bodyData = CompatMockURLProtocol.readBody(from: req)
+                    let bodyObj = (try? JSONDecoder().decode([String: JSONValue].self, from: bodyData)) ?? [:]
+                    let stepOffset = bodyObj["stepOffset"]?.intValue ?? 0
+                    probe.recordJSON(stepOffset: stepOffset)
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, stepOffset == 0 ? firstPageJson : emptyPageJson)
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "cloud-stall-host",
+            hostname: "Stalling Cloud Host",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18798")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        let steps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "v1/cas-cloud-stall",
+            knownStepCount: 12,
+            isCloud: true
+        )
+        XCTAssertEqual(steps.count, 12)
+        let learnedCeiling = await client.learnedJsonTrajectoryStepCeiling()
+        XCTAssertEqual(learnedCeiling, 5)
+        XCTAssertEqual(probe.jsonCount(), 2)
+        XCTAssertEqual(probe.protoCount(), 1)
+    }
+
+    func testAdaptiveJsonUpgradesToProtobufOnHttp413PayloadLimit() async throws {
+        let fullProtoBytes = makeBinaryPlannerSteps(count: 42, prefix: "Recovered 413 step")
+        let probe = CompatTrajectoryProbeState()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let contentType = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if path.hasSuffix("/GetCascadeTrajectorySteps") {
+                if contentType.contains("application/proto") {
+                    probe.recordProto()
+                    let resp = HTTPURLResponse(
+                        url: req.url!,
+                        statusCode: 200,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/proto"]
+                    )!
+                    return (resp, fullProtoBytes)
+                } else {
+                    probe.recordJSON(stepOffset: nil)
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 413, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, Data("{\"code\":\"resource_exhausted\",\"message\":\"Payload Too Large\"}".utf8))
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "cloud-413-host",
+            hostname: "Payload-Limited Host",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18799")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        let steps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "v1/cas-cloud-413",
+            knownStepCount: 42,
+            isCloud: true
+        )
+        XCTAssertEqual(steps.count, 42)
+        let learnedCeiling = await client.learnedJsonTrajectoryStepCeiling()
+        XCTAssertEqual(learnedCeiling, 42)
+        XCTAssertEqual(probe.jsonCount(), 1)
+        XCTAssertEqual(probe.protoCount(), 1)
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers
@@ -706,6 +1087,65 @@ private final class CompatRequestCounter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return paths.filter { $0.hasSuffix(suffix) }.count
+    }
+}
+
+private final class CompatTrajectoryProbeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var protoRequests: Int = 0
+    private var jsonRequests: Int = 0
+    private var returnUnknownStep: Bool = false
+    private var recordedJsonStepOffset: Int? = nil
+
+    func recordProto() {
+        lock.lock()
+        defer { lock.unlock() }
+        protoRequests += 1
+    }
+
+    func recordJSON(stepOffset: Int?) {
+        lock.lock()
+        defer { lock.unlock() }
+        jsonRequests += 1
+        recordedJsonStepOffset = stepOffset
+    }
+
+    func protoCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return protoRequests
+    }
+
+    func jsonCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return jsonRequests
+    }
+
+    func lastJsonStepOffset() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedJsonStepOffset
+    }
+
+    func resetCounts() {
+        lock.lock()
+        defer { lock.unlock() }
+        protoRequests = 0
+        jsonRequests = 0
+        recordedJsonStepOffset = nil
+    }
+
+    func setReturnUnknownStep(_ enabled: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        returnUnknownStep = enabled
+    }
+
+    func shouldReturnUnknownStep() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return returnUnknownStep
     }
 }
 
