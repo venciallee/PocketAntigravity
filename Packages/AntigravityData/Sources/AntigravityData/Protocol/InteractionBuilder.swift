@@ -59,6 +59,12 @@ public enum InteractionBuilder: Sendable {
             return nil
         }
 
+        // Never fabricate a mismatched `approvalInteraction` oneof when binary Protobuf decoded an unknown field number
+        // without recovering its exact JSON `rawMemberKey` — newer servers silently drop mismatched oneof replies.
+        if requested.isUnrecognizedWireMember && (requested.rawMemberKey?.isEmpty != false) {
+            return nil
+        }
+
         if decision == .reject {
             switch requested.kind {
             case .permission:
@@ -236,7 +242,9 @@ public enum InteractionBuilder: Sendable {
     /// Read-only permissions and workspace-scoped file reads auto-resolve; commands, browser
     /// actions/downloads/uploads, workflow scripts, MCP writes, and `ask_question` always require explicit user action.
     public static func canSafeAutoAccept(step: CascadeStep, allowedWorkspaceRoots: [String]) -> Bool {
-        guard step.status == .waiting, let requested = step.requestedInteraction else {
+        guard step.status == .waiting,
+              let requested = step.requestedInteraction,
+              !requested.isUnrecognizedWireMember else {
             return false
         }
         switch requested.kind {

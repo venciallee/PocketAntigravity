@@ -818,6 +818,8 @@ extension AntigravitySessionStore {
         isMutatingAutomation = false
         automationsErrorText = nil
         isAutomationsAuthExpired = false
+        hostCapabilitiesByKey.removeAll()
+        compatibilityNoticeText = nil
         pendingDraftConversation = nil
         composerWorkflowCommand = nil
         optimisticActiveUntilByCascadeId.removeAll()
@@ -1731,6 +1733,11 @@ extension AntigravitySessionStore {
         var updatedHost = host
         updatedHost.latencyMs = handshake.latencyMs
         updatedHost.isOnline = hostOnline
+        if !handshake.serverVersion.isEmpty {
+            updatedHost.version = handshake.serverVersion
+        } else if let reported = handshake.hostCapabilities.reportedVersion, !reported.isEmpty {
+            updatedHost.version = reported
+        }
         activeHost = updatedHost
         if let existingIdx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
             hosts[existingIdx] = updatedHost
@@ -1738,6 +1745,14 @@ extension AntigravitySessionStore {
             hosts.insert(updatedHost, at: 0)
         }
         rpcClient = client
+        hostCapabilitiesByKey[handshake.hostCapabilities.hostKey] = handshake.hostCapabilities
+        if !updatedHost.instanceId.isEmpty {
+            hostCapabilitiesByKey[updatedHost.instanceId] = handshake.hostCapabilities
+        }
+        compatibilityNoticeText = nil
+        Task { [weak self] in
+            await self?.refreshHostCapabilitiesFromClient()
+        }
         consecutiveSyncFailures = 0
         reconnectAttemptCount = 0
         nextReconnectAt = nil

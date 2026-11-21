@@ -221,17 +221,19 @@ public struct TurnDiffReviewViewController: View {
                 }
 
                 if let live = activeLiveDiff {
+                    let gitSupported = store.isCapabilitySupportedOnActiveHost(.gitVcs)
                     Button {
                         store.toggleStageDiffFile(at: currentFileIndex)
                     } label: {
                         Label(live.isStaged ? "Unstage" : "Stage", systemImage: live.isStaged ? "minus.circle" : "plus.circle")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(live.isStaged ? Self.emeraldDone : AntigravityTheme.inkReading)
+                            .foregroundStyle(gitSupported ? (live.isStaged ? Self.emeraldDone : AntigravityTheme.inkReading) : AntigravityTheme.inkMuted)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .background(Self.pillBg, in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .disabled(!gitSupported)
                     .accessibilityIdentifier("btn-git-stage-toggle")
 
                     Button {
@@ -239,12 +241,13 @@ public struct TurnDiffReviewViewController: View {
                     } label: {
                         Label("Discard", systemImage: "arrow.uturn.backward")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(Self.coralError)
+                            .foregroundStyle(gitSupported ? Self.coralError : AntigravityTheme.inkMuted)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(Self.coralError.opacity(0.14), in: Capsule())
+                            .background((gitSupported ? Self.coralError : AntigravityTheme.inkMuted).opacity(0.14), in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .disabled(!gitSupported)
                     .accessibilityIdentifier("btn-git-discard-file")
                 }
             }
@@ -286,7 +289,8 @@ public struct TurnDiffReviewViewController: View {
     }
 
     private var liveGitCommitCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let gitSupported = store.isCapabilitySupportedOnActiveHost(.gitVcs)
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Label("Git Commit & Push", systemImage: "checkmark.seal")
                     .font(.system(size: 13.5, weight: .bold))
@@ -298,11 +302,17 @@ public struct TurnDiffReviewViewController: View {
                         .foregroundStyle(Self.emeraldDone)
                 }
             }
+            if !gitSupported {
+                Text(store.activeHostCapabilities.userFacingUnsupportedMessage(for: .gitVcs))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
+            }
             TextField("Commit message...", text: $store.gitCommitDraft.message)
                 .font(.system(size: 14))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .padding(10)
                 .background(Self.pillBg, in: RoundedRectangle(cornerRadius: 10))
+                .disabled(!gitSupported)
                 .accessibilityIdentifier("input-git-commit-message")
 
             HStack(spacing: 12) {
@@ -310,10 +320,12 @@ public struct TurnDiffReviewViewController: View {
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .tint(Self.periwinkle)
+                    .disabled(!gitSupported)
                 Toggle("Amend", isOn: $store.gitCommitDraft.amend)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .tint(Self.periwinkle)
+                    .disabled(!gitSupported)
             }
 
             HStack(spacing: 10) {
@@ -323,17 +335,18 @@ public struct TurnDiffReviewViewController: View {
                 .font(.system(size: 13.5, weight: .bold))
                 .foregroundStyle(Self.inkOnCTA)
                 .frame(maxWidth: .infinity, minHeight: 40)
-                .background(Self.periwinkle, in: RoundedRectangle(cornerRadius: 12))
-                .disabled(store.gitCommitDraft.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .background(gitSupported ? Self.periwinkle : Self.pillBg, in: RoundedRectangle(cornerRadius: 12))
+                .disabled(!gitSupported || store.gitCommitDraft.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("btn-git-commit")
 
                 Button("Push") {
                     Task { _ = await store.pushCurrentDiffBranch() }
                 }
                 .font(.system(size: 13.5, weight: .semibold))
-                .foregroundStyle(AntigravityTheme.inkReading)
+                .foregroundStyle(gitSupported ? AntigravityTheme.inkReading : AntigravityTheme.inkMuted)
                 .frame(maxWidth: .infinity, minHeight: 40)
                 .background(Self.pillBg, in: RoundedRectangle(cornerRadius: 12))
+                .disabled(!gitSupported)
                 .accessibilityIdentifier("btn-git-push")
             }
         }

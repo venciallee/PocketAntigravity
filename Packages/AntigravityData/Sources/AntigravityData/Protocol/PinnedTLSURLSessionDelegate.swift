@@ -26,18 +26,20 @@ public struct BackendHandshakeResult: Sendable, Equatable {
     public let resolvedAuthUser: String?
     public let availableRelayInstances: [RelayInstanceInfo]
     public let isSelectedHostOnline: Bool
+    public let hostCapabilities: HostCapabilityProfile
 
     public init(
         latencyMs: Int,
         workspaces: [WorkspaceInfo],
         summaries: [CascadeSummary],
         cloudProjects: [ProjectWorkspace] = [],
-        serverVersion: String = "v2.32.0",
+        serverVersion: String = "",
         resolvedHostname: String? = nil,
         resolvedInstanceUuid: String? = nil,
         resolvedAuthUser: String? = nil,
         availableRelayInstances: [RelayInstanceInfo] = [],
-        isSelectedHostOnline: Bool = true
+        isSelectedHostOnline: Bool = true,
+        hostCapabilities: HostCapabilityProfile = HostCapabilityProfile()
     ) {
         self.latencyMs = latencyMs
         self.workspaces = workspaces
@@ -49,6 +51,7 @@ public struct BackendHandshakeResult: Sendable, Equatable {
         self.resolvedAuthUser = resolvedAuthUser
         self.availableRelayInstances = availableRelayInstances
         self.isSelectedHostOnline = isSelectedHostOnline
+        self.hostCapabilities = hostCapabilities
     }
 }
 

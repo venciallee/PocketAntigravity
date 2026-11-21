@@ -10,6 +10,14 @@ public enum ArtifactKind: String, Codable, Sendable {
     case jupyterNotebook
     case imageAsset
     case videoAsset
+    /// Forward-compatible fallback for unrecognized artifact kinds produced by newer Desktop hosts.
+    case unsupportedAsset
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        self = ArtifactKind(rawValue: raw) ?? .unsupportedAsset
+    }
 }
 
 /// Represents an Antigravity artifact (`GetArtifactSnapshots` / `GetRevisionArtifact`).
@@ -19,6 +27,7 @@ public struct ArtifactSnapshot: Codable, Sendable, Equatable, Identifiable {
     public var title: String
     public var summary: String
     public var kind: ArtifactKind
+    public var rawKindName: String?
     public var content: String
     public var requestFeedback: Bool
     public var userFacing: Bool
@@ -34,17 +43,37 @@ public struct ArtifactSnapshot: Codable, Sendable, Equatable, Identifiable {
         requestFeedback: Bool = false,
         userFacing: Bool = true,
         version: Int = 1,
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        rawKindName: String? = nil
     ) {
         self.artifactPath = artifactPath
         self.title = title
         self.summary = summary
         self.kind = kind
+        self.rawKindName = rawKindName
         self.content = content
         self.requestFeedback = requestFeedback
         self.userFacing = userFacing
         self.version = version
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case artifactPath, title, summary, kind, rawKindName, content, requestFeedback, userFacing, version, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.artifactPath = try container.decode(String.self, forKey: .artifactPath)
+        self.title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        self.summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        self.kind = try container.decodeIfPresent(ArtifactKind.self, forKey: .kind) ?? .unsupportedAsset
+        self.rawKindName = try container.decodeIfPresent(String.self, forKey: .rawKindName)
+        self.content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        self.requestFeedback = try container.decodeIfPresent(Bool.self, forKey: .requestFeedback) ?? false
+        self.userFacing = try container.decodeIfPresent(Bool.self, forKey: .userFacing) ?? true
+        self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 }
 

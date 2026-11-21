@@ -265,6 +265,44 @@ public struct AntigravityRootContainerView: View {
             }
         }
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
+        .overlay(alignment: .top) {
+            if !store.isVerificationMode,
+               let notice = store.compatibilityNoticeText,
+               !notice.isEmpty {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.statusWaiting)
+                        .padding(.top, 1)
+                    Text(notice)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .lineLimit(3)
+                    Spacer(minLength: 4)
+                    Button {
+                        store.dismissCompatibilityNotice()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-dismiss-compat-notice")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(AntigravityTheme.surfaceCard.opacity(0.96), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(AntigravityTheme.statusWaiting.opacity(0.4), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.35), radius: 12, x: 0, y: 6)
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .accessibilityIdentifier("banner-compatibility-notice")
+            }
+        }
         .onAppear {
             var transaction = Transaction()
             transaction.disablesAnimations = true

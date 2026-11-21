@@ -637,6 +637,12 @@ extension AntigravitySessionStore {
             decision: decision,
             workspaceUri: selectedWorkspaceUri
         )
+        if payload == nil,
+           targetStep.effectiveRequestedInteraction?.isUnrecognizedWireMember == true,
+           (hasPairedBackend || isLiveBackendConnected) {
+            compatibilityNoticeText = "This approval type uses a newer Antigravity Desktop schema. Approve or deny it directly in Antigravity Desktop, then refresh."
+            return
+        }
         lastDispatchedInteraction = payload
 
         switch decision {
@@ -845,25 +851,57 @@ extension AntigravitySessionStore {
     }
 
     public func cancelBackgroundTask(_ taskId: String) {
+        let previousTask = conversationOverview.backgroundTasks.first(where: { $0.id == taskId })
         if let idx = conversationOverview.backgroundTasks.firstIndex(where: { $0.id == taskId }) {
             conversationOverview.backgroundTasks[idx].status = .cancelled
             conversationOverview.backgroundTasks[idx].canCancel = false
         }
         let cid = activeCascadeId
-        let clientRef = rpcClient
-        Task {
-            try? await clientRef?.cancelBackgroundTask(cascadeId: cid, taskId: taskId)
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
+        guard let clientRef = rpcClient else { return }
+        Task { [weak self] in
+            do {
+                try await clientRef.cancelBackgroundTask(cascadeId: cid, taskId: taskId)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let prev = previousTask,
+                   let idx = self.conversationOverview.backgroundTasks.firstIndex(where: { $0.id == taskId }) {
+                    self.conversationOverview.backgroundTasks[idx] = prev
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .backgroundTaskControl,
+                    fallbackActionLabel: "Cancelling background task"
+                )
+            }
         }
     }
 
     public func stopSubagent(_ subagentId: String) {
+        let previousSubagent = conversationOverview.subagents.first(where: { $0.subagentId == subagentId })
         if let idx = conversationOverview.subagents.firstIndex(where: { $0.subagentId == subagentId }) {
             conversationOverview.subagents[idx].status = .cancelled
         }
         let cid = activeCascadeId
-        let clientRef = rpcClient
-        Task {
-            try? await clientRef?.stopSubagent(cascadeId: cid, subagentId: subagentId)
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
+        guard let clientRef = rpcClient else { return }
+        Task { [weak self] in
+            do {
+                try await clientRef.stopSubagent(cascadeId: cid, subagentId: subagentId)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                if let prev = previousSubagent,
+                   let idx = self.conversationOverview.subagents.firstIndex(where: { $0.subagentId == subagentId }) {
+                    self.conversationOverview.subagents[idx] = prev
+                }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .backgroundTaskControl,
+                    fallbackActionLabel: "Stopping subagent"
+                )
+            }
         }
     }
 
@@ -891,13 +929,28 @@ extension AntigravitySessionStore {
         let cid = activeCascadeId
         let threadId = sideQuestionThread.threadId
         let clientRef = rpcClient
-        let isLive = (hasPairedBackend || isLiveBackendConnected)
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
 
         Task { [weak self] in
             let reply: SideQuestionMessage
-            if isLive, let clientRef, !cid.isEmpty,
-               let remoteReply = try? await clientRef.sendSideQuestion(cascadeId: cid, question: trimmed, threadId: threadId) {
-                reply = remoteReply
+            if isLive, let clientRef, !cid.isEmpty {
+                do {
+                    reply = try await clientRef.sendSideQuestion(cascadeId: cid, question: trimmed, threadId: threadId)
+                    await self?.refreshHostCapabilitiesFromClient()
+                } catch {
+                    if let self {
+                        await self.handleLiveCapabilityWriteError(
+                            error,
+                            capability: .sideQuestion,
+                            fallbackActionLabel: "/btw side question"
+                        )
+                        let honestText = self.compatibilityNoticeText
+                            ?? self.activeHostCapabilities.userFacingUnsupportedMessage(for: .sideQuestion)
+                        reply = SideQuestionMessage(isUser: false, text: "⚠️ \(honestText)")
+                    } else {
+                        reply = SideQuestionMessage(isUser: false, text: "⚠️ Side question failed: \(error.localizedDescription)")
+                    }
+                }
             } else {
                 reply = SideQuestionMessage(
                     isUser: false,
@@ -966,15 +1019,30 @@ extension AntigravitySessionStore {
     }
 
     public func revertConversationToStep(_ stepIndex: Int) {
-        guard var steps = stepsByCascadeId[activeCascadeId] else { return }
+        guard let previousSteps = stepsByCascadeId[activeCascadeId] else { return }
+        var steps = previousSteps
         steps.removeAll { $0.stepIndex > stepIndex }
         stepsByCascadeId[activeCascadeId] = steps
         let cid = activeCascadeId
         let clientRef = rpcClient
         let storeRef = projectionStore
-        Task {
+        let isLive = !isVerificationMode && (hasPairedBackend || isLiveBackendConnected)
+        Task { [weak self] in
             await storeRef.saveProjectedSteps(steps, for: cid)
-            try? await clientRef?.revertConversationToStep(cascadeId: cid, stepIndex: stepIndex)
+            guard let clientRef else { return }
+            do {
+                try await clientRef.revertConversationToStep(cascadeId: cid, stepIndex: stepIndex)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                self.stepsByCascadeId[cid] = previousSteps
+                await storeRef.saveProjectedSteps(previousSteps, for: cid)
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .revertToStep,
+                    fallbackActionLabel: "Reverting conversation"
+                )
+            }
         }
     }
 

@@ -260,6 +260,83 @@ public final class AntigravitySessionStore {
     public var selectedHostScope: AgentsHostFilterScope = .allHosts
     public var isSwitchingHost: Bool = false
     public var refreshingHostScopeKeys: Set<String> = []
+    public var hostCapabilitiesByKey: [String: HostCapabilityProfile] = [:]
+    public var compatibilityNoticeText: String? = nil
+
+    /// Runtime-discovered compatibility profile for the currently active host.
+    public var activeHostCapabilities: HostCapabilityProfile {
+        let candidateKeys: [String] = {
+            var keys: [String] = []
+            if !activeHost.instanceId.isEmpty {
+                keys.append(activeHost.instanceId)
+            }
+            if activeHost.channel == .directHost, let host = activeHost.endpointURL.host {
+                if let port = activeHost.endpointURL.port {
+                    keys.append("direct:\(host):\(port)")
+                }
+                keys.append("direct:\(host)")
+            }
+            return keys
+        }()
+        for key in candidateKeys {
+            if let profile = hostCapabilitiesByKey[key] {
+                return profile
+            }
+        }
+        return HostCapabilityProfile(
+            hostKey: candidateKeys.first ?? "default",
+            reportedVersion: activeHost.version
+        )
+    }
+
+    /// Returns `false` once runtime discovery has confirmed the active live Desktop host does not support `capability`.
+    /// Always returns `true` during offline / ESDD verification mode or before negative proof is observed.
+    public func isCapabilitySupportedOnActiveHost(_ capability: HostCapability) -> Bool {
+        guard !isVerificationMode, (hasPairedBackend || isLiveBackendConnected) else {
+            return true
+        }
+        return activeHostCapabilities.supportState(for: capability) != .unsupported
+    }
+
+    public func dismissCompatibilityNotice() {
+        compatibilityNoticeText = nil
+    }
+
+    public func refreshHostCapabilitiesFromClient() async {
+        guard let client = rpcClient else { return }
+        let snapshot = await client.allCapabilityProfiles()
+        for (key, profile) in snapshot {
+            hostCapabilitiesByKey[key] = profile
+        }
+        var activeProfile = await client.capabilityProfile()
+        if activeProfile.reportedVersion == nil,
+           let knownVer = HostCapabilityProfile.normalizedVersionString(activeHost.version) {
+            activeProfile.reportedVersion = knownVer
+        }
+        hostCapabilitiesByKey[activeProfile.hostKey] = activeProfile
+        if !activeHost.instanceId.isEmpty {
+            hostCapabilitiesByKey[activeHost.instanceId] = activeProfile
+        }
+        if let version = activeProfile.reportedVersion, !version.isEmpty, activeHost.version != version {
+            activeHost.version = version
+            if let idx = hosts.firstIndex(where: { $0.instanceId == activeHost.instanceId }) {
+                hosts[idx].version = version
+            }
+        }
+    }
+
+    internal func handleLiveCapabilityWriteError(
+        _ error: Error,
+        capability: HostCapability,
+        fallbackActionLabel: String
+    ) async {
+        await refreshHostCapabilitiesFromClient()
+        if ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+            compatibilityNoticeText = activeHostCapabilities.userFacingUnsupportedMessage(for: capability)
+        } else {
+            compatibilityNoticeText = "\(fallbackActionLabel) failed: \(error.localizedDescription)"
+        }
+    }
 
     // MARK: - Dependencies
     internal static let selectedHostScopeDefaultsKey = "antigravity.ios.selectedHostScope.v1"

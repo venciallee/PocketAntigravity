@@ -186,6 +186,7 @@ public enum ProtobufStepCodec {
         var dynamicWorkflowPayload: DynamicWorkflowPayload?
         var swarmBoardPayload: SwarmBoardPayload?
         var mcpToolCallPayload: McpToolCallPayload?
+        var unknownPayloadSummary: String? = nil
 
         while offset < data.count {
             guard let tag = readVarint(from: data, offset: &offset) else { break }
@@ -411,7 +412,15 @@ public enum ProtobufStepCodec {
                     stepType = .mcpToolCall
                 }
             default:
-                skipField(wireType: wireType, data: data, offset: &offset)
+                if wireType == 2 {
+                    if let nested = readLengthDelimited(from: data, offset: &offset),
+                       unknownPayloadSummary == nil,
+                       fieldNumber > 6 {
+                        unknownPayloadSummary = extractReadableSummaryFromUnknownSubmessage(nested)
+                    }
+                } else {
+                    skipField(wireType: wireType, data: data, offset: &offset)
+                }
             }
         }
 
@@ -424,6 +433,13 @@ public enum ProtobufStepCodec {
             && (stepStatus == .inProgress || stepStatus == .pending) {
             plannerPayload = PlannerResponsePayload(response: "")
         }
+
+        let rawTypeName: String? = (stepType == .unspecified && rawType > 0)
+            ? "STEP_TYPE_\(rawType)"
+            : nil
+        let fallbackSummary: String? = (stepType == .unspecified && plannerPayload == nil)
+            ? unknownPayloadSummary
+            : nil
 
         return CascadeStep(
             cascadeId: cascadeId,
@@ -445,7 +461,9 @@ public enum ProtobufStepCodec {
             subagent: subagentPayload,
             dynamicWorkflow: dynamicWorkflowPayload,
             swarmBoard: swarmBoardPayload,
-            mcpToolCall: mcpToolCallPayload
+            mcpToolCall: mcpToolCallPayload,
+            rawTypeName: rawTypeName,
+            fallbackSummary: fallbackSummary
         )
     }
 
@@ -835,9 +853,16 @@ public enum ProtobufStepCodec {
                     rawMemberKey: "workflowScript"
                 )
             default:
-                let summary = nonEmpty(extractStringField(nested, targetField: 1))
+                let summary = extractReadableSummaryFromUnknownSubmessage(nested)
+                    ?? nonEmpty(extractStringField(nested, targetField: 1))
                     ?? nonEmpty(extractStringField(nested, targetField: 2))
-                return RequestedInteraction(kind: .approvalInteraction, rawSummary: summary)
+                return RequestedInteraction(
+                    kind: .approvalInteraction,
+                    rawMemberKey: nil,
+                    rawSummary: summary,
+                    isUnrecognizedWireMember: true,
+                    rawWireFieldNumber: fieldNumber
+                )
             }
         }
         return nil
@@ -848,6 +873,37 @@ public enum ProtobufStepCodec {
             return nil
         }
         return value
+    }
+
+    /// Safely extracts the first short printable UTF-8 string from an unknown Protobuf submessage
+    /// (fields 1..8) so future Desktop step/interaction types display meaningful context instead of vanishing.
+    private static func extractReadableSummaryFromUnknownSubmessage(_ data: Data) -> String? {
+        guard !data.isEmpty, data.count <= 65_536 else { return nil }
+        for field in 1...8 {
+            if let candidate = nonEmpty(extractStringField(data, targetField: field)),
+               isHumanReadableText(candidate) {
+                return candidate.count > 240 ? String(candidate.prefix(240)) : candidate
+            }
+        }
+        if let direct = nonEmpty(String(data: data, encoding: .utf8)),
+           isHumanReadableText(direct) {
+            return direct.count > 240 ? String(direct.prefix(240)) : direct
+        }
+        return nil
+    }
+
+    private static func isHumanReadableText(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else { return false }
+        var controlCount = 0
+        for scalar in trimmed.unicodeScalars {
+            if scalar.value < 0x20 && scalar != "\n" && scalar != "\r" && scalar != "\t" {
+                controlCount += 1
+            } else if scalar.value == 0x7F || scalar.value == 0xFFFD {
+                controlCount += 1
+            }
+        }
+        return controlCount == 0
     }
 
     private static func looksLikeArtifactDocument(_ content: String, forURI uri: String) -> Bool {

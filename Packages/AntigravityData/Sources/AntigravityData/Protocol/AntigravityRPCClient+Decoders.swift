@@ -348,11 +348,13 @@ extension AntigravityRPCClient {
     ) -> CascadeStep? {
         guard let obj = value.objectValue else { return nil }
         let stepIndex = obj["stepIndex"]?.intValue ?? fallbackIndex
+        let rawTypeInputString = nonEmptyString(obj["type"]?.stringValue)
+        let rawTypeInputInt = obj["type"]?.intValue
         var stepType: CortexStepType = {
-            if let typeName = obj["type"]?.stringValue, !typeName.isEmpty {
+            if let typeName = rawTypeInputString {
                 return resolveStepType(typeName)
             }
-            if let typeInt = obj["type"]?.intValue {
+            if let typeInt = rawTypeInputInt {
                 return ProtobufStepCodec.decodeStepType(typeInt)
             }
             return .unspecified
@@ -795,6 +797,40 @@ extension AntigravityRPCClient {
 
         let createdDate = Self.parseProtoTimestamp(obj["metadata"]?.objectValue?["createdAt"] ?? obj["createdAt"]) ?? Date()
 
+        // Forward compatibility: if a newer Desktop host emits a step type we don't recognize yet,
+        // preserve its raw type name & extract a readable fallback summary from any unknown sub-object.
+        var rawTypeName: String? = nil
+        var fallbackSummary: String? = nil
+        if stepType == .unspecified {
+            let ignoredHousekeeping: Set<String> = [
+                "CORTEX_STEP_TYPE_UNSPECIFIED",
+                "UNSPECIFIED",
+                "CORTEX_STEP_TYPE_CHECKPOINT",
+                "CORTEX_STEP_TYPE_EPHEMERAL_MESSAGE",
+                "CORTEX_STEP_TYPE_CONVERSATION_HISTORY"
+            ]
+            if let rawStr = rawTypeInputString, !ignoredHousekeeping.contains(rawStr.uppercased()) {
+                rawTypeName = rawStr
+            } else if let rawInt = rawTypeInputInt, rawInt > 0 {
+                rawTypeName = "STEP_TYPE_\(rawInt)"
+            }
+            if plannerPayload == nil {
+                let ignoredStepKeys: Set<String> = [
+                    "type", "status", "stepIndex", "metadata", "createdAt",
+                    "requestedInteraction", "id", "cascadeId", "trajectoryId"
+                ]
+                for key in obj.keys.sorted() where !ignoredStepKeys.contains(key) {
+                    if let summary = extractReadableSummary(from: obj[key]) {
+                        fallbackSummary = summary
+                        if rawTypeName == nil {
+                            rawTypeName = key
+                        }
+                        break
+                    }
+                }
+            }
+        }
+
         return CascadeStep(
             cascadeId: cascadeId,
             stepIndex: stepIndex,
@@ -815,7 +851,9 @@ extension AntigravityRPCClient {
             subagent: subagentPayload,
             dynamicWorkflow: dynamicWorkflowPayload,
             swarmBoard: swarmBoardPayload,
-            mcpToolCall: mcpToolCallPayload
+            mcpToolCall: mcpToolCallPayload,
+            rawTypeName: rawTypeName,
+            fallbackSummary: fallbackSummary
         )
     }
 
