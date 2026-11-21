@@ -148,11 +148,16 @@ jobs:
           fi
 
       - name: "[Gate] Run Local Connect-RPC, v2.33 Capabilities & 4-Gate ESDD Verification"
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python3 scripts/sync-antigravity-docs.py --self-test
           python3 verification/verify-live-rpc-flow.py
           python3 verification/verify-v233-capabilities.py
           python3 verification/esdd-verify.py
+          if [ "${{ inputs.dry_run }}" = "true" ] || [ -z "${GEMINI_API_KEY:-}" ]; then
+            git checkout -- verification/output || true
+          fi
 
       - name: Commit Changes & Open Pull Request / Tier 3 RFC Issue
         env:
