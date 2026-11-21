@@ -1244,7 +1244,7 @@ public final class AntigravitySessionStore {
                 channel: saved.channel,
                 endpointURL: credURL,
                 isOnline: false,
-                certificateFingerprintSHA256: saved.certFingerprintSHA256
+                certificateFingerprintSHA256: saved.certFingerprintSHA256 ?? ""
             )
             if let existing = hydratedHosts.first(where: { $0.instanceId == credId || $0.hostname == saved.hostname }) {
                 primaryOfflineHost = existing
