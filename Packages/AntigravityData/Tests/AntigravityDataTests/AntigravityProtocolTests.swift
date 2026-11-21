@@ -1846,6 +1846,104 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertEqual(cloudSummaries[0].cloudProjectId, "cloud-proj-uuid-ios")
         XCTAssertEqual(cloudSummaries[0].status, .inProgress)
     }
+
+    @MainActor
+    func testJSONStepRequestedInteractionDecodingAndFallbackApprovals() throws {
+        // 1. Outside-workspace listDirectory step with `requestedInteraction.permission` (exact live Desktop pattern)
+        let permStepJSON: JSONValue = .object([
+            "stepIndex": .int(77),
+            "type": .string("CORTEX_STEP_TYPE_LIST_DIRECTORY"),
+            "status": .string("CORTEX_STEP_STATUS_WAITING"),
+            "listDirectory": .object([
+                "directoryPathUri": .string("file:///Users/bytedance/Documents/workspace/dsh-superagent")
+            ]),
+            "requestedInteraction": .object([
+                "permission": .object([
+                    "action": .string("list_dir"),
+                    "target": .string("/Users/bytedance/Documents/workspace/dsh-superagent"),
+                    "suggestedPersistPattern": .string("/Users/bytedance/Documents/workspace/*"),
+                    "reason": .string("Directory is outside current workspace")
+                ])
+            ])
+        ])
+        let permStep = try XCTUnwrap(AntigravityRPCClient.decodeJSONStep(permStepJSON, cascadeId: "cid-dsh", fallbackIndex: 77))
+        XCTAssertEqual(permStep.type, .listDirectory)
+        XCTAssertEqual(permStep.status, .waiting)
+        XCTAssertTrue(permStep.isWaitingForUser)
+        XCTAssertEqual(permStep.requestedInteraction?.kind, .permission)
+        XCTAssertEqual(permStep.requestedInteraction?.permission?.action, "list_dir")
+        XCTAssertEqual(permStep.requestedInteraction?.permission?.target, "/Users/bytedance/Documents/workspace/dsh-superagent")
+        XCTAssertEqual(permStep.requestedInteraction?.rawMemberKey, "permission")
+        XCTAssertTrue(permStep.hasRenderableChatContent)
+
+        // Waiting evidence step MUST NOT be collapsed into an evidenceGroup
+        let items = CascadeDisplayItem.buildDisplayItems(from: [permStep])
+        XCTAssertEqual(items.count, 1)
+        if case .single(let singleStep) = items[0] {
+            XCTAssertEqual(singleStep.stepIndex, 77)
+        } else {
+            XCTFail("Waiting listDirectory step must remain standalone .single display item")
+        }
+
+        let permPayload = try XCTUnwrap(InteractionBuilder.buildPayload(step: permStep, decision: .allowOnce))
+        XCTAssertEqual(permPayload.stepIndex, 77)
+        XCTAssertEqual(permPayload.permission?.allow, true)
+
+        // 2. Waiting runCommand where commandLine only lives inside requestedInteraction.runCommand
+        let cmdStepJSON: JSONValue = .object([
+            "stepIndex": .int(78),
+            "type": .string("CORTEX_STEP_TYPE_RUN_COMMAND"),
+            "status": .string("CORTEX_STEP_STATUS_WAITING"),
+            "requestedInteraction": .object([
+                "runCommand": .object([
+                    "proposedCommandLine": .string("go test ./..."),
+                    "cwd": .string("/Users/bytedance/Documents/workspace/dsh-superagent-prototype")
+                ])
+            ])
+        ])
+        let cmdStep = try XCTUnwrap(AntigravityRPCClient.decodeJSONStep(cmdStepJSON, cascadeId: "cid-dsh", fallbackIndex: 78))
+        XCTAssertEqual(cmdStep.runCommand?.commandLine, "go test ./...")
+        XCTAssertEqual(cmdStep.requestedInteraction?.kind, .runCommand)
+
+        // 3. Unknown future interaction key preserves rawMemberKey & rawSummary verbatim
+        let futureStepJSON: JSONValue = .object([
+            "stepIndex": .int(79),
+            "type": .string("CORTEX_STEP_TYPE_EPHEMERAL_MESSAGE"),
+            "status": .string("CORTEX_STEP_STATUS_WAITING"),
+            "requestedInteraction": .object([
+                "customFutureGate": .object([
+                    "reason": .string("Confirm external deployment trigger")
+                ])
+            ])
+        ])
+        let futureStep = try XCTUnwrap(AntigravityRPCClient.decodeJSONStep(futureStepJSON, cascadeId: "cid-dsh", fallbackIndex: 79))
+        XCTAssertEqual(futureStep.requestedInteraction?.kind, .approvalInteraction)
+        XCTAssertEqual(futureStep.requestedInteraction?.rawMemberKey, "customFutureGate")
+        XCTAssertEqual(futureStep.requestedInteraction?.rawSummary, "Confirm external deployment trigger")
+        let futurePayload = try XCTUnwrap(InteractionBuilder.buildPayload(step: futureStep, decision: .allowOnce))
+        XCTAssertEqual(futurePayload.rawMemberKey, "customFutureGate")
+        XCTAssertEqual(futurePayload.genericConfirm, true)
+
+        // 4. Waiting step with NO requestedInteraction still synthesizes effectiveRequestedInteraction & payload
+        let bareWaitingNotify = CascadeStep(
+            cascadeId: "cid-dsh",
+            stepIndex: 80,
+            type: .notifyUser,
+            status: .waiting,
+            plannerResponse: PlannerResponsePayload(response: "Please review the architecture plan.")
+        )
+        XCTAssertEqual(bareWaitingNotify.effectiveRequestedInteraction?.kind, .approvalInteraction)
+        let barePayload = try XCTUnwrap(InteractionBuilder.buildPayload(step: bareWaitingNotify, decision: .allowOnce))
+        XCTAssertEqual(barePayload.genericConfirm, true)
+        XCTAssertEqual(barePayload.stepIndex, 80)
+
+        // 5. Store pendingWaitingStep picks latest waiting step and waitingStep(at:) matches explicit index
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        store.activeCascadeId = "cid-dsh"
+        store.stepsByCascadeId["cid-dsh"] = [permStep, bareWaitingNotify]
+        XCTAssertEqual(store.pendingWaitingStep?.stepIndex, 80)
+        XCTAssertEqual(store.waitingStep(at: 77)?.stepIndex, 77)
+    }
 }
 
 private extension AntigravitySessionStore {

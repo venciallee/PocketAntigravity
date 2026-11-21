@@ -280,14 +280,19 @@ public enum ProtobufStepCodec {
                 if let nested = readLengthDelimited(from: data, offset: &offset) {
                     requestedInteraction = decodeRequestedInteraction(nested, hintStepType: stepType)
                     if requestedInteraction?.kind == .runCommand,
-                       runCommandPayload == nil,
                        let spec = requestedInteraction?.runCommand {
-                        runCommandPayload = RunCommandPayload(
-                            commandId: "cmd-\(defaultIndex)",
-                            commandLine: spec.proposedCommandLine,
-                            proposedCommandLine: spec.proposedCommandLine,
-                            cwd: spec.cwd
-                        )
+                        if runCommandPayload == nil {
+                            runCommandPayload = RunCommandPayload(
+                                commandId: "cmd-\(defaultIndex)",
+                                commandLine: spec.proposedCommandLine,
+                                proposedCommandLine: spec.proposedCommandLine,
+                                cwd: spec.cwd
+                            )
+                        } else if runCommandPayload?.commandLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true,
+                                  !spec.proposedCommandLine.isEmpty {
+                            runCommandPayload?.commandLine = spec.proposedCommandLine
+                            runCommandPayload?.proposedCommandLine = spec.proposedCommandLine
+                        }
                     }
                 }
             case (93, 2): // CortexStepTaskBoundary
@@ -635,6 +640,65 @@ public enum ProtobufStepCodec {
                     kind: .executeUrl,
                     executeUrl: ExecuteUrlInteractionSpec(url: url, domain: domain, isRedirect: isRedirect)
                 )
+            case 5: // RunExtensionCode
+                let summary = nonEmpty(extractStringField(nested, targetField: 1))
+                    ?? nonEmpty(extractStringField(nested, targetField: 2))
+                return RequestedInteraction(
+                    kind: .runExtensionCode,
+                    rawMemberKey: "runExtensionCode",
+                    rawSummary: summary
+                )
+            case 6: // ExecuteBrowserJavascript
+                let summary = nonEmpty(extractStringField(nested, targetField: 1))
+                return RequestedInteraction(
+                    kind: .executeBrowserJavascript,
+                    rawMemberKey: "executeBrowserJavascript",
+                    rawSummary: summary
+                )
+            case 7: // CaptureBrowserScreenshot
+                return RequestedInteraction(
+                    kind: .captureBrowserScreenshot,
+                    rawMemberKey: "captureBrowserScreenshot",
+                    rawSummary: nonEmpty(extractStringField(nested, targetField: 1))
+                )
+            case 8: // ClickBrowserPixel
+                return RequestedInteraction(
+                    kind: .clickBrowserPixel,
+                    rawMemberKey: "clickBrowserPixel",
+                    rawSummary: nonEmpty(extractStringField(nested, targetField: 1))
+                )
+            case 9: // BrowserAction
+                let url = nonEmpty(extractStringField(nested, targetField: 1)) ?? ""
+                return RequestedInteraction(
+                    kind: .browserAction,
+                    executeUrl: url.isEmpty ? nil : ExecuteUrlInteractionSpec(
+                        url: url,
+                        domain: URL(string: url)?.host ?? url
+                    ),
+                    rawMemberKey: "browserAction",
+                    rawSummary: nonEmpty(url) ?? nonEmpty(extractStringField(nested, targetField: 2))
+                )
+            case 11: // ConfirmBrowserSetup
+                return RequestedInteraction(
+                    kind: .confirmBrowserSetup,
+                    rawMemberKey: "confirmBrowserSetup",
+                    rawSummary: nonEmpty(extractStringField(nested, targetField: 1))
+                )
+            case 12: // SendCommandInput
+                let input = nonEmpty(extractStringField(nested, targetField: 2))
+                    ?? nonEmpty(extractStringField(nested, targetField: 1))
+                return RequestedInteraction(
+                    kind: .sendCommandInput,
+                    rawMemberKey: "sendCommandInput",
+                    rawSummary: input
+                )
+            case 13: // ReadUrlContent
+                let url = nonEmpty(extractStringField(nested, targetField: 1))
+                return RequestedInteraction(
+                    kind: .readUrlContent,
+                    rawMemberKey: "readUrlContent",
+                    rawSummary: url
+                )
             case 18: // McpInteractionSpec
                 let serverName = nonEmpty(extractStringField(nested, targetField: 1)) ?? "mcp-server"
                 let toolName = nonEmpty(extractStringField(nested, targetField: 2)) ?? "invoke_tool"
@@ -643,7 +707,8 @@ public enum ProtobufStepCodec {
                     kind: .mcp,
                     mcpServerName: serverName,
                     mcpToolName: toolName,
-                    pluginName: pluginName
+                    pluginName: pluginName,
+                    rawMemberKey: "mcp"
                 )
             case 19: // FilePermissionInteractionSpec
                 let uri = extractStringField(nested, targetField: 1) ?? ""
@@ -655,7 +720,17 @@ public enum ProtobufStepCodec {
                         absolutePathUri: uri,
                         isDirectory: isDir,
                         blockReason: reason
-                    )
+                    ),
+                    rawMemberKey: "filePermission"
+                )
+            case 20: // ElicitationInteractionSpec
+                let q = nonEmpty(extractStringField(nested, targetField: 1)) ?? "Input required"
+                let opts = extractRepeatedStringField(nested, targetField: 2)
+                return RequestedInteraction(
+                    kind: .elicitation,
+                    askQuestion: AskQuestionInteractionSpec(question: q, options: opts, isMultiSelect: false),
+                    rawMemberKey: "elicitation",
+                    rawSummary: q
                 )
             case 21: // PermissionInteractionSpec (action=1, target/pattern=2, reason=3, pluginName=4, persistType=5)
                 let action = nonEmpty(extractStringField(nested, targetField: 1)) ?? "read"
@@ -674,7 +749,8 @@ public enum ProtobufStepCodec {
                         reason: reason,
                         pluginName: plugin
                     ),
-                    pluginName: plugin
+                    pluginName: plugin,
+                    rawMemberKey: "permission"
                 )
             case 22, 24: // AskQuestionInteractionSpec (22 real, 24 mock_language_server)
                 let q = extractStringField(nested, targetField: 1) ?? "Clarification needed"
@@ -682,7 +758,8 @@ public enum ProtobufStepCodec {
                 let multi = (extractVarintField(nested, targetField: 3) ?? 0) != 0
                 return RequestedInteraction(
                     kind: .askQuestion,
-                    askQuestion: AskQuestionInteractionSpec(question: q, options: opts, isMultiSelect: multi)
+                    askQuestion: AskQuestionInteractionSpec(question: q, options: opts, isMultiSelect: multi),
+                    rawMemberKey: "askQuestion"
                 )
             case 23: // ApprovalInteractionSpec (23 real) or mock_language_server runCommand (when stepType == .runCommand)
                 if hintStepType == .runCommand,
@@ -692,7 +769,13 @@ public enum ProtobufStepCodec {
                         runCommand: RunCommandInteractionSpec(proposedCommandLine: cmd, cwd: "/workspace")
                     )
                 }
-                return RequestedInteraction(kind: .approvalInteraction)
+                let summary = nonEmpty(extractStringField(nested, targetField: 1))
+                    ?? nonEmpty(extractStringField(nested, targetField: 2))
+                return RequestedInteraction(
+                    kind: .approvalInteraction,
+                    rawMemberKey: "approvalInteraction",
+                    rawSummary: summary
+                )
             case 25: // DownloadUrlInteractionSpec
                 let url = nonEmpty(extractStringField(nested, targetField: 1)) ?? ""
                 let origin = nonEmpty(extractStringField(nested, targetField: 2)) ?? (URL(string: url)?.host ?? "unknown")
@@ -707,14 +790,16 @@ public enum ProtobufStepCodec {
                         fileName: fileName,
                         mimeType: mime,
                         destinationFolder: dest
-                    )
+                    ),
+                    rawMemberKey: "downloadUrl"
                 )
             case 26: // BrowserUploadInteractionSpec
                 let origin = nonEmpty(extractStringField(nested, targetField: 1)) ?? "https://app.example.com"
                 let files = extractRepeatedStringField(nested, targetField: 2)
                 return RequestedInteraction(
                     kind: .browserUpload,
-                    browserUpload: BrowserUploadInteractionSpec(origin: origin, fileNames: files)
+                    browserUpload: BrowserUploadInteractionSpec(origin: origin, fileNames: files),
+                    rawMemberKey: "browserUpload"
                 )
             case 27: // WorkflowScriptInteractionSpec
                 let title = nonEmpty(extractStringField(nested, targetField: 1)) ?? "Dynamic Workflow"
@@ -722,10 +807,13 @@ public enum ProtobufStepCodec {
                 let phases = extractRepeatedStringField(nested, targetField: 3)
                 return RequestedInteraction(
                     kind: .workflowScript,
-                    workflowScript: WorkflowScriptInteractionSpec(title: title, pythonScript: script, phaseNames: phases)
+                    workflowScript: WorkflowScriptInteractionSpec(title: title, pythonScript: script, phaseNames: phases),
+                    rawMemberKey: "workflowScript"
                 )
             default:
-                return RequestedInteraction(kind: .approvalInteraction)
+                let summary = nonEmpty(extractStringField(nested, targetField: 1))
+                    ?? nonEmpty(extractStringField(nested, targetField: 2))
+                return RequestedInteraction(kind: .approvalInteraction, rawSummary: summary)
             }
         }
         return nil

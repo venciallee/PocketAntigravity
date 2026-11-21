@@ -41,6 +41,8 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
     public var mcpServerName: String?
     public var mcpToolName: String?
     public var pluginName: String?
+    public var rawMemberKey: String?
+    public var rawSummary: String?
 
     public init(
         kind: MemberKind,
@@ -54,7 +56,9 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
         workflowScript: WorkflowScriptInteractionSpec? = nil,
         mcpServerName: String? = nil,
         mcpToolName: String? = nil,
-        pluginName: String? = nil
+        pluginName: String? = nil,
+        rawMemberKey: String? = nil,
+        rawSummary: String? = nil
     ) {
         self.kind = kind
         self.permission = permission
@@ -68,6 +72,8 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
         self.mcpServerName = mcpServerName
         self.mcpToolName = mcpToolName
         self.pluginName = pluginName
+        self.rawMemberKey = rawMemberKey
+        self.rawSummary = rawSummary
     }
 }
 
@@ -324,6 +330,7 @@ public struct CascadeUserInteractionPayload: Codable, Sendable, Equatable {
     public var askQuestion: AskQuestionAnswer?
     public var genericConfirm: Bool?
     public var approvalScope: String?
+    public var rawMemberKey: String?
 
     public init(
         cascadeId: String,
@@ -335,7 +342,8 @@ public struct CascadeUserInteractionPayload: Codable, Sendable, Equatable {
         filePermission: FilePermissionAnswer? = nil,
         askQuestion: AskQuestionAnswer? = nil,
         genericConfirm: Bool? = nil,
-        approvalScope: String? = nil
+        approvalScope: String? = nil,
+        rawMemberKey: String? = nil
     ) {
         self.cascadeId = cascadeId
         self.stepIndex = stepIndex
@@ -347,5 +355,6 @@ public struct CascadeUserInteractionPayload: Codable, Sendable, Equatable {
         self.askQuestion = askQuestion
         self.genericConfirm = genericConfirm
         self.approvalScope = approvalScope
+        self.rawMemberKey = rawMemberKey
     }
 }
