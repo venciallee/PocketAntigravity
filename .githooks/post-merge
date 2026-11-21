@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Auto-sync gitignored iOSAntigravity.xcodeproj on macOS after `git pull` / `git merge`
+# Install once with: bash scripts/sync-xcode.sh --install-hooks
+set -euo pipefail
+
+[[ "$(uname -s)" == "Darwin" ]] || exit 0
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -n "$ROOT_DIR" && -f "$ROOT_DIR/scripts/sync-xcode.sh" ]] || exit 0
+
+# Only auto-regenerate if this checkout already uses an Xcode project locally
+[[ -d "$ROOT_DIR/iOSAntigravity.xcodeproj" ]] || exit 0
+
+CHANGED="$(git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD 2>/dev/null || true)"
+if printf '%s\n' "$CHANGED" | grep -Eq '^(project\.yml|apps/ios/|tests/ios-ui/|shared/|gradle/|build\.gradle\.kts|settings\.gradle\.kts|gradle\.properties)'; then
+  echo "[post-merge] iOS/KMP project files changed — syncing iOSAntigravity.xcodeproj..."
+  bash "$ROOT_DIR/scripts/sync-xcode.sh" || echo "[post-merge] Warning: sync-xcode.sh failed; run 'bash scripts/sync-xcode.sh --clean --open' manually."
+fi
+exit 0

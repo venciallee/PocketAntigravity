@@ -110,6 +110,25 @@ Contributions of all kinds are welcome — from Android Jetpack Compose screens 
 - **KMP / Android Shared Core**: JDK 21 and Gradle (`./gradlew` included).
 - **Protocol & ESDD Verification**: Python 3.10+ (zero external server dependencies for mock RPC tests).
 
+### Building & Opening in Xcode (macOS)
+
+`iOSAntigravity.xcodeproj` and `AntigravityShared.xcframework` are generated locally and excluded from Git. After cloning or running `git pull`, always sync the Xcode project before building:
+
+```bash
+# 1. Build/refresh KMP XCFramework + regenerate iOSAntigravity.xcodeproj and open Xcode
+bash scripts/sync-xcode.sh --open
+
+# (Optional) Install git hooks so future `git pull` / branch switches auto-sync Xcode
+bash scripts/sync-xcode.sh --install-hooks
+
+# (Optional) Wipe stale pre-monorepo .xcodeproj & DerivedData, or build pure-Swift without JDK
+bash scripts/sync-xcode.sh --clean --open
+bash scripts/sync-xcode.sh --swift-only --open
+
+# Build, sign & install directly onto a connected physical iPhone
+bash scripts/install-on-iphone.sh
+```
+
 ### Local Verification CLI (Human & Coding-Agent Friendly)
 
 Use the single stateless [`scripts/verify.py`](scripts/verify.py) CLI from any directory — it auto-detects available toolchains on Linux/macOS, suppresses noisy HTTP logs, keeps `git status` clean, and supports machine-readable `--json` output:

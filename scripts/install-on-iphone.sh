@@ -11,19 +11,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if ! command -v xcodegen >/dev/null 2>&1; then
-  echo "[*] Installing xcodegen via Homebrew..."
-  brew install xcodegen
-fi
-
-xcodegen generate
-
 WITH_BRIDGE=0
+SYNC_ARGS=()
 for arg in "$@"; do
-  if [[ "$arg" == "--with-bridge" ]]; then
-    WITH_BRIDGE=1
-  fi
+  case "$arg" in
+    --with-bridge) WITH_BRIDGE=1 ;;
+    --swift-only|--rebuild-kmp|--clean|--require-kmp) SYNC_ARGS+=("$arg") ;;
+  esac
 done
+
+bash "$ROOT_DIR/scripts/sync-xcode.sh" ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"}
 
 # 1. Detect connected physical iPhone FIRST (excluding Xcode 26/27 DeviceHub Simulators!)
 IPHONE_INFO_FILE="$(mktemp "${TMPDIR:-/tmp}/agy-iphone.XXXXXX")"

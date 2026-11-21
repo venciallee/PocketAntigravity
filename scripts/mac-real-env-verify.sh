@@ -33,7 +33,7 @@ if [[ -n "$E2E_PLAN_MODE" ]]; then
     exit 0
   fi
   if python3 -c "import json; p=json.load(open('$PLAN_PATH')); raise SystemExit(0 if p['gates']['gate1SwiftDataTests'] else 1)"; then
-    swift test --package-path Packages/AntigravityData
+    swift test --package-path apps/ios/Packages/AntigravityData
   fi
   if python3 -c "import json; p=json.load(open('$PLAN_PATH')); raise SystemExit(0 if p['gates']['gate2LiveRPC'] else 1)"; then
     python3 verification/verify-live-rpc-flow.py
@@ -111,18 +111,8 @@ else
 fi
 
 echo ""
-echo "=== [3/5] Generating Xcode Project & Booting Simulator ==="
-if ! command -v xcodegen >/dev/null 2>&1; then
-  if command -v brew >/dev/null 2>&1; then
-    echo "[*] Installing xcodegen via Homebrew..."
-    brew install xcodegen
-  else
-    echo "[!] xcodegen not found. Install via 'brew install xcodegen' and re-run."
-    exit 1
-  fi
-fi
-
-xcodegen generate
+echo "=== [3/5] Syncing KMP XCFramework, Generating Xcode Project & Booting Simulator ==="
+bash "$ROOT_DIR/scripts/sync-xcode.sh"
 
 SIM_INFO_FILE="$(mktemp "${TMPDIR:-/tmp}/agy-sim-info.XXXXXX")"
 TAIL_PID=""

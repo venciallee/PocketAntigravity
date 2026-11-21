@@ -190,8 +190,18 @@ def classify_file(path: str) -> dict[str, Any]:
     if norm.startswith("verification/output/"):
         return _empty_impact("verification-output", "Verification output artifacts only")
 
-    if norm in {"scripts/install-on-iphone.sh", "scripts/mac-real-env-verify.sh", "scripts/render-brand-icons.py", "scripts/verify.py"} or norm.startswith("scripts/assets/"):
-        return _empty_impact("helper-scripts", "Developer/local helper script or source SVG asset changed")
+    if (
+        norm in {
+            "scripts/install-on-iphone.sh",
+            "scripts/mac-real-env-verify.sh",
+            "scripts/sync-xcode.sh",
+            "scripts/render-brand-icons.py",
+            "scripts/verify.py",
+        }
+        or norm.startswith("scripts/assets/")
+        or norm.startswith(".githooks/")
+    ):
+        return _empty_impact("helper-scripts", "Developer/local helper script, git hook, or source SVG asset changed")
 
     # 8. KMP shared modules & Gradle build (verified by kmp-verify.yml)
     if norm.startswith("shared/umbrella/"):
