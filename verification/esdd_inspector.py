@@ -244,6 +244,13 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path) -> dict:
     else:
         checks.append("Secret hygiene verified: zero hardcoded Google API key literals across source tree")
 
+    # 8. Automated Bidirectional Compatibility Static Guardrails
+    from verify_compat_guardrails import inspect_compatibility_guardrails
+
+    compat_res = inspect_compatibility_guardrails(repo_root)
+    checks.extend(compat_res["checks"])
+    errors.extend(compat_res["errors"])
+
     return {
         "passed": len(errors) == 0,
         "specVersion": ir.get("specVersion"),

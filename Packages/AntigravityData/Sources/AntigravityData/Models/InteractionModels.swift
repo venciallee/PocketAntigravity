@@ -4,7 +4,7 @@ import Foundation
 /// Authoritative specification of what interaction member the LanguageServer expects
 /// in `HandleCascadeUserInteraction`.
 public struct RequestedInteraction: Codable, Sendable, Equatable {
-    public enum MemberKind: String, Codable, Sendable {
+    public enum MemberKind: String, ResilientStringEnum {
         case deploy
         case runCommand
         case openBrowserUrl
@@ -27,6 +27,8 @@ public struct RequestedInteraction: Codable, Sendable, Equatable {
         case downloadUrl
         case browserUpload
         case workflowScript
+
+        public static var unknownFallback: MemberKind { .approvalInteraction }
     }
 
     public var kind: MemberKind

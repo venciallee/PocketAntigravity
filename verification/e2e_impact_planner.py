@@ -131,12 +131,14 @@ def classify_file(path: str) -> dict[str, Any]:
         res["gate2_v233"] = True
         return res
 
-    # 5. Companion Bridge / Mock Server / Live RPC verifiers (Python backend & protocol harness)
+    # 5. Companion Bridge / Mock Server / Live RPC & Compat Matrix verifiers (Python backend & protocol harness)
     if norm in {
         "scripts/mac-companion-bridge.py",
         "verification/mock_language_server.py",
         "verification/verify-live-rpc-flow.py",
         "verification/verify-v233-capabilities.py",
+        "verification/verify_compat_guardrails.py",
+        "verification/verify-compat-matrix.py",
     }:
         res = _empty_impact("python-rpc-bridge", "Connect-RPC companion bridge or protocol mock/verifier changed")
         res["gate2_live_rpc"] = True

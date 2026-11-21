@@ -186,13 +186,79 @@ public enum HostCapability: String, Codable, Sendable, CaseIterable, Hashable {
             return nil
         }
     }
+
+    /// Core baseline & liveness-probe RPC methods expected across supported Desktop hosts.
+    /// These methods are NEVER permanently short-circuited by negative caching (so transient
+    /// proxy/routing errors cannot brick core chat or discovery) and serve as the canonical
+    /// allowlist for the CI static RPC registration guardrail (`verify_compat_guardrails.py`).
+    public static let coreBaselineMethods: Set<String> = [
+        "CancelCascadeInvocation",
+        "CreateAutomation",
+        "CreateProject",
+        "CreateProjectWorkspace",
+        "GetAllCascadeTrajectories",
+        "GetAllCustomAgentConfigs",
+        "GetArtifactSnapshots",
+        "GetAvailableModels",
+        "GetCascadeModelConfigData",
+        "GetCascadeModelConfigs",
+        "GetCascadeTrajectory",
+        "GetCascadeTrajectorySteps",
+        "GetRevisionArtifact",
+        "GetUserStatus",
+        "GetWorkspaceInfos",
+        "HandleCascadeUserInteraction",
+        "ListAutomations",
+        "ListAvailableResources",
+        "ListProjects",
+        "LoadTrajectory",
+        "MoveCascadeToWorkspace",
+        "OpenWorkspaceInFinder",
+        "ProjectUpdatesStream",
+        "ReadArtifactFile",
+        "ReadProject",
+        "SendPlanReviewComments",
+        "SendUserCascadeMessage",
+        "SetAutomationPaused",
+        "StartCascade",
+        "StreamCascadeReactiveUpdates",
+        "TriggerAutomationNow"
+    ]
+
+    /// Legacy / Companion-Bridge alias RPCs that automatically fall back to upstream
+    /// `UpdateConversationAnnotations` or `DeleteCascadeTrajectory` on HTTP 404/501.
+    public static let legacyAliasMethods: Set<String> = [
+        "ArchiveCascade",
+        "DeleteCascade",
+        "PinCascade",
+        "RenameCascade"
+    ]
+
+    /// Complete set of registered Connect-RPC methods (core + legacy aliases + optional capabilities).
+    public static var allRegisteredMethods: Set<String> {
+        var methods = coreBaselineMethods.union(legacyAliasMethods)
+        for cap in HostCapability.allCases {
+            methods.formUnion(cap.rpcMethods)
+        }
+        return methods
+    }
+
+    /// Inverse-allowlist negative-caching policy:
+    /// Every non-core RPC (including future optional RPCs not yet assigned a dedicated
+    /// `HostCapability` case) is automatically cached as unsupported per host upon `404/501/unimplemented`
+    /// so repeated UI interactions never spam an older PC.
+    public static func shouldNegativeCacheOnUnimplemented(_ method: String) -> Bool {
+        !coreBaselineMethods.contains(method)
+    }
 }
 
 /// Tri-state capability support status discovered for a host.
-public enum CapabilitySupportState: String, Codable, Sendable, Equatable {
+public enum CapabilitySupportState: String, ResilientStringEnum, Equatable {
     case unknown
     case supported
     case unsupported
+
+    public static var unknownFallback: CapabilitySupportState { .unknown }
 }
 
 /// Per-host runtime compatibility profile tracking version, Bridge polyfills,
@@ -615,6 +681,42 @@ public enum ProtocolCompatibilityEngine: Sendable {
         default:
             return (value, false)
         }
+    }
+
+    /// Secondary fallback when an older Desktop host rejects an unrecognized enum string value
+    /// not listed in `downgradedEnumReplacement`: recursively strips every JSON object key
+    /// whose string value matches `targetValue` so the older host falls back to its protobuf default.
+    public static func recursivelyRemoveKeysWithValue(
+        _ targetValue: String,
+        from object: [String: JSONValue]
+    ) -> (updated: [String: JSONValue], removedKeys: Set<String>) {
+        var copy: [String: JSONValue] = [:]
+        var removedKeys: Set<String> = []
+        for (key, value) in object {
+            switch value {
+            case .string(let s) where s == targetValue:
+                removedKeys.insert(key)
+            case .object(let dict):
+                let (updatedDict, nestedRemoved) = recursivelyRemoveKeysWithValue(targetValue, from: dict)
+                copy[key] = .object(updatedDict)
+                removedKeys.formUnion(nestedRemoved)
+            case .array(let arr):
+                var nestedRemoved: Set<String> = []
+                let mapped = arr.map { elem -> JSONValue in
+                    if case .object(let dict) = elem {
+                        let (updatedDict, subRemoved) = recursivelyRemoveKeysWithValue(targetValue, from: dict)
+                        nestedRemoved.formUnion(subRemoved)
+                        return .object(updatedDict)
+                    }
+                    return elem
+                }
+                copy[key] = .array(mapped)
+                removedKeys.formUnion(nestedRemoved)
+            default:
+                copy[key] = value
+            }
+        }
+        return (copy, removedKeys)
     }
 
     /// Pre-applies cached field strips and enum downgrades learned for this host + method

@@ -508,6 +508,169 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(artifacts[1].kind, .unsupportedAsset)
         XCTAssertEqual(artifacts[1].rawKindName, "future3DMesh")
     }
+
+    // MARK: - 6. Automated Compatibility Guardrails (ResilientStringEnum, Unknown-Enum Strip, Inverse Allowlist, Live Write Helper)
+
+    func testResilientStringEnumsDecodeUnknownFutureStringsWithoutThrowing() throws {
+        struct Box<T: Decodable>: Decodable { let v: T }
+        func decodeUnknown<T: ResilientStringEnum>(_ type: T.Type) throws -> T {
+            let data = Data("{\"v\":\"BRAND_NEW_FUTURE_ENUM_V99\"}".utf8)
+            return try JSONDecoder().decode(Box<T>.self, from: data).v
+        }
+
+        XCTAssertEqual(try decodeUnknown(ArtifactKind.self), .unsupportedAsset)
+        XCTAssertEqual(try decodeUnknown(ThinkingEffortLevel.self), .high)
+        XCTAssertEqual(try decodeUnknown(CascadeExecutionMode.self), .planning)
+        XCTAssertEqual(try decodeUnknown(AgentPermissionPreset.self), .auto)
+        XCTAssertEqual(try decodeUnknown(RequestedInteraction.MemberKind.self), .approvalInteraction)
+        XCTAssertEqual(try decodeUnknown(TaskChecklistStatus.self), .pending)
+        XCTAssertEqual(try decodeUnknown(GitFileStatusLetter.self), .modified)
+        XCTAssertEqual(try decodeUnknown(GitHubPullRequestInfo.PRState.self), .open)
+        XCTAssertEqual(try decodeUnknown(McpServerStatusItem.ConnectionState.self), .stopped)
+        XCTAssertEqual(try decodeUnknown(CapabilitySupportState.self), .unknown)
+        XCTAssertEqual(try decodeUnknown(SemanticIcon.self), .embedArtifact)
+        XCTAssertEqual(try decodeUnknown(PrimaryTab.self), .agents)
+        XCTAssertEqual(try decodeUnknown(AppThemePreset.self), .obsidian)
+    }
+
+    func testUnknownFutureEnumTriggersSecondaryKeyStripFallbackAndCaches() async throws {
+        let counter = CompatRequestCounter()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            let bodyObj = (try? JSONDecoder().decode([String: JSONValue].self, from: bodyData)) ?? [:]
+            counter.record(path: path)
+
+            if path.hasSuffix("/SendUserCascadeMessage") {
+                let planner = bodyObj["cascadeConfig"]?.objectValue?["plannerConfig"]?.objectValue
+                if planner?["experimentalEffort"]?.stringValue == "THINKING_EFFORT_ULTRA" {
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 400, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, Data("{\"code\":\"invalid_argument\",\"message\":\"invalid value for enum type ThinkingEffort: \\\"THINKING_EFFORT_ULTRA\\\"\"}".utf8))
+                }
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                return (resp, Data("{\"ok\":true}".utf8))
+            }
+
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "legacy-unknown-enum-strip",
+            hostname: "Legacy Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18792")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        let payload: [String: JSONValue] = [
+            "cascadeId": .string("cas-ultra"),
+            "cascadeConfig": .object([
+                "plannerConfig": .object([
+                    "experimentalEffort": .string("THINKING_EFFORT_ULTRA")
+                ])
+            ])
+        ]
+
+        // 1st call: 400 on unmapped enum -> strips `experimentalEffort` key -> succeeds on attempt 2
+        _ = try await client.callUnaryJSON(method: "SendUserCascadeMessage", body: payload)
+        XCTAssertEqual(counter.count(forSuffix: "/SendUserCascadeMessage"), 2)
+
+        // 2nd call: cached stripped key is pre-applied -> succeeds on attempt 1 (total 3)
+        _ = try await client.callUnaryJSON(method: "SendUserCascadeMessage", body: payload)
+        XCTAssertEqual(counter.count(forSuffix: "/SendUserCascadeMessage"), 3)
+
+        let profile = await client.capabilityProfile()
+        XCTAssertTrue(profile.strippedFieldsByMethod["SendUserCascadeMessage"]?.contains("experimentalEffort") == true)
+    }
+
+    func testInverseAllowlistCachesUnregisteredFutureOptionalRPCButNeverCoreBaseline() async throws {
+        let counter = CompatRequestCounter()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            counter.record(path: path)
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{\"code\":\"unimplemented\",\"message\":\"unknown method\"}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "legacy-inverse-allowlist",
+            hostname: "Legacy Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18793")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        // 1. Future unregistered optional RPC (`CreateWorktree`) IS negatively cached automatically
+        XCTAssertTrue(HostCapability.shouldNegativeCacheOnUnimplemented("CreateWorktree"))
+        do { _ = try await client.callUnaryJSON(method: "CreateWorktree", body: [:]) } catch {}
+        do { _ = try await client.callUnaryJSON(method: "CreateWorktree", body: [:]) } catch {}
+        XCTAssertEqual(counter.count(forSuffix: "/CreateWorktree"), 1, "Unregistered optional RPC must short-circuit on 2nd call")
+
+        // 2. Core baseline probe (`GetWorkspaceInfos`) is NEVER permanently cached as unsupported
+        XCTAssertFalse(HostCapability.shouldNegativeCacheOnUnimplemented("GetWorkspaceInfos"))
+        do { _ = try await client.callUnaryJSON(method: "GetWorkspaceInfos", body: [:]) } catch {}
+        do { _ = try await client.callUnaryJSON(method: "GetWorkspaceInfos", body: [:]) } catch {}
+        XCTAssertEqual(counter.count(forSuffix: "/GetWorkspaceInfos"), 2, "Core baseline RPC must not be permanently cached")
+    }
+
+    @MainActor
+    func testPerformLiveCapabilityWriteTransactionOfflineSuccessAndRollback() async {
+        // 1. Offline ESDD mode passes through cleanly without remote RPC
+        let offlineStore = AntigravitySessionStore.makeESDDVerificationStore()
+        var value = "initial"
+        var rolledBack = false
+        let offlineRes = await offlineStore.performLiveCapabilityWrite(
+            capability: .gitVcs,
+            actionLabel: "Test write",
+            optimistic: { value = "optimistic" },
+            offlineResult: { "offline-ok" },
+            remote: { _ in "remote-ok" },
+            onSuccess: { res in value = res },
+            rollback: { rolledBack = true }
+        )
+        XCTAssertEqual(offlineRes, "offline-ok")
+        XCTAssertEqual(value, "offline-ok")
+        XCTAssertFalse(rolledBack)
+
+        // 2. Live host returning 404 rolls back automatically & posts honest compatibility notice
+        let session = makeMockSession { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{\"code\":\"unimplemented\",\"message\":\"unknown method GitPush\"}".utf8))
+        }
+        let host = RemoteHostInstance(
+            instanceId: "live-tx-rollback",
+            hostname: "Old Mac",
+            version: "v2.31.0",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18794")!,
+            isOnline: true
+        )
+        let liveStore = AntigravitySessionStore.makeESDDVerificationStore()
+        liveStore.isVerificationMode = false
+        liveStore.hasPairedBackend = true
+        liveStore.isLiveBackendConnected = true
+        liveStore.activeHost = host
+        liveStore.rpcClient = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        var stateFlag = false
+        let liveRes: Bool? = await liveStore.performLiveCapabilityWrite(
+            capability: .gitVcs,
+            actionLabel: "Git push",
+            optimistic: { stateFlag = true },
+            offlineResult: { true },
+            remote: { client in
+                try await client.gitPushBranch(cascadeId: "cas-1", branchName: "main")
+            },
+            rollback: { stateFlag = false }
+        )
+        XCTAssertNil(liveRes)
+        XCTAssertFalse(stateFlag, "Failed live capability write must invoke rollback")
+        XCTAssertNotNil(liveStore.compatibilityNoticeText)
+        XCTAssertFalse(liveStore.isCapabilitySupportedOnActiveHost(.gitVcs))
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers

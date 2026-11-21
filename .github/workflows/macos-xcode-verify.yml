@@ -22,7 +22,7 @@ on:
 
 jobs:
   plan-and-fast-gates:
-    name: Impact Analysis + Fast Gates (DocSync, Live RPC, ESDD)
+    name: Impact Analysis + Fast Gates (DocSync, Compat Guardrails, Live RPC, ESDD)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -58,7 +58,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --github-step-summary "$GITHUB_STEP_SUMMARY"
 
-      - name: "[Gate 0] Script Syntax, Doc-Sync Watcher & Impact Planner Self-Test"
+      - name: "[Gate 0] Script Syntax, Doc-Sync Watcher, Compat Guardrails & Impact Planner Self-Test"
         run: |
           set -euo pipefail
           python3 -m py_compile \
@@ -68,20 +68,24 @@ jobs:
             verification/mock_language_server.py \
             verification/verify-live-rpc-flow.py \
             verification/verify-v233-capabilities.py \
+            verification/verify_compat_guardrails.py \
+            verification/verify-compat-matrix.py \
             verification/e2e_impact_planner.py \
             verification/ios-simulator-runner.py \
             verification/esdd_inspector.py \
             verification/esdd-verify.py
           python3 scripts/sync-antigravity-docs.py --self-test
+          python3 verification/verify_compat_guardrails.py
           python3 verification/e2e_impact_planner.py --self-test
 
-      - name: "[Gate 2] Live Connect-RPC Protocol Flow & v2.33 Capabilities"
+      - name: "[Gate 2] Live Connect-RPC Flow, v2.33 Capabilities & 3-Version Compat Matrix (Legacy/Current/Future)"
         if: steps.plan.outputs.run_gate2_live_rpc == 'true' || steps.plan.outputs.run_gate2_v233 == 'true' || steps.plan.outputs.is_release == 'true'
         run: |
           set -euo pipefail
           mkdir -p verification/output/fast-gates
           if [ "${{ steps.plan.outputs.run_gate2_live_rpc }}" = "true" ] || [ "${{ steps.plan.outputs.is_release }}" = "true" ]; then
             python3 verification/verify-live-rpc-flow.py 2>&1 | tee verification/output/fast-gates/live-rpc-flow.log
+            python3 verification/verify-compat-matrix.py 2>&1 | tee verification/output/fast-gates/compat-matrix.log
           fi
           if [ "${{ steps.plan.outputs.run_gate2_v233 }}" = "true" ] || [ "${{ steps.plan.outputs.is_release }}" = "true" ]; then
             python3 verification/verify-v233-capabilities.py 2>&1 | tee verification/output/fast-gates/v233-capabilities.log

@@ -39,13 +39,15 @@ public struct ModelUsageQuota: Codable, Sendable, Equatable {
 // MARK: - Fine-Grained Permission Rules (v2.23 - v2.33)
 // Note: `AgentPermissionPreset` is unified in `WorkspaceModels.swift`.
 
-public enum PermissionRuleListKind: String, Codable, CaseIterable, Sendable {
+public enum PermissionRuleListKind: String, ResilientStringEnum, CaseIterable {
     case deny = "Deny"
     case ask = "Ask"
     case allow = "Allow"
+
+    public static var unknownFallback: PermissionRuleListKind { .ask }
 }
 
-public enum PermissionRuleAction: String, Codable, CaseIterable, Sendable {
+public enum PermissionRuleAction: String, ResilientStringEnum, CaseIterable {
     case readFile = "read_file"
     case writeFile = "write_file"
     case readUrl = "read_url"
@@ -53,6 +55,8 @@ public enum PermissionRuleAction: String, Codable, CaseIterable, Sendable {
     case downloadUrl = "download_url"
     case command = "command"
     case mcp = "mcp"
+
+    public static var unknownFallback: PermissionRuleAction { .command }
 }
 
 public struct PermissionRuleEntry: Codable, Sendable, Equatable, Identifiable {
@@ -306,11 +310,13 @@ public struct ConversationGoalItem: Codable, Sendable, Equatable, Identifiable {
 
 /// Live GitHub Pull Request pill & Overview card (Antigravity v2.33.0).
 public struct GitHubPullRequestInfo: Codable, Sendable, Equatable, Identifiable {
-    public enum PRState: String, Codable, Sendable {
+    public enum PRState: String, ResilientStringEnum {
         case open
         case draft
         case merged
         case closed
+
+        public static var unknownFallback: PRState { .open }
     }
 
     public var id: String { "\(ownerRepo)#\(number)" }
@@ -424,21 +430,24 @@ public struct SideQuestionThread: Codable, Sendable, Equatable {
 
 // MARK: - Git VCS Review Extensions (v2.28 - v2.33)
 
-public enum DiffCompareMode: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum DiffCompareMode: String, ResilientStringEnum, CaseIterable, Identifiable {
     case turn = "Per Turn"
     case uncommitted = "Uncommitted"
     case branch = "Branch"
     case agentEdits = "Agent Edits"
 
     public var id: String { rawValue }
+    public static var unknownFallback: DiffCompareMode { .turn }
 }
 
-public enum GitFileStatusLetter: String, Codable, CaseIterable, Sendable {
+public enum GitFileStatusLetter: String, ResilientStringEnum, CaseIterable {
     case modified = "M"
     case added = "A"
     case untracked = "U"
     case deleted = "D"
     case renamed = "R"
+
+    public static var unknownFallback: GitFileStatusLetter { .modified }
 }
 
 public struct GitCommitDraft: Codable, Sendable, Equatable {
@@ -478,10 +487,12 @@ public struct GitCommitResult: Codable, Sendable, Equatable {
 
 // MARK: - Jupyter Notebook (.ipynb) & Image Region Comments (v2.27 - v2.29)
 
-public enum JupyterCellKind: String, Codable, Sendable {
+public enum JupyterCellKind: String, ResilientStringEnum {
     case markdown
     case code
     case raw
+
+    public static var unknownFallback: JupyterCellKind { .raw }
 }
 
 public struct JupyterCellOutput: Codable, Sendable, Equatable, Identifiable {
@@ -769,10 +780,12 @@ public struct RuleSummary: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct McpServerStatusItem: Codable, Sendable, Equatable, Identifiable {
-    public enum ConnectionState: String, Codable, Sendable {
+    public enum ConnectionState: String, ResilientStringEnum {
         case connected
         case stopped
         case error
+
+        public static var unknownFallback: ConnectionState { .stopped }
     }
 
     public var id: String { name }
@@ -965,20 +978,22 @@ public struct CustomizationsCatalog: Codable, Sendable, Equatable {
 
 // MARK: - Appearance, Layout, Queued Messages & Turn Navigator (v2.28 - v2.33)
 
-public enum InterfaceLayoutMode: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum InterfaceLayoutMode: String, ResilientStringEnum, CaseIterable, Identifiable {
     case softwareEngineering = "Software Engineering"
     case knowledgeWork = "Knowledge Work"
 
     public var id: String { rawValue }
+    public static var unknownFallback: InterfaceLayoutMode { .softwareEngineering }
 }
 
-public enum AppThemePreset: String, Codable, CaseIterable, Sendable, Identifiable {
+public enum AppThemePreset: String, ResilientStringEnum, CaseIterable, Identifiable {
     case obsidian = "Matte Obsidian"
     case nord = "Nord Dark"
     case everforestDark = "Everforest Dark"
     case everforestLight = "Everforest Light"
 
     public var id: String { rawValue }
+    public static var unknownFallback: AppThemePreset { .obsidian }
 }
 
 public struct AppAppearancePreferences: Codable, Sendable, Equatable {

@@ -37,6 +37,7 @@ if [[ -n "$E2E_PLAN_MODE" ]]; then
   fi
   if python3 -c "import json; p=json.load(open('$PLAN_PATH')); raise SystemExit(0 if p['gates']['gate2LiveRPC'] else 1)"; then
     python3 verification/verify-live-rpc-flow.py
+    python3 verification/verify-compat-matrix.py
   fi
   if python3 -c "import json; p=json.load(open('$PLAN_PATH')); raise SystemExit(0 if p['gates']['gate2V233Capabilities'] else 1)"; then
     python3 verification/verify-v233-capabilities.py

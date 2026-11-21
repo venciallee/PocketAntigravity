@@ -52,14 +52,26 @@ extension AntigravitySessionStore {
         let projectsSnapshot = projects
         let storeRef = projectionStore
         let clientRef = rpcClient
+        let isLive = isLiveBackendActive
         Task { [weak self] in
             await storeRef.saveProjects(projectsSnapshot)
-            if let remoteCreated = try? await clientRef?.createProjectWorkspace(draft: draft),
-               let self,
-               let idx = self.projects.firstIndex(where: { $0.id == slug }) {
-                self.projects[idx].cloudProjectId = remoteCreated.cloudProjectId ?? self.projects[idx].cloudProjectId
-                self.projects[idx].originInstanceUuid = remoteCreated.originInstanceUuid ?? self.projects[idx].originInstanceUuid
-                await storeRef.saveProjects(self.projects)
+            guard let clientRef else { return }
+            do {
+                let remoteCreated = try await clientRef.createProjectWorkspace(draft: draft)
+                await self?.refreshHostCapabilitiesFromClient()
+                if let self,
+                   let idx = self.projects.firstIndex(where: { $0.id == slug }) {
+                    self.projects[idx].cloudProjectId = remoteCreated.cloudProjectId ?? self.projects[idx].cloudProjectId
+                    self.projects[idx].originInstanceUuid = remoteCreated.originInstanceUuid ?? self.projects[idx].originInstanceUuid
+                    await storeRef.saveProjects(self.projects)
+                }
+            } catch {
+                guard let self, isLive else { return }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: "Creating project workspace"
+                )
             }
         }
         return created
@@ -194,28 +206,39 @@ extension AntigravitySessionStore {
         let engineRef = kmpEngine
         let modelId = selectedModelConfig.modelId
         let shouldCallLiveBackend = (hasPairedBackend || isLiveBackendConnected)
+        let isLive = isLiveBackendActive
 
         Task { [weak self] in
             var createdCascadeId: String? = nil
             if shouldCallLiveBackend {
-                if let engineRef {
-                    createdCascadeId = try? await engineRef.startConversation(
-                        workspaceUri: workspaceUri,
-                        initialPrompt: initialPrompt ?? "",
-                        modelId: modelId,
-                        cloudProjectId: cloudProjId,
-                        isCloud: isCloudProj,
-                        instanceUuidOverride: originUuid
-                    )
-                } else if let clientRef {
-                    createdCascadeId = try? await clientRef.startCascade(
-                        workspaceUri: workspaceUri,
-                        initialPrompt: initialPrompt ?? "",
-                        modelId: modelId,
-                        cloudProjectId: cloudProjId,
-                        isCloud: isCloudProj,
-                        instanceUuidOverride: originUuid
-                    )
+                do {
+                    if let engineRef {
+                        createdCascadeId = try await engineRef.startConversation(
+                            workspaceUri: workspaceUri,
+                            initialPrompt: initialPrompt ?? "",
+                            modelId: modelId,
+                            cloudProjectId: cloudProjId,
+                            isCloud: isCloudProj,
+                            instanceUuidOverride: originUuid
+                        )
+                    } else if let clientRef {
+                        createdCascadeId = try await clientRef.startCascade(
+                            workspaceUri: workspaceUri,
+                            initialPrompt: initialPrompt ?? "",
+                            modelId: modelId,
+                            cloudProjectId: cloudProjId,
+                            isCloud: isCloudProj,
+                            instanceUuidOverride: originUuid
+                        )
+                    }
+                } catch {
+                    if let self, isLive {
+                        await self.handleLiveCapabilityWriteError(
+                            error,
+                            capability: .conversationAnnotations,
+                            fallbackActionLabel: "Starting conversation"
+                        )
+                    }
                 }
             }
             if let realCascadeId = createdCascadeId, !realCascadeId.isEmpty {
@@ -306,8 +329,20 @@ extension AntigravitySessionStore {
               !project.workspaceUri.isEmpty else { return }
         let uri = project.workspaceUri
         let clientRef = rpcClient
-        Task {
-            try? await clientRef?.openWorkspaceInFinder(workspaceUri: uri)
+        let isLive = isLiveBackendActive
+        Task { [weak self] in
+            guard let clientRef else { return }
+            do {
+                try await clientRef.openWorkspaceInFinder(workspaceUri: uri)
+                await self?.refreshHostCapabilitiesFromClient()
+            } catch {
+                guard let self, isLive else { return }
+                await self.handleLiveCapabilityWriteError(
+                    error,
+                    capability: .conversationAnnotations,
+                    fallbackActionLabel: "Opening workspace in Finder"
+                )
+            }
         }
     }
 
