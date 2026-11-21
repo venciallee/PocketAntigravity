@@ -656,6 +656,134 @@ def read_disk_project_configs() -> dict[str, dict]:
     return out
 
 
+ARTIFACT_MIME_TYPES = {
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".json": "application/json",
+    ".txt": "text/plain",
+    ".mmd": "text/plain",
+    ".mermaid": "text/plain",
+}
+
+FORBIDDEN_ARTIFACT_BASENAMES = {
+    ".env",
+    ".netrc",
+    ".gitcookies",
+    "id_rsa",
+    "id_ed25519",
+    "state.vscdb",
+    "state.vscdb.backup",
+}
+
+MAX_ARTIFACT_FILE_BYTES = 4 * 1024 * 1024  # 4 MB hard ceiling
+
+
+def read_trusted_artifact_file(
+    raw_uri_or_path: str,
+    workspace_roots: list[str] | None = None,
+    extra_trusted_roots: list[str] | None = None,
+) -> tuple[int, dict]:
+    """Reads an `<agent-embed>` or artifact file strictly inside trusted Antigravity brain or workspace roots."""
+    import base64
+
+    raw = (raw_uri_or_path or "").strip()
+    if not raw:
+        return 400, {"ok": False, "error": "Missing uri or path"}
+
+    if raw.lower().startswith("file://"):
+        raw = urllib.parse.unquote(raw[len("file://") :])
+    else:
+        raw = urllib.parse.unquote(raw)
+
+    raw = raw.split("#", 1)[0].split("?", 1)[0]
+    if not raw:
+        return 400, {"ok": False, "error": "Empty path after normalization"}
+
+    try:
+        resolved = os.path.realpath(os.path.expanduser(raw))
+    except Exception as exc:
+        return 400, {"ok": False, "error": f"Invalid path: {exc}"}
+
+    base_name = os.path.basename(resolved).lower()
+    if (
+        base_name in FORBIDDEN_ARTIFACT_BASENAMES
+        or base_name.startswith(".env.")
+        or "/.ssh/" in resolved.replace("\\", "/")
+    ):
+        return 403, {"ok": False, "error": "Access to sensitive file denied"}
+
+    trusted_roots: list[str] = [
+        os.path.realpath(os.path.expanduser("~/.gemini")),
+        os.path.realpath(os.path.expanduser("~/Library/Application Support/Antigravity")),
+    ]
+    env_home = os.environ.get("GEMINI_HOME", "").strip()
+    if env_home:
+        trusted_roots.append(os.path.realpath(os.path.expanduser(env_home)))
+    for ws in workspace_roots or []:
+        clean_ws = (ws or "").strip()
+        if clean_ws.lower().startswith("file://"):
+            clean_ws = urllib.parse.unquote(clean_ws[len("file://") :])
+        if clean_ws and os.path.isdir(clean_ws):
+            trusted_roots.append(os.path.realpath(clean_ws))
+    for extra in extra_trusted_roots or []:
+        if extra:
+            trusted_roots.append(os.path.realpath(os.path.expanduser(extra)))
+
+    allowed = False
+    for root in trusted_roots:
+        try:
+            if os.path.commonpath([resolved, root]) == root:
+                allowed = True
+                break
+        except ValueError:
+            continue
+
+    if not allowed:
+        return 403, {"ok": False, "error": "Path is outside trusted Antigravity artifact & workspace roots"}
+
+    if not os.path.isfile(resolved):
+        return 404, {"ok": False, "error": "Artifact file not found"}
+
+    size_bytes = os.path.getsize(resolved)
+    if size_bytes > MAX_ARTIFACT_FILE_BYTES:
+        return 413, {"ok": False, "error": f"Artifact file exceeds {MAX_ARTIFACT_FILE_BYTES} byte limit"}
+
+    ext = Path(resolved).suffix.lower()
+    mime = ARTIFACT_MIME_TYPES.get(ext, "application/octet-stream")
+    data = Path(resolved).read_bytes()
+    is_text = mime.startswith("text/") or mime in ("image/svg+xml", "application/json")
+    if is_text:
+        try:
+            text_val = data.decode("utf-8")
+            return 200, {
+                "ok": True,
+                "path": resolved,
+                "mimeType": mime,
+                "encoding": "utf-8",
+                "content": text_val,
+                "sizeBytes": len(data),
+            }
+        except UnicodeDecodeError:
+            pass
+
+    return 200, {
+        "ok": True,
+        "path": resolved,
+        "mimeType": mime,
+        "encoding": "base64",
+        "content": base64.b64encode(data).decode("ascii"),
+        "sizeBytes": len(data),
+    }
+
+
 class CompanionState:
     """Stateful companion store for Automations, Jetbox live cache, and Standalone Sandbox testing."""
 
@@ -1465,6 +1593,20 @@ def create_bridge_server(
                 if sys.platform == "darwin" and uri:
                     subprocess.Popen(["open", uri])
                 self._write_json(200, {"ok": True})
+                return
+
+            if method == "ReadArtifactFile":
+                req_obj = self._parse_json(raw_body)
+                target_uri = req_obj.get("uri") or req_obj.get("path") or ""
+                with state.lock:
+                    ws_roots = [state.workspace_root] + [
+                        w.get("workspaceUri") or "" for w in state.workspaces if isinstance(w, dict)
+                    ]
+                status_code, payload_obj = read_trusted_artifact_file(
+                    target_uri,
+                    workspace_roots=ws_roots,
+                )
+                self._write_json(status_code, payload_obj)
                 return
 
             if method == "CreateProjectWorkspace":

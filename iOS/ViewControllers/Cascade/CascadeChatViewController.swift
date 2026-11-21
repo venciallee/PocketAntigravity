@@ -92,94 +92,100 @@ public struct CascadeChatViewController: View {
 
             ScrollViewReader { scrollProxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 9) {
+                    Group {
                         if isStaticESDDFixtureView {
-                            staticRateLimiterShowcaseBody
+                            VStack(alignment: .leading, spacing: 9) {
+                                staticRateLimiterShowcaseBody
+                            }
                         } else if store.displayItems.isEmpty {
-                            emptyOrLoadingSessionCard
+                            VStack(alignment: .leading, spacing: 9) {
+                                emptyOrLoadingSessionCard
+                            }
                         } else {
-                            ForEach(store.displayItems) { item in
-                                switch item {
-                                case .single(let step):
-                                    CascadeStepCellView(store: store, step: step)
-                                        .id("step-\(step.stepIndex)")
-                                        .contextMenu {
-                                            if let text = step.plannerResponse?.response ?? step.userInput, !text.isEmpty {
-                                                Button {
-                                                    store.composerDraftText += (store.composerDraftText.isEmpty ? "" : "\n") + "> \(String(text.prefix(240)))\n"
+                            LazyVStack(alignment: .leading, spacing: 9) {
+                                ForEach(store.displayItems) { item in
+                                    switch item {
+                                    case .single(let step):
+                                        CascadeStepCellView(store: store, step: step)
+                                            .id("step-\(step.stepIndex)")
+                                            .contextMenu {
+                                                if let text = step.plannerResponse?.response ?? step.userInput, !text.isEmpty {
+                                                    Button {
+                                                        store.composerDraftText += (store.composerDraftText.isEmpty ? "" : "\n") + "> \(String(text.prefix(240)))\n"
+                                                    } label: {
+                                                        Label("Quote in Reply", systemImage: "text.quote")
+                                                    }
+                                                }
+                                                Button(role: .destructive) {
+                                                    store.revertConversationToStep(step.stepIndex)
                                                 } label: {
-                                                    Label("Quote in Reply", systemImage: "text.quote")
+                                                    Label("Revert to This Step", systemImage: "arrow.uturn.backward")
                                                 }
                                             }
-                                            Button(role: .destructive) {
-                                                store.revertConversationToStep(step.stepIndex)
-                                            } label: {
-                                                Label("Revert to This Step", systemImage: "arrow.uturn.backward")
-                                            }
-                                        }
-                                case .evidenceGroup(let groupId, let groupedSteps):
-                                    CascadeEvidenceGroupCardView(
-                                        store: store,
-                                        groupId: groupId,
-                                        steps: groupedSteps
-                                    )
-                                }
-                            }
-
-                            if !store.isVerificationMode,
-                               let waiting = store.pendingWaitingStep,
-                               waiting.requestedInteraction?.kind == .askQuestion {
-                                Button {
-                                    store.syncActiveLiveQuestionFromSteps()
-                                    store.presentedSheet = .askQuestion(stepIndex: waiting.stepIndex)
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        Image(systemName: "list.bullet.rectangle.portrait.fill")
-                                            .foregroundStyle(Self.warmAmber)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("Structured Question Pending")
-                                                .font(.system(size: 13.5, weight: .bold))
-                                                .foregroundStyle(AntigravityTheme.inkReading)
-                                            Text(waiting.requestedInteraction?.askQuestion?.question ?? "Tap to answer agent question")
-                                                .font(.system(size: 12.5))
-                                                .foregroundStyle(AntigravityTheme.inkSecondary)
-                                                .lineLimit(2)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .foregroundStyle(Self.warmAmber)
+                                    case .evidenceGroup(let groupId, let groupedSteps):
+                                        CascadeEvidenceGroupCardView(
+                                            store: store,
+                                            groupId: groupId,
+                                            steps: groupedSteps
+                                        )
                                     }
-                                    .padding(12)
-                                    .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
-                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Self.warmAmber.opacity(0.45), lineWidth: 1))
                                 }
-                                .buttonStyle(.plain)
-                            }
 
-                            if store.isCascadeStreaming || store.activeSummary?.status == .inProgress || store.activeSummary?.status == .pending {
-                                HStack(spacing: 10) {
-                                    AntigravityFourDotLoadingView(
-                                        isAnimated: shouldAnimateLive,
-                                        dotSize: 4.5,
-                                        spacing: 3.5,
-                                        tint: Self.periwinkle
-                                    )
-                                    Text("Agent is thinking and executing steps...")
-                                        .font(.system(size: 13.5, weight: .medium))
-                                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                                    Spacer()
+                                if !store.isVerificationMode,
+                                   let waiting = store.pendingWaitingStep,
+                                   waiting.requestedInteraction?.kind == .askQuestion {
+                                    Button {
+                                        store.syncActiveLiveQuestionFromSteps()
+                                        store.presentedSheet = .askQuestion(stepIndex: waiting.stepIndex)
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "list.bullet.rectangle.portrait.fill")
+                                                .foregroundStyle(Self.warmAmber)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Structured Question Pending")
+                                                    .font(.system(size: 13.5, weight: .bold))
+                                                    .foregroundStyle(AntigravityTheme.inkReading)
+                                                Text(waiting.requestedInteraction?.askQuestion?.question ?? "Tap to answer agent question")
+                                                    .font(.system(size: 12.5))
+                                                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                                                    .lineLimit(2)
+                                            }
+                                            Spacer()
+                                            Image(systemName: "chevron.right")
+                                                .foregroundStyle(Self.warmAmber)
+                                        }
+                                        .padding(12)
+                                        .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
+                                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Self.warmAmber.opacity(0.45), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(AntigravityTheme.surfaceCard.opacity(0.65))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .accessibilityIdentifier("chat-inline-four-dot-loading")
+
+                                if store.isCascadeStreaming || store.activeSummary?.status == .inProgress || store.activeSummary?.status == .pending {
+                                    HStack(spacing: 10) {
+                                        AntigravityFourDotLoadingView(
+                                            isAnimated: shouldAnimateLive,
+                                            dotSize: 4.5,
+                                            spacing: 3.5,
+                                            tint: Self.periwinkle
+                                        )
+                                        Text("Agent is thinking and executing steps...")
+                                            .font(.system(size: 13.5, weight: .medium))
+                                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 10)
+                                    .background(AntigravityTheme.surfaceCard.opacity(0.65))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .accessibilityIdentifier("chat-inline-four-dot-loading")
+                                }
+
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id("chat-bottom-anchor")
                             }
                         }
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id("chat-bottom-anchor")
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)

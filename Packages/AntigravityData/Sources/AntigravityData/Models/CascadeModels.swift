@@ -301,6 +301,7 @@ public struct CodeActionPayload: Codable, Sendable, Equatable {
     public var startLine: Int?
     public var endLine: Int?
     public var diffPreviewLines: [String]
+    public var fileContent: String?
 
     public init(
         targetFileUri: String,
@@ -310,7 +311,8 @@ public struct CodeActionPayload: Codable, Sendable, Equatable {
         isArtifactFile: Bool = false,
         startLine: Int? = nil,
         endLine: Int? = nil,
-        diffPreviewLines: [String] = []
+        diffPreviewLines: [String] = [],
+        fileContent: String? = nil
     ) {
         self.targetFileUri = targetFileUri
         self.description = description
@@ -320,6 +322,7 @@ public struct CodeActionPayload: Codable, Sendable, Equatable {
         self.startLine = startLine
         self.endLine = endLine
         self.diffPreviewLines = diffPreviewLines
+        self.fileContent = fileContent
     }
 
     public var fileName: String {
@@ -332,12 +335,20 @@ public struct ViewFilePayload: Codable, Sendable, Equatable {
     public var startLine: Int
     public var endLine: Int
     public var totalLines: Int
+    public var fileContent: String?
 
-    public init(fileUri: String, startLine: Int = 1, endLine: Int = 120, totalLines: Int = 240) {
+    public init(
+        fileUri: String,
+        startLine: Int = 1,
+        endLine: Int = 120,
+        totalLines: Int = 240,
+        fileContent: String? = nil
+    ) {
         self.fileUri = fileUri
         self.startLine = startLine
         self.endLine = endLine
         self.totalLines = totalLines
+        self.fileContent = fileContent
     }
 
     public var fileName: String {
@@ -466,6 +477,10 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
             return swarmBoard != nil
         case .mcpToolCall:
             return mcpToolCall != nil
+        case .generateImage, .readUrlContent, .browserSubagent:
+            let hasResponse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasRefs = !(plannerResponse?.referencedFiles.isEmpty ?? true)
+            return hasResponse || hasRefs || viewFile != nil || search != nil || status == .inProgress
         default:
             let hasResponse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return hasResponse

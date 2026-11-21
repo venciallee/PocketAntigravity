@@ -419,7 +419,13 @@ class LiveMockServer:
                                         "content": "---\ntitle: Rate Limiter Plan\n---\n# Rate Limiter Plan\nSee https://github.com/venciallee/iOSAntigravity/pull/42",
                                         "requestFeedback": True,
                                         "version": 2,
-                                    }
+                                    },
+                                    {
+                                        "artifactPath": "/Users/bytedance/.gemini/antigravity/brain/71d80260-b9b2-4f5f-b568-5374f6aebbdd/fig4-verification-pyramid.html",
+                                        "title": "Fig 4 · Verification Pyramid",
+                                        "kind": "generativeUIHTML",
+                                        "content": "<!doctype html><html><body><h3>6-Layer Verification Pyramid</h3></body></html>",
+                                    },
                                 ]
                             }
                         elif inner_method == "GetConversationOverview":
@@ -879,6 +885,13 @@ class LiveMockServer:
                                     "kind": "generativeUIHTML",
                                     "content": "<html><body style='background:#090A0D;color:#F5F6F8'><h3>2,000 req/s</h3></body></html>",
                                 },
+                                {
+                                    "artifactPath": "/Users/bytedance/.gemini/antigravity/brain/71d80260-b9b2-4f5f-b568-5374f6aebbdd/fig4-verification-pyramid.html",
+                                    "title": "Fig 4 · Verification Pyramid",
+                                    "summary": "6-Layer Full-Stack Verification Pyramid",
+                                    "kind": "generativeUIHTML",
+                                    "content": "<!doctype html><html><body style='background:#090A0D;color:#F5F7FA;font-family:-apple-system,sans-serif;padding:16px'><h3 style='margin:0 0 8px;color:#8EB4FF'>6-Layer Verification Pyramid</h3><div style='background:#141519;border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px'>L1–L6 Parity Verified</div></body></html>",
+                                },
                             ]
                         },
                     )
@@ -1141,6 +1154,40 @@ class LiveMockServer:
                             "submittedCount": len(req.get("comments", [])) or 1,
                         },
                     )
+                    return
+
+                if method in ("ReadArtifactFile", "GetArtifactSnapshots"):
+                    outer_state.record(method, req)
+                    sample_html = (
+                        "<!doctype html><html><body style='background:#090A0D;color:#F5F7FA;font-family:-apple-system,sans-serif;padding:16px'>"
+                        "<h3 style='margin:0 0 8px;color:#8EB4FF'>6-Layer Verification Pyramid</h3>"
+                        "<div style='background:#141519;border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px'>L1–L6 Parity Verified</div>"
+                        "</body></html>"
+                    )
+                    if method == "ReadArtifactFile":
+                        self._send_json(
+                            200,
+                            {
+                                "ok": True,
+                                "mimeType": "text/html",
+                                "encoding": "utf-8",
+                                "content": sample_html,
+                                "sizeBytes": len(sample_html.encode("utf-8")),
+                            },
+                        )
+                    else:
+                        self._send_json(
+                            200,
+                            {
+                                "artifacts": [
+                                    {
+                                        "artifactPath": "/Users/bytedance/.gemini/antigravity/brain/71d80260-b9b2-4f5f-b568-5374f6aebbdd/fig4-verification-pyramid.html",
+                                        "title": "Fig 4 · Verification Pyramid",
+                                        "content": sample_html,
+                                    }
+                                ]
+                            },
+                        )
                     return
 
                 outer_state.record(method, req)
