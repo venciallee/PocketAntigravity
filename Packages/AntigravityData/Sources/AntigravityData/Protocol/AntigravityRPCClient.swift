@@ -5137,13 +5137,15 @@ public actor AntigravityRPCClient {
                 ?? "tool"
             let pattern = nonEmptyString(permInt["suggestedPersistPattern"]?.stringValue)
                 ?? nonEmptyString(permInt["persistPattern"]?.stringValue)
-            let target = nonEmptyString(permInt["target"]?.stringValue)
-                ?? nonEmptyString(permInt["resource"]?.stringValue)
-                ?? nonEmptyString(permInt["path"]?.stringValue)
-                ?? nonEmptyString(permInt["absolutePathUri"]?.stringValue)
-                ?? nonEmptyString(permInt["command"]?.stringValue)
-                ?? pattern
-                ?? "*"
+            let targetKeys = ["target", "resource", "path", "absolutePathUri", "command"]
+            var resolvedTarget: String? = nil
+            for key in targetKeys {
+                if let candidate = nonEmptyString(permInt[key]?.stringValue) {
+                    resolvedTarget = candidate
+                    break
+                }
+            }
+            let target = resolvedTarget ?? pattern ?? "*"
             let reason = nonEmptyString(permInt["reason"]?.stringValue)
                 ?? nonEmptyString(permInt["description"]?.stringValue)
                 ?? nonEmptyString(permInt["message"]?.stringValue)
@@ -5602,27 +5604,41 @@ public actor AntigravityRPCClient {
         }
 
         var codeActionPayload: CodeActionPayload?
-        let caCandidate = obj["codeAction"]?.objectValue
-            ?? obj["replaceFileContent"]?.objectValue
-            ?? obj["multiReplaceFileContent"]?.objectValue
-            ?? obj["writeToFile"]?.objectValue
-            ?? obj["fileChange"]?.objectValue
+        let caCandidate: [String: JSONValue]? = [
+            obj["codeAction"],
+            obj["replaceFileContent"],
+            obj["multiReplaceFileContent"],
+            obj["writeToFile"],
+            obj["fileChange"]
+        ].compactMap { $0?.objectValue }.first
         if let ca = caCandidate {
             let actionSpec = ca["actionSpec"]?.objectValue
             let createFileSpec = actionSpec?["createFile"]?.objectValue
-            let uri = nonEmptyString(ca["targetFileUri"]?.stringValue)
-                ?? nonEmptyString(ca["fileUri"]?.stringValue)
-                ?? nonEmptyString(ca["targetFile"]?.stringValue)
-                ?? nonEmptyString(ca["TargetFile"]?.stringValue)
-                ?? nonEmptyString(ca["absoluteUri"]?.stringValue)
-                ?? nonEmptyString(ca["absolutePathUri"]?.stringValue)
-                ?? nonEmptyString(ca["absolutePath"]?.stringValue)
-                ?? nonEmptyString(ca["filePath"]?.stringValue)
-                ?? nonEmptyString(ca["path"]?.stringValue)
-                ?? nonEmptyString(createFileSpec?["path"]?.objectValue?["absoluteUri"]?.stringValue)
-                ?? nonEmptyString(actionSpec?["insertBlock"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
-                ?? nonEmptyString(actionSpec?["editFile"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
-                ?? nonEmptyString(actionSpec?["replaceFileContent"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
+            let directUriKeys = [
+                "targetFileUri", "fileUri", "targetFile", "TargetFile",
+                "absoluteUri", "absolutePathUri", "absolutePath", "filePath", "path"
+            ]
+            var uri: String? = nil
+            for key in directUriKeys {
+                if let candidate = nonEmptyString(ca[key]?.stringValue) {
+                    uri = candidate
+                    break
+                }
+            }
+            if uri == nil {
+                let specObjects: [[String: JSONValue]?] = [
+                    createFileSpec,
+                    actionSpec?["insertBlock"]?.objectValue,
+                    actionSpec?["editFile"]?.objectValue,
+                    actionSpec?["replaceFileContent"]?.objectValue
+                ]
+                for spec in specObjects {
+                    if let candidate = nonEmptyString(spec?["path"]?.objectValue?["absoluteUri"]?.stringValue) {
+                        uri = candidate
+                        break
+                    }
+                }
+            }
             if let uri {
                 let lowerUri = uri.lowercased()
                 let isArtifact = (ca["artifactMetadata"] != nil)

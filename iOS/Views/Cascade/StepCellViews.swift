@@ -1435,12 +1435,17 @@ public struct StepInlineApprovalCardView: View {
                 supportsScopedAllow: false
             )
         default:
-            let fallbackDetail = requested.rawSummary
-                ?? requested.filePermission?.absolutePathUri
-                ?? step.viewFile?.fileUri
-                ?? step.codeAction?.targetFileUri
-                ?? step.search?.query
-                ?? step.runCommand?.commandLine
+            let fallbackCandidates: [String?] = [
+                requested.rawSummary,
+                requested.filePermission?.absolutePathUri,
+                step.viewFile?.fileUri,
+                step.codeAction?.targetFileUri,
+                step.search?.query,
+                step.runCommand?.commandLine
+            ]
+            let fallbackDetail = fallbackCandidates
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first(where: { !$0.isEmpty })
                 ?? "Step \(step.stepIndex + 1) is waiting for your approval to continue."
             let title: String = {
                 if step.type == .notifyUser {
