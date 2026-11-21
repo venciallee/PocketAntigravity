@@ -196,16 +196,43 @@ public struct RemotePairingViewController: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
-                // Multi-instance switcher (shown only when >1 Desktop instance is online on the signed-in Google account)
+                // Multi-instance switcher (shown when >1 Desktop instance is registered on the signed-in Google account)
                 if store.availableRelayInstances.count > 1 {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("AVAILABLE HOSTS")
-                            .font(.system(size: 11, weight: .semibold))
-                            .tracking(0.7)
-                            .foregroundStyle(UEChromePalette.textMuted)
+                        HStack(spacing: 8) {
+                            Text("AVAILABLE HOSTS")
+                                .font(.system(size: 11, weight: .semibold))
+                                .tracking(0.7)
+                                .foregroundStyle(UEChromePalette.textMuted)
+                            if store.isRefreshingRelayHosts {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .tint(AntigravityTheme.accentPeriwinkle)
+                            }
+                            Spacer()
+                            Button {
+                                Task {
+                                    await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+                                }
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(UEChromePalette.textSecondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("btn-refresh-hosts")
+                        }
 
                         ForEach(store.availableRelayInstances) { inst in
                             let isSelected = (store.activeHost.instanceId == inst.uuid)
+                            let statusDotColor: Color = {
+                                switch inst.status {
+                                case .connected: return AntigravityTheme.statusDone
+                                case .idle: return AntigravityTheme.statusWaiting
+                                case .disconnected: return AntigravityTheme.statusError
+                                case .unknown: return UEChromePalette.textMuted
+                                }
+                            }()
                             Button {
                                 Task {
                                     if let cached = await store.loadSavedSessionCookie() {
@@ -214,7 +241,9 @@ public struct RemotePairingViewController: View {
                                             sessionCookie: cached.cookie,
                                             authUser: store.activeAuthUser,
                                             resolvedInstanceUuid: inst.uuid,
-                                            hostName: inst.name
+                                            hostName: inst.name,
+                                            focusHostFilterOnConnected: true,
+                                            strictTargetSelection: true
                                         )
                                         if ok {
                                             onConnected?()
@@ -224,15 +253,15 @@ public struct RemotePairingViewController: View {
                             } label: {
                                 HStack(spacing: 10) {
                                     Circle()
-                                        .fill(inst.status.isReachable ? AntigravityTheme.statusDone : UEChromePalette.textMuted)
+                                        .fill(statusDotColor)
                                         .frame(width: 8, height: 8)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(inst.name)
                                             .font(.system(size: 14.5, weight: .semibold))
-                                            .foregroundStyle(Color.white)
+                                            .foregroundStyle(inst.status.isReachable ? Color.white : UEChromePalette.textSecondary)
                                         Text("\(inst.status.badgeText) · \(inst.version)")
                                             .font(.system(size: 11.5, weight: .regular, design: .monospaced))
-                                            .foregroundStyle(UEChromePalette.textSecondary)
+                                            .foregroundStyle(inst.status == .disconnected ? AntigravityTheme.statusError : UEChromePalette.textSecondary)
                                     }
                                     Spacer()
                                     if isSelected {
@@ -282,7 +311,17 @@ public struct RemotePairingViewController: View {
             .padding(.top, 12)
             .padding(.bottom, 24)
         }
+        .refreshable {
+            if store.hasPairedBackend && !store.isVerificationMode {
+                await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+            }
+        }
         .background(AntigravityTheme.canvasObsidian)
+        .task {
+            if store.hasPairedBackend && !store.isVerificationMode && store.activeHost.channel == .cloudRelay {
+                await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+            }
+        }
         .onChange(of: externalScannerTrigger?.wrappedValue ?? false) { _, triggered in
             if triggered {
                 isShowingQRScanner = true

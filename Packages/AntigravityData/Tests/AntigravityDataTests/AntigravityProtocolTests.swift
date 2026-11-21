@@ -1647,6 +1647,160 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertEqual(store.remotePermissionPreset, .defaultPolicy)
         XCTAssertEqual(store.localPermissionPreset, .requestReview)
     }
+
+    @MainActor
+    func testMultiHostFilteringIsolationAndPerHostReachability() throws {
+        // 1. Omitted status field (row.count <= 2) in ListInstances must decode as `.unknown`, never `.connected`
+        let omittedStatusJSPB = Data(
+            ")]}'\n[[[\"uuid-missing-status-v2\",[\"stale-host\",\"2.29.0-v2\",1]]],5]".utf8
+        )
+        let omittedDecoded = try CloudRelayJSPBCodec.decodeListInstancesResponse(omittedStatusJSPB)
+        XCTAssertEqual(omittedDecoded.count, 1)
+        XCTAssertEqual(omittedDecoded[0].status, .unknown)
+        XCTAssertFalse(omittedDecoded[0].status.isReachable)
+
+        // 2. Multi-host reconciliation isolates distinct hosts & partitions same-slug `No Project` per host
+        let macMiniUuid = "inst-mac-mini-v2"
+        let macMiniName = "huangjiafandemac-mini-local-swift-vapor"
+        let workstationUuid = "inst-golden-star-v2"
+        let workstationName = "lt74xt6l0m-golden-star"
+
+        var summaries: [CascadeSummary] = [
+            CascadeSummary(
+                cascadeId: "cid-game-loop-1",
+                title: "Automation And Workflow Setup",
+                projectSlug: "game_loop",
+                workspaceUri: "file:///Users/dev/code/game_loop",
+                status: .waiting,
+                stepCount: 12,
+                isUnread: true,
+                isCloud: false,
+                originInstanceUuid: macMiniUuid,
+                originHostName: macMiniName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-dsh-1",
+                title: "Go Version Of DSH Superagent",
+                projectSlug: "dsh-superagent-prototype",
+                workspaceUri: "file:///Users/work/dsh-superagent-prototype",
+                status: .inProgress,
+                stepCount: 78,
+                isUnread: false,
+                isCloud: false,
+                originInstanceUuid: workstationUuid,
+                originHostName: workstationName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-noproj-mini",
+                title: "Quick scratch on mini",
+                projectSlug: "No Project",
+                workspaceUri: "",
+                status: .done,
+                stepCount: 3,
+                isCloud: false,
+                originInstanceUuid: macMiniUuid,
+                originHostName: macMiniName
+            ),
+            CascadeSummary(
+                cascadeId: "cid-noproj-work",
+                title: "Quick scratch on workstation",
+                projectSlug: "No Project",
+                workspaceUri: "",
+                status: .done,
+                stepCount: 4,
+                isCloud: false,
+                originInstanceUuid: workstationUuid,
+                originHostName: workstationName
+            ),
+            CascadeSummary(
+                cascadeId: "v1/default/jetski_remote_agents_3p/cid-cloud-1",
+                title: "Cloud iOS Task",
+                projectSlug: "venciallee/iOSAntigravity",
+                workspaceUri: "cloud://venciallee/iOSAntigravity",
+                status: .done,
+                stepCount: 5,
+                isUnread: true,
+                isCloud: true,
+                originHostName: "Antigravity"
+            )
+        ]
+
+        let projects = AntigravitySessionStore.reconcileLiveProjects(
+            workspaces: [],
+            summaries: &summaries,
+            existingProjects: [],
+            hostName: macMiniName
+        )
+
+        // Two distinct local `No Project` sections should be created (one per Mac)
+        let localNoProjects = projects.filter { $0.isNoProject && $0.runtime == .macBookPro }
+        XCTAssertEqual(localNoProjects.count, 2)
+        XCTAssertEqual(Set(localNoProjects.compactMap(\.originInstanceUuid)), [macMiniUuid, workstationUuid])
+
+        // 3. Store hostFilter strictly isolates projects, conversations, and badge counts per host
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.isDeviceNetworkReachable = true
+        store.activeHost = RemoteHostInstance(
+            instanceId: macMiniUuid,
+            hostname: macMiniName,
+            version: "2.29.0-v2",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(macMiniUuid)")!,
+            isOnline: false
+        )
+        store.syncRelayInstancesState(
+            [
+                RelayInstanceInfo(uuid: workstationUuid, name: workstationName, version: "2.34.0-v2", status: .connected),
+                RelayInstanceInfo(uuid: macMiniUuid, name: macMiniName, version: "2.29.0-v2", status: .disconnected)
+            ],
+            latencyMs: 120
+        )
+        store.projects = projects
+        store.summaries = summaries
+
+        // Per-host online reachability reflects each Mac independently
+        XCTAssertTrue(store.isLocalHostOnline(instanceId: workstationUuid, hostname: workstationName))
+        XCTAssertFalse(store.isLocalHostOnline(instanceId: macMiniUuid, hostname: macMiniName))
+        XCTAssertTrue(store.anyPairedLocalHostOnline)
+
+        let gameLoopProj = try XCTUnwrap(projects.first(where: { $0.name == "game_loop" }))
+        let dshProj = try XCTUnwrap(projects.first(where: { $0.name == "dsh-superagent-prototype" }))
+        let cloudProj = try XCTUnwrap(projects.first(where: { $0.runtime == .cloud }))
+        XCTAssertFalse(store.isProjectHostOnline(gameLoopProj))
+        XCTAssertTrue(store.isProjectHostOnline(dshProj))
+        XCTAssertTrue(store.isProjectHostOnline(cloudProj))
+
+        // Filtering to `huangjiafandemac` MUST exclude `dsh-superagent-prototype` and Cloud
+        store.selectHostFilter(.localHost(id: macMiniUuid, name: macMiniName))
+        XCTAssertTrue(store.projectMatchesHostFilter(gameLoopProj))
+        XCTAssertFalse(store.projectMatchesHostFilter(dshProj))
+        XCTAssertFalse(store.projectMatchesHostFilter(cloudProj))
+
+        let miniVisibleIds = Set(store.summaries.filter { store.summaryMatchesHostFilter($0) }.map(\.cascadeId))
+        XCTAssertEqual(miniVisibleIds, ["cid-game-loop-1", "cid-noproj-mini"])
+        XCTAssertEqual(store.hostScopedRunningCount, 0)
+        XCTAssertEqual(store.hostScopedNeedsYouCount, 1)
+        XCTAssertEqual(store.hostScopedUnreadCount, 1)
+
+        // Filtering to `lt74xt6l0m-golden-star` excludes `game_loop`, updates activeHost (since online), and scopes counts
+        store.selectHostFilter(.localHost(id: workstationUuid, name: workstationName))
+        XCTAssertEqual(store.activeHost.instanceId, workstationUuid)
+        XCTAssertFalse(store.projectMatchesHostFilter(gameLoopProj))
+        XCTAssertTrue(store.projectMatchesHostFilter(dshProj))
+        XCTAssertFalse(store.projectMatchesHostFilter(cloudProj))
+        XCTAssertEqual(store.hostScopedRunningCount, 1)
+        XCTAssertEqual(store.hostScopedNeedsYouCount, 0)
+        XCTAssertEqual(store.hostScopedUnreadCount, 0)
+
+        // Filtering to Cloud shows only Cloud
+        store.selectHostFilter(.antigravityCloud)
+        XCTAssertTrue(store.projectMatchesHostFilter(cloudProj))
+        XCTAssertFalse(store.projectMatchesHostFilter(gameLoopProj))
+        XCTAssertFalse(store.projectMatchesHostFilter(dshProj))
+        XCTAssertEqual(store.hostScopedUnreadCount, 1)
+    }
 }
 
 private extension AntigravitySessionStore {

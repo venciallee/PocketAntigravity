@@ -56,6 +56,18 @@ public struct RelayInstanceInfo: Codable, Sendable, Equatable, Identifiable {
         self.updatedAt = updatedAt
     }
 
+    /// Returns a copy of this Relay instance with an updated lifecycle `status` (e.g. after end-to-end `ProxyCommand` probe).
+    public func withStatus(_ nextStatus: RelayInstanceStatus) -> RelayInstanceInfo {
+        RelayInstanceInfo(
+            uuid: uuid,
+            name: name,
+            version: version,
+            supportsChunking: supportsChunking,
+            status: nextStatus,
+            updatedAt: updatedAt
+        )
+    }
+
     /// Matches either the full relay UUID (`0f5819ac-9308-40d8-a308-98b55122c533-v2`),
     /// human-readable device slug (`lt74xt6l0m-golden-star`), or UUID prefix.
     public func matches(identifier rawIdentifier: String) -> Bool {
@@ -432,7 +444,7 @@ public enum CloudRelayJSPBCodec: Sendable {
                 return true
             }()
 
-            let statusCode = row.count > 2 ? (row[2].intValue ?? 0) : 1
+            let statusCode = row.count > 2 ? (row[2].intValue ?? 0) : 0
             let status = RelayInstanceStatus(rawStatusCode: statusCode)
 
             var updatedAt: Date? = nil

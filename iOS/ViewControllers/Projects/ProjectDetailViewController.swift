@@ -192,7 +192,10 @@ public struct ProjectDetailViewController: View {
     }
 
     private var isPairedHostOnline: Bool {
-        !store.hasPairedBackend || (store.isLiveBackendConnected && store.activeHost.isOnline)
+        if let project = liveProject {
+            return store.isProjectHostOnline(project)
+        }
+        return !store.hasPairedBackend || (store.isDeviceNetworkReachable && store.isLiveBackendConnected && store.activeHost.isOnline)
     }
 
     private var liveProject: ProjectWorkspace? {
@@ -249,8 +252,9 @@ public struct ProjectDetailViewController: View {
             }
             return "Cloud"
         }
+        let hostDisplay = (liveProject?.hostName.isEmpty == false) ? liveProject!.hostName : store.activeHost.hostname
         let prefix = isPairedHostOnline ? "Local" : "Offline"
-        return "\(prefix) · \(store.activeHost.hostname)"
+        return "\(prefix) · \(hostDisplay)"
     }
 
     private var effectiveBranchName: String {

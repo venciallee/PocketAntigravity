@@ -223,11 +223,23 @@ public enum AntigravityCloudDetector {
         "/root"
     ]
 
-    public static func isNoProjectSlug(_ rawSlug: String) -> Bool {
-        var cleaned = rawSlug.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.lowercased().hasPrefix("cloud:") {
-            cleaned = String(cleaned.dropFirst("cloud:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    public static func stripProjectNamespacePrefix(_ rawSlug: String) -> String {
+        let cleaned = rawSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = cleaned.lowercased()
+        if lower.hasPrefix("cloud:") {
+            return String(cleaned.dropFirst("cloud:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        if lower.hasPrefix("host:") {
+            let tail = cleaned.dropFirst("host:".count)
+            if let sep = tail.firstIndex(of: ":") {
+                return String(tail[tail.index(after: sep)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return cleaned
+    }
+
+    public static func isNoProjectSlug(_ rawSlug: String) -> Bool {
+        let cleaned = stripProjectNamespacePrefix(rawSlug)
         let lower = cleaned.lowercased()
         return lower.isEmpty
             || lower == "no project"
@@ -476,6 +488,25 @@ public struct ProjectWorkspace: Codable, Sendable, Equatable, Identifiable {
 }
 
 // MARK: - Remote Host & Workspace Info
+
+/// Active host/runtime filter for Agents Home (`UE01`), persisted on `AntigravitySessionStore`
+/// across tab switches, chat navigation, and Settings host switching.
+public enum AgentHostFilter: Sendable, Equatable, Hashable, Identifiable {
+    case allHosts
+    case antigravityCloud
+    case localHost(id: String, name: String)
+
+    public var id: String {
+        switch self {
+        case .allHosts:
+            return "all-hosts"
+        case .antigravityCloud:
+            return "antigravity-cloud"
+        case .localHost(let id, _):
+            return "host-\(id)"
+        }
+    }
+}
 
 /// Connection transport channel for Antigravity Remote Control.
 public enum RemoteConnectionChannel: String, Codable, Sendable, CaseIterable {

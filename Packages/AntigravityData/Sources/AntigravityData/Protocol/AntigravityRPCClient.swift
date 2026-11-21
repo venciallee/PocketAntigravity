@@ -334,6 +334,25 @@ public actor AntigravityRPCClient {
         return cachedRelayInstances.first(where: \.status.isReachable)
     }
 
+    /// Returns the latest known Cloud Relay instance list (including end-to-end reachability status updates).
+    public func cachedInstancesSnapshot() -> [RelayInstanceInfo] {
+        cachedRelayInstances
+    }
+
+    /// Updates the preferred active Cloud Relay target UUID/name when the user selects a specific online host.
+    public func setPreferredRelayInstance(uuid: String, name: String) {
+        let trimmedUuid = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedUuid.isEmpty {
+            self.resolvedInstanceUuid = trimmedUuid
+        }
+        if !trimmedName.isEmpty {
+            self.targetInstanceIdentifier = trimmedName
+        } else if !trimmedUuid.isEmpty {
+            self.targetInstanceIdentifier = trimmedUuid
+        }
+    }
+
     /// Resolves a scanned Remote Control device slug (`lt74xt6l0m-golden-star`) or UUID (`0f5819ac-...-v2`)
     /// to an online `RelayInstanceInfo`, automatically failing over across open windows on the same Mac/account
     /// and probing `X-Goog-AuthUser` `0..4` for multi-account sessions.
@@ -458,12 +477,16 @@ public actor AntigravityRPCClient {
 
     /// Verifies authentication (`SAPISIDHASH` + `ApiService/ListInstances` + `ProxyCommand`, or `x-codeium-csrf-token`)
     /// and hydrates initial local + Antigravity Cloud workspaces & trajectories across all reachable instances.
-    public func verifyConnection(timeoutInterval: TimeInterval = 4.0) async throws -> BackendHandshakeResult {
+    public func verifyConnection(
+        timeoutInterval: TimeInterval = 4.0,
+        strictTargetSelection: Bool = false
+    ) async throws -> BackendHandshakeResult {
         let start = Date()
         let effectiveTimeout = (channel == .cloudRelay) ? max(timeoutInterval, 15.0) : timeoutInterval
         var resolvedName: String? = nil
         var serverVersion = "v2.32.0"
         var allRelayInstances: [RelayInstanceInfo] = []
+        var initialSelectedUuid: String? = nil
 
         if channel == .cloudRelay {
             let resolution = try await resolveCloudRelayInstance(
@@ -473,9 +496,50 @@ public actor AntigravityRPCClient {
             resolvedName = resolution.selected.name
             serverVersion = resolution.selected.version
             allRelayInstances = resolution.allInstances
+            initialSelectedUuid = resolution.selected.uuid
+
+            if strictTargetSelection {
+                let targetTrimmed = targetInstanceIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+                let matchedTarget = targetTrimmed.isEmpty || resolution.selected.matches(identifier: targetTrimmed)
+                if !matchedTarget || !resolution.selected.status.isReachable {
+                    let targetLabel = targetTrimmed.isEmpty ? resolution.selected.name : targetTrimmed
+                    throw AntigravityRPCError.httpError(
+                        statusCode: 503,
+                        body: "\(targetLabel) is currently offline or unreachable"
+                    )
+                }
+            }
         }
 
         let federated = try await fetchFederatedWorkspacesAndSummaries(timeoutInterval: effectiveTimeout)
+        let reconciledInstances = federated.relayInstances.isEmpty ? allRelayInstances : federated.relayInstances
+
+        if channel == .cloudRelay && !reconciledInstances.isEmpty {
+            let selectedUuid = initialSelectedUuid ?? resolvedInstanceUuid
+            if let selectedUuid,
+               let verifiedSelected = reconciledInstances.first(where: { $0.uuid == selectedUuid }) {
+                if !verifiedSelected.status.isReachable {
+                    if strictTargetSelection {
+                        throw AntigravityRPCError.httpError(
+                            statusCode: 503,
+                            body: "\(verifiedSelected.name) is currently offline or not responding"
+                        )
+                    }
+                    if let liveFallback = reconciledInstances.first(where: {
+                        $0.status.isReachable && $0.sameHostFamily(as: verifiedSelected.name)
+                    }) ?? reconciledInstances.first(where: \.status.isReachable) {
+                        self.resolvedInstanceUuid = liveFallback.uuid
+                        resolvedName = liveFallback.name
+                        serverVersion = liveFallback.version
+                    }
+                } else {
+                    self.resolvedInstanceUuid = verifiedSelected.uuid
+                    resolvedName = verifiedSelected.name
+                    serverVersion = verifiedSelected.version
+                }
+            }
+        }
+
         let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
         return BackendHandshakeResult(
             latencyMs: elapsedMs,
@@ -486,22 +550,62 @@ public actor AntigravityRPCClient {
             resolvedHostname: resolvedName,
             resolvedInstanceUuid: resolvedInstanceUuid,
             resolvedAuthUser: channel == .cloudRelay ? authUser : nil,
-            availableRelayInstances: allRelayInstances
+            availableRelayInstances: reconciledInstances
         )
     }
 
-    /// Single-request lightweight reachability probe used by foreground idle heartbeats
-    /// and exponential-backoff offline recovery so mobile radios avoid multi-RPC fan-out.
-    /// - Cloud Relay: sends only `ApiService/ListInstances` (a few hundred bytes, zero `ProxyCommand` fan-out).
+    /// Lightweight reachability probe used by foreground idle heartbeats and offline recovery.
+    /// - Cloud Relay (`verifyEndToEnd == false`): sends only `ApiService/ListInstances` (zero `ProxyCommand` fan-out).
+    /// - Cloud Relay (`verifyEndToEnd == true`, e.g. Settings refresh): verifies each reachable Relay instance end-to-end
+    ///   with a short-timeout `GetWorkspaceInfos` `ProxyCommand` (`allowCrossInstanceFailover: false`) so stale/zombie
+    ///   Relay entries are truthfully downgraded to `.disconnected`.
     /// - Direct LAN: sends a single short-timeout `GetWorkspaceInfos` probe (HTTP 404 still proves server + auth liveness).
-    public func probeHostReachability(timeoutInterval: TimeInterval? = nil) async throws -> HostReachabilityProbeResult {
+    public func probeHostReachability(
+        timeoutInterval: TimeInterval? = nil,
+        verifyEndToEnd: Bool = false
+    ) async throws -> HostReachabilityProbeResult {
         let start = Date()
         if channel == .cloudRelay {
             let effectiveTimeout = timeoutInterval ?? 8.0
             let prevReachableIds = Set(cachedRelayInstances.filter(\.status.isReachable).map(\.uuid))
             let prevActiveUuid = resolvedInstanceUuid
 
-            let instances = try await listRelayInstances(timeoutInterval: effectiveTimeout)
+            var instances = try await listRelayInstances(timeoutInterval: effectiveTimeout)
+            if verifyEndToEnd && !instances.isEmpty {
+                let candidateReachable = instances.filter(\.status.isReachable)
+                if !candidateReachable.isEmpty {
+                    let perHostTimeout = min(effectiveTimeout, 4.5)
+                    var failedUuids = Set<String>()
+                    await withTaskGroup(of: (String, Bool).self) { group in
+                        for inst in candidateReachable {
+                            group.addTask {
+                                do {
+                                    _ = try await self.getWorkspaceInfos(
+                                        instanceUuidOverride: inst.uuid,
+                                        originHostName: inst.name,
+                                        timeoutInterval: perHostTimeout,
+                                        allowCrossInstanceFailover: false
+                                    )
+                                    return (inst.uuid, true)
+                                } catch let AntigravityRPCError.httpError(code, _) where code == 404 {
+                                    return (inst.uuid, true)
+                                } catch {
+                                    return (inst.uuid, false)
+                                }
+                            }
+                        }
+                        for await (uuid, ok) in group where !ok {
+                            failedUuids.insert(uuid)
+                        }
+                    }
+                    if !failedUuids.isEmpty {
+                        instances = instances.map { inst in
+                            failedUuids.contains(inst.uuid) ? inst.withStatus(.disconnected) : inst
+                        }
+                    }
+                }
+            }
+
             if !instances.isEmpty {
                 self.cachedRelayInstances = instances
             }
@@ -512,7 +616,8 @@ public actor AntigravityRPCClient {
                     do {
                         _ = try await getWorkspaceInfos(
                             instanceUuidOverride: directUuid,
-                            timeoutInterval: effectiveTimeout
+                            timeoutInterval: effectiveTimeout,
+                            allowCrossInstanceFailover: false
                         )
                     } catch let AntigravityRPCError.httpError(statusCode, _) where statusCode == 404 {
                         // HTTP 404 on optional endpoint still proves the remote language_server is alive.
@@ -566,12 +671,18 @@ public actor AntigravityRPCClient {
     }
 
     /// Refreshes `ListInstances` (when on `.cloudRelay`), federates local workspaces & summaries across all
-    /// reachable instances on the signed-in Google account, and queries Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`)
-    /// projects & conversations so both Cloud ("Antigravity") and Local hosts stay synchronized.
+    /// reachable instances on the signed-in Google account without cross-host spoofing, reconciles each instance's
+    /// live end-to-end reachability status, and queries Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects & sessions.
     public func fetchFederatedWorkspacesAndSummaries(
         timeoutInterval: TimeInterval? = nil,
         lightweightPoll: Bool = false
-    ) async throws -> (workspaces: [WorkspaceInfo], summaries: [CascadeSummary], cloudProjects: [ProjectWorkspace], cloudWarmingUp: Bool) {
+    ) async throws -> (
+        workspaces: [WorkspaceInfo],
+        summaries: [CascadeSummary],
+        cloudProjects: [ProjectWorkspace],
+        cloudWarmingUp: Bool,
+        relayInstances: [RelayInstanceInfo]
+    ) {
         if channel == .cloudRelay {
             if let refreshed = try? await listRelayInstances(timeoutInterval: timeoutInterval), !refreshed.isEmpty {
                 self.cachedRelayInstances = refreshed
@@ -605,9 +716,9 @@ public actor AntigravityRPCClient {
         }
         let cloudProjects = cloudProjectOutcome.projects
 
-        var mergedWorkspacesByUri: [String: WorkspaceInfo] = [:]
+        var mergedWorkspacesByKey: [String: WorkspaceInfo] = [:]
         for cp in cloudProjects {
-            mergedWorkspacesByUri[cp.workspaceUri] = WorkspaceInfo(
+            mergedWorkspacesByKey["cloud|\(cp.workspaceUri)"] = WorkspaceInfo(
                 workspaceUri: cp.workspaceUri,
                 displayName: cp.name,
                 activeBranch: cp.activeBranch,
@@ -622,8 +733,10 @@ public actor AntigravityRPCClient {
         if channel == .cloudRelay && !reachableInstances.isEmpty {
             let cloudProjectsSnapshot = self.cachedCloudProjectsById
             var anyInstanceSucceeded = false
+            var verifiedOnlineUuids = Set<String>()
+            var failedProbeUuids = Set<String>()
 
-            await withTaskGroup(of: (Bool, [WorkspaceInfo], [CascadeSummary], [CascadeSummary]).self) { group in
+            await withTaskGroup(of: (String, Bool, [WorkspaceInfo], [CascadeSummary], [CascadeSummary]).self) { group in
                 for inst in reachableInstances {
                     group.addTask {
                         var instOk = false
@@ -632,7 +745,8 @@ public actor AntigravityRPCClient {
                             ws = try await self.getWorkspaceInfos(
                                 instanceUuidOverride: inst.uuid,
                                 originHostName: inst.name,
-                                timeoutInterval: timeoutInterval
+                                timeoutInterval: timeoutInterval,
+                                allowCrossInstanceFailover: false
                             )
                             instOk = true
                         } catch let AntigravityRPCError.httpError(code, _) where code == 404 {
@@ -647,7 +761,8 @@ public actor AntigravityRPCClient {
                             mem = try await self.getAllCascadeTrajectories(
                                 instanceUuidOverride: inst.uuid,
                                 originHostName: inst.name,
-                                timeoutInterval: timeoutInterval
+                                timeoutInterval: timeoutInterval,
+                                allowCrossInstanceFailover: false
                             )
                             instOk = true
                         } catch {
@@ -658,17 +773,28 @@ public actor AntigravityRPCClient {
                             cloud: false,
                             instanceUuidOverride: inst.uuid,
                             originHostName: inst.name,
-                            snapshotTimeout: 3.5
+                            snapshotTimeout: 3.5,
+                            allowCrossInstanceFailover: false
                         )
                         if !jbLocal.isEmpty { instOk = true }
-                        return (instOk, ws, mem, jbLocal)
+                        return (inst.uuid, instOk, ws, mem, jbLocal)
                     }
                 }
 
-                for await (instOk, wsList, memList, jbLocalList) in group {
-                    if instOk { anyInstanceSucceeded = true }
-                    for ws in wsList where mergedWorkspacesByUri[ws.workspaceUri] == nil {
-                        mergedWorkspacesByUri[ws.workspaceUri] = ws
+                for await (instUuid, instOk, wsList, memList, jbLocalList) in group {
+                    if instOk {
+                        anyInstanceSucceeded = true
+                        verifiedOnlineUuids.insert(instUuid)
+                    } else {
+                        failedProbeUuids.insert(instUuid)
+                    }
+                    for ws in wsList {
+                        let key = ws.isCloud
+                            ? "cloud|\(ws.workspaceUri)"
+                            : "\(ws.originInstanceUuid ?? instUuid)|\(ws.workspaceUri)"
+                        if mergedWorkspacesByKey[key] == nil {
+                            mergedWorkspacesByKey[key] = ws
+                        }
                     }
                     for s in memList + jbLocalList {
                         Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: cloudProjectsSnapshot)
@@ -676,14 +802,26 @@ public actor AntigravityRPCClient {
                 }
             }
 
-            // Query Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) summaries across candidate instances until non-empty
+            // Reconcile end-to-end reachability back into `cachedRelayInstances` so unresponsive Relay entries show Offline.
+            if !failedProbeUuids.isEmpty {
+                self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
+                    if failedProbeUuids.contains(inst.uuid) && inst.status.isReachable {
+                        return inst.withStatus(.disconnected)
+                    }
+                    return inst
+                }
+            }
+
+            // Query Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) summaries across verified-online instances first.
             let updatedCloudProjects = self.cachedCloudProjectsById
-            for inst in reachableInstances {
+            let cloudQueryCandidates = reachableInstances.filter { verifiedOnlineUuids.contains($0.uuid) }
+            for inst in (cloudQueryCandidates.isEmpty ? reachableInstances : cloudQueryCandidates) {
                 let cloudSummaries = await fetchJetboxSummariesSnapshot(
                     cloud: true,
                     instanceUuidOverride: inst.uuid,
                     originHostName: "Antigravity",
-                    snapshotTimeout: 4.5
+                    snapshotTimeout: 4.5,
+                    allowCrossInstanceFailover: false
                 )
                 if !cloudSummaries.isEmpty {
                     anyInstanceSucceeded = true
@@ -697,7 +835,10 @@ public actor AntigravityRPCClient {
             if !anyInstanceSucceeded && cloudProjects.isEmpty {
                 let ws = try await getWorkspaceInfosOptional(timeoutInterval: timeoutInterval)
                 let sums = try await getAllCascadeTrajectories(timeoutInterval: timeoutInterval)
-                for w in ws { mergedWorkspacesByUri[w.workspaceUri] = w }
+                for w in ws {
+                    let key = w.isCloud ? "cloud|\(w.workspaceUri)" : "\(w.originInstanceUuid ?? "local")|\(w.workspaceUri)"
+                    mergedWorkspacesByKey[key] = w
+                }
                 for s in sums { Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: updatedCloudProjects) }
             }
         } else {
@@ -712,8 +853,11 @@ public actor AntigravityRPCClient {
                 snapshotTimeout: 1.5
             )
             let cloudProjectsSnapshot = self.cachedCloudProjectsById
-            for w in workspaces where mergedWorkspacesByUri[w.workspaceUri] == nil {
-                mergedWorkspacesByUri[w.workspaceUri] = w
+            for w in workspaces {
+                let key = w.isCloud ? "cloud|\(w.workspaceUri)" : "local|\(w.workspaceUri)"
+                if mergedWorkspacesByKey[key] == nil {
+                    mergedWorkspacesByKey[key] = w
+                }
             }
             for s in summaries + cloudSummaries {
                 Self.mergeSummaryEntry(s, into: &mergedSummariesById, cloudProjectsById: cloudProjectsSnapshot)
@@ -726,8 +870,8 @@ public actor AntigravityRPCClient {
             }
             return lhs.cascadeId < rhs.cascadeId
         }
-        let sortedWorkspaces = Array(mergedWorkspacesByUri.values).sorted { $0.displayName < $1.displayName }
-        return (sortedWorkspaces, sortedSummaries, cloudProjects, cloudProjectOutcome.warmingUp)
+        let sortedWorkspaces = Array(mergedWorkspacesByKey.values).sorted { $0.displayName < $1.displayName }
+        return (sortedWorkspaces, sortedSummaries, cloudProjects, cloudProjectOutcome.warmingUp, cachedRelayInstances)
     }
 
     private static func mergeSummaryEntry(
@@ -793,15 +937,19 @@ public actor AntigravityRPCClient {
         method: String,
         body: [String: JSONValue] = [:],
         instanceUuidOverride: String? = nil,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) async throws -> [String: JSONValue] {
         if channel == .cloudRelay {
-            let relayTimeout = timeoutInterval.map { max($0, 10.0) }
+            let relayTimeout = allowCrossInstanceFailover
+                ? timeoutInterval.map { max($0, 10.0) }
+                : timeoutInterval
             return try await callCloudRelayUnaryJSON(
                 method: method,
                 body: body,
                 instanceUuidOverride: instanceUuidOverride,
-                timeoutInterval: relayTimeout
+                timeoutInterval: relayTimeout,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             )
         }
 
@@ -841,7 +989,8 @@ public actor AntigravityRPCClient {
         method: String,
         body: [String: JSONValue],
         instanceUuidOverride: String? = nil,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) async throws -> [String: JSONValue] {
         if Self.companionOnlyMethods.contains(method) {
             if method == "ListAutomations" {
@@ -864,7 +1013,8 @@ public actor AntigravityRPCClient {
                 payload: encodedPayload,
                 contentType: "application/json",
                 instanceUuidOverride: instanceUuidOverride,
-                timeoutInterval: timeoutInterval
+                timeoutInterval: timeoutInterval,
+                allowCrossInstanceFailover: allowCrossInstanceFailover
             )
             let respData = Self.unwrapConnectFramedPayloadIfNeeded(rawRespData)
             if respData.isEmpty {
@@ -912,8 +1062,14 @@ public actor AntigravityRPCClient {
         return out.isEmpty ? data : out
     }
 
-    private func selectReachableRelayUuid(preferred: String?) -> String? {
+    private func selectReachableRelayUuid(
+        preferred: String?,
+        allowCrossInstanceFailover: Bool = true
+    ) -> String? {
         let candidate = (preferred?.isEmpty == false) ? preferred : resolvedInstanceUuid
+        if !allowCrossInstanceFailover, let candidate, !candidate.isEmpty {
+            return candidate
+        }
         guard !cachedRelayInstances.isEmpty else { return candidate }
         if let candidate,
            cachedRelayInstances.contains(where: { $0.uuid == candidate && $0.status.isReachable }) {
@@ -942,7 +1098,8 @@ public actor AntigravityRPCClient {
         payload: Data,
         contentType: String,
         instanceUuidOverride: String? = nil,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) async throws -> (payload: Data, headers: [String: String]) {
         if instanceUuidOverride == nil && resolvedInstanceUuid == nil {
             _ = try await resolveCloudRelayInstance(
@@ -956,7 +1113,10 @@ public actor AntigravityRPCClient {
             }
         }
 
-        guard let initialTargetUuid = selectReachableRelayUuid(preferred: instanceUuidOverride),
+        guard let initialTargetUuid = selectReachableRelayUuid(
+            preferred: instanceUuidOverride,
+            allowCrossInstanceFailover: allowCrossInstanceFailover
+        ),
               !initialTargetUuid.isEmpty else {
             throw AntigravityRPCError.invalidEndpoint
         }
@@ -1019,6 +1179,7 @@ public actor AntigravityRPCClient {
             throw AntigravityRPCError.unauthorized(msg)
         } catch {
             let shouldFailover: Bool = {
+                guard allowCrossInstanceFailover else { return false }
                 if error is URLError { return true }
                 if case let AntigravityRPCError.httpError(code, _) = error {
                     return code == 404 || code == 502 || code == 503 || code == 504
@@ -1502,7 +1663,8 @@ public actor AntigravityRPCClient {
         cloud: Bool,
         instanceUuidOverride: String? = nil,
         originHostName: String? = nil,
-        snapshotTimeout: TimeInterval = 4.0
+        snapshotTimeout: TimeInterval = 4.0,
+        allowCrossInstanceFailover: Bool = true
     ) async -> [CascadeSummary] {
         let reqPayload: [String: JSONValue] = cloud
             ? ["backend": .string("BACKEND_TYPE_REMOTE_AICODE")]
@@ -1510,7 +1672,8 @@ public actor AntigravityRPCClient {
         guard let stream = try? subscribeEnvelopeStream(
             method: "JetboxSubscribeToSummaries",
             requestPayload: reqPayload,
-            instanceUuidOverride: instanceUuidOverride
+            instanceUuidOverride: instanceUuidOverride,
+            allowCrossInstanceFailover: allowCrossInstanceFailover
         ) else {
             return []
         }
@@ -2029,12 +2192,14 @@ public actor AntigravityRPCClient {
     public func getWorkspaceInfos(
         instanceUuidOverride: String? = nil,
         originHostName: String? = nil,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) async throws -> [WorkspaceInfo] {
         let res = try await callUnaryJSON(
             method: "GetWorkspaceInfos",
             instanceUuidOverride: instanceUuidOverride,
-            timeoutInterval: timeoutInterval
+            timeoutInterval: timeoutInterval,
+            allowCrossInstanceFailover: allowCrossInstanceFailover
         )
         let items = res["workspaces"]?.arrayValue ?? res["workspaceInfos"]?.arrayValue ?? []
         return items.compactMap { item -> WorkspaceInfo? in
@@ -2162,12 +2327,14 @@ public actor AntigravityRPCClient {
     public func getAllCascadeTrajectories(
         instanceUuidOverride: String? = nil,
         originHostName: String? = nil,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) async throws -> [CascadeSummary] {
         let res = try await callUnaryJSON(
             method: "GetAllCascadeTrajectories",
             instanceUuidOverride: instanceUuidOverride,
-            timeoutInterval: timeoutInterval
+            timeoutInterval: timeoutInterval,
+            allowCrossInstanceFailover: allowCrossInstanceFailover
         )
         let now = Date()
         let cloudMap = self.cachedCloudProjectsById
@@ -2763,14 +2930,16 @@ public actor AntigravityRPCClient {
     public func subscribeEnvelopeStream(
         method: String,
         requestPayload: [String: JSONValue] = [:],
-        instanceUuidOverride: String? = nil
+        instanceUuidOverride: String? = nil,
+        allowCrossInstanceFailover: Bool = true
     ) throws -> AsyncThrowingStream<[String: JSONValue], Error> {
         let rawJSON = requestPayload.isEmpty ? Data("{}".utf8) : try JSONEncoder().encode(requestPayload)
         let framedPayload = ConnectEnvelopeFrame(flags: [], payload: rawJSON).encode()
 
         if channel == .cloudRelay {
             var effectiveUuid = (instanceUuidOverride?.isEmpty == false) ? instanceUuidOverride : resolvedInstanceUuid
-            if let candidate = effectiveUuid,
+            if allowCrossInstanceFailover,
+               let candidate = effectiveUuid,
                !cachedRelayInstances.isEmpty,
                !cachedRelayInstances.contains(where: { $0.uuid == candidate && $0.status.isReachable }),
                let fallbackOnline = cachedRelayInstances.first(where: { $0.status.isReachable }) {

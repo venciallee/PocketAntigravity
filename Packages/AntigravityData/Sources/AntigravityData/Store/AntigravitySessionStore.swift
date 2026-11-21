@@ -73,6 +73,7 @@ public final class AntigravitySessionStore {
     }
 
     // MARK: - Agents Home, Display Options & Search State (`UE01`, `UE02`, `UE03`)
+    public var hostFilter: AgentHostFilter = .allHosts
     public var quickFilter: AgentsQuickFilter = .all
     public var displayOptions: AgentDisplayOptions = AgentDisplayOptions()
     public var isSortPopoverPresented: Bool = true
@@ -191,6 +192,7 @@ public final class AntigravitySessionStore {
     public var connectionErrorText: String? = nil
     public var lastPingLatencyMs: Int? = nil
     public var availableRelayInstances: [RelayInstanceInfo] = []
+    public var isRefreshingRelayHosts: Bool = false
     public var activeAuthUser: String = "0"
     public var lastScannedRelayURL: String = ""
     public var isLoadingSteps: Bool = false
@@ -326,6 +328,147 @@ public final class AntigravitySessionStore {
 
     public var unreadCount: Int {
         summaries.filter { !$0.isArchived && $0.isUnread }.count
+    }
+
+    /// Deduplicated list of paired local Mac/PC hosts (excluding Antigravity Cloud and placeholder unpaired entries).
+    public var pairedLocalHosts: [RemoteHostInstance] {
+        var seen = Set<String>()
+        var result: [RemoteHostInstance] = []
+        for host in hosts where host.instanceId != "unpaired" && host.hostname.lowercased() != "cloud" {
+            if seen.insert(host.instanceId).inserted {
+                result.append(host)
+            }
+        }
+        if result.isEmpty && hasPairedBackend && activeHost.instanceId != "unpaired" {
+            result.append(activeHost)
+        }
+        return result
+    }
+
+    /// Returns real per-host online reachability for a specific local Mac/PC instance.
+    public func isLocalHostOnline(instanceId: String?, hostname: String?) -> Bool {
+        guard isDeviceNetworkReachable && isLiveBackendConnected else { return false }
+        if let id = instanceId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            if let inst = availableRelayInstances.first(where: { $0.uuid == id }) {
+                return inst.status.isReachable
+            }
+            if let host = hosts.first(where: { $0.instanceId == id }) {
+                return host.isOnline
+            }
+        }
+        if let name = hostname?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            if let inst = availableRelayInstances.first(where: { $0.name == name }) {
+                return inst.status.isReachable
+            }
+            if let host = hosts.first(where: { $0.hostname == name }) {
+                return host.isOnline
+            }
+        }
+        return activeHost.isOnline
+    }
+
+    /// Returns real online reachability for a project's owning runtime/host.
+    public func isProjectHostOnline(_ project: ProjectWorkspace) -> Bool {
+        if project.runtime == .cloud {
+            return isDeviceNetworkReachable
+        }
+        guard hasPairedBackend else { return true }
+        return isLocalHostOnline(instanceId: project.originInstanceUuid, hostname: project.hostName)
+    }
+
+    /// Returns `true` when at least one paired local Mac/PC host is currently online.
+    public var anyPairedLocalHostOnline: Bool {
+        guard isDeviceNetworkReachable && isLiveBackendConnected else { return false }
+        let localHosts = pairedLocalHosts
+        if !localHosts.isEmpty {
+            return localHosts.contains(where: {
+                isLocalHostOnline(instanceId: $0.instanceId, hostname: $0.hostname)
+            })
+        }
+        return activeHost.isOnline
+    }
+
+    /// Strict host filter check for conversation summaries so projects/chats from other Macs never leak across hosts.
+    public func summaryMatchesHostFilter(_ s: CascadeSummary, filter: AgentHostFilter? = nil) -> Bool {
+        switch filter ?? hostFilter {
+        case .allHosts:
+            return true
+        case .antigravityCloud:
+            return s.isCloud
+        case .localHost(let id, let name):
+            guard !s.isCloud else { return false }
+            if pairedLocalHosts.count <= 1 {
+                return true
+            }
+            if let originUuid = s.originInstanceUuid, !originUuid.isEmpty {
+                return originUuid == id || s.originHostName == name
+            }
+            if let originHost = s.originHostName, !originHost.isEmpty {
+                return originHost == name
+            }
+            return activeHost.instanceId == id
+        }
+    }
+
+    /// Strict host filter check for project sections so projects from other Macs never leak across hosts.
+    public func projectMatchesHostFilter(_ proj: ProjectWorkspace, filter: AgentHostFilter? = nil) -> Bool {
+        switch filter ?? hostFilter {
+        case .allHosts:
+            return true
+        case .antigravityCloud:
+            return proj.runtime == .cloud
+        case .localHost(let id, let name):
+            guard proj.runtime != .cloud else { return false }
+            if pairedLocalHosts.count <= 1 {
+                return true
+            }
+            if let originUuid = proj.originInstanceUuid, !originUuid.isEmpty {
+                return originUuid == id || proj.hostName == name
+            }
+            if !proj.hostName.isEmpty {
+                return proj.hostName == name
+            }
+            return activeHost.instanceId == id
+        }
+    }
+
+    public var hostScopedRunningCount: Int {
+        summaries.filter {
+            !$0.isArchived && summaryMatchesHostFilter($0) && ($0.status == .inProgress || $0.status == .pending)
+        }.count
+    }
+
+    public var hostScopedNeedsYouCount: Int {
+        summaries.filter {
+            !$0.isArchived && summaryMatchesHostFilter($0) && ($0.status == .waiting || $0.status == .blocked)
+        }.count
+    }
+
+    public var hostScopedUnreadCount: Int {
+        summaries.filter {
+            !$0.isArchived && summaryMatchesHostFilter($0) && $0.isUnread
+        }.count
+    }
+
+    /// Updates `hostFilter` (persisted across tab & chat navigation) and aligns `activeHost` + Relay target
+    /// when the user picks a specific online local host.
+    public func selectHostFilter(_ target: AgentHostFilter) {
+        hostFilter = target
+        if case let .localHost(id, name) = target,
+           let matchedHost = hosts.first(where: { $0.instanceId == id || $0.hostname == name }),
+           matchedHost.instanceId != activeHost.instanceId,
+           isLocalHostOnline(instanceId: matchedHost.instanceId, hostname: matchedHost.hostname) {
+            activeHost = matchedHost
+            if isLiveBackendConnected {
+                connectionStatusText = "Connected · \(matchedHost.hostname)"
+            }
+            let clientRef = rpcClient
+            let targetUuid = matchedHost.instanceId
+            let targetName = matchedHost.hostname
+            Task {
+                await clientRef?.setPreferredRelayInstance(uuid: targetUuid, name: targetName)
+            }
+        }
     }
 
     /// Filtered and sorted conversation summaries driven by `quickFilter`, `displayOptions`, and `searchQuery`.
@@ -793,7 +936,9 @@ public final class AntigravitySessionStore {
         resolvedInstanceUuid: String? = nil,
         deepLinkedConversationId: String? = nil,
         hostName: String = "Antigravity Desktop",
-        isRestoringSavedSession: Bool = false
+        isRestoringSavedSession: Bool = false,
+        focusHostFilterOnConnected: Bool = false,
+        strictTargetSelection: Bool = false
     ) async -> Bool {
         let trimmedInput = relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         var parsedTarget = RemoteHostInstance.parseRemoteControlTarget(
@@ -815,6 +960,7 @@ public final class AntigravitySessionStore {
             return false
         }
 
+        let previousStatusText = connectionStatusText
         isConnectingToBackend = true
         connectionErrorText = nil
         defer { isConnectingToBackend = false }
@@ -857,7 +1003,9 @@ public final class AntigravitySessionStore {
         )
 
         do {
-            let handshake = try await candidateClient.verifyConnection()
+            let handshake = try await candidateClient.verifyConnection(
+                strictTargetSelection: strictTargetSelection
+            )
             let finalHostName = handshake.resolvedHostname ?? hostName
             let finalUuid = handshake.resolvedInstanceUuid ?? hostInstance.instanceId
             let finalAuthUser = handshake.resolvedAuthUser ?? effectiveAuthUser ?? "0"
@@ -874,31 +1022,19 @@ public final class AntigravitySessionStore {
                 latencyMs: handshake.latencyMs
             )
 
-            availableRelayInstances = handshake.availableRelayInstances
             activeAuthUser = finalAuthUser
             applyVerifiedLiveConnection(
                 host: verifiedHost,
                 client: candidateClient,
                 handshake: handshake
             )
-
-            // Register all reachable Cloud Relay instances in `hosts` so the user can switch Macs from Home
-            for inst in handshake.availableRelayInstances where inst.uuid != finalUuid {
-                let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? finalRelayURL
-                let peerHost = RemoteHostInstance(
-                    instanceId: inst.uuid,
-                    hostname: inst.name,
-                    version: inst.version,
-                    channel: .cloudRelay,
-                    endpointURL: instURL,
-                    isOnline: inst.status.isReachable,
-                    latencyMs: handshake.latencyMs
-                )
-                if let existingIdx = hosts.firstIndex(where: { $0.instanceId == peerHost.instanceId }) {
-                    hosts[existingIdx] = peerHost
-                } else {
-                    hosts.append(peerHost)
-                }
+            syncRelayInstancesState(
+                handshake.availableRelayInstances,
+                latencyMs: handshake.latencyMs,
+                relayOriginPrefix: originPrefix
+            )
+            if focusHostFilterOnConnected {
+                hostFilter = .localHost(id: finalUuid, name: finalHostName)
             }
 
             await KeychainStore.shared.saveCredentials(
@@ -932,6 +1068,19 @@ public final class AntigravitySessionStore {
             }
             return false
         } catch let AntigravityRPCError.httpError(code, body) {
+            let latestInstances = await candidateClient.cachedInstancesSnapshot()
+            if !latestInstances.isEmpty {
+                syncRelayInstancesState(
+                    latestInstances,
+                    latencyMs: lastPingLatencyMs ?? activeHost.latencyMs,
+                    relayOriginPrefix: parsedTarget?.relayOrigin
+                )
+            }
+            if strictTargetSelection && isLiveBackendConnected {
+                connectionErrorText = body.isEmpty ? "\(hostName) is currently offline or unreachable." : body
+                connectionStatusText = previousStatusText
+                return false
+            }
             let errMsg = "Cloud Relay error (\(code)): \(body)"
             if (isRestoringSavedSession || hasPairedBackend) && (code == 502 || code == 503 || code == 504) {
                 await applyOfflinePairedSession(
@@ -947,6 +1096,19 @@ public final class AntigravitySessionStore {
             }
             return false
         } catch {
+            let latestInstances = await candidateClient.cachedInstancesSnapshot()
+            if !latestInstances.isEmpty {
+                syncRelayInstancesState(
+                    latestInstances,
+                    latencyMs: lastPingLatencyMs ?? activeHost.latencyMs,
+                    relayOriginPrefix: parsedTarget?.relayOrigin
+                )
+            }
+            if strictTargetSelection && isLiveBackendConnected {
+                connectionErrorText = "\(hostName) is unreachable: \(error.localizedDescription)"
+                connectionStatusText = previousStatusText
+                return false
+            }
             let errMsg = "Cloud Relay handshake failed: \(error.localizedDescription)"
             if isRestoringSavedSession || hasPairedBackend {
                 await applyOfflinePairedSession(
@@ -992,6 +1154,8 @@ public final class AntigravitySessionStore {
         rpcClient = nil
         lastPingLatencyMs = nil
         availableRelayInstances = []
+        isRefreshingRelayHosts = false
+        hostFilter = .allHosts
         connectionErrorText = nil
         connectionStatusText = "Not Connected"
         if !isVerificationMode {
@@ -1377,10 +1541,7 @@ public final class AntigravitySessionStore {
         let cloudProjByName = Dictionary(grouping: cloudProjects, by: \.name)
 
         func baseSlug(for rawSlug: String) -> String {
-            if rawSlug.hasPrefix("cloud:") {
-                return String(rawSlug.dropFirst("cloud:".count))
-            }
-            return rawSlug
+            AntigravityCloudDetector.stripProjectNamespacePrefix(rawSlug)
         }
 
         // Link summaries that carry a `cloudProjectId` to their canonical Cloud project name & URI,
@@ -1408,6 +1569,16 @@ public final class AntigravitySessionStore {
             return secondary
         }
 
+        func localHostPartitionKey(for summary: CascadeSummary) -> String {
+            if let uuid = summary.originInstanceUuid?.trimmingCharacters(in: .whitespacesAndNewlines), !uuid.isEmpty {
+                return uuid
+            }
+            if let originHost = summary.originHostName?.trimmingCharacters(in: .whitespacesAndNewlines), !originHost.isEmpty {
+                return originHost
+            }
+            return hostName
+        }
+
         var orderedBaseSlugs: [String] = []
         var seenBaseSlugs = Set<String>()
         for s in summaries {
@@ -1421,6 +1592,80 @@ public final class AntigravitySessionStore {
         var reconciled: [ProjectWorkspace] = []
         var knownIds = Set<String>()
 
+        func appendLocalGroups(
+            canonicalName: String,
+            isNoProj: Bool,
+            localIndices: [Int],
+            localWorkspaces: [WorkspaceInfo],
+            cloudWs: WorkspaceInfo?,
+            summaries: inout [CascadeSummary],
+            reconciled: inout [ProjectWorkspace],
+            knownIds: inout Set<String>
+        ) {
+            var orderedHostKeys: [String] = []
+            var indicesByHostKey: [String: [Int]] = [:]
+            for idx in localIndices {
+                let key = localHostPartitionKey(for: summaries[idx])
+                if indicesByHostKey[key] == nil {
+                    orderedHostKeys.append(key)
+                    indicesByHostKey[key] = []
+                }
+                indicesByHostKey[key]?.append(idx)
+            }
+
+            for (groupOffset, hostKey) in orderedHostKeys.enumerated() {
+                guard let groupIndices = indicesByHostKey[hostKey], !groupIndices.isEmpty else { continue }
+                let firstLocal = summaries[groupIndices[0]]
+                let matchedLocalWs = localWorkspaces.first(where: { ws in
+                    if let wsUuid = ws.originInstanceUuid, !wsUuid.isEmpty,
+                       let sumUuid = firstLocal.originInstanceUuid, !sumUuid.isEmpty {
+                        return wsUuid == sumUuid
+                    }
+                    if let wsHost = ws.originHostName, !wsHost.isEmpty,
+                       let sumHost = firstLocal.originHostName, !sumHost.isEmpty {
+                        return wsHost == sumHost
+                    }
+                    return orderedHostKeys.count == 1
+                }) ?? (orderedHostKeys.count == 1 ? localWorkspaces.first : nil)
+
+                let projectId = (groupOffset == 0 && !knownIds.contains(canonicalName))
+                    ? canonicalName
+                    : "host:\(hostKey):\(canonicalName)"
+                for idx in groupIndices {
+                    summaries[idx].projectSlug = projectId
+                }
+
+                let isWsCloudOnly = orderedHostKeys.count == 1
+                    && !isNoProj
+                    && (cloudWs != nil && matchedLocalWs == nil && AntigravityCloudDetector.isCloudWorkspaceURI(firstLocal.workspaceUri))
+                let effectiveUri = isNoProj
+                    ? ""
+                    : ((isWsCloudOnly ? cloudWs?.workspaceUri : matchedLocalWs?.workspaceUri) ?? firstLocal.workspaceUri)
+                let effectiveBranch = isNoProj ? "" : (matchedLocalWs?.activeBranch ?? firstLocal.branchName)
+                let resolvedLocalHost = matchedLocalWs?.originHostName ?? firstLocal.originHostName ?? hostName
+                let pathDisplay = isNoProj
+                    ? "Unassigned · \(resolvedLocalHost)"
+                    : effectiveUri.replacingOccurrences(of: "file://", with: "")
+
+                if knownIds.insert(projectId).inserted {
+                    reconciled.append(
+                        ProjectWorkspace(
+                            id: projectId,
+                            name: canonicalName,
+                            pathDisplay: pathDisplay,
+                            workspaceUri: effectiveUri,
+                            runtime: isWsCloudOnly ? .cloud : .macBookPro,
+                            hostName: isWsCloudOnly ? "Cloud" : resolvedLocalHost,
+                            activeBranch: effectiveBranch,
+                            worktrees: isNoProj ? [] : (matchedLocalWs?.worktrees.isEmpty == false ? matchedLocalWs!.worktrees : [effectiveBranch]),
+                            isExpandedInHome: expandedById[projectId] ?? expandedById[canonicalName] ?? true,
+                            originInstanceUuid: matchedLocalWs?.originInstanceUuid ?? firstLocal.originInstanceUuid
+                        )
+                    )
+                }
+            }
+        }
+
         for slug in orderedBaseSlugs {
             let isNoProj = AntigravityCloudDetector.isNoProjectSlug(slug)
             let canonicalName = isNoProj ? AntigravityCloudDetector.noProjectDisplayName : slug
@@ -1430,38 +1675,22 @@ public final class AntigravitySessionStore {
 
             let matchingWorkspaces = isNoProj ? [] : (wsByName[slug] ?? [])
             let cloudWs = matchingWorkspaces.first(where: \.isCloud)
-            let localWs = matchingWorkspaces.first(where: { !$0.isCloud })
+            let localWorkspaces = matchingWorkspaces.filter { !$0.isCloud }
             let matchedCloudProj = isNoProj ? nil : cloudProjByName[slug]?.first
 
             if !cloudIndices.isEmpty && !localIndices.isEmpty {
                 // Both active local Mac chats and active Cloud chats exist for the same group (`slug` or `No Project`):
-                // keep local chats under `canonicalName` and separate Cloud chats under `cloud:<canonicalName>`.
-                for idx in localIndices {
-                    summaries[idx].projectSlug = canonicalName
-                }
-                let firstLocal = summaries[localIndices[0]]
-                let localUri = isNoProj ? "" : (localWs?.workspaceUri ?? firstLocal.workspaceUri)
-                let localBranch = isNoProj ? "" : (localWs?.activeBranch ?? firstLocal.branchName)
-                let resolvedLocalHost = localWs?.originHostName ?? firstLocal.originHostName ?? hostName
-                let localPathDisplay = isNoProj
-                    ? "Unassigned · \(resolvedLocalHost)"
-                    : localUri.replacingOccurrences(of: "file://", with: "")
-                if knownIds.insert(canonicalName).inserted {
-                    reconciled.append(
-                        ProjectWorkspace(
-                            id: canonicalName,
-                            name: canonicalName,
-                            pathDisplay: localPathDisplay,
-                            workspaceUri: localUri,
-                            runtime: .macBookPro,
-                            hostName: resolvedLocalHost,
-                            activeBranch: localBranch,
-                            worktrees: isNoProj ? [] : (localWs?.worktrees.isEmpty == false ? localWs!.worktrees : [localBranch]),
-                            isExpandedInHome: expandedById[canonicalName] ?? true,
-                            originInstanceUuid: localWs?.originInstanceUuid ?? firstLocal.originInstanceUuid
-                        )
-                    )
-                }
+                // keep local chats grouped per host and separate Cloud chats under `cloud:<canonicalName>`.
+                appendLocalGroups(
+                    canonicalName: canonicalName,
+                    isNoProj: isNoProj,
+                    localIndices: localIndices,
+                    localWorkspaces: localWorkspaces,
+                    cloudWs: nil,
+                    summaries: &summaries,
+                    reconciled: &reconciled,
+                    knownIds: &knownIds
+                )
 
                 let cloudId = "cloud:\(canonicalName)"
                 for idx in cloudIndices {
@@ -1522,35 +1751,16 @@ public final class AntigravitySessionStore {
                     )
                 }
             } else if !localIndices.isEmpty {
-                for idx in localIndices {
-                    summaries[idx].projectSlug = canonicalName
-                }
-                let firstLocal = summaries[localIndices[0]]
-                let isWsCloudOnly = !isNoProj && (cloudWs != nil && localWs == nil && AntigravityCloudDetector.isCloudWorkspaceURI(firstLocal.workspaceUri))
-                let effectiveUri = isNoProj
-                    ? ""
-                    : ((isWsCloudOnly ? cloudWs?.workspaceUri : localWs?.workspaceUri) ?? firstLocal.workspaceUri)
-                let effectiveBranch = isNoProj ? "" : (localWs?.activeBranch ?? firstLocal.branchName)
-                let resolvedLocalHost = localWs?.originHostName ?? firstLocal.originHostName ?? hostName
-                let pathDisplay = isNoProj
-                    ? "Unassigned · \(resolvedLocalHost)"
-                    : effectiveUri.replacingOccurrences(of: "file://", with: "")
-                if knownIds.insert(canonicalName).inserted {
-                    reconciled.append(
-                        ProjectWorkspace(
-                            id: canonicalName,
-                            name: canonicalName,
-                            pathDisplay: pathDisplay,
-                            workspaceUri: effectiveUri,
-                            runtime: isWsCloudOnly ? .cloud : .macBookPro,
-                            hostName: isWsCloudOnly ? "Cloud" : resolvedLocalHost,
-                            activeBranch: effectiveBranch,
-                            worktrees: isNoProj ? [] : (localWs?.worktrees.isEmpty == false ? localWs!.worktrees : [effectiveBranch]),
-                            isExpandedInHome: expandedById[canonicalName] ?? true,
-                            originInstanceUuid: localWs?.originInstanceUuid ?? firstLocal.originInstanceUuid
-                        )
-                    )
-                }
+                appendLocalGroups(
+                    canonicalName: canonicalName,
+                    isNoProj: isNoProj,
+                    localIndices: localIndices,
+                    localWorkspaces: localWorkspaces,
+                    cloudWs: cloudWs,
+                    summaries: &summaries,
+                    reconciled: &reconciled,
+                    knownIds: &knownIds
+                )
             }
         }
 
@@ -1563,10 +1773,27 @@ public final class AntigravitySessionStore {
                 continue
             }
             let isCloud = ws.isCloud || AntigravityCloudDetector.isCloudWorkspaceURI(ws.workspaceUri)
-            if reconciled.contains(where: { !$0.workspaceUri.isEmpty && $0.workspaceUri.caseInsensitiveCompare(ws.workspaceUri) == .orderedSame }) {
+            let wsHostName = ws.originHostName ?? hostName
+            let alreadyRepresented = reconciled.contains { existing in
+                guard !existing.workspaceUri.isEmpty,
+                      existing.workspaceUri.caseInsensitiveCompare(ws.workspaceUri) == .orderedSame else {
+                    return false
+                }
+                if isCloud || existing.runtime == .cloud {
+                    return isCloud && existing.runtime == .cloud
+                }
+                if let eUuid = existing.originInstanceUuid, !eUuid.isEmpty,
+                   let wUuid = ws.originInstanceUuid, !wUuid.isEmpty {
+                    return eUuid == wUuid
+                }
+                return existing.hostName == wsHostName
+            }
+            if alreadyRepresented {
                 continue
             }
-            if knownIds.contains(slug) {
+
+            var targetId = slug
+            if knownIds.contains(targetId) {
                 if isCloud,
                    let idx = reconciled.firstIndex(where: { $0.id == slug }),
                    !summaries.contains(where: { $0.projectSlug == slug && !$0.isCloud }) {
@@ -1575,21 +1802,37 @@ public final class AntigravitySessionStore {
                     reconciled[idx].hostName = "Cloud"
                     reconciled[idx].workspaceUri = mergedUri
                     reconciled[idx].pathDisplay = mergedUri
+                    continue
                 }
-                continue
+                if !isCloud {
+                    let wsHostKey = (ws.originInstanceUuid?.isEmpty == false) ? ws.originInstanceUuid! : wsHostName
+                    let namespacedId = "host:\(wsHostKey):\(slug)"
+                    let existingSameHost = reconciled.contains { existing in
+                        existing.runtime == .macBookPro
+                            && existing.name == slug
+                            && ((existing.originInstanceUuid != nil && existing.originInstanceUuid == ws.originInstanceUuid)
+                                || existing.hostName == wsHostName)
+                    }
+                    if existingSameHost || knownIds.contains(namespacedId) {
+                        continue
+                    }
+                    targetId = namespacedId
+                } else {
+                    continue
+                }
             }
-            knownIds.insert(slug)
+            knownIds.insert(targetId)
             reconciled.append(
                 ProjectWorkspace(
-                    id: slug,
+                    id: targetId,
                     name: slug,
                     pathDisplay: ws.workspaceUri.replacingOccurrences(of: "file://", with: ""),
                     workspaceUri: ws.workspaceUri,
                     runtime: isCloud ? .cloud : .macBookPro,
-                    hostName: isCloud ? "Cloud" : (ws.originHostName ?? hostName),
+                    hostName: isCloud ? "Cloud" : wsHostName,
                     activeBranch: ws.activeBranch,
                     worktrees: ws.worktrees.isEmpty ? [ws.activeBranch] : ws.worktrees,
-                    isExpandedInHome: expandedById[slug] ?? true,
+                    isExpandedInHome: expandedById[targetId] ?? expandedById[slug] ?? true,
                     originInstanceUuid: ws.originInstanceUuid
                 )
             )
@@ -1957,29 +2200,72 @@ public final class AntigravitySessionStore {
         }
     }
 
+    /// Reconciles `availableRelayInstances`, `hosts`, and `activeHost.isOnline` from a freshly fetched Relay instance list.
+    internal func syncRelayInstancesState(
+        _ instances: [RelayInstanceInfo],
+        latencyMs: Int,
+        relayOriginPrefix: String? = nil
+    ) {
+        guard !instances.isEmpty else { return }
+        availableRelayInstances = instances
+
+        let originPrefix: String = {
+            if let relayOriginPrefix, !relayOriginPrefix.isEmpty {
+                return relayOriginPrefix
+            }
+            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
+            return parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
+        }()
+
+        let incomingByUuid = Dictionary(uniqueKeysWithValues: instances.map { ($0.uuid, $0) })
+        for inst in instances {
+            let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
+            let peerHost = RemoteHostInstance(
+                instanceId: inst.uuid,
+                hostname: inst.name,
+                version: inst.version,
+                channel: .cloudRelay,
+                endpointURL: instURL,
+                isOnline: inst.status.isReachable,
+                latencyMs: latencyMs
+            )
+            if let idx = hosts.firstIndex(where: { $0.instanceId == peerHost.instanceId }) {
+                hosts[idx] = peerHost
+            } else {
+                hosts.append(peerHost)
+            }
+        }
+
+        // Mark any previously known Cloud Relay host missing from `ListInstances` as offline
+        for idx in hosts.indices where hosts[idx].channel == .cloudRelay {
+            let id = hosts[idx].instanceId
+            if incomingByUuid[id] == nil && id != "unpaired" {
+                hosts[idx].isOnline = false
+            }
+        }
+
+        // Keep `activeHost.isOnline` aligned when the active Relay host is present in `instances`
+        if activeHost.channel == .cloudRelay,
+           let matchedActive = incomingByUuid[activeHost.instanceId] {
+            var updatedActive = activeHost
+            updatedActive.hostname = matchedActive.name
+            updatedActive.version = matchedActive.version
+            updatedActive.isOnline = matchedActive.status.isReachable
+            updatedActive.latencyMs = latencyMs
+            activeHost = updatedActive
+            if let idx = hosts.firstIndex(where: { $0.instanceId == updatedActive.instanceId }) {
+                hosts[idx] = updatedActive
+            }
+        }
+    }
+
     private func applyRelayProbeMetadata(_ probe: HostReachabilityProbeResult) {
         lastPingLatencyMs = probe.latencyMs
         if !probe.availableRelayInstances.isEmpty {
-            availableRelayInstances = probe.availableRelayInstances
-            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
-            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
-            for inst in probe.availableRelayInstances {
-                let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
-                let peerHost = RemoteHostInstance(
-                    instanceId: inst.uuid,
-                    hostname: inst.name,
-                    version: inst.version,
-                    channel: .cloudRelay,
-                    endpointURL: instURL,
-                    isOnline: inst.status.isReachable,
-                    latencyMs: probe.latencyMs
-                )
-                if let idx = hosts.firstIndex(where: { $0.instanceId == peerHost.instanceId }) {
-                    hosts[idx] = peerHost
-                } else {
-                    hosts.append(peerHost)
-                }
-            }
+            syncRelayInstancesState(
+                probe.availableRelayInstances,
+                latencyMs: probe.latencyMs
+            )
         }
 
         if let activeInst = probe.activeRelayInstance {
@@ -1992,7 +2278,7 @@ public final class AntigravitySessionStore {
                 version: activeInst.version,
                 channel: .cloudRelay,
                 endpointURL: nextURL,
-                isOnline: true,
+                isOnline: activeInst.status.isReachable,
                 latencyMs: probe.latencyMs
             )
             activeHost = refreshedHost
@@ -2001,7 +2287,9 @@ public final class AntigravitySessionStore {
             } else {
                 hosts.insert(refreshedHost, at: 0)
             }
-            connectionStatusText = "Connected · \(refreshedHost.hostname) · \(probe.latencyMs)ms"
+            connectionStatusText = refreshedHost.isOnline
+                ? "Connected · \(refreshedHost.hostname) · \(probe.latencyMs)ms"
+                : "Offline · \(refreshedHost.hostname)"
         } else {
             var updatedHost = activeHost
             updatedHost.latencyMs = probe.latencyMs
@@ -2011,6 +2299,51 @@ public final class AntigravitySessionStore {
                 hosts[idx] = updatedHost
             }
             connectionStatusText = "Connected · \(updatedHost.hostname) · \(probe.latencyMs)ms"
+        }
+    }
+
+    /// On-demand live refresh of available Cloud Relay hosts (called when opening or pulling-to-refresh Settings).
+    /// Performs end-to-end `ProxyCommand` verification per host so offline/stale Relay entries flip to `Offline` immediately.
+    public func refreshAvailableRelayHosts(verifyEndToEnd: Bool = true) async {
+        guard !isVerificationMode, !isNetworkingSuspended, hasPairedBackend, isDeviceNetworkReachable else { return }
+        guard let client = rpcClient else { return }
+        if activeHost.channel != .cloudRelay {
+            await reconnectNow(userInitiated: true)
+            return
+        }
+
+        isRefreshingRelayHosts = true
+        defer { isRefreshingRelayHosts = false }
+
+        do {
+            let probe = try await client.probeHostReachability(
+                timeoutInterval: 8.0,
+                verifyEndToEnd: verifyEndToEnd
+            )
+            consecutiveSyncFailures = 0
+            reconnectAttemptCount = 0
+            nextReconnectAt = nil
+            lastBackendActivityAt = Date()
+            applyRelayProbeMetadata(probe)
+            if !isLiveBackendConnected || !activeHost.isOnline {
+                markBackendReconnected()
+            } else {
+                connectionErrorText = nil
+            }
+            if probe.relayTopologyChanged {
+                await refreshWorkspacesAndSummaries(forceFullSync: true, includeAutomations: false)
+            }
+        } catch {
+            let latestInstances = await client.cachedInstancesSnapshot()
+            if !latestInstances.isEmpty {
+                syncRelayInstancesState(
+                    latestInstances,
+                    latencyMs: lastPingLatencyMs ?? activeHost.latencyMs
+                )
+            }
+            if Self.isBackendOfflineError(error) {
+                markBackendOffline(error: error)
+            }
         }
     }
 
@@ -2751,8 +3084,26 @@ public final class AntigravitySessionStore {
     ) -> String {
         let optimisticId = "cas-\(UUID().uuidString.prefix(8).lowercased())"
         let trimmedSlug = projectSlug.trimmingCharacters(in: .whitespacesAndNewlines)
-        let project = projects.first(where: { $0.id == trimmedSlug })
-            ?? projects.first(where: { $0.name == trimmedSlug })
+        let selectedLocalFilter: (id: String, name: String)? = {
+            if case let .localHost(id, name) = hostFilter {
+                return (id, name)
+            }
+            return nil
+        }()
+        let project: ProjectWorkspace? = {
+            if let exact = projects.first(where: { $0.id == trimmedSlug }) {
+                return exact
+            }
+            if let selectedLocalFilter,
+               let hostScoped = projects.first(where: {
+                   $0.name == trimmedSlug
+                       && $0.runtime != .cloud
+                       && ($0.originInstanceUuid == selectedLocalFilter.id || $0.hostName == selectedLocalFilter.name)
+               }) {
+                return hostScoped
+            }
+            return projects.first(where: { $0.name == trimmedSlug })
+        }()
         let isUnassigned = (project?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(trimmedSlug)
         let isCloudProj = (project?.runtime == .cloud) || trimmedSlug.lowercased().hasPrefix("cloud:")
         let effectiveSlug: String = {
@@ -2767,7 +3118,12 @@ public final class AntigravitySessionStore {
             return trimmedSlug
         }()
         let cloudProjId = isUnassigned ? nil : project?.cloudProjectId
-        let originUuid = project?.originInstanceUuid
+        let originUuid: String? = isCloudProj
+            ? project?.originInstanceUuid
+            : (project?.originInstanceUuid ?? selectedLocalFilter?.id)
+        let originHostName: String = isCloudProj
+            ? "Antigravity"
+            : (project?.hostName ?? selectedLocalFilter?.name ?? activeHost.hostname)
         let workspaceUri: String = {
             if isUnassigned { return "" }
             if let existingUri = project?.workspaceUri, !existingUri.isEmpty {
@@ -2801,7 +3157,7 @@ public final class AntigravitySessionStore {
             isCloud: isCloudProj,
             cloudProjectId: cloudProjId,
             originInstanceUuid: originUuid,
-            originHostName: isCloudProj ? "Antigravity" : activeHost.hostname
+            originHostName: originHostName
         )
         summaries.insert(newSummary, at: 0)
         if hasPairedBackend || isLiveBackendConnected {
@@ -2941,9 +3297,27 @@ public final class AntigravitySessionStore {
             if !federated.workspaces.isEmpty {
                 workspaces = federated.workspaces
             }
+            if !federated.relayInstances.isEmpty {
+                syncRelayInstancesState(
+                    federated.relayInstances,
+                    latencyMs: lastPingLatencyMs ?? activeHost.latencyMs
+                )
+            }
 
-            if hasPairedBackend && (!isLiveBackendConnected || !activeHost.isOnline) {
-                markBackendReconnected()
+            let activeRelayIsReachable: Bool = {
+                guard isRelay, !federated.relayInstances.isEmpty else { return true }
+                if let matched = federated.relayInstances.first(where: { $0.uuid == activeHost.instanceId }) {
+                    return matched.status.isReachable
+                }
+                return federated.relayInstances.contains(where: \.status.isReachable)
+            }()
+
+            if hasPairedBackend && (!isLiveBackendConnected || (!activeHost.isOnline && activeRelayIsReachable)) {
+                if activeRelayIsReachable {
+                    markBackendReconnected()
+                } else {
+                    isLiveBackendConnected = federated.relayInstances.contains(where: \.status.isReachable)
+                }
             } else if isLiveBackendConnected && activeHost.isOnline {
                 connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
             }
