@@ -656,6 +656,134 @@ def read_disk_project_configs() -> dict[str, dict]:
     return out
 
 
+ARTIFACT_MIME_TYPES = {
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".json": "application/json",
+    ".txt": "text/plain",
+    ".mmd": "text/plain",
+    ".mermaid": "text/plain",
+}
+
+FORBIDDEN_ARTIFACT_BASENAMES = {
+    ".env",
+    ".netrc",
+    ".gitcookies",
+    "id_rsa",
+    "id_ed25519",
+    "state.vscdb",
+    "state.vscdb.backup",
+}
+
+MAX_ARTIFACT_FILE_BYTES = 4 * 1024 * 1024  # 4 MB hard ceiling
+
+
+def read_trusted_artifact_file(
+    raw_uri_or_path: str,
+    workspace_roots: list[str] | None = None,
+    extra_trusted_roots: list[str] | None = None,
+) -> tuple[int, dict]:
+    """Reads an `<agent-embed>` or artifact file strictly inside trusted Antigravity brain or workspace roots."""
+    import base64
+
+    raw = (raw_uri_or_path or "").strip()
+    if not raw:
+        return 400, {"ok": False, "error": "Missing uri or path"}
+
+    if raw.lower().startswith("file://"):
+        raw = urllib.parse.unquote(raw[len("file://") :])
+    else:
+        raw = urllib.parse.unquote(raw)
+
+    raw = raw.split("#", 1)[0].split("?", 1)[0]
+    if not raw:
+        return 400, {"ok": False, "error": "Empty path after normalization"}
+
+    try:
+        resolved = os.path.realpath(os.path.expanduser(raw))
+    except Exception as exc:
+        return 400, {"ok": False, "error": f"Invalid path: {exc}"}
+
+    base_name = os.path.basename(resolved).lower()
+    if (
+        base_name in FORBIDDEN_ARTIFACT_BASENAMES
+        or base_name.startswith(".env.")
+        or "/.ssh/" in resolved.replace("\\", "/")
+    ):
+        return 403, {"ok": False, "error": "Access to sensitive file denied"}
+
+    trusted_roots: list[str] = [
+        os.path.realpath(os.path.expanduser("~/.gemini")),
+        os.path.realpath(os.path.expanduser("~/Library/Application Support/Antigravity")),
+    ]
+    env_home = os.environ.get("GEMINI_HOME", "").strip()
+    if env_home:
+        trusted_roots.append(os.path.realpath(os.path.expanduser(env_home)))
+    for ws in workspace_roots or []:
+        clean_ws = (ws or "").strip()
+        if clean_ws.lower().startswith("file://"):
+            clean_ws = urllib.parse.unquote(clean_ws[len("file://") :])
+        if clean_ws and os.path.isdir(clean_ws):
+            trusted_roots.append(os.path.realpath(clean_ws))
+    for extra in extra_trusted_roots or []:
+        if extra:
+            trusted_roots.append(os.path.realpath(os.path.expanduser(extra)))
+
+    allowed = False
+    for root in trusted_roots:
+        try:
+            if os.path.commonpath([resolved, root]) == root:
+                allowed = True
+                break
+        except ValueError:
+            continue
+
+    if not allowed:
+        return 403, {"ok": False, "error": "Path is outside trusted Antigravity artifact & workspace roots"}
+
+    if not os.path.isfile(resolved):
+        return 404, {"ok": False, "error": "Artifact file not found"}
+
+    size_bytes = os.path.getsize(resolved)
+    if size_bytes > MAX_ARTIFACT_FILE_BYTES:
+        return 413, {"ok": False, "error": f"Artifact file exceeds {MAX_ARTIFACT_FILE_BYTES} byte limit"}
+
+    ext = Path(resolved).suffix.lower()
+    mime = ARTIFACT_MIME_TYPES.get(ext, "application/octet-stream")
+    data = Path(resolved).read_bytes()
+    is_text = mime.startswith("text/") or mime in ("image/svg+xml", "application/json")
+    if is_text:
+        try:
+            text_val = data.decode("utf-8")
+            return 200, {
+                "ok": True,
+                "path": resolved,
+                "mimeType": mime,
+                "encoding": "utf-8",
+                "content": text_val,
+                "sizeBytes": len(data),
+            }
+        except UnicodeDecodeError:
+            pass
+
+    return 200, {
+        "ok": True,
+        "path": resolved,
+        "mimeType": mime,
+        "encoding": "base64",
+        "content": base64.b64encode(data).decode("ascii"),
+        "sizeBytes": len(data),
+    }
+
+
 class CompanionState:
     """Stateful companion store for Automations, Jetbox live cache, and Standalone Sandbox testing."""
 
@@ -1465,6 +1593,20 @@ def create_bridge_server(
                 if sys.platform == "darwin" and uri:
                     subprocess.Popen(["open", uri])
                 self._write_json(200, {"ok": True})
+                return
+
+            if method == "ReadArtifactFile":
+                req_obj = self._parse_json(raw_body)
+                target_uri = req_obj.get("uri") or req_obj.get("path") or ""
+                with state.lock:
+                    ws_roots = [state.workspace_root] + [
+                        w.get("workspaceUri") or "" for w in state.workspaces if isinstance(w, dict)
+                    ]
+                status_code, payload_obj = read_trusted_artifact_file(
+                    target_uri,
+                    workspace_roots=ws_roots,
+                )
+                self._write_json(status_code, payload_obj)
                 return
 
             if method == "CreateProjectWorkspace":
@@ -2423,6 +2565,109 @@ def create_bridge_server(
                     if cid in state.trajectories:
                         state.trajectories[cid]["status"] = "CORTEX_STEP_STATUS_CANCELLED"
                 self._write_json(200, {"ok": True, "cascadeId": cid})
+                return
+
+            if method == "GetSidecars":
+                with state.lock:
+                    sidecars = []
+                    for a in state.automations:
+                        cron_expr = a.get("cronExpression") or "0 9 * * 1-5"
+                        prompt_text = a.get("prompt") or a.get("title") or "Scheduled Automation"
+                        enabled = a.get("section", "SCHEDULED") != "PAUSED"
+                        sidecars.append(
+                            {
+                                "sidecarId": a["id"],
+                                "status": "SIDECAR_STATUS_RUNNING" if enabled else "SIDECAR_STATUS_STOPPED",
+                                "config": {
+                                    "builtin": "schedule",
+                                    "restartPolicy": "always",
+                                    "displayName": a.get("title", a["id"]),
+                                    "description": a.get("descriptionText", ""),
+                                    "args": [cron_expr, "agentapi", "new-conversation", "--", prompt_text],
+                                },
+                                "userConfig": {
+                                    "enabled": enabled,
+                                    "projectId": a.get("projectSlug", ""),
+                                    "allProjects": bool(a.get("allProjects", False)),
+                                },
+                            }
+                        )
+                self._write_json(200, {"sidecars": sidecars})
+                return
+
+            if method == "GetSidecarEvents":
+                sid = req_obj.get("sidecarId", "")
+                events = []
+                with state.lock:
+                    for a in state.automations:
+                        if a["id"] == sid and a.get("lastRunCascadeId"):
+                            events.append(
+                                {
+                                    "timestampMs": str(int(time.time() * 1000)),
+                                    "payload": {
+                                        "newConversation": {
+                                            "conversationId": a["lastRunCascadeId"],
+                                            "prompt": a.get("prompt") or a.get("title") or "",
+                                        }
+                                    },
+                                }
+                            )
+                self._write_json(200, {"events": events})
+                return
+
+            if method == "ManageSidecar":
+                sid = req_obj.get("sidecarId") or f"auto-{uuid.uuid4().hex[:8]}"
+                action = str(req_obj.get("action", "")).upper()
+                cfg = req_obj.get("config") or {}
+                args = cfg.get("args") or []
+                cron_expr = args[0] if args else "0 9 * * 1-5"
+                prompt_text = args[-1] if args else cfg.get("displayName", "Scheduled Automation")
+                with state.lock:
+                    existing = next((a for a in state.automations if a["id"] == sid), None)
+                    if action == "SIDECAR_ACTION_CREATE":
+                        proj_slug = req_obj.get("projectId") or ("All projects" if req_obj.get("allProjects") else "This Computer")
+                        item = {
+                            "id": sid,
+                            "title": cfg.get("displayName") or prompt_text,
+                            "projectSlug": proj_slug,
+                            "scheduleSummary": f"{proj_slug} · Scheduled · Flash",
+                            "section": "SCHEDULED",
+                            "nextRunText": "Tomorrow, 09:00",
+                            "lastRunText": "Created just now",
+                            "cronExpression": cron_expr,
+                            "prompt": prompt_text,
+                            "descriptionText": cfg.get("description", ""),
+                            "allProjects": bool(req_obj.get("allProjects", False)),
+                        }
+                        state.automations = [a for a in state.automations if a["id"] != sid]
+                        state.automations.insert(0, item)
+                    elif action == "SIDECAR_ACTION_UPDATE" and existing is not None:
+                        existing["title"] = cfg.get("displayName") or existing["title"]
+                        existing["cronExpression"] = cron_expr
+                        existing["prompt"] = prompt_text
+                        existing["descriptionText"] = cfg.get("description", existing.get("descriptionText", ""))
+                    elif action == "SIDECAR_ACTION_SET_PROJECT" and existing is not None:
+                        existing["projectSlug"] = req_obj.get("projectId") or existing["projectSlug"]
+                        existing["allProjects"] = False
+                    elif action == "SIDECAR_ACTION_SET_ALL_PROJECTS" and existing is not None:
+                        existing["allProjects"] = bool(req_obj.get("allProjects", True))
+                        if existing["allProjects"]:
+                            existing["projectSlug"] = "All projects"
+                    elif action == "SIDECAR_ACTION_DISABLE" and existing is not None:
+                        existing["section"] = "PAUSED"
+                        existing["lastRunText"] = "Paused"
+                    elif action == "SIDECAR_ACTION_ENABLE" and existing is not None:
+                        existing["section"] = "SCHEDULED"
+                        existing["lastRunText"] = "Resumed · just now"
+                    elif action == "SIDECAR_ACTION_DELETE":
+                        state.automations = [a for a in state.automations if a["id"] != sid]
+                    elif action == "SIDECAR_ACTION_RUN_NOW" and existing is not None:
+                        existing["isRunningNow"] = True
+                        existing["lastRunText"] = "Running now..."
+                        first_cid = next(iter(state.trajectories.keys()), None)
+                        if first_cid:
+                            existing["lastRunCascadeId"] = first_cid
+                self._write_json(200, {"sidecarId": sid, "ok": True})
                 return
 
             self._write_json(200, {"ok": True, "method": method})

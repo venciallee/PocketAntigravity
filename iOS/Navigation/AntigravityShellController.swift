@@ -1,5 +1,8 @@
 import SwiftUI
 import AntigravityData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 public typealias AntigravityShellController = AntigravityRootContainerView
 
@@ -188,8 +191,11 @@ public struct AntigravityRootContainerView: View {
 
     @State private var selectedTab: ShellTab = .agents
     @State private var activeModalSheet: ModalSheetDestination?
-    @State private var chatReturnProjectSlug: String?
+    @State private var navigationPath: [ShellPushDestination] = []
     @State private var settingsScannerTriggered: Bool = false
+    #if canImport(UIKit)
+    @State private var popGestureHandler = InteractivePopGestureHandler()
+    #endif
 
     private enum ModalSheetDestination: String, Identifiable {
         case displayOptions
@@ -197,6 +203,13 @@ public struct AntigravityRootContainerView: View {
         case contextMenuPreview
 
         var id: String { rawValue }
+    }
+
+    private enum ShellPushDestination: Hashable {
+        case projectDetail(String)
+        case cascadeChat
+        case planReview
+        case turnDiffReview
     }
 
     public init(
@@ -219,6 +232,9 @@ public struct AntigravityRootContainerView: View {
         .onChange(of: store.activeRoute) { _, newRoute in
             if newRoute == .pairingSettings {
                 selectedTab = .settings
+            }
+            if activeVerifyCase == nil {
+                syncNavigationPath(from: newRoute)
             }
         }
         .onChange(of: selectedTab) { _, newTab in
@@ -253,67 +269,29 @@ public struct AntigravityRootContainerView: View {
 
     @ViewBuilder
     private var pairedShellView: some View {
-        ZStack {
-            switch store.activeRoute {
-            case .planReview:
-                ImplementationPlanReviewViewController(store: store)
-            case .turnDiffReview:
-                TurnDiffReviewViewController(store: store)
-            case .projectDetail(let projectSlug):
-                ProjectDetailViewController(
-                    store: store,
-                    projectSlug: projectSlug,
-                    onBack: {
-                        chatReturnProjectSlug = nil
-                        store.activeRoute = .tabRoot
-                    },
-                    onOpenConversation: { convId in
-                        chatReturnProjectSlug = projectSlug
-                        openOrCreateConversation(convId, defaultProjectSlug: projectSlug)
-                    }
+        NavigationStack(path: $navigationPath) {
+            withInteractivePopGesture(
+                tabRootContentView
+                    .toolbar(.hidden, for: .navigationBar)
+            )
+            .navigationDestination(for: ShellPushDestination.self) { destination in
+                withInteractivePopGesture(
+                    pushedDestinationView(for: destination)
+                        .toolbar(.hidden, for: .navigationBar)
+                        .navigationBarBackButtonHidden(true)
                 )
-            case .cascadeChat:
-                CascadeChatViewController(
-                    store: store,
-                    onBack: {
-                        if let returnSlug = chatReturnProjectSlug {
-                            chatReturnProjectSlug = nil
-                            store.activeRoute = .projectDetail(returnSlug)
-                        } else {
-                            store.activeRoute = .tabRoot
-                        }
-                    }
-                )
-            case .pairingSettings:
-                settingsTabContainerView
-            case .tabRoot:
-                switch selectedTab {
-                case .agents:
-                    AgentsHomeViewController(
-                        store: store,
-                        onSelectTab: { tab in selectedTab = tab },
-                        onOpenDisplayOptions: { activeModalSheet = .displayOptions },
-                        onOpenNewProject: { activeModalSheet = .createProject },
-                        onOpenProjectDetail: { slug in
-                            chatReturnProjectSlug = nil
-                            store.selectProject(slug)
-                        },
-                        onOpenContextMenuPreview: { activeModalSheet = .contextMenuPreview },
-                        onOpenConversation: { convId in
-                            chatReturnProjectSlug = nil
-                            openOrCreateConversation(convId, defaultProjectSlug: store.selectedProjectId)
-                        }
-                    )
-                case .automations:
-                    AutomationsViewController(
-                        store: store,
-                        onSelectTab: { tab in selectedTab = tab },
-                        onOpenDisplayOptions: { activeModalSheet = .displayOptions }
-                    )
-                case .settings:
-                    settingsTabContainerView
-                }
             }
+        }
+        .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
+        .onAppear {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                syncNavigationPath(from: store.activeRoute)
+            }
+        }
+        .onChange(of: navigationPath) { _, newPath in
+            syncActiveRoute(from: newPath)
         }
         .sheet(item: $activeModalSheet) { sheet in
             switch sheet {
@@ -362,6 +340,169 @@ public struct AntigravityRootContainerView: View {
                 InteractionGateSheetController(store: store, mode: .permissionGate, stepIndex: stepIndex)
             case .askQuestion, .newCascadeSheet:
                 StructuredQuestionCardView(store: store)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var tabRootContentView: some View {
+        switch selectedTab {
+        case .agents:
+            AgentsHomeViewController(
+                store: store,
+                onSelectTab: { tab in selectedTab = tab },
+                onOpenDisplayOptions: { activeModalSheet = .displayOptions },
+                onOpenNewProject: { activeModalSheet = .createProject },
+                onOpenProjectDetail: { slug in
+                    store.selectProject(slug)
+                },
+                onOpenContextMenuPreview: { activeModalSheet = .contextMenuPreview },
+                onOpenConversation: { convId in
+                    openOrCreateConversation(convId, defaultProjectSlug: store.selectedProjectId)
+                }
+            )
+        case .automations:
+            AutomationsViewController(
+                store: store,
+                onSelectTab: { tab in selectedTab = tab },
+                onOpenDisplayOptions: { activeModalSheet = .displayOptions }
+            )
+        case .settings:
+            settingsTabContainerView
+        }
+    }
+
+    @ViewBuilder
+    private func pushedDestinationView(for destination: ShellPushDestination) -> some View {
+        switch destination {
+        case .projectDetail(let projectSlug):
+            ProjectDetailViewController(
+                store: store,
+                projectSlug: projectSlug,
+                onBack: {
+                    popTopDestination()
+                },
+                onOpenConversation: { convId in
+                    openOrCreateConversation(convId, defaultProjectSlug: projectSlug)
+                }
+            )
+        case .cascadeChat:
+            CascadeChatViewController(
+                store: store,
+                onBack: {
+                    popTopDestination()
+                }
+            )
+        case .planReview:
+            ImplementationPlanReviewViewController(store: store)
+        case .turnDiffReview:
+            TurnDiffReviewViewController(store: store)
+        }
+    }
+
+    @ViewBuilder
+    private func withInteractivePopGesture<Content: View>(_ content: Content) -> some View {
+        #if canImport(UIKit)
+        content.background {
+            InteractivePopGestureEnabler(
+                handler: popGestureHandler,
+                stackDepth: navigationPath.count
+            )
+            .frame(width: 0, height: 0)
+        }
+        #else
+        content
+        #endif
+    }
+
+    private func popTopDestination() {
+        if !navigationPath.isEmpty {
+            navigationPath.removeLast()
+        } else {
+            store.activeRoute = .tabRoot
+        }
+    }
+
+    private func syncNavigationPath(from newRoute: AntigravityNavigationRoute) {
+        switch newRoute {
+        case .tabRoot:
+            if !navigationPath.isEmpty {
+                navigationPath.removeAll()
+            }
+        case .pairingSettings:
+            selectedTab = .settings
+            if !navigationPath.isEmpty {
+                navigationPath.removeAll()
+            }
+        case .projectDetail(let slug):
+            let target = ShellPushDestination.projectDetail(slug)
+            if navigationPath.last == target {
+                return
+            }
+            if let existingIndex = navigationPath.lastIndex(of: target) {
+                navigationPath.removeSubrange((existingIndex + 1)...)
+            } else {
+                navigationPath = [target]
+            }
+        case .cascadeChat:
+            if navigationPath.last == .cascadeChat {
+                return
+            }
+            if let existingIndex = navigationPath.lastIndex(of: .cascadeChat) {
+                navigationPath.removeSubrange((existingIndex + 1)...)
+            } else if case .projectDetail = navigationPath.last {
+                navigationPath.append(.cascadeChat)
+            } else {
+                navigationPath = [.cascadeChat]
+            }
+        case .planReview:
+            if navigationPath.last == .planReview {
+                return
+            }
+            if let chatIdx = navigationPath.lastIndex(of: .cascadeChat) {
+                var updated = Array(navigationPath.prefix(through: chatIdx))
+                updated.append(.planReview)
+                navigationPath = updated
+            } else {
+                navigationPath = [.cascadeChat, .planReview]
+            }
+        case .turnDiffReview:
+            if navigationPath.last == .turnDiffReview {
+                return
+            }
+            if let chatIdx = navigationPath.lastIndex(of: .cascadeChat) {
+                var updated = Array(navigationPath.prefix(through: chatIdx))
+                updated.append(.turnDiffReview)
+                navigationPath = updated
+            } else {
+                navigationPath = [.cascadeChat, .turnDiffReview]
+            }
+        }
+    }
+
+    private func syncActiveRoute(from path: [ShellPushDestination]) {
+        switch path.last {
+        case .none:
+            if store.activeRoute != .tabRoot && store.activeRoute != .pairingSettings {
+                store.activeRoute = .tabRoot
+            }
+        case .projectDetail(let slug):
+            if store.activeRoute != .projectDetail(slug) {
+                store.activeRoute = .projectDetail(slug)
+            }
+        case .cascadeChat:
+            if case .cascadeChat = store.activeRoute {
+                // Keep exact activeCascadeId while already on the conversation route.
+            } else {
+                store.activeRoute = .cascadeChat(store.activeCascadeId)
+            }
+        case .planReview:
+            if store.activeRoute != .planReview {
+                store.activeRoute = .planReview
+            }
+        case .turnDiffReview:
+            if store.activeRoute != .turnDiffReview {
+                store.activeRoute = .turnDiffReview
             }
         }
     }
@@ -457,3 +598,170 @@ public struct AntigravityRootContainerView: View {
         }
     }
 }
+
+#if canImport(UIKit)
+/// Dedicated `UIGestureRecognizerDelegate` that preserves native iOS left-edge interactive
+/// swipe-back (`interactivePopGestureRecognizer`) when SwiftUI hides the system navigation bar
+/// in favor of custom UE v2.0 top headers, while safely disabling edge-swipe at stack root.
+@MainActor
+private final class InteractivePopGestureHandler: NSObject, UIGestureRecognizerDelegate {
+    private weak var navigationController: UINavigationController?
+
+    override init() {
+        super.init()
+    }
+
+    func attach(to navController: UINavigationController) {
+        if self.navigationController !== navController {
+            self.navigationController = navController
+            navController.view.backgroundColor = UIColor(
+                red: 0x09 / 255.0,
+                green: 0x0A / 255.0,
+                blue: 0x0D / 255.0,
+                alpha: 1.0
+            )
+        }
+        if let popGesture = navController.interactivePopGestureRecognizer {
+            if popGesture.delegate !== self {
+                popGesture.delegate = self
+            }
+            if !popGesture.isEnabled {
+                popGesture.isEnabled = true
+            }
+            if popGesture.requiresExclusiveTouchType {
+                popGesture.requiresExclusiveTouchType = false
+            }
+        }
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let nav = navigationController else { return false }
+        guard nav.viewControllers.count > 1 else { return false }
+        guard nav.presentedViewController == nil else { return false }
+        guard nav.transitionCoordinator == nil else { return false }
+
+        if let pan = gestureRecognizer as? UIPanGestureRecognizer {
+            let velocity = pan.velocity(in: nav.view)
+            let isRTL = nav.view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            let horizontalVelocity = isRTL ? -velocity.x : velocity.x
+            if horizontalVelocity < 0 {
+                return false
+            }
+            if abs(velocity.y) > abs(velocity.x) * 1.5 && abs(velocity.y) > 40 {
+                return false
+            }
+        }
+
+        Task { @MainActor [weak nav, weak gestureRecognizer] in
+            guard let gestureRecognizer,
+                  gestureRecognizer.state == .began || gestureRecognizer.state == .changed else {
+                return
+            }
+            _ = nav?.view.endEditing(true)
+        }
+
+        return true
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        guard let nav = navigationController else { return false }
+        guard nav.viewControllers.count > 1 else { return false }
+        guard nav.presentedViewController == nil else { return false }
+        return otherGestureRecognizer is UIPanGestureRecognizer
+    }
+}
+
+private struct InteractivePopGestureEnabler: UIViewControllerRepresentable {
+    let handler: InteractivePopGestureHandler
+    let stackDepth: Int
+
+    func makeUIViewController(context: Context) -> InteractivePopGestureAnchorViewController {
+        InteractivePopGestureAnchorViewController(handler: handler)
+    }
+
+    func updateUIViewController(_ uiViewController: InteractivePopGestureAnchorViewController, context: Context) {
+        uiViewController.handler = handler
+        uiViewController.configureNavigationController()
+    }
+}
+
+@MainActor
+private final class InteractivePopGestureAnchorViewController: UIViewController {
+    var handler: InteractivePopGestureHandler
+
+    init(handler: InteractivePopGestureHandler) {
+        self.handler = handler
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        let anchorView = UIView(frame: .zero)
+        anchorView.backgroundColor = .clear
+        anchorView.isUserInteractionEnabled = false
+        anchorView.isAccessibilityElement = false
+        anchorView.accessibilityElementsHidden = true
+        self.view = anchorView
+    }
+
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        configureNavigationController()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        configureNavigationController()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        configureNavigationController()
+        Task { @MainActor [weak self] in
+            self?.configureNavigationController()
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        configureNavigationController()
+    }
+
+    func configureNavigationController() {
+        guard let navController = resolveNavigationController() else { return }
+        handler.attach(to: navController)
+    }
+
+    private func resolveNavigationController() -> UINavigationController? {
+        if let nav = self.navigationController {
+            return nav
+        }
+        var currentParent = self.parent
+        while let parentVC = currentParent {
+            if let nav = parentVC as? UINavigationController {
+                return nav
+            }
+            if let nav = parentVC.navigationController {
+                return nav
+            }
+            currentParent = parentVC.parent
+        }
+        var responder: UIResponder? = self.view
+        while let current = responder {
+            if let nav = current as? UINavigationController {
+                return nav
+            }
+            responder = current.next
+        }
+        return nil
+    }
+}
+#endif
+

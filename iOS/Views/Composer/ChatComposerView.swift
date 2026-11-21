@@ -320,6 +320,45 @@ public struct ChatComposerView: View {
                 }
             }
 
+            // Workflow Command Pill (e.g. `⏱ automation` from Automations "Create with Prompt")
+            if let rawWorkflow = store.composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rawWorkflow.isEmpty {
+                let workflowName = rawWorkflow.hasPrefix("/") ? String(rawWorkflow.dropFirst()) : rawWorkflow
+                let workflowIcon = workflowName.lowercased() == "automation" ? "clock" : "sparkles"
+                HStack(spacing: 6) {
+                    Button {
+                        store.composerWorkflowCommand = nil
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: workflowIcon)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                            Text(workflowName)
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .foregroundStyle(Color.white)
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(Self.controlPillBg)
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                        .clipShape(Capsule())
+                        .frame(minHeight: 36)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Workflow \(workflowName). Tap to remove.")
+                    .accessibilityIdentifier("composer-workflow-chip")
+
+                    Spacer(minLength: 0)
+                }
+            }
+
             if let voiceErr = voiceManager.errorMessage {
                 Text(voiceErr)
                     .font(.system(size: 11.5))
@@ -505,9 +544,9 @@ public struct ChatComposerView: View {
                 draftMessageText = store.composerDraftText
             }
         }
-        .onChange(of: store.composerDraftText) { _, updated in
-            if !updated.isEmpty && updated != draftMessageText {
-                draftMessageText = updated
+        .onChange(of: store.composerDraftText) { _, newValue in
+            if draftMessageText != newValue {
+                draftMessageText = newValue
             }
         }
         .onChange(of: store.composerAttachments.count) { _, _ in
@@ -587,7 +626,8 @@ public struct ChatComposerView: View {
     private func submitMessage() {
         voiceManager.stopRecording()
         let trimmed = draftMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !attachedChipLabels.isEmpty else { return }
+        let hasWorkflow = !(store.composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        guard !trimmed.isEmpty || !attachedChipLabels.isEmpty || hasWorkflow else { return }
         let existingByLabel = Dictionary(uniqueKeysWithValues: store.composerAttachments.map { ($0.label, $0) })
         store.composerAttachments = attachedChipLabels.map { label in
             if let existing = existingByLabel[label] {

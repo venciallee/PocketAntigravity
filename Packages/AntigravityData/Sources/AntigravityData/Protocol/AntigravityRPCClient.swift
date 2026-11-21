@@ -154,6 +154,9 @@ public actor AntigravityRPCClient {
     private var preferredCloudInstanceUuid: String? = nil
     private var cachedRelayInstances: [RelayInstanceInfo] = []
     private var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
+    private var cachedLocalProjectNameById: [String: String] = [:]
+    private var cachedLocalProjectIdByName: [String: String] = [:]
+    private var lastLocalProjectFetchAt: Date? = nil
     private var wokenInstanceCascadeKeys: Set<String> = []
     private var cachedValidUpstreamModels: Set<String>?
     private var cachedDefaultUpstreamModel: String?
@@ -179,10 +182,11 @@ public actor AntigravityRPCClient {
         }
     }
 
-    /// Only true local-OS-only desktop commands (like revealing a local folder in macOS Finder)
-    /// are unsupported over Antigravity Cloud Relay; all data & review RPCs forward to upstream.
+    /// Only true local-OS-only desktop commands (like revealing a local folder in macOS Finder
+    /// or Companion Bridge's sandboxed `ReadArtifactFile`) are local-only; all upstream data & review RPCs forward over Cloud Relay.
     private static let localDesktopOnlyMethods: Set<String> = [
-        "OpenWorkspaceInFinder"
+        "OpenWorkspaceInFinder",
+        "ReadArtifactFile"
     ]
 
     public init(
@@ -351,6 +355,11 @@ public actor AntigravityRPCClient {
             return matched
         }
         return cachedRelayInstances.first(where: \.status.isReachable)
+    }
+
+    /// Returns the latest Cloud Relay instance list observed from `ApiService/ListInstances`.
+    public func currentCachedRelayInstances() -> [RelayInstanceInfo] {
+        cachedRelayInstances
     }
 
     /// Resolves a scanned Remote Control device slug (`lt74xt6l0m-golden-star`) or UUID (`0f5819ac-...-v2`)
@@ -1295,7 +1304,7 @@ public actor AntigravityRPCClient {
         let currentAuthUser = authUser
         let session = urlSession
 
-        func sendOnce(to targetUuid: String) async throws -> (payload: Data, headers: [String: String]) {
+        func sendOnce(to targetUuid: String, authUserOverride: String? = nil) async throws -> (payload: Data, headers: [String: String]) {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             if let timeoutInterval {
@@ -1305,7 +1314,7 @@ public actor AntigravityRPCClient {
                 to: &request,
                 cookieHeader: currentCookie,
                 origin: originStr,
-                authUser: currentAuthUser,
+                authUser: authUserOverride ?? currentAuthUser,
                 isStreaming: false
             )
             request.httpBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
@@ -1337,6 +1346,12 @@ public actor AntigravityRPCClient {
         do {
             return try await sendOnce(to: initialTargetUuid)
         } catch let AntigravityRPCError.unauthorized(msg) {
+            if let resolved = try? await resolveCloudRelayInstance(
+                preferredIdentifier: targetInstanceIdentifier,
+                timeoutInterval: 6.0
+            ), (resolved.matchedAuthUser != currentAuthUser || resolved.selected.uuid != initialTargetUuid) {
+                return try await sendOnce(to: resolved.selected.uuid, authUserOverride: resolved.matchedAuthUser)
+            }
             throw AntigravityRPCError.unauthorized(msg)
         } catch {
             let shouldFailover: Bool = {
@@ -1855,16 +1870,21 @@ public actor AntigravityRPCClient {
         var repoDisplay: String? = nil
         for resEntry in resources {
             guard let resObj = resEntry.objectValue else { continue }
-            let nestedCandidate = resObj["remoteResource"]?.objectValue
-                ?? resObj["githubRepo"]?.objectValue
-                ?? resObj["githubRepository"]?.objectValue
-                ?? resObj["gitFolder"]?.objectValue
-            if let rr = nestedCandidate {
-                if let dn = nonEmptyString(rr["displayName"]?.stringValue)
-                    ?? nonEmptyString(rr["fullName"]?.stringValue)
-                    ?? nonEmptyString(rr["name"]?.stringValue)
-                    ?? nonEmptyString(rr["uri"]?.stringValue)
-                    ?? nonEmptyString(rr["folderUri"]?.stringValue) {
+            let nestedCandidates: [[String: JSONValue]?] = [
+                resObj["remoteResource"]?.objectValue,
+                resObj["githubRepo"]?.objectValue,
+                resObj["githubRepository"]?.objectValue,
+                resObj["gitFolder"]?.objectValue
+            ]
+            if let rr = nestedCandidates.compactMap({ $0 }).first {
+                let displayNameCandidates: [String?] = [
+                    rr["displayName"]?.stringValue,
+                    rr["fullName"]?.stringValue,
+                    rr["name"]?.stringValue,
+                    rr["uri"]?.stringValue,
+                    rr["folderUri"]?.stringValue
+                ]
+                if let dn = displayNameCandidates.compactMap(nonEmptyString).first {
                     var normalized = dn
                         .replacingOccurrences(of: "https://github.com/", with: "")
                         .replacingOccurrences(of: "http://github.com/", with: "")
@@ -3368,9 +3388,407 @@ public actor AntigravityRPCClient {
         )
     }
 
-    // MARK: - Automations RPC (`UE06`)
+    // MARK: - Automations RPC (`UE06` — Native Antigravity 2.0 Sidecars)
 
-    public func listAutomations() async throws -> [AutomationItem] {
+    private static func isMethodUnimplementedError(_ error: Error) -> Bool {
+        guard case let AntigravityRPCError.httpError(code, body) = error else { return false }
+        if code == 404 || code == 501 { return true }
+        let lower = body.lowercased()
+        return lower.contains("unimplemented") || lower.contains("unknown method") || lower.contains("method not found")
+    }
+
+    public static func parseInt64Millis(_ value: JSONValue?) -> Int64? {
+        guard let value else { return nil }
+        switch value {
+        case .int(let i):
+            return Int64(i)
+        case .double(let d):
+            return Int64(d)
+        case .string(let s):
+            return Int64(s.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizeSidecarStatus(_ value: JSONValue?) -> String {
+        guard let value else { return "UNSPECIFIED" }
+        if let raw = value.stringValue?.uppercased() {
+            if raw.contains("RUNNING") { return "RUNNING" }
+            if raw.contains("STOPPED") { return "STOPPED" }
+            if raw.contains("ERROR") { return "ERRORED" }
+            if raw.contains("BACKOFF") { return "BACKOFF" }
+            if raw.contains("STARTING") { return "STARTING" }
+            return raw
+        }
+        if let code = value.intValue {
+            switch code {
+            case 1: return "RUNNING"
+            case 2: return "STOPPED"
+            case 3: return "ERRORED"
+            case 4: return "BACKOFF"
+            case 5: return "STARTING"
+            default: return "UNSPECIFIED"
+            }
+        }
+        return "UNSPECIFIED"
+    }
+
+    /// Refreshes local Antigravity Desktop `Project.id <-> Project.name` mapping via `ListProjects({})` + `ReadProject`.
+    private func ensureLocalProjectIndex(forceRefresh: Bool = false) async {
+        if !forceRefresh,
+           let last = lastLocalProjectFetchAt,
+           Date().timeIntervalSince(last) < 30.0,
+           !cachedLocalProjectNameById.isEmpty {
+            return
+        }
+        lastLocalProjectFetchAt = Date()
+        guard let listResp = try? await callUnaryJSON(method: "ListProjects", body: [:], timeoutInterval: 6.0),
+              let ids = (listResp["projectIds"] ?? listResp["project_ids"])?.arrayValue?.compactMap(\.stringValue).filter({ !$0.isEmpty }),
+              !ids.isEmpty else {
+            return
+        }
+        for pid in ids.prefix(32) {
+            guard let readResp = try? await callUnaryJSON(method: "ReadProject", body: ["id": .string(pid)], timeoutInterval: 5.0),
+                  let projObj = readResp["project"]?.objectValue else {
+                continue
+            }
+            let resolvedId = Self.nonEmptyString(projObj["id"]?.stringValue) ?? pid
+            let name = Self.nonEmptyString(projObj["name"]?.stringValue) ?? resolvedId
+            cachedLocalProjectNameById[resolvedId] = name
+            cachedLocalProjectIdByName[name.lowercased()] = resolvedId
+        }
+    }
+
+    /// Decodes a single `exa.cortex_pb.SidecarStatusInfo` JSON object into an `AutomationItem`.
+    /// Returns `nil` for pure auxiliary Web UI panel sidecars (`hasWebUi: true`) or bundled non-schedule sidecars.
+    public static func decodeSidecarStatusInfo(
+        _ obj: [String: JSONValue],
+        projectNameById: [String: String] = [:],
+        originInstanceUuid: String? = nil,
+        now: Date = Date()
+    ) -> AutomationItem? {
+        guard let sidecarId = nonEmptyString(obj["sidecarId"]?.stringValue)
+            ?? nonEmptyString(obj["sidecar_id"]?.stringValue)
+            ?? nonEmptyString(obj["id"]?.stringValue) else {
+            return nil
+        }
+
+        let cfg = obj["config"]?.objectValue ?? [:]
+        let uiCfg = obj["uiConfig"]?.objectValue ?? obj["ui_config"]?.objectValue
+            ?? cfg["uiConfig"]?.objectValue ?? cfg["ui_config"]?.objectValue
+        let uiViews = uiCfg?["views"]?.arrayValue ?? []
+        let hasWebUI = (cfg["hasWebUi"]?.boolValue ?? cfg["has_web_ui"]?.boolValue ?? false) || !uiViews.isEmpty
+        let isBundled = obj["isBundled"]?.boolValue ?? obj["is_bundled"]?.boolValue ?? false
+
+        let builtin = (nonEmptyString(cfg["builtin"]?.stringValue) ?? nonEmptyString(obj["builtin"]?.stringValue) ?? "").lowercased()
+        let command = nonEmptyString(cfg["command"]?.stringValue) ?? ""
+        let args = cfg["args"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        let invokesAgentApi = args.count >= 3 && args.contains("agentapi") && args.contains("new-conversation")
+        let isSchedule = (builtin == "schedule") || invokesAgentApi
+
+        // Exclude Auxiliary Pane Web UI widgets and internal bundled daemons unless they are scheduled automations.
+        if !isSchedule && (hasWebUI || isBundled) {
+            return nil
+        }
+
+        let displayName = nonEmptyString(cfg["displayName"]?.stringValue)
+            ?? nonEmptyString(cfg["display_name"]?.stringValue)
+            ?? nonEmptyString(obj["name"]?.stringValue)
+            ?? sidecarId
+        let descriptionText = nonEmptyString(cfg["description"]?.stringValue)
+            ?? nonEmptyString(obj["description"]?.stringValue)
+            ?? ""
+
+        let statusNorm = normalizeSidecarStatus(obj["status"])
+        let lastError = nonEmptyString(obj["lastError"]?.stringValue) ?? nonEmptyString(obj["last_error"]?.stringValue)
+
+        let userCfg = obj["userConfig"]?.objectValue ?? obj["user_config"]?.objectValue
+        let userProjectId = nonEmptyString(userCfg?["projectId"]?.stringValue) ?? nonEmptyString(userCfg?["project_id"]?.stringValue)
+        let allProjects = userCfg?["allProjects"]?.boolValue ?? userCfg?["all_projects"]?.boolValue ?? false
+        let configDisabled = cfg["disabled"]?.boolValue ?? false
+
+        // Proto3 JSON omits scalar `bool enabled = false`, so combine explicit `userConfig.enabled` with runtime `status`.
+        let isEnabled: Bool = {
+            if let explicitEnabled = userCfg?["enabled"]?.boolValue {
+                return explicitEnabled
+            }
+            if configDisabled {
+                return false
+            }
+            if statusNorm == "RUNNING" || statusNorm == "STARTING" {
+                return true
+            }
+            if userCfg != nil {
+                return false
+            }
+            return statusNorm != "STOPPED"
+        }()
+
+        let section: AutomationSectionKind = {
+            if !isEnabled { return .paused }
+            return isSchedule ? .scheduled : .alwaysOn
+        }()
+
+        let parsedArgs: (cron: String, prompt: String, modelLabel: String?) = isSchedule
+            ? AutomationScheduleCodec.parseScheduleArgs(args)
+            : (cron: "", prompt: "", modelLabel: nil)
+        let cronExpr = parsedArgs.cron
+        let promptText = parsedArgs.prompt.isEmpty ? (descriptionText.isEmpty ? displayName : descriptionText) : parsedArgs.prompt
+        let modelBadge = parsedArgs.modelLabel ?? (isSchedule ? "Flash" : nil)
+
+        // Resolve human-readable project label from `projectId`, `agentPermissions.workspaceUris`, or `allProjects`.
+        let agentPerms = cfg["agentPermissions"]?.objectValue ?? cfg["agent_permissions"]?.objectValue
+        let permWorkspaceUris = (agentPerms?["workspaceUris"] ?? agentPerms?["workspace_uris"])?.arrayValue?.compactMap(\.stringValue) ?? []
+        let projectSlug: String = {
+            if let pid = userProjectId, !pid.isEmpty {
+                if let resolved = projectNameById[pid], !resolved.isEmpty {
+                    return resolved
+                }
+                return pid
+            }
+            if let firstUri = permWorkspaceUris.first, !firstUri.isEmpty {
+                let cleaned = firstUri.replacingOccurrences(of: "file://", with: "")
+                let base = (cleaned as NSString).lastPathComponent
+                if !base.isEmpty && base != "/" {
+                    return base
+                }
+            }
+            return allProjects ? "All projects" : "This Computer"
+        }()
+
+        let humanSchedule = isSchedule
+            ? AutomationScheduleCodec.humanReadableSchedule(from: cronExpr)
+            : (command.isEmpty ? "Background listener" : (command as NSString).lastPathComponent)
+
+        let scheduleSummary: String = {
+            if isSchedule {
+                return "\(projectSlug) · \(humanSchedule) · \(modelBadge ?? "Flash")"
+            }
+            return "\(projectSlug) · Always On · \(humanSchedule)"
+        }()
+
+        let nextRunText: String = {
+            if section == .paused { return "Paused" }
+            if isSchedule {
+                return AutomationScheduleCodec.nextFireDescription(from: cronExpr, after: now)
+            }
+            switch statusNorm {
+            case "RUNNING": return "Listening"
+            case "STARTING": return "Starting..."
+            case "ERRORED", "BACKOFF": return "Error"
+            default: return "Active"
+            }
+        }()
+
+        let hasRuntimeError = (statusNorm == "ERRORED" || statusNorm == "BACKOFF") || (lastError != nil)
+        let lastRunText: String = {
+            if let lastError, !lastError.isEmpty {
+                return "Error · \(String(lastError.prefix(28)))"
+            }
+            if statusNorm == "ERRORED" || statusNorm == "BACKOFF" {
+                return "Failed · Needs review"
+            }
+            if section == .paused {
+                return "Paused"
+            }
+            if let startMs = parseInt64Millis(obj["startTimeMs"] ?? obj["start_time_ms"]), startMs > 0 {
+                return isSchedule ? "Scheduled · Ready" : "Running · \(AutomationScheduleCodec.relativeTimeLabel(from: startMs, now: now))"
+            }
+            return isSchedule ? "Scheduled · Ready" : "Active"
+        }()
+
+        return AutomationItem(
+            id: sidecarId,
+            title: displayName,
+            projectSlug: projectSlug,
+            scheduleSummary: scheduleSummary,
+            section: section,
+            nextRunText: nextRunText,
+            lastRunText: lastRunText,
+            needsReview: hasRuntimeError,
+            isRunningNow: false,
+            descriptionText: descriptionText,
+            prompt: promptText,
+            cronExpression: cronExpr,
+            projectId: userProjectId,
+            allProjects: allProjects,
+            modelLabel: modelBadge,
+            lastRunCascadeId: nil,
+            lastError: lastError,
+            isEnabled: isEnabled,
+            isScheduleBuiltin: isSchedule,
+            originInstanceUuid: originInstanceUuid
+        )
+    }
+
+    public static func decodeSidecarEvent(_ obj: [String: JSONValue]) -> SidecarRunEvent? {
+        let ts = parseInt64Millis(obj["timestampMs"] ?? obj["timestamp_ms"])
+            ?? parseInt64Millis(obj["commandInvocationTimestampMs"] ?? obj["command_invocation_timestamp_ms"])
+            ?? 0
+        let err = nonEmptyString(obj["error"]?.stringValue)
+        let payload = obj["payload"]?.objectValue
+        let newConv = payload?["newConversation"]?.objectValue ?? payload?["new_conversation"]?.objectValue
+        let convId = nonEmptyString(newConv?["conversationId"]?.stringValue)
+            ?? nonEmptyString(newConv?["conversation_id"]?.stringValue)
+        let prompt = nonEmptyString(newConv?["prompt"]?.stringValue)
+        guard ts > 0 || convId != nil || err != nil else { return nil }
+        return SidecarRunEvent(
+            timestampMs: ts,
+            error: err,
+            conversationId: convId,
+            prompt: prompt
+        )
+    }
+
+    /// Builds a native `ManageSidecarRequest` (`SIDECAR_ACTION_CREATE` or `SIDECAR_ACTION_UPDATE`) JSON body.
+    public static func buildManageSidecarConfigBody(
+        sidecarId: String,
+        action: SidecarManageAction,
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        description: String = "",
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil
+    ) -> [String: JSONValue] {
+        let args = AutomationScheduleCodec.buildScheduleArgs(
+            cron: cronExpression,
+            prompt: prompt,
+            modelArg: modelArg
+        )
+        var configObj: [String: JSONValue] = [
+            "builtin": .string("schedule"),
+            "restartPolicy": .string("always"),
+            "displayName": .string(displayName),
+            "args": .array(args.map { .string($0) })
+        ]
+        if !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            configObj["description"] = .string(description.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        var body: [String: JSONValue] = [
+            "sidecarId": .string(sidecarId),
+            "action": .string(action.rawValue),
+            "config": .object(configObj)
+        ]
+        if let projectId = nonEmptyString(projectId) {
+            body["projectId"] = .string(projectId)
+        } else if allProjects {
+            body["allProjects"] = .bool(true)
+        }
+        return body
+    }
+
+    public func getSidecarEvents(
+        sidecarId: String,
+        instanceUuidOverride: String? = nil,
+        timeoutInterval: TimeInterval = 5.0
+    ) async throws -> [SidecarRunEvent] {
+        let res = try await callUnaryJSON(
+            method: "GetSidecarEvents",
+            body: ["sidecarId": .string(sidecarId)],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: timeoutInterval
+        )
+        guard let arr = res["events"]?.arrayValue else { return [] }
+        return arr.compactMap { entry -> SidecarRunEvent? in
+            guard let obj = entry.objectValue else { return nil }
+            return Self.decodeSidecarEvent(obj)
+        }
+        .sorted { $0.timestampMs > $1.timestampMs }
+    }
+
+    public func listAutomations(timeoutInterval: TimeInterval? = nil) async throws -> [AutomationItem] {
+        await ensureLocalProjectIndex()
+        var projectNameById = cachedLocalProjectNameById
+        for (pid, proj) in cachedCloudProjectsById where projectNameById[pid] == nil {
+            projectNameById[pid] = proj.name
+        }
+
+        do {
+            let res = try await callUnaryJSON(
+                method: "GetSidecars",
+                body: [:],
+                timeoutInterval: timeoutInterval ?? 10.0
+            )
+            let activeOrigin = resolvedInstanceUuid
+            let rawSidecars = res["sidecars"]?.arrayValue ?? []
+            var items: [AutomationItem] = rawSidecars.compactMap { entry in
+                guard let obj = entry.objectValue else { return nil }
+                return Self.decodeSidecarStatusInfo(
+                    obj,
+                    projectNameById: projectNameById,
+                    originInstanceUuid: activeOrigin
+                )
+            }
+
+            // Enrich top automations with real run history (`lastRunText` & `lastRunCascadeId`) via `GetSidecarEvents`.
+            if !items.isEmpty {
+                let targetIds = items.prefix(20).map(\.id)
+                let eventsById: [String: SidecarRunEvent] = await withTaskGroup(of: (String, SidecarRunEvent?).self) { group in
+                    for sid in targetIds {
+                        group.addTask {
+                            let events = (try? await self.getSidecarEvents(
+                                sidecarId: sid,
+                                instanceUuidOverride: activeOrigin,
+                                timeoutInterval: 4.5
+                            )) ?? []
+                            return (sid, events.first)
+                        }
+                    }
+                    var map: [String: SidecarRunEvent] = [:]
+                    for await (sid, latest) in group {
+                        if let latest {
+                            map[sid] = latest
+                        }
+                    }
+                    return map
+                }
+
+                let now = Date()
+                for idx in items.indices {
+                    guard let latest = eventsById[items[idx].id] else { continue }
+                    if let cid = latest.conversationId, !cid.isEmpty {
+                        items[idx].lastRunCascadeId = cid
+                    }
+                    let rel = latest.timestampMs > 0
+                        ? AutomationScheduleCodec.relativeTimeLabel(from: latest.timestampMs, now: now)
+                        : "recently"
+                    if let err = latest.error, !err.isEmpty {
+                        items[idx].lastError = err
+                        items[idx].needsReview = true
+                        items[idx].lastRunText = "Failed · \(rel)"
+                    } else if items[idx].lastError == nil {
+                        items[idx].lastRunText = "Succeeded · \(rel)"
+                    }
+                }
+            }
+
+            items.sort { lhs, rhs in
+                if lhs.section != rhs.section {
+                    let rank: (AutomationSectionKind) -> Int = { s in
+                        switch s {
+                        case .scheduled: return 0
+                        case .alwaysOn: return 1
+                        case .paused: return 2
+                        }
+                    }
+                    return rank(lhs.section) < rank(rhs.section)
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+            return items
+        } catch {
+            // Only fall back to legacy `ListAutomations` on direct LAN mock/sandbox servers that don't expose `GetSidecars`.
+            if channel == .directHost && Self.isMethodUnimplementedError(error) {
+                return try await listLegacyCompanionAutomations()
+            }
+            throw error
+        }
+    }
+
+    private func listLegacyCompanionAutomations() async throws -> [AutomationItem] {
         let res = try await callUnaryJSON(method: "ListAutomations")
         guard let arr = res["automations"]?.arrayValue else { return [] }
         return arr.compactMap { item -> AutomationItem? in
@@ -3396,53 +3814,322 @@ public actor AntigravityRPCClient {
     }
 
     public func createAutomation(prompt: String, projectSlug: String) async throws -> AutomationItem {
-        let res = try await callUnaryJSON(
-            method: "CreateAutomation",
-            body: [
-                "prompt": .string(prompt),
-                "projectSlug": .string(projectSlug)
-            ]
-        )
-        let id = res["id"]?.stringValue ?? "auto-\(UUID().uuidString.prefix(8).lowercased())"
-        return AutomationItem(
-            id: id,
-            title: prompt,
+        let parsed = AutomationScheduleCodec.parseNaturalLanguagePrompt(prompt)
+        return try await createAutomation(
+            displayName: parsed.displayName,
+            prompt: parsed.prompt,
+            cronExpression: parsed.cronExpression,
             projectSlug: projectSlug,
-            scheduleSummary: "\(projectSlug) · Custom schedule · Flash",
-            section: .scheduled,
-            nextRunText: "Tomorrow, 09:00",
-            lastRunText: "Created just now"
+            projectId: nil,
+            allProjects: projectSlug.isEmpty || projectSlug == "All projects",
+            modelArg: nil,
+            description: "\(parsed.humanScheduleLabel): \(parsed.prompt)",
+            enableImmediately: true
         )
     }
 
-    public func triggerAutomationNow(automationId: String) async throws {
-        _ = try await callUnaryJSON(
-            method: "TriggerAutomationNow",
-            body: ["automationId": .string(automationId)]
+    public func createAutomation(
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        projectSlug: String,
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil,
+        description: String = "",
+        enableImmediately: Bool = true
+    ) async throws -> AutomationItem {
+        await ensureLocalProjectIndex()
+        let resolvedLocalProjectId: String? = {
+            if let explicit = Self.nonEmptyString(projectId),
+               cachedLocalProjectNameById[explicit] != nil || !explicit.hasPrefix("projects/") {
+                return explicit
+            }
+            let normalizedSlug = projectSlug
+                .replacingOccurrences(of: "cloud:", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if !normalizedSlug.isEmpty, let match = cachedLocalProjectIdByName[normalizedSlug] {
+                return match
+            }
+            return nil
+        }()
+
+        let sidecarId = AutomationScheduleCodec.makeSidecarId(from: displayName)
+        let createBody = Self.buildManageSidecarConfigBody(
+            sidecarId: sidecarId,
+            action: .create,
+            displayName: displayName,
+            prompt: prompt,
+            cronExpression: cronExpression,
+            description: description,
+            projectId: resolvedLocalProjectId,
+            allProjects: resolvedLocalProjectId == nil && allProjects,
+            modelArg: modelArg
         )
+
+        do {
+            let createResp = try await callUnaryJSON(
+                method: "ManageSidecar",
+                body: createBody,
+                timeoutInterval: 15.0
+            )
+            let createdId = Self.nonEmptyString(createResp["sidecarId"]?.stringValue)
+                ?? Self.nonEmptyString(createResp["sidecar_id"]?.stringValue)
+                ?? sidecarId
+
+            // Bind target project explicitly via `SIDECAR_ACTION_SET_PROJECT` so Desktop honors it even when
+            // `jetski-sidecar-declared-permissions` omits project binding on initial CREATE.
+            if let pid = resolvedLocalProjectId, !pid.isEmpty {
+                _ = try? await callUnaryJSON(
+                    method: "ManageSidecar",
+                    body: [
+                        "sidecarId": .string(createdId),
+                        "action": .string(SidecarManageAction.setProject.rawValue),
+                        "projectId": .string(pid)
+                    ],
+                    timeoutInterval: 10.0
+                )
+            } else if allProjects {
+                _ = try? await callUnaryJSON(
+                    method: "ManageSidecar",
+                    body: [
+                        "sidecarId": .string(createdId),
+                        "action": .string(SidecarManageAction.setAllProjects.rawValue),
+                        "allProjects": .bool(true)
+                    ],
+                    timeoutInterval: 10.0
+                )
+            }
+
+            if enableImmediately {
+                _ = try? await callUnaryJSON(
+                    method: "ManageSidecar",
+                    body: [
+                        "sidecarId": .string(createdId),
+                        "action": .string(SidecarManageAction.enable.rawValue)
+                    ],
+                    timeoutInterval: 10.0
+                )
+            }
+
+            let humanSched = AutomationScheduleCodec.humanReadableSchedule(from: cronExpression)
+            let modelBadge = AutomationScheduleCodec.formatModelBadge(modelArg ?? "Flash")
+            let slugLabel = projectSlug.isEmpty ? (allProjects ? "All projects" : "This Computer") : projectSlug
+            return AutomationItem(
+                id: createdId,
+                title: displayName,
+                projectSlug: slugLabel,
+                scheduleSummary: "\(slugLabel) · \(humanSched) · \(modelBadge)",
+                section: enableImmediately ? .scheduled : .paused,
+                nextRunText: enableImmediately ? AutomationScheduleCodec.nextFireDescription(from: cronExpression) : "Paused",
+                lastRunText: enableImmediately ? "Created just now" : "Paused · New",
+                needsReview: false,
+                isRunningNow: false,
+                descriptionText: description,
+                prompt: prompt,
+                cronExpression: cronExpression,
+                projectId: resolvedLocalProjectId,
+                allProjects: resolvedLocalProjectId == nil && allProjects,
+                modelLabel: modelBadge,
+                isEnabled: enableImmediately,
+                isScheduleBuiltin: true,
+                originInstanceUuid: resolvedInstanceUuid
+            )
+        } catch {
+            if channel == .directHost && Self.isMethodUnimplementedError(error) {
+                let res = try await callUnaryJSON(
+                    method: "CreateAutomation",
+                    body: [
+                        "prompt": .string(prompt),
+                        "projectSlug": .string(projectSlug)
+                    ]
+                )
+                let id = res["id"]?.stringValue ?? sidecarId
+                return AutomationItem(
+                    id: id,
+                    title: displayName,
+                    projectSlug: projectSlug,
+                    scheduleSummary: "\(projectSlug) · \(AutomationScheduleCodec.humanReadableSchedule(from: cronExpression)) · Flash",
+                    section: .scheduled,
+                    nextRunText: AutomationScheduleCodec.nextFireDescription(from: cronExpression),
+                    lastRunText: "Created just now",
+                    prompt: prompt,
+                    cronExpression: cronExpression
+                )
+            }
+            throw error
+        }
     }
 
-    public func setAutomationPaused(automationId: String, isPaused: Bool) async throws {
+    public func updateAutomation(
+        automationId: String,
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        projectSlug: String,
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil,
+        description: String = "",
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        await ensureLocalProjectIndex()
+        let resolvedLocalProjectId: String? = {
+            if let explicit = Self.nonEmptyString(projectId) { return explicit }
+            let key = projectSlug.replacingOccurrences(of: "cloud:", with: "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return cachedLocalProjectIdByName[key]
+        }()
+
+        let body = Self.buildManageSidecarConfigBody(
+            sidecarId: automationId,
+            action: .update,
+            displayName: displayName,
+            prompt: prompt,
+            cronExpression: cronExpression,
+            description: description,
+            projectId: resolvedLocalProjectId,
+            allProjects: resolvedLocalProjectId == nil && allProjects,
+            modelArg: modelArg
+        )
         _ = try await callUnaryJSON(
-            method: "SetAutomationPaused",
+            method: "ManageSidecar",
+            body: body,
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 15.0
+        )
+        if let pid = resolvedLocalProjectId, !pid.isEmpty {
+            _ = try? await callUnaryJSON(
+                method: "ManageSidecar",
+                body: [
+                    "sidecarId": .string(automationId),
+                    "action": .string(SidecarManageAction.setProject.rawValue),
+                    "projectId": .string(pid)
+                ],
+                instanceUuidOverride: instanceUuidOverride,
+                timeoutInterval: 10.0
+            )
+        } else if allProjects {
+            _ = try? await callUnaryJSON(
+                method: "ManageSidecar",
+                body: [
+                    "sidecarId": .string(automationId),
+                    "action": .string(SidecarManageAction.setAllProjects.rawValue),
+                    "allProjects": .bool(true)
+                ],
+                instanceUuidOverride: instanceUuidOverride,
+                timeoutInterval: 10.0
+            )
+        }
+    }
+
+    public func triggerAutomationNow(
+        automationId: String,
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        do {
+            _ = try await callUnaryJSON(
+                method: "ManageSidecar",
+                body: [
+                    "sidecarId": .string(automationId),
+                    "action": .string(SidecarManageAction.runNow.rawValue)
+                ],
+                instanceUuidOverride: instanceUuidOverride,
+                timeoutInterval: 15.0
+            )
+        } catch {
+            if channel == .directHost && Self.isMethodUnimplementedError(error) {
+                _ = try await callUnaryJSON(
+                    method: "TriggerAutomationNow",
+                    body: ["automationId": .string(automationId)]
+                )
+                return
+            }
+            throw error
+        }
+    }
+
+    public func setAutomationPaused(
+        automationId: String,
+        isPaused: Bool,
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        let action: SidecarManageAction = isPaused ? .disable : .enable
+        do {
+            _ = try await callUnaryJSON(
+                method: "ManageSidecar",
+                body: [
+                    "sidecarId": .string(automationId),
+                    "action": .string(action.rawValue)
+                ],
+                instanceUuidOverride: instanceUuidOverride,
+                timeoutInterval: 12.0
+            )
+        } catch {
+            if channel == .directHost && Self.isMethodUnimplementedError(error) {
+                _ = try await callUnaryJSON(
+                    method: "SetAutomationPaused",
+                    body: [
+                        "automationId": .string(automationId),
+                        "isPaused": .bool(isPaused)
+                    ]
+                )
+                return
+            }
+            throw error
+        }
+    }
+
+    public func deleteAutomation(
+        automationId: String,
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        _ = try await callUnaryJSON(
+            method: "ManageSidecar",
             body: [
-                "automationId": .string(automationId),
-                "isPaused": .bool(isPaused)
-            ]
+                "sidecarId": .string(automationId),
+                "action": .string(SidecarManageAction.delete.rawValue)
+            ],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 12.0
+        )
+    }
+
+    public func restartAutomation(
+        automationId: String,
+        instanceUuidOverride: String? = nil
+    ) async throws {
+        _ = try await callUnaryJSON(
+            method: "ManageSidecar",
+            body: [
+                "sidecarId": .string(automationId),
+                "action": .string(SidecarManageAction.restart.rawValue)
+            ],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 12.0
         )
     }
 
     // MARK: - Artifacts & Turn Diff RPC (`UE11`, `UE12` + Git VCS)
 
-    public func getArtifactSnapshots(cascadeId: String) async throws -> [ArtifactSnapshot] {
+    public func getArtifactSnapshots(cascadeId: String, instanceUuidOverride: String? = nil) async throws -> [ArtifactSnapshot] {
         let res = try await callUnaryJSON(
             method: "GetArtifactSnapshots",
-            body: ["cascadeId": .string(cascadeId)]
+            body: ["cascadeId": .string(cascadeId)],
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: 8.0
         )
-        guard let arr = res["artifacts"]?.arrayValue else { return [] }
+        let arr = res["artifacts"]?.arrayValue
+            ?? res["artifactSnapshots"]?.arrayValue
+            ?? res["snapshots"]?.arrayValue
+            ?? []
         return arr.compactMap { item -> ArtifactSnapshot? in
-            guard let obj = item.objectValue,
-                  let path = obj["artifactPath"]?.stringValue else { return nil }
+            guard let obj = item.objectValue else { return nil }
+            let path = obj["artifactPath"]?.stringValue
+                ?? obj["path"]?.stringValue
+                ?? obj["fileUri"]?.stringValue
+                ?? obj["uri"]?.stringValue
+            guard let path, !path.isEmpty else { return nil }
             let kind: ArtifactKind = {
                 if let rawKind = obj["kind"]?.stringValue,
                    let parsed = ArtifactKind(rawValue: rawKind) {
@@ -3457,23 +4144,134 @@ public actor AntigravityRPCClient {
                 if lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") || lower.hasSuffix(".webm") {
                     return .videoAsset
                 }
-                if lower.hasSuffix(".html") { return .generativeUIHTML }
+                if lower.hasSuffix(".html") || lower.hasSuffix(".htm") { return .generativeUIHTML }
                 if lower.hasSuffix(".url.json") { return .urlBookmark }
                 if lower.contains("walkthrough") { return .walkthrough }
                 if lower.contains("task") { return .taskList }
                 return .implementationPlan
             }()
+            let content = obj["content"]?.stringValue
+                ?? obj["textContent"]?.stringValue
+                ?? obj["body"]?.stringValue
+                ?? ""
             return ArtifactSnapshot(
                 artifactPath: path,
                 title: obj["title"]?.stringValue ?? (path as NSString).lastPathComponent,
                 summary: obj["summary"]?.stringValue ?? "",
                 kind: kind,
-                content: obj["content"]?.stringValue ?? "",
+                content: content,
                 requestFeedback: obj["requestFeedback"]?.boolValue ?? false,
                 userFacing: obj["userFacing"]?.boolValue ?? true,
                 version: obj["version"]?.intValue ?? 1
             )
         }
+    }
+
+    /// Resolves a host-local `file:///...` artifact (such as an `<agent-embed src="file:///.../fig4.html">`
+    /// widget or generated image) through Companion Bridge `ReadArtifactFile`, `GetArtifactSnapshots`,
+    /// or `GetRevisionArtifact` across both Direct LAN and Cloud Relay channels.
+    public func fetchRemoteArtifactResource(
+        uri: String,
+        cascadeId: String,
+        instanceUuidOverride: String? = nil
+    ) async -> ResolvedEmbedResource? {
+        let normalizedTarget = ResolvedEmbedResource.normalizePath(uri)
+        let targetBaseName = (normalizedTarget as NSString).lastPathComponent.lowercased()
+        guard !normalizedTarget.isEmpty else { return nil }
+
+        // 1. Companion Bridge / Direct LAN `ReadArtifactFile` (supports HTML, SVG, MD, PNG/JPG/WebP/GIF)
+        if channel == .directHost {
+            if let res = try? await callUnaryJSON(
+                method: "ReadArtifactFile",
+                body: [
+                    "uri": .string(uri),
+                    "path": .string(normalizedTarget),
+                    "cascadeId": .string(cascadeId)
+                ],
+                timeoutInterval: 8.0
+            ), res["ok"]?.boolValue != false,
+               let rawContent = res["content"]?.stringValue,
+               !rawContent.isEmpty {
+                let mime = res["mimeType"]?.stringValue ?? ResolvedEmbedResource.inferredMimeType(for: uri)
+                let encoding = (res["encoding"]?.stringValue ?? "utf-8").lowercased()
+                if encoding == "base64", let data = Data(base64Encoded: rawContent, options: .ignoreUnknownCharacters) {
+                    let text = mime.lowercased().hasPrefix("text/") || mime.lowercased().contains("svg")
+                        ? String(data: data, encoding: .utf8)
+                        : nil
+                    return ResolvedEmbedResource(
+                        uri: uri,
+                        normalizedPath: normalizedTarget,
+                        mimeType: mime,
+                        textContent: text,
+                        binaryData: data,
+                        source: .remoteHost
+                    )
+                } else {
+                    return ResolvedEmbedResource(
+                        uri: uri,
+                        normalizedPath: normalizedTarget,
+                        mimeType: mime,
+                        textContent: rawContent,
+                        binaryData: Data(rawContent.utf8),
+                        source: .remoteHost
+                    )
+                }
+            }
+        }
+
+        // 2. Upstream `LanguageServerService/GetArtifactSnapshots` (works over Direct LAN & Official Cloud Relay!)
+        if !cascadeId.isEmpty,
+           let snapshots = try? await getArtifactSnapshots(cascadeId: cascadeId, instanceUuidOverride: instanceUuidOverride) {
+            if let matched = snapshots.first(where: { snap in
+                let snapNorm = ResolvedEmbedResource.normalizePath(snap.artifactPath)
+                if snapNorm == normalizedTarget { return true }
+                if !targetBaseName.isEmpty && (snapNorm as NSString).lastPathComponent.lowercased() == targetBaseName {
+                    return true
+                }
+                return false
+            }), !matched.content.isEmpty {
+                return ResolvedEmbedResource(
+                    uri: uri,
+                    normalizedPath: normalizedTarget,
+                    mimeType: ResolvedEmbedResource.inferredMimeType(for: uri),
+                    textContent: matched.content,
+                    binaryData: Data(matched.content.utf8),
+                    source: .artifactSnapshot
+                )
+            }
+        }
+
+        // 3. Upstream `LanguageServerService/GetRevisionArtifact` fallback
+        if !cascadeId.isEmpty {
+            let revBodies: [[String: JSONValue]] = [
+                ["cascadeId": .string(cascadeId), "artifactPath": .string(normalizedTarget)],
+                ["trajectoryId": .string(cascadeId), "fileUri": .string(uri)]
+            ]
+            for reqBody in revBodies {
+                if let res = try? await callUnaryJSON(
+                    method: "GetRevisionArtifact",
+                    body: reqBody,
+                    instanceUuidOverride: instanceUuidOverride,
+                    timeoutInterval: 6.0
+                ) {
+                    let content = res["content"]?.stringValue
+                        ?? res["artifact"]?.objectValue?["content"]?.stringValue
+                        ?? res["text"]?.stringValue
+                    if let content, !content.isEmpty {
+                        return ResolvedEmbedResource(
+                            uri: uri,
+                            normalizedPath: normalizedTarget,
+                            mimeType: ResolvedEmbedResource.inferredMimeType(for: uri),
+                            textContent: content,
+                            binaryData: Data(content.utf8),
+                            source: .artifactSnapshot
+                        )
+                    }
+                }
+            }
+        }
+
+        return nil
     }
 
     public func sendPlanReviewComments(cascadeId: String, comments: [PlanInlineComment]) async throws {
@@ -4764,10 +5562,17 @@ public actor AntigravityRPCClient {
             ?? nonEmptyString(vf["absolutePathUri"]?.stringValue)
             ?? nonEmptyString(vf["absolutePath"]?.stringValue)
             ?? nonEmptyString(vf["path"]?.stringValue) {
+            var capturedViewContent: String? = nil
+            if ResolvedEmbedResource.isEmbeddableTextArtifactPath(uri),
+               let rawContent = nonEmptyString(vf["content"]?.stringValue),
+               rawContent.utf8.count <= 524_288 {
+                capturedViewContent = rawContent
+            }
             viewFilePayload = ViewFilePayload(
                 fileUri: uri,
                 startLine: vf["startLine"]?.intValue ?? 1,
-                endLine: vf["endLine"]?.intValue ?? 120
+                endLine: vf["endLine"]?.intValue ?? 120,
+                fileContent: capturedViewContent
             )
             if stepType == .unspecified { stepType = .viewFile }
         } else if let ld = obj["listDirectory"]?.objectValue,
@@ -4804,6 +5609,7 @@ public actor AntigravityRPCClient {
             ?? obj["fileChange"]?.objectValue
         if let ca = caCandidate {
             let actionSpec = ca["actionSpec"]?.objectValue
+            let createFileSpec = actionSpec?["createFile"]?.objectValue
             let uri = nonEmptyString(ca["targetFileUri"]?.stringValue)
                 ?? nonEmptyString(ca["fileUri"]?.stringValue)
                 ?? nonEmptyString(ca["targetFile"]?.stringValue)
@@ -4813,20 +5619,106 @@ public actor AntigravityRPCClient {
                 ?? nonEmptyString(ca["absolutePath"]?.stringValue)
                 ?? nonEmptyString(ca["filePath"]?.stringValue)
                 ?? nonEmptyString(ca["path"]?.stringValue)
-                ?? nonEmptyString(actionSpec?["createFile"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
+                ?? nonEmptyString(createFileSpec?["path"]?.objectValue?["absoluteUri"]?.stringValue)
                 ?? nonEmptyString(actionSpec?["insertBlock"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
                 ?? nonEmptyString(actionSpec?["editFile"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
                 ?? nonEmptyString(actionSpec?["replaceFileContent"]?.objectValue?["path"]?.objectValue?["absoluteUri"]?.stringValue)
             if let uri {
+                let lowerUri = uri.lowercased()
+                let isArtifact = (ca["artifactMetadata"] != nil)
+                    || (ca["isArtifactFile"]?.boolValue == true)
+                    || lowerUri.contains("/.gemini/")
+                    || lowerUri.contains("/brain/")
+                var capturedContent: String? = nil
+                if isArtifact || ResolvedEmbedResource.isEmbeddableTextArtifactPath(uri) {
+                    let directCandidates: [String?] = [
+                        ca["codeContent"]?.stringValue,
+                        ca["content"]?.stringValue,
+                        ca["fileContent"]?.stringValue,
+                        createFileSpec?["codeContent"]?.stringValue,
+                        createFileSpec?["content"]?.stringValue,
+                        createFileSpec?["fileContent"]?.stringValue,
+                        createFileSpec?["instruction"]?.stringValue
+                    ]
+                    for cand in directCandidates {
+                        if let c = nonEmptyString(cand), c.utf8.count <= 524_288 {
+                            capturedContent = c
+                            break
+                        }
+                    }
+                    // Fallback: reconstruct newly created artifact content from `actionResult.edit.diff.unifiedDiff.lines`
+                    if capturedContent == nil,
+                       let diffLines = ca["actionResult"]?.objectValue?["edit"]?.objectValue?["diff"]?.objectValue?["unifiedDiff"]?.objectValue?["lines"]?.arrayValue {
+                        var addedLines: [String] = []
+                        var hasRemoved = false
+                        for lineItem in diffLines {
+                            if let lineObj = lineItem.objectValue {
+                                let lineText = lineObj["text"]?.stringValue ?? ""
+                                let kind = (lineObj["type"]?.stringValue ?? "").uppercased()
+                                if kind.contains("DELETE") || kind.contains("REMOVE") {
+                                    hasRemoved = true
+                                } else {
+                                    addedLines.append(lineText)
+                                }
+                            } else if let rawLine = lineItem.stringValue {
+                                if rawLine.hasPrefix("+") && !rawLine.hasPrefix("+++") {
+                                    addedLines.append(String(rawLine.dropFirst()))
+                                } else if rawLine.hasPrefix("-") && !rawLine.hasPrefix("---") {
+                                    hasRemoved = true
+                                }
+                            }
+                        }
+                        if !hasRemoved && !addedLines.isEmpty {
+                            let joined = addedLines.joined(separator: "\n")
+                            if joined.utf8.count <= 524_288 {
+                                capturedContent = joined
+                            }
+                        }
+                    }
+                }
+
                 codeActionPayload = CodeActionPayload(
                     targetFileUri: uri,
                     description: nonEmptyString(ca["description"]?.stringValue)
                         ?? nonEmptyString(ca["instruction"]?.stringValue)
                         ?? "Updated file",
                     additions: ca["additions"]?.intValue ?? 0,
-                    deletions: ca["deletions"]?.intValue ?? 0
+                    deletions: ca["deletions"]?.intValue ?? 0,
+                    isArtifactFile: isArtifact,
+                    fileContent: capturedContent
                 )
                 if stepType == .unspecified { stepType = .codeAction }
+            }
+        }
+
+        // Decode generateImage / readUrlContent / browserSubagent into lightweight display payloads
+        if plannerPayload == nil {
+            if let genImg = obj["generateImage"]?.objectValue {
+                let imgPath = nonEmptyString(genImg["imagePath"]?.stringValue)
+                    ?? nonEmptyString(genImg["outputPath"]?.stringValue)
+                    ?? nonEmptyString(genImg["savedPath"]?.stringValue)
+                    ?? nonEmptyString(genImg["artifactUri"]?.stringValue)
+                let prompt = nonEmptyString(genImg["prompt"]?.stringValue) ?? "Generated image"
+                if let imgPath {
+                    let fileURI = imgPath.contains("://") ? imgPath : "file://\(imgPath)"
+                    plannerPayload = PlannerResponsePayload(
+                        response: "![\(prompt)](\(fileURI))",
+                        referencedFiles: [fileURI]
+                    )
+                    stepType = .generateImage
+                }
+            } else if let readUrl = obj["readUrlContent"]?.objectValue {
+                let targetUrl = nonEmptyString(readUrl["url"]?.stringValue) ?? nonEmptyString(readUrl["uri"]?.stringValue)
+                if let targetUrl {
+                    plannerPayload = PlannerResponsePayload(response: targetUrl)
+                    stepType = .readUrlContent
+                }
+            } else if let browser = obj["browserSubagent"]?.objectValue {
+                let taskSummary = nonEmptyString(browser["taskName"]?.stringValue)
+                    ?? nonEmptyString(browser["task"]?.stringValue)
+                    ?? "Browser automation task"
+                plannerPayload = PlannerResponsePayload(response: taskSummary)
+                stepType = .browserSubagent
             }
         }
 
@@ -4836,8 +5728,9 @@ public actor AntigravityRPCClient {
                 taskName: nonEmptyString(tb["taskName"]?.stringValue) ?? "Task",
                 taskStatus: nonEmptyString(tb["taskStatus"]?.stringValue) ?? "",
                 taskSummary: nonEmptyString(tb["taskSummary"]?.stringValue) ?? "",
-                completedCount: tb["completedCount"]?.intValue ?? 1,
-                totalCount: tb["totalCount"]?.intValue ?? 4
+                completedCount: tb["completedCount"]?.intValue ?? 0,
+                totalCount: tb["totalCount"]?.intValue ?? 0,
+                elapsedLabel: nonEmptyString(tb["elapsedLabel"]?.stringValue) ?? ""
             )
             if stepType == .unspecified { stepType = .taskBoundary }
         }
@@ -4970,13 +5863,16 @@ public actor AntigravityRPCClient {
             ?? Int(obj["stepCount"]?.stringValue ?? "")
             ?? 0
 
-        let cloudProjectId = Self.nonEmptyString(trajMeta?["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(trajMeta?["project_id"]?.stringValue)
-            ?? Self.nonEmptyString(obj["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(obj["project_id"]?.stringValue)
-            ?? Self.nonEmptyString(annotations?["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(obj["projectEnvConfig"]?.objectValue?["projectId"]?.stringValue)
-            ?? Self.nonEmptyString(obj["metadata"]?.objectValue?["projectId"]?.stringValue)
+        let projectIdCandidates: [String?] = [
+            trajMeta?["projectId"]?.stringValue,
+            trajMeta?["project_id"]?.stringValue,
+            obj["projectId"]?.stringValue,
+            obj["project_id"]?.stringValue,
+            annotations?["projectId"]?.stringValue,
+            obj["projectEnvConfig"]?.objectValue?["projectId"]?.stringValue,
+            obj["metadata"]?.objectValue?["projectId"]?.stringValue
+        ]
+        let cloudProjectId = projectIdCandidates.compactMap(Self.nonEmptyString).first
         let explicitCloudBool = (obj["cloud"]?.boolValue == true)
             || (obj["isCloud"]?.boolValue == true)
             || (trajMeta?["isCloud"]?.boolValue == true)
@@ -5126,30 +6022,34 @@ public actor AntigravityRPCClient {
             )
         ].compactMap { $0 }
         let updatedDate = candidateUpdateDates.max() ?? Self.parseProtoTimestamp(obj["createdTime"])
-        let lastViewedDate = Self.parseProtoTimestamp(
-            annotations?["lastUserViewTime"]
-                ?? annotations?["last_user_view_time"]
-                ?? annotations?["lastViewedTime"]
-                ?? annotations?["lastReadTime"]
-                ?? obj["lastUserViewTime"]
-                ?? obj["last_user_view_time"]
-                ?? obj["lastViewedTime"]
-                ?? trajMeta?["lastUserViewTime"]
-        )
+        let lastViewedCandidates: [JSONValue?] = [
+            annotations?["lastUserViewTime"],
+            annotations?["last_user_view_time"],
+            annotations?["lastViewedTime"],
+            annotations?["lastReadTime"],
+            obj["lastUserViewTime"],
+            obj["last_user_view_time"],
+            obj["lastViewedTime"],
+            trajMeta?["lastUserViewTime"]
+        ]
+        let lastViewedDate = lastViewedCandidates.compactMap { Self.parseProtoTimestamp($0) }.first
         let updatedAt = updatedDate ?? now
         let relativeLabel = Self.formatRelativeTimeLabel(from: updatedDate, now: now)
 
-        let explicitUnread = obj["isUnread"]?.boolValue
-            ?? obj["unread"]?.boolValue
-            ?? obj["hasUnread"]?.boolValue
-            ?? obj["hasUnreadMessages"]?.boolValue
-            ?? obj["hasUnseenUpdates"]?.boolValue
-            ?? obj["unseen"]?.boolValue
-            ?? annotations?["isUnread"]?.boolValue
-            ?? annotations?["unread"]?.boolValue
-            ?? annotations?["hasUnread"]?.boolValue
-            ?? trajMeta?["unread"]?.boolValue
-            ?? trajMeta?["isUnread"]?.boolValue
+        let unreadCandidates: [Bool?] = [
+            obj["isUnread"]?.boolValue,
+            obj["unread"]?.boolValue,
+            obj["hasUnread"]?.boolValue,
+            obj["hasUnreadMessages"]?.boolValue,
+            obj["hasUnseenUpdates"]?.boolValue,
+            obj["unseen"]?.boolValue,
+            annotations?["isUnread"]?.boolValue,
+            annotations?["unread"]?.boolValue,
+            annotations?["hasUnread"]?.boolValue,
+            trajMeta?["unread"]?.boolValue,
+            trajMeta?["isUnread"]?.boolValue
+        ]
+        let explicitUnread: Bool? = unreadCandidates.compactMap { $0 }.first
 
         let isUnread: Bool
         if let explicitUnread {

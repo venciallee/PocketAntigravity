@@ -215,11 +215,32 @@ public enum ProtobufStepCodec {
                     let desc = nonEmpty(extractStringField(nested, targetField: 4))
                         ?? nonEmpty(extractStringField(nested, targetField: 2))
                         ?? "Modified file"
+                    let lowerUri = uri.lowercased()
+                    let isArtifact = lowerUri.contains("/.gemini/") || lowerUri.contains("/brain/")
+                    var capturedContent: String? = nil
+                    if ResolvedEmbedResource.isEmbeddableTextArtifactPath(uri) || isArtifact {
+                        // Look for written content in common code_action / write_to_file / create_file fields (capped at 512 KB)
+                        let candidates: [String?] = [
+                            extractStringField(nested, targetField: 2),
+                            extractStringField(nested, targetField: 3),
+                            extractNestedStringField(nested, outerField: 1, innerField: 2),
+                            extractNestedStringField(nested, outerField: 1, innerField: 3),
+                            extractNestedStringField(nested, outerField: 2, innerField: 2)
+                        ]
+                        for cand in candidates {
+                            if let c = cand, c.utf8.count <= 524_288, Self.looksLikeArtifactDocument(c, forURI: uri) {
+                                capturedContent = c
+                                break
+                            }
+                        }
+                    }
                     codeActionPayload = CodeActionPayload(
                         targetFileUri: uri,
                         description: desc,
                         additions: 0,
-                        deletions: 0
+                        deletions: 0,
+                        isArtifactFile: isArtifact,
+                        fileContent: capturedContent
                     )
                     if stepType == .unspecified { stepType = .codeAction }
                 }
@@ -303,7 +324,10 @@ public enum ProtobufStepCodec {
                     taskBoundaryPayload = TaskBoundaryPayload(
                         taskName: tName,
                         taskStatus: tStatus,
-                        taskSummary: tSummary
+                        taskSummary: tSummary,
+                        completedCount: 0,
+                        totalCount: 0,
+                        elapsedLabel: ""
                     )
                     stepType = .taskBoundary
                 }
@@ -824,6 +848,28 @@ public enum ProtobufStepCodec {
             return nil
         }
         return value
+    }
+
+    private static func looksLikeArtifactDocument(_ content: String, forURI uri: String) -> Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 16 else { return false }
+        let lowerURI = ResolvedEmbedResource.normalizePath(uri).lowercased()
+        let lowerBody = trimmed.lowercased()
+        if lowerURI.hasSuffix(".html") || lowerURI.hasSuffix(".htm") {
+            return lowerBody.contains("<html")
+                || lowerBody.contains("<!doctype")
+                || lowerBody.contains("<div")
+                || lowerBody.contains("<svg")
+                || lowerBody.contains("<style")
+                || lowerBody.contains("<script")
+        }
+        if lowerURI.hasSuffix(".svg") {
+            return lowerBody.contains("<svg")
+        }
+        if lowerURI.hasSuffix(".json") {
+            return trimmed.hasPrefix("{") || trimmed.hasPrefix("[")
+        }
+        return trimmed.contains("\n") || trimmed.count >= 48
     }
 
     private static func readLengthDelimited(from data: Data, offset: inout Int) -> Data? {

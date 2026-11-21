@@ -110,6 +110,10 @@ public final class AntigravitySessionStore {
     public var summaries: [CascadeSummary]
     public var automations: [AutomationItem]
     public var automationPromptDraft: String = ""
+    public var isLoadingAutomations: Bool = false
+    public var isMutatingAutomation: Bool = false
+    public var automationsErrorText: String? = nil
+    public var isAutomationsAuthExpired: Bool = false
     public var contextCandidates: [ContextCandidateItem]
     public var contextSearchQuery: String = ""
     public var selectedContextCategoryFilter: ContextCategory? = nil
@@ -124,6 +128,9 @@ public final class AntigravitySessionStore {
     public var unreadStreamingStepCount: Int = 0
 
     // MARK: - Composer, Model & Permission State (`UE07`, `UE08`, `UE09`)
+    public static let defaultAutomationGuidedPrompt = "Guide me through creating an automated task"
+    public var pendingDraftConversation: PendingDraftConversation? = nil
+    public var composerWorkflowCommand: String? = nil
     public var composerDraftText: String = ""
     public var composerAttachments: [ComposerAttachmentChip] = []
     public var selectedModelConfig: CascadeModelConfig
@@ -138,6 +145,9 @@ public final class AntigravitySessionStore {
 
     /// `true` when the active conversation or selected project targets Antigravity Cloud / Remote Agents.
     public var isActiveSessionCloud: Bool {
+        if let draft = pendingDraftConversation, activeCascadeId.isEmpty {
+            return draft.isCloud
+        }
         if activeSummary?.isCloud == true { return true }
         if activeCascadeId.hasPrefix("v1/") { return true }
         if let slug = activeSummary?.projectSlug,
@@ -181,6 +191,7 @@ public final class AntigravitySessionStore {
     public var activeTurnGrants: Set<String> = ["ReadOnlyWorkspace", "verification/*"]
     public var activeArtifacts: [ArtifactSnapshot]
     public var selectedArtifactPath: String = "/brain/implementation_plan.md"
+    public var resolvedEmbedCache: [String: ResolvedEmbedResource] = [:]
     public var planChanges: [PlanProposedFileChange]
     public var planComments: [PlanInlineComment]
 
@@ -260,6 +271,7 @@ public final class AntigravitySessionStore {
     private var optimisticActiveUntilByCascadeId: [String: Date] = [:]
     private var consecutiveSyncFailures: Int = 0
     private var backgroundPollCounter: Int = 0
+    private var lastAutomationsSyncAt: Date? = nil
     private var syncedConfigCascadeIds: Set<String> = []
     internal var locallyCreatedEmptyCascadeIds: Set<String> = []
     private var stepSyncGeneration: UInt64 = 0
@@ -363,6 +375,10 @@ public final class AntigravitySessionStore {
             host: activeHost,
             csrfToken: "csrf-antigravity-ios-session-token"
         )
+        self.harvestEmbedResources(from: activeArtifacts)
+        for (_, stepList) in mergedSteps {
+            self.harvestEmbedResources(from: stepList)
+        }
     }
 
     // MARK: - Computed Properties for Agents Home & Project Hub (`UE01`, `UE02`, `UE04`)
@@ -635,7 +651,9 @@ public final class AntigravitySessionStore {
     }
 
     public var canSendCurrentDraft: Bool {
-        !composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerAttachments.isEmpty
+        !composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !composerAttachments.isEmpty
+            || !(composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     // MARK: - Live Backend Login, Pairing & Streaming Actions
@@ -957,24 +975,11 @@ public final class AntigravitySessionStore {
                 handshake: handshake
             )
 
-            // Register all reachable Cloud Relay instances in `hosts` so the user can switch Macs from Home
-            for inst in handshake.availableRelayInstances where inst.uuid != finalUuid {
-                let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? finalRelayURL
-                let peerHost = RemoteHostInstance(
-                    instanceId: inst.uuid,
-                    hostname: inst.name,
-                    version: inst.version,
-                    channel: .cloudRelay,
-                    endpointURL: instURL,
-                    isOnline: inst.status.isReachable,
-                    latencyMs: handshake.latencyMs
-                )
-                if let existingIdx = hosts.firstIndex(where: { $0.instanceId == peerHost.instanceId }) {
-                    hosts[existingIdx] = peerHost
-                } else {
-                    hosts.append(peerHost)
-                }
-            }
+            // Sync all Cloud Relay instances (online & offline) into `hosts` so Home reflects per-device reachability
+            syncRelayInstancesToHosts(
+                handshake.availableRelayInstances,
+                latencyMs: handshake.latencyMs
+            )
 
             await KeychainStore.shared.saveCredentials(
                 SavedBackendCredentials(
@@ -1058,6 +1063,13 @@ public final class AntigravitySessionStore {
         lastStreamReopenAttemptAt = .distantPast
         pendingOutboxCount = 0
         connectionLifecyclePhase = .disconnected
+        lastAutomationsSyncAt = nil
+        isLoadingAutomations = false
+        isMutatingAutomation = false
+        automationsErrorText = nil
+        isAutomationsAuthExpired = false
+        pendingDraftConversation = nil
+        composerWorkflowCommand = nil
         optimisticActiveUntilByCascadeId.removeAll()
         syncedConfigCascadeIds.removeAll()
         locallyCreatedEmptyCascadeIds.removeAll()
@@ -1340,6 +1352,21 @@ public final class AntigravitySessionStore {
         activeHost = updatedHost
         if let idx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
             hosts[idx] = updatedHost
+        }
+        if updatedHost.channel == .cloudRelay || !isDeviceNetworkReachable {
+            for idx in hosts.indices where hosts[idx].channel == updatedHost.channel || !isDeviceNetworkReachable {
+                hosts[idx].isOnline = false
+            }
+            availableRelayInstances = availableRelayInstances.map { inst in
+                RelayInstanceInfo(
+                    uuid: inst.uuid,
+                    name: inst.name,
+                    version: inst.version,
+                    supportsChunking: inst.supportsChunking,
+                    status: .disconnected,
+                    updatedAt: inst.updatedAt
+                )
+            }
         }
 
         connectionErrorText = error.localizedDescription
@@ -1844,9 +1871,14 @@ public final class AntigravitySessionStore {
         stepsByCascadeId = [:]
         syncedConfigCascadeIds.removeAll()
         activeTurnDiffs = []
+        pendingDraftConversation = nil
+        composerWorkflowCommand = nil
         composerDraftText = ""
         composerAttachments = []
         stepLoadErrorText = nil
+        automationsErrorText = nil
+        isAutomationsAuthExpired = false
+        lastAutomationsSyncAt = nil
         automations = []
 
         let projectsSnapshot = projects
@@ -2116,32 +2148,84 @@ public final class AntigravitySessionStore {
         }
     }
 
-    private func applyRelayProbeMetadata(_ probe: HostReachabilityProbeResult) {
-        lastPingLatencyMs = probe.latencyMs
-        if !probe.availableRelayInstances.isEmpty {
-            availableRelayInstances = probe.availableRelayInstances
-            let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
-            let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
-            for inst in probe.availableRelayInstances {
-                let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
-                let peerHost = RemoteHostInstance(
-                    instanceId: inst.uuid,
-                    hostname: inst.name,
-                    version: inst.version,
-                    channel: .cloudRelay,
-                    endpointURL: instURL,
-                    isOnline: inst.status.isReachable,
-                    latencyMs: probe.latencyMs
-                )
-                if let idx = hosts.firstIndex(where: { $0.instanceId == peerHost.instanceId }) {
-                    hosts[idx] = peerHost
-                } else {
-                    hosts.append(peerHost)
+    internal func syncRelayInstancesToHosts(
+        _ relayInstances: [RelayInstanceInfo],
+        latencyMs: Int? = nil,
+        preferredActiveInstance: RelayInstanceInfo? = nil
+    ) {
+        guard !relayInstances.isEmpty else { return }
+        availableRelayInstances = relayInstances
+
+        let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
+        let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
+        let effectiveLatency = latencyMs ?? lastPingLatencyMs ?? activeHost.latencyMs
+        let seenIds = Set(relayInstances.map(\.uuid))
+
+        for inst in relayInstances {
+            let instURL = URL(string: "\(originPrefix)/r/\(inst.uuid)") ?? activeHost.endpointURL
+            let peerHost = RemoteHostInstance(
+                instanceId: inst.uuid,
+                hostname: inst.name,
+                version: inst.version,
+                channel: .cloudRelay,
+                endpointURL: instURL,
+                isOnline: inst.status.isReachable,
+                latencyMs: effectiveLatency
+            )
+            if let idx = hosts.firstIndex(where: { $0.instanceId == inst.uuid }) {
+                hosts[idx] = peerHost
+                hosts.removeAll {
+                    $0.channel == .cloudRelay && $0.instanceId != inst.uuid && $0.instanceId == inst.name
                 }
+            } else if let slugIdx = hosts.firstIndex(where: { $0.channel == .cloudRelay && $0.instanceId == inst.name }) {
+                hosts[slugIdx] = peerHost
+            } else {
+                hosts.append(peerHost)
             }
         }
 
-        if let activeInst = probe.activeRelayInstance {
+        // Any previously cached Cloud Relay device absent from the latest ListInstances snapshot is no longer online
+        for idx in hosts.indices where hosts[idx].channel == .cloudRelay && !seenIds.contains(hosts[idx].instanceId) {
+            hosts[idx].isOnline = false
+        }
+
+        if let activeInst = preferredActiveInstance {
+            let nextURL = URL(string: "\(originPrefix)/r/\(activeInst.uuid)") ?? activeHost.endpointURL
+            let refreshedHost = RemoteHostInstance(
+                instanceId: activeInst.uuid,
+                hostname: activeInst.name,
+                version: activeInst.version,
+                channel: .cloudRelay,
+                endpointURL: nextURL,
+                isOnline: activeInst.status.isReachable,
+                latencyMs: effectiveLatency
+            )
+            activeHost = refreshedHost
+            if let idx = hosts.firstIndex(where: { $0.instanceId == refreshedHost.instanceId }) {
+                hosts[idx] = refreshedHost
+            } else {
+                hosts.insert(refreshedHost, at: 0)
+            }
+        } else if activeHost.channel == .cloudRelay,
+                  let matchedActive = relayInstances.first(where: { $0.uuid == activeHost.instanceId }) {
+            var updatedActive = activeHost
+            updatedActive.hostname = matchedActive.name
+            updatedActive.version = matchedActive.version
+            updatedActive.isOnline = matchedActive.status.isReachable
+            updatedActive.latencyMs = effectiveLatency
+            activeHost = updatedActive
+        }
+    }
+
+    private func applyRelayProbeMetadata(_ probe: HostReachabilityProbeResult) {
+        lastPingLatencyMs = probe.latencyMs
+        if !probe.availableRelayInstances.isEmpty {
+            syncRelayInstancesToHosts(
+                probe.availableRelayInstances,
+                latencyMs: probe.latencyMs,
+                preferredActiveInstance: probe.activeRelayInstance
+            )
+        } else if let activeInst = probe.activeRelayInstance {
             let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
             let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
             let nextURL = URL(string: "\(originPrefix)/r/\(activeInst.uuid)") ?? activeHost.endpointURL
@@ -2151,7 +2235,7 @@ public final class AntigravitySessionStore {
                 version: activeInst.version,
                 channel: .cloudRelay,
                 endpointURL: nextURL,
-                isOnline: true,
+                isOnline: activeInst.status.isReachable,
                 latencyMs: probe.latencyMs
             )
             activeHost = refreshedHost
@@ -2160,7 +2244,6 @@ public final class AntigravitySessionStore {
             } else {
                 hosts.insert(refreshedHost, at: 0)
             }
-            connectionStatusText = "Connected · \(refreshedHost.hostname) · \(probe.latencyMs)ms"
         } else {
             var updatedHost = activeHost
             updatedHost.latencyMs = probe.latencyMs
@@ -2169,8 +2252,8 @@ public final class AntigravitySessionStore {
             if let idx = hosts.firstIndex(where: { $0.instanceId == updatedHost.instanceId }) {
                 hosts[idx] = updatedHost
             }
-            connectionStatusText = "Connected · \(updatedHost.hostname) · \(probe.latencyMs)ms"
         }
+        connectionStatusText = "Connected · \(activeHost.hostname) · \(probe.latencyMs)ms"
     }
 
     private func performLightweightHeartbeatTick(allowFullReconciliation: Bool) async {
@@ -2248,17 +2331,6 @@ public final class AntigravitySessionStore {
                 }
             }
             return false
-        }
-    }
-
-    /// Refreshes automations on demand (initial handshake, Automations tab entry, or manual pull-to-refresh)
-    /// instead of on every periodic summary tick.
-    public func refreshAutomations() async {
-        guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
-        guard isLiveBackendConnected, let client = rpcClient else { return }
-        if let remoteAutos = try? await client.listAutomations() {
-            automations = remoteAutos
-            await projectionStore.saveAutomations(remoteAutos)
         }
     }
 
@@ -2569,12 +2641,13 @@ public final class AntigravitySessionStore {
             }
             if (self?.stepsByCascadeId[cascadeId] ?? []).isEmpty {
                 let cached = await storeRef.loadProjectedSteps(cascadeId: cascadeId)
-                if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
-                    self.stepsByCascadeId[cascadeId] = cached
-                    if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
-                        self.isLoadingSteps = false
+                    if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                        self.stepsByCascadeId[cascadeId] = cached
+                        self.harvestEmbedResources(from: cached)
+                        if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
+                            self.isLoadingSteps = false
+                        }
                     }
-                }
             }
 
             var attempts = 0
@@ -2645,6 +2718,7 @@ public final class AntigravitySessionStore {
                     if !remoteSteps.isEmpty {
                         self.locallyCreatedEmptyCascadeIds.remove(cascadeId)
                         self.stepsByCascadeId[cascadeId] = remoteSteps
+                        self.harvestEmbedResources(from: remoteSteps)
                         await storeRef.saveProjectedSteps(remoteSteps, for: cascadeId)
                         if !self.syncedConfigCascadeIds.contains(cascadeId),
                            let latestCfgStep = remoteSteps.last(where: {
@@ -2782,6 +2856,7 @@ public final class AntigravitySessionStore {
     }
 
     public func selectCascade(_ cascadeId: String) {
+        discardPendingDraftConversation()
         activeCascadeId = cascadeId
         let viewedNow = Date()
         locallyViewedAtByCascadeId[cascadeId] = viewedNow
@@ -2802,11 +2877,13 @@ public final class AntigravitySessionStore {
                 )
             }
         }
-        if let cachedSteps = stepsByCascadeId[cascadeId],
-           let latestCfgStep = cachedSteps.last(where: {
-               $0.type == .userInput && ($0.recordedExecutionMode != nil || $0.recordedModelId != nil)
-           }) {
-            applyRecordedConversationConfig(from: latestCfgStep)
+        if let cachedSteps = stepsByCascadeId[cascadeId] {
+            harvestEmbedResources(from: cachedSteps)
+            if let latestCfgStep = cachedSteps.last(where: {
+                $0.type == .userInput && ($0.recordedExecutionMode != nil || $0.recordedModelId != nil)
+            }) {
+                applyRecordedConversationConfig(from: latestCfgStep)
+            }
         }
         activeRoute = .cascadeChat(cascadeId)
         unreadStreamingStepCount = 0
@@ -2828,6 +2905,138 @@ public final class AntigravitySessionStore {
             }
             syncStepsForCascade(cascadeId, pollUntilIdle: true)
         }
+    }
+
+    // MARK: - Embed & Artifact Resource Resolution (`<agent-embed>`, `file:///` Images & HTML Widgets)
+
+    public func harvestEmbedResources(from steps: [CascadeStep]) {
+        for step in steps {
+            if let ca = step.codeAction, let content = ca.fileContent, !content.isEmpty {
+                let norm = ResolvedEmbedResource.normalizePath(ca.targetFileUri)
+                let res = ResolvedEmbedResource(
+                    uri: ca.targetFileUri,
+                    normalizedPath: norm,
+                    mimeType: ResolvedEmbedResource.inferredMimeType(for: ca.targetFileUri),
+                    textContent: content,
+                    binaryData: Data(content.utf8),
+                    source: .trajectoryStep
+                )
+                storeResolvedEmbedInCache(res)
+            }
+            if let vf = step.viewFile, let content = vf.fileContent, !content.isEmpty {
+                let norm = ResolvedEmbedResource.normalizePath(vf.fileUri)
+                let res = ResolvedEmbedResource(
+                    uri: vf.fileUri,
+                    normalizedPath: norm,
+                    mimeType: ResolvedEmbedResource.inferredMimeType(for: vf.fileUri),
+                    textContent: content,
+                    binaryData: Data(content.utf8),
+                    source: .trajectoryStep
+                )
+                storeResolvedEmbedInCache(res)
+            }
+        }
+    }
+
+    public func harvestEmbedResources(from artifacts: [ArtifactSnapshot]) {
+        for artifact in artifacts where !artifact.content.isEmpty {
+            let norm = ResolvedEmbedResource.normalizePath(artifact.artifactPath)
+            let res = ResolvedEmbedResource(
+                uri: artifact.artifactPath,
+                normalizedPath: norm,
+                mimeType: ResolvedEmbedResource.inferredMimeType(for: artifact.artifactPath),
+                textContent: artifact.content,
+                binaryData: Data(artifact.content.utf8),
+                source: .artifactSnapshot
+            )
+            storeResolvedEmbedInCache(res)
+        }
+    }
+
+    private func storeResolvedEmbedInCache(_ resource: ResolvedEmbedResource) {
+        if resolvedEmbedCache.count >= 64, resolvedEmbedCache[resource.normalizedPath] == nil {
+            if let firstKey = resolvedEmbedCache.keys.first {
+                resolvedEmbedCache.removeValue(forKey: firstKey)
+            }
+        }
+        resolvedEmbedCache[resource.normalizedPath] = resource
+    }
+
+    public func cachedEmbedResource(for uri: String) -> ResolvedEmbedResource? {
+        let norm = ResolvedEmbedResource.normalizePath(uri)
+        if let exact = resolvedEmbedCache[norm] {
+            return exact
+        }
+        let targetBase = (norm as NSString).lastPathComponent.lowercased()
+        guard !targetBase.isEmpty else { return nil }
+        // Match `/brain/<id>/<filename>` even if host home directory prefix differs (e.g. `/Users/...` vs `/home/...`)
+        if norm.contains("/brain/") || norm.contains("/.gemini/") {
+            if let byBase = resolvedEmbedCache.values.first(where: {
+                ($0.normalizedPath as NSString).lastPathComponent.lowercased() == targetBase
+            }) {
+                return byBase
+            }
+        }
+        return nil
+    }
+
+    /// 4-tier resolver for `<agent-embed src="...">` HTML widgets, SVGs, and `file:///` images:
+    /// 1. In-memory trajectory & artifact snapshot cache (works offline & over Cloud Relay)
+    /// 2. Inline `data:` URI decoding
+    /// 3. Direct `http://`/`https://` URL pass-through
+    /// 4. Remote host / Companion Bridge / Desktop `GetArtifactSnapshots` / `GetRevisionArtifact` RPC
+    public func resolveEmbedResource(
+        uri: String,
+        cascadeId: String? = nil
+    ) async -> ResolvedEmbedResource? {
+        let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Tier 1: Local trajectory & artifact cache
+        if let cached = cachedEmbedResource(for: trimmed) {
+            return cached
+        }
+
+        // Tier 2: Inline `data:` URI
+        if trimmed.lowercased().hasPrefix("data:"),
+           let decoded = ResolvedEmbedResource.decodeDataURI(trimmed) {
+            storeResolvedEmbedInCache(decoded)
+            return decoded
+        }
+
+        // Tier 3: Direct HTTP(S) URL
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("https://") || lower.hasPrefix("http://") {
+            let direct = ResolvedEmbedResource(
+                uri: trimmed,
+                normalizedPath: trimmed,
+                mimeType: ResolvedEmbedResource.inferredMimeType(for: trimmed),
+                textContent: nil,
+                binaryData: nil,
+                source: .directNetwork
+            )
+            return direct
+        }
+
+        // Tier 4: Live backend RPC fetch (`ReadArtifactFile` -> `GetArtifactSnapshots` -> `GetRevisionArtifact`)
+        guard (hasPairedBackend || isLiveBackendConnected),
+              isDeviceNetworkReachable,
+              !isNetworkingSuspended,
+              let client = rpcClient else {
+            return nil
+        }
+
+        let effectiveCascadeId = cascadeId ?? activeCascadeId
+        let originUuid = summaries.first(where: { $0.cascadeId == effectiveCascadeId })?.originInstanceUuid
+        if let fetched = await client.fetchRemoteArtifactResource(
+            uri: trimmed,
+            cascadeId: effectiveCascadeId,
+            instanceUuidOverride: originUuid
+        ) {
+            storeResolvedEmbedInCache(fetched)
+            return fetched
+        }
+        return nil
     }
 
     public func resetDisplayOptions() {
@@ -3063,6 +3272,7 @@ public final class AntigravitySessionStore {
         title: String = "New Conversation",
         initialPrompt: String? = nil
     ) -> String {
+        discardPendingDraftConversation()
         let optimisticId = "cas-\(UUID().uuidString.prefix(8).lowercased())"
         let trimmedSlug = projectSlug.trimmingCharacters(in: .whitespacesAndNewlines)
         let project = projects.first(where: { $0.id == trimmedSlug })
@@ -3174,7 +3384,9 @@ public final class AntigravitySessionStore {
                 }
                 if self.activeCascadeId == optimisticId {
                     self.activeCascadeId = realCascadeId
-                    self.activeRoute = .cascadeChat(realCascadeId)
+                    if case .cascadeChat = self.activeRoute {
+                        self.activeRoute = .cascadeChat(realCascadeId)
+                    }
                 }
                 if let prompt = initialPrompt, !prompt.isEmpty {
                     self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
@@ -3250,6 +3462,17 @@ public final class AntigravitySessionStore {
             lastBackendActivityAt = Date()
             lastFullSyncAt = Date()
             cloudAgentWarmingUp = federated.cloudWarmingUp
+
+            if isRelay {
+                let latestInstances = await client.currentCachedRelayInstances()
+                let latestActive = await client.currentActiveRelayInstance()
+                if !latestInstances.isEmpty {
+                    syncRelayInstancesToHosts(
+                        latestInstances,
+                        preferredActiveInstance: latestActive
+                    )
+                }
+            }
 
             let remoteSummaries = federated.summaries
             if !federated.workspaces.isEmpty {
@@ -3413,13 +3636,143 @@ public final class AntigravitySessionStore {
             return
         }
 
-        if includeAutomations && isLiveBackendConnected, let remoteAutos = try? await client.listAutomations() {
-            automations = remoteAutos
-            await projectionStore.saveAutomations(remoteAutos)
+        if isLiveBackendConnected {
+            if includeAutomations {
+                await refreshAutomations(silent: true)
+            } else if !automations.isEmpty {
+                automations = Self.reconcileAutomations(automations, with: summaries)
+            }
         }
     }
 
-    // MARK: - Automations Actions (`UE06`)
+    // MARK: - Automations Actions (`UE06` — Native Antigravity 2.0 Sidecars)
+
+    private static func formatAutomationError(_ error: Error, isCloudRelay: Bool = true) -> String {
+        if let rpcErr = error as? AntigravityRPCError {
+            switch rpcErr {
+            case .unauthorized:
+                if isCloudRelay {
+                    return "Google 登录会话已过期，请点击下方重新登录。"
+                }
+                return "宿主机鉴权失败，请检查配对 Token 或重新配对。"
+            case .httpError(let code, let body):
+                let cleaned = body.trimmingCharacters(in: .whitespacesAndNewlines)
+                if cleaned.isEmpty {
+                    return "Host rejected request (HTTP \(code))."
+                }
+                return "Host error (\(code)): \(String(cleaned.prefix(160)))"
+            case .invalidEndpoint:
+                return "Host endpoint is unavailable."
+            case .decodingError(let msg):
+                return "Invalid response from host: \(msg)"
+            case .interactionRejected:
+                return "Automation action was rejected by host."
+            }
+        }
+        return error.localizedDescription
+    }
+
+    private func recordAutomationError(_ error: Error, silent: Bool = false) {
+        let isRelay = (activeHost.channel == .cloudRelay)
+        if case AntigravityRPCError.unauthorized = error {
+            isAutomationsAuthExpired = true
+            connectionStatusText = isRelay ? "Google Sign-In Expired" : "Offline · \(activeHost.hostname) (Auth Expired)"
+            automationsErrorText = Self.formatAutomationError(error, isCloudRelay: isRelay)
+            return
+        }
+        if !silent || automations.isEmpty {
+            automationsErrorText = Self.formatAutomationError(error, isCloudRelay: isRelay)
+        }
+    }
+
+    /// Reconciles live Cascade summary state (`running`, `waiting`, `error`, `done`) onto Automations
+    /// whose latest `GetSidecarEvents` payload references a `lastRunCascadeId`.
+    public static func reconcileAutomations(
+        _ items: [AutomationItem],
+        with summaries: [CascadeSummary]
+    ) -> [AutomationItem] {
+        guard !items.isEmpty, !summaries.isEmpty else { return items }
+        var byCascadeId: [String: CascadeSummary] = [:]
+        for summary in summaries {
+            byCascadeId[summary.cascadeId] = summary
+        }
+        return items.map { raw in
+            var copy = raw
+            guard let cid = copy.lastRunCascadeId, let summary = byCascadeId[cid] else {
+                return copy
+            }
+            switch summary.status {
+            case .inProgress, .pending:
+                copy.isRunningNow = true
+                copy.needsReview = false
+                copy.lastRunText = "Running · \(summary.relativeTimeLabel)"
+            case .waiting, .blocked:
+                copy.isRunningNow = false
+                copy.needsReview = true
+                copy.lastRunText = "Needs review · \(summary.relativeTimeLabel)"
+            case .error:
+                copy.isRunningNow = false
+                copy.needsReview = true
+                let lower = copy.lastRunText.lowercased()
+                if !lower.hasPrefix("failed") && !lower.hasPrefix("error") {
+                    copy.lastRunText = "Failed · \(summary.relativeTimeLabel)"
+                }
+            case .done:
+                copy.isRunningNow = false
+                if copy.lastRunText.lowercased().hasPrefix("running") {
+                    copy.lastRunText = "Succeeded · \(summary.relativeTimeLabel)"
+                }
+            case .unspecified, .cancelled:
+                copy.isRunningNow = false
+            }
+            return copy
+        }
+    }
+
+    private func preferredLocalAutomationProjectSlug() -> String {
+        if let selected = selectedProject, selected.runtime != .cloud, !selected.isNoProject {
+            return selected.name
+        }
+        if let firstLocal = projects.first(where: { $0.runtime != .cloud && !$0.isNoProject }) {
+            return firstLocal.name
+        }
+        if hasPairedBackend || isLiveBackendConnected {
+            return "This Computer"
+        }
+        return selectedProject?.id ?? "ledger-svc"
+    }
+
+    /// Refreshes native Antigravity 2.0 Automations via `GetSidecars` + `GetSidecarEvents`.
+    public func refreshAutomations(silent: Bool = false) async {
+        if isVerificationMode && !isLiveBackendConnected {
+            return
+        }
+        guard !isNetworkingSuspended, isDeviceNetworkReachable else {
+            return
+        }
+        guard let client = rpcClient, (hasPairedBackend || isLiveBackendConnected) else {
+            return
+        }
+        if !silent {
+            isLoadingAutomations = true
+        }
+        defer {
+            if !silent {
+                isLoadingAutomations = false
+            }
+        }
+        do {
+            let remote = try await client.listAutomations()
+            let reconciled = Self.reconcileAutomations(remote, with: summaries)
+            automations = reconciled
+            automationsErrorText = nil
+            isAutomationsAuthExpired = false
+            lastAutomationsSyncAt = Date()
+            await projectionStore.saveAutomations(reconciled)
+        } catch {
+            recordAutomationError(error, silent: silent)
+        }
+    }
 
     @discardableResult
     public func createAutomationFromPrompt(_ prompt: String = "") -> AutomationItem? {
@@ -3428,62 +3781,484 @@ public final class AntigravitySessionStore {
             : prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
 
-        let slug = selectedProject?.id ?? "ledger-svc"
+        let parsed = AutomationScheduleCodec.parseNaturalLanguagePrompt(raw)
+        let slug = preferredLocalAutomationProjectSlug()
+        let optimisticId = parsed.sidecarId
         let item = AutomationItem(
-            id: "auto-\(UUID().uuidString.prefix(8).lowercased())",
-            title: raw,
+            id: optimisticId,
+            title: parsed.displayName,
             projectSlug: slug,
-            scheduleSummary: "\(slug) · Weekdays at 09:00 · Flash",
+            scheduleSummary: "\(slug) · \(parsed.humanScheduleLabel) · Flash",
             section: .scheduled,
-            nextRunText: "Tomorrow, 09:00",
-            lastRunText: "Created just now",
+            nextRunText: AutomationScheduleCodec.nextFireDescription(from: parsed.cronExpression),
+            lastRunText: (hasPairedBackend || isLiveBackendConnected) ? "Creating..." : "Created just now",
             needsReview: false,
-            isRunningNow: false
+            isRunningNow: false,
+            descriptionText: "\(parsed.humanScheduleLabel): \(parsed.prompt)",
+            prompt: parsed.prompt,
+            cronExpression: parsed.cronExpression,
+            projectId: nil,
+            allProjects: slug == "All projects",
+            modelLabel: "Flash",
+            isEnabled: true,
+            isScheduleBuiltin: true
         )
         automations.insert(item, at: 0)
         automationPromptDraft = ""
+        automationsErrorText = nil
 
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
         let snapshot = automations
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
-            await storeRef.saveAutomations(snapshot)
-            _ = try? await clientRef?.createAutomation(prompt: raw, projectSlug: slug)
+        if isLive {
+            isMutatingAutomation = true
+        }
+
+        Task { [weak self] in
+            if !isLive {
+                await storeRef.saveAutomations(snapshot)
+                return
+            }
+            defer {
+                self?.isMutatingAutomation = false
+            }
+            guard let clientRef else { return }
+            do {
+                let created = try await clientRef.createAutomation(
+                    displayName: parsed.displayName,
+                    prompt: parsed.prompt,
+                    cronExpression: parsed.cronExpression,
+                    projectSlug: slug,
+                    projectId: nil,
+                    allProjects: slug == "All projects",
+                    modelArg: nil,
+                    description: "\(parsed.humanScheduleLabel): \(parsed.prompt)",
+                    enableImmediately: true
+                )
+                guard let self else { return }
+                if let idx = self.automations.firstIndex(where: { $0.id == optimisticId }) {
+                    self.automations[idx] = created
+                } else {
+                    self.automations.insert(created, at: 0)
+                }
+                self.automationsErrorText = nil
+                await storeRef.saveAutomations(self.automations)
+                await self.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                self.automations.removeAll { $0.id == optimisticId }
+                self.recordAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
         }
         return item
     }
 
+    /// Creates a structured scheduled Automation via native `ManageSidecar(SIDECAR_ACTION_CREATE)`.
+    @discardableResult
+    public func createAutomation(
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        projectSlug: String,
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil,
+        description: String = "",
+        enableImmediately: Bool = true
+    ) async -> Bool {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCron = cronExpression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty, !trimmedCron.isEmpty else {
+            automationsErrorText = "Please enter a name, schedule, and prompt."
+            return false
+        }
+
+        automationsErrorText = nil
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+        if !isLive {
+            let humanSched = AutomationScheduleCodec.humanReadableSchedule(from: trimmedCron)
+            let modelBadge = AutomationScheduleCodec.formatModelBadge(modelArg ?? "Flash")
+            let slugLabel = projectSlug.isEmpty ? (allProjects ? "All projects" : "This Computer") : projectSlug
+            let localItem = AutomationItem(
+                id: AutomationScheduleCodec.makeSidecarId(from: trimmedName),
+                title: trimmedName,
+                projectSlug: slugLabel,
+                scheduleSummary: "\(slugLabel) · \(humanSched) · \(modelBadge)",
+                section: enableImmediately ? .scheduled : .paused,
+                nextRunText: enableImmediately ? AutomationScheduleCodec.nextFireDescription(from: trimmedCron) : "Paused",
+                lastRunText: enableImmediately ? "Created just now" : "Paused · New",
+                descriptionText: description,
+                prompt: trimmedPrompt,
+                cronExpression: trimmedCron,
+                projectId: projectId,
+                allProjects: allProjects,
+                modelLabel: modelBadge,
+                isEnabled: enableImmediately,
+                isScheduleBuiltin: true
+            )
+            automations.insert(localItem, at: 0)
+            await projectionStore.saveAutomations(automations)
+            return true
+        }
+
+        guard let client = rpcClient else { return false }
+        isMutatingAutomation = true
+        defer { isMutatingAutomation = false }
+
+        do {
+            let created = try await client.createAutomation(
+                displayName: trimmedName,
+                prompt: trimmedPrompt,
+                cronExpression: trimmedCron,
+                projectSlug: projectSlug,
+                projectId: projectId,
+                allProjects: allProjects,
+                modelArg: modelArg,
+                description: description,
+                enableImmediately: enableImmediately
+            )
+            automations.removeAll { $0.id == created.id }
+            automations.insert(created, at: 0)
+            automationsErrorText = nil
+            await projectionStore.saveAutomations(automations)
+            await refreshAutomations(silent: true)
+            return true
+        } catch {
+            recordAutomationError(error)
+            return false
+        }
+    }
+
+    /// Updates an existing scheduled Automation via `ManageSidecar(SIDECAR_ACTION_UPDATE)`.
+    @discardableResult
+    public func updateAutomation(
+        automationId: String,
+        displayName: String,
+        prompt: String,
+        cronExpression: String,
+        projectSlug: String,
+        projectId: String? = nil,
+        allProjects: Bool = false,
+        modelArg: String? = nil,
+        description: String = ""
+    ) async -> Bool {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCron = cronExpression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedPrompt.isEmpty, !trimmedCron.isEmpty else {
+            automationsErrorText = "Please enter a name, schedule, and prompt."
+            return false
+        }
+
+        automationsErrorText = nil
+        let existing = automations.first(where: { $0.id == automationId })
+        let originUuid = existing?.originInstanceUuid
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+
+        if isLive, let client = rpcClient {
+            isMutatingAutomation = true
+            defer { isMutatingAutomation = false }
+            do {
+                try await client.updateAutomation(
+                    automationId: automationId,
+                    displayName: trimmedName,
+                    prompt: trimmedPrompt,
+                    cronExpression: trimmedCron,
+                    projectSlug: projectSlug,
+                    projectId: projectId,
+                    allProjects: allProjects,
+                    modelArg: modelArg,
+                    description: description,
+                    instanceUuidOverride: originUuid
+                )
+            } catch {
+                recordAutomationError(error)
+                return false
+            }
+        }
+
+        if let idx = automations.firstIndex(where: { $0.id == automationId }) {
+            let humanSched = AutomationScheduleCodec.humanReadableSchedule(from: trimmedCron)
+            let modelBadge = AutomationScheduleCodec.formatModelBadge(modelArg ?? automations[idx].modelLabel ?? "Flash")
+            let slugLabel = projectSlug.isEmpty ? (allProjects ? "All projects" : "This Computer") : projectSlug
+            automations[idx].title = trimmedName
+            automations[idx].prompt = trimmedPrompt
+            automations[idx].cronExpression = trimmedCron
+            automations[idx].descriptionText = description
+            automations[idx].projectSlug = slugLabel
+            automations[idx].projectId = projectId
+            automations[idx].allProjects = allProjects
+            automations[idx].modelLabel = modelBadge
+            automations[idx].scheduleSummary = "\(slugLabel) · \(humanSched) · \(modelBadge)"
+            if automations[idx].section == .scheduled {
+                automations[idx].nextRunText = AutomationScheduleCodec.nextFireDescription(from: trimmedCron)
+            }
+        }
+        await projectionStore.saveAutomations(automations)
+        if isLive {
+            await refreshAutomations(silent: true)
+        }
+        return true
+    }
+
     public func triggerAutomationNow(_ automationId: String) {
         guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        let previous = automations[idx]
         automations[idx].isRunningNow = true
         automations[idx].needsReview = false
         automations[idx].lastRunText = "Running now..."
+        automationsErrorText = nil
 
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
         let snapshot = automations
         let storeRef = projectionStore
         let clientRef = rpcClient
-        let entry = OutboxEntry(cascadeId: automationId, kind: .automationTrigger, messageText: "TriggerAutomationNow")
-        Task {
+        let originUuid = previous.originInstanceUuid
+        let entry = OutboxEntry(cascadeId: automationId, kind: .automationTrigger, messageText: "ManageSidecar:RUN_NOW")
+
+        Task { [weak self] in
             await storeRef.enqueueOutbox(entry)
             await storeRef.saveAutomations(snapshot)
-            try? await clientRef?.triggerAutomationNow(automationId: automationId)
-            await storeRef.removeOutboxEntry(id: entry.id)
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.triggerAutomationNow(
+                    automationId: automationId,
+                    instanceUuidOverride: originUuid
+                )
+                await storeRef.removeOutboxEntry(id: entry.id)
+                // Follow up briefly so newly spawned conversation links to `lastRunCascadeId`.
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                await self?.refreshAutomations(silent: true)
+                await self?.refreshWorkspacesAndSummaries()
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                await storeRef.removeOutboxEntry(id: entry.id)
+                if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
+                    self.automations[currentIdx] = previous
+                }
+                self.recordAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
+        }
+    }
+
+    public func pauseAutomation(_ automationId: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        let previous = automations[idx]
+        automations[idx].section = .paused
+        automations[idx].isEnabled = false
+        automations[idx].isRunningNow = false
+        automations[idx].nextRunText = "Paused"
+        automations[idx].lastRunText = "Paused · just now"
+        automationsErrorText = nil
+
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+        let snapshot = automations
+        let storeRef = projectionStore
+        let clientRef = rpcClient
+        let originUuid = previous.originInstanceUuid
+
+        Task { [weak self] in
+            await storeRef.saveAutomations(snapshot)
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.setAutomationPaused(
+                    automationId: automationId,
+                    isPaused: true,
+                    instanceUuidOverride: originUuid
+                )
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
+                    self.automations[currentIdx] = previous
+                }
+                self.recordAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
         }
     }
 
     public func resumeAutomation(_ automationId: String) {
         guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
-        automations[idx].section = .scheduled
-        automations[idx].nextRunText = "Tomorrow, 08:00"
+        let previous = automations[idx]
+        let targetSection: AutomationSectionKind = previous.isScheduleBuiltin ? .scheduled : .alwaysOn
+        automations[idx].section = targetSection
+        automations[idx].isEnabled = true
+        if targetSection == .scheduled {
+            automations[idx].nextRunText = previous.cronExpression.isEmpty
+                ? "Tomorrow, 08:00"
+                : AutomationScheduleCodec.nextFireDescription(from: previous.cronExpression)
+        } else {
+            automations[idx].nextRunText = "Listening"
+        }
         automations[idx].lastRunText = "Resumed · just now"
+        automationsErrorText = nil
 
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
         let snapshot = automations
         let storeRef = projectionStore
         let clientRef = rpcClient
-        Task {
+        let originUuid = previous.originInstanceUuid
+
+        Task { [weak self] in
             await storeRef.saveAutomations(snapshot)
-            try? await clientRef?.setAutomationPaused(automationId: automationId, isPaused: false)
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.setAutomationPaused(
+                    automationId: automationId,
+                    isPaused: false,
+                    instanceUuidOverride: originUuid
+                )
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                if let currentIdx = self.automations.firstIndex(where: { $0.id == automationId }) {
+                    self.automations[currentIdx] = previous
+                }
+                self.recordAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
         }
+    }
+
+    public func deleteAutomation(_ automationId: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        let removed = automations.remove(at: idx)
+        automationsErrorText = nil
+
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+        let snapshot = automations
+        let storeRef = projectionStore
+        let clientRef = rpcClient
+        let originUuid = removed.originInstanceUuid
+
+        Task { [weak self] in
+            await storeRef.saveAutomations(snapshot)
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.deleteAutomation(
+                    automationId: automationId,
+                    instanceUuidOverride: originUuid
+                )
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                guard let self else { return }
+                let insertIdx = min(idx, self.automations.count)
+                self.automations.insert(removed, at: insertIdx)
+                self.recordAutomationError(error)
+                await storeRef.saveAutomations(self.automations)
+            }
+        }
+    }
+
+    public func restartAutomation(_ automationId: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        let originUuid = automations[idx].originInstanceUuid
+        automations[idx].lastRunText = "Restarting..."
+        automationsErrorText = nil
+
+        let isLive = (hasPairedBackend || isLiveBackendConnected) && rpcClient != nil
+        let clientRef = rpcClient
+        Task { [weak self] in
+            guard isLive, let clientRef else { return }
+            do {
+                try await clientRef.restartAutomation(
+                    automationId: automationId,
+                    instanceUuidOverride: originUuid
+                )
+                await self?.refreshAutomations(silent: true)
+            } catch {
+                self?.recordAutomationError(error)
+            }
+        }
+    }
+
+    /// Opens an unsent draft composer pre-filled with the `/automation` workflow chip and editable guided prompt,
+    /// matching Antigravity Desktop's "Create with Prompt" flow.
+    /// Does NOT call `StartCascade`, does NOT auto-send, and does NOT add an entry to `summaries` until the user taps Send.
+    public func openAutomationPromptDraft(prompt: String = "", projectSlug: String? = nil) {
+        let trimmedRaw = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let strippedBody: String = {
+            if trimmedRaw.lowercased() == "/automation" {
+                return ""
+            }
+            if trimmedRaw.lowercased().hasPrefix("/automation ") {
+                return String(trimmedRaw.dropFirst("/automation ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return trimmedRaw
+        }()
+        let initialBody = strippedBody.isEmpty ? Self.defaultAutomationGuidedPrompt : strippedBody
+        let targetSlug: String = {
+            if let explicit = projectSlug,
+               !explicit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let match = projects.first(where: { ($0.id == explicit || $0.name == explicit) && $0.runtime != .cloud }) {
+                return match.id
+            }
+            return AntigravityCloudDetector.noProjectDisplayName
+        }()
+        let workspaceUri: String = {
+            if AntigravityCloudDetector.isNoProjectSlug(targetSlug) {
+                return ""
+            }
+            return projects.first(where: { $0.id == targetSlug || $0.name == targetSlug })?.workspaceUri ?? ""
+        }()
+
+        stepPollingTask?.cancel()
+        stepPollingTask = nil
+        isLoadingSteps = false
+        stepLoadErrorText = nil
+
+        pendingDraftConversation = PendingDraftConversation(
+            title: "New Automation",
+            projectSlug: targetSlug,
+            isCloud: false,
+            workflowCommand: "/automation",
+            defaultGuidedPrompt: Self.defaultAutomationGuidedPrompt
+        )
+        activeCascadeId = ""
+        selectedProjectId = targetSlug
+        selectedWorkspaceUri = workspaceUri
+        composerWorkflowCommand = "/automation"
+        composerDraftText = initialBody
+        composerAttachments.removeAll()
+        isSlashPopupDismissedManually = true
+        activeRoute = .cascadeChat("")
+    }
+
+    /// Discards an unsent draft conversation (e.g., tapping Back before sending) without creating any backend session.
+    public func discardPendingDraftConversation() {
+        guard pendingDraftConversation != nil else { return }
+        pendingDraftConversation = nil
+        composerWorkflowCommand = nil
+        composerDraftText = ""
+        composerAttachments.removeAll()
+        isSlashPopupDismissedManually = false
+    }
+
+    /// Updates the target project for an unsent draft conversation (matching PC's `No Project ⌄` picker).
+    public func updatePendingDraftProject(_ projectSlug: String) {
+        guard var draft = pendingDraftConversation else { return }
+        let trimmed = projectSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.projectSlug = trimmed.isEmpty ? AntigravityCloudDetector.noProjectDisplayName : trimmed
+        pendingDraftConversation = draft
+        selectedProjectId = draft.projectSlug
+        if let proj = projects.first(where: { $0.id == draft.projectSlug || $0.name == draft.projectSlug }),
+           !proj.isNoProject {
+            selectedWorkspaceUri = proj.workspaceUri
+        } else {
+            selectedWorkspaceUri = ""
+        }
+    }
+
+    /// Backwards-compatible alias that opens the interactive `/automation` prompt draft without auto-sending.
+    public func createAutomationWithAgent(prompt: String = "", projectSlug: String? = nil) {
+        openAutomationPromptDraft(prompt: prompt, projectSlug: projectSlug)
     }
 
     // MARK: - Add Context & Composer Actions (`UE07`, `UE08`, `UE09`)
@@ -3545,50 +4320,149 @@ public final class AntigravitySessionStore {
 
     public func sendCurrentDraft() {
         let trimmed = composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !composerAttachments.isEmpty else { return }
+        let workflowPrefix = composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty || !composerAttachments.isEmpty || !workflowPrefix.isEmpty else { return }
 
-        let lowerTrim = trimmed.lowercased()
-        if lowerTrim == "/btw" || lowerTrim.hasPrefix("/btw ") {
-            let sidePrompt = trimmed.count > 4 ? String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines) : ""
-            composerDraftText = ""
-            openSideQuestion(initialPrompt: sidePrompt.isEmpty ? nil : sidePrompt)
-            return
-        }
-        if lowerTrim == "/model" {
-            composerDraftText = ""
-            presentedSheet = .modelAndMode
-            return
-        }
-        if lowerTrim == "/mode" {
-            composerDraftText = ""
-            if !selectedModelConfig.isOrchestrator {
-                selectedModelConfig.mode = (selectedModelConfig.mode == .planning) ? .fast : .planning
+        let combinedText: String = {
+            if workflowPrefix.isEmpty {
+                return trimmed
             }
-            return
-        }
-        if lowerTrim == "/voice" {
-            composerDraftText = ""
-            startVoiceMode()
-            return
-        }
-        if lowerTrim == "/clear" {
-            composerDraftText = ""
-            let targetProj = selectedProjectId.isEmpty ? (projects.first?.id ?? AntigravityCloudDetector.noProjectDisplayName) : selectedProjectId
-            _ = createConversationInProject(targetProj)
-            return
+            if trimmed.isEmpty {
+                return workflowPrefix
+            }
+            if trimmed.lowercased().hasPrefix(workflowPrefix.lowercased()) {
+                return trimmed
+            }
+            return "\(workflowPrefix) \(trimmed)"
+        }()
+
+        if workflowPrefix.isEmpty {
+            let lowerTrim = trimmed.lowercased()
+            if lowerTrim == "/btw" || lowerTrim.hasPrefix("/btw ") {
+                let sidePrompt = trimmed.count > 4 ? String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                composerDraftText = ""
+                openSideQuestion(initialPrompt: sidePrompt.isEmpty ? nil : sidePrompt)
+                return
+            }
+            if lowerTrim == "/model" {
+                composerDraftText = ""
+                presentedSheet = .modelAndMode
+                return
+            }
+            if lowerTrim == "/mode" {
+                composerDraftText = ""
+                if !selectedModelConfig.isOrchestrator {
+                    selectedModelConfig.mode = (selectedModelConfig.mode == .planning) ? .fast : .planning
+                }
+                return
+            }
+            if lowerTrim == "/voice" {
+                composerDraftText = ""
+                startVoiceMode()
+                return
+            }
+            if lowerTrim == "/clear" {
+                composerDraftText = ""
+                let targetProj = selectedProjectId.isEmpty ? (projects.first?.id ?? AntigravityCloudDetector.noProjectDisplayName) : selectedProjectId
+                _ = createConversationInProject(targetProj)
+                return
+            }
         }
 
-        if isCascadeStreaming && (hasPairedBackend || isLiveBackendConnected) && !isVerificationMode {
-            enqueueFollowUpMessage(trimmed, attachments: composerAttachments)
+        if pendingDraftConversation == nil && isCascadeStreaming && (hasPairedBackend || isLiveBackendConnected) && !isVerificationMode {
+            enqueueFollowUpMessage(combinedText, attachments: composerAttachments)
+            composerWorkflowCommand = nil
             composerDraftText = ""
             composerAttachments.removeAll()
             return
         }
 
-        let messageBody = trimmed.isEmpty
+        let messageBody = combinedText.isEmpty
             ? "Inspect attached context: \(composerAttachments.map(\.label).joined(separator: ", "))"
-            : trimmed
+            : combinedText
         let mentionLabels = composerAttachments.map(\.label)
+
+        // Materialize an unsent pending draft conversation (e.g. Automations "Create with Prompt") only on Send.
+        var materializedDirectly = false
+        if let draft = pendingDraftConversation, activeCascadeId.isEmpty {
+            materializedDirectly = true
+            pendingDraftConversation = nil
+            let optimisticId = "cas-\(UUID().uuidString.prefix(8).lowercased())"
+            let project = projects.first(where: { $0.id == draft.projectSlug || $0.name == draft.projectSlug })
+            let isUnassigned = (project?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug)
+            let isCloudProj = draft.isCloud || (project?.runtime == .cloud) || draft.projectSlug.lowercased().hasPrefix("cloud:")
+            let effectiveSlug: String = {
+                if let project { return project.id }
+                if isUnassigned {
+                    let hasLocalNoProj = projects.contains(where: { $0.isNoProject && $0.runtime != .cloud })
+                    if isCloudProj && hasLocalNoProj {
+                        return "cloud:\(AntigravityCloudDetector.noProjectDisplayName)"
+                    }
+                    return AntigravityCloudDetector.noProjectDisplayName
+                }
+                return draft.projectSlug
+            }()
+            let draftWorkspaceUri: String = {
+                if isUnassigned { return "" }
+                if let existingUri = project?.workspaceUri, !existingUri.isEmpty {
+                    return existingUri
+                }
+                if hasPairedBackend || isLiveBackendConnected {
+                    return ""
+                }
+                return isCloudProj ? "cloud://\(effectiveSlug)" : "file:///Users/wl/code/\(effectiveSlug)"
+            }()
+            let branch = isUnassigned ? "" : (project?.activeBranch ?? "main")
+            let effectiveTitle: String = {
+                let isDefaultGuided = (trimmed == draft.defaultGuidedPrompt)
+                if !trimmed.isEmpty && !isDefaultGuided && draft.title == "New Automation" {
+                    return String(trimmed.prefix(48))
+                }
+                return draft.title
+            }()
+            let newSummary = CascadeSummary(
+                cascadeId: optimisticId,
+                title: effectiveTitle,
+                projectSlug: effectiveSlug,
+                workspaceUri: draftWorkspaceUri,
+                branchName: branch,
+                status: .inProgress,
+                stepCount: 1,
+                currentStepIndex: 1,
+                totalSteps: 1,
+                updatedAt: Date(),
+                relativeTimeLabel: "now",
+                statusSubtitle: "Running · Step 1 of 1",
+                isPinned: displayOptions.autoPinOnMessage,
+                isArchived: false,
+                isUnread: false,
+                modelLabel: selectedModelConfig.displayName,
+                lastMessagePreview: messageBody,
+                isCloud: isCloudProj,
+                cloudProjectId: isUnassigned ? nil : project?.cloudProjectId,
+                originInstanceUuid: project?.originInstanceUuid,
+                originHostName: isCloudProj ? "Antigravity" : activeHost.hostname
+            )
+            summaries.insert(newSummary, at: 0)
+            if hasPairedBackend || isLiveBackendConnected {
+                let existingCloudProjects = projects.filter { $0.runtime == .cloud && $0.cloudProjectId != nil }
+                var nextSummaries = summaries
+                projects = Self.reconcileLiveProjects(
+                    workspaces: workspaces,
+                    summaries: &nextSummaries,
+                    existingProjects: projects,
+                    hostName: activeHost.hostname,
+                    cloudProjects: existingCloudProjects
+                )
+                summaries = nextSummaries
+            }
+            stepsByCascadeId[optimisticId] = []
+            activeCascadeId = optimisticId
+            selectedProjectId = summaries.first(where: { $0.cascadeId == optimisticId })?.projectSlug ?? effectiveSlug
+            selectedWorkspaceUri = draftWorkspaceUri
+            activeRoute = .cascadeChat(optimisticId)
+        }
+        let skipUpgradeWait = materializedDirectly
 
         var currentSteps = stepsByCascadeId[activeCascadeId] ?? []
         let nextIndex = (currentSteps.map(\.stepIndex).max() ?? 0) + 1
@@ -3652,6 +4526,7 @@ public final class AntigravitySessionStore {
         }
 
         let attachmentsSnapshot = composerAttachments
+        composerWorkflowCommand = nil
         composerDraftText = ""
         composerAttachments.removeAll()
         isSlashPopupDismissedManually = false
@@ -3717,7 +4592,7 @@ public final class AntigravitySessionStore {
             }
 
             var targetCascadeId = cid
-            if targetCascadeId.hasPrefix("cas-") {
+            if !skipUpgradeWait && targetCascadeId.hasPrefix("cas-") {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 if let upgraded = self?.activeCascadeId, !upgraded.isEmpty, !upgraded.hasPrefix("cas-") {
                     targetCascadeId = upgraded
@@ -3749,7 +4624,9 @@ public final class AntigravitySessionStore {
                         }
                         if self.activeCascadeId == targetCascadeId || self.activeCascadeId.isEmpty {
                             self.activeCascadeId = createdId
-                            self.activeRoute = .cascadeChat(createdId)
+                            if case .cascadeChat = self.activeRoute {
+                                self.activeRoute = .cascadeChat(createdId)
+                            }
                         }
                         targetCascadeId = createdId
                     }
