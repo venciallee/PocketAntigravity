@@ -48,6 +48,139 @@ public struct ArtifactSnapshot: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+// MARK: - Remote Artifact & `<agent-embed>` Resource Resolution Models
+
+public enum EmbedResourceSource: String, Codable, Sendable, Equatable {
+    case trajectoryStep
+    case artifactSnapshot
+    case remoteHost
+    case directNetwork
+    case inlineDataURI
+}
+
+/// Resolved content backing an `<agent-embed src="file:///...">`, standalone image, or artifact preview.
+public struct ResolvedEmbedResource: Codable, Sendable, Equatable {
+    public var uri: String
+    public var normalizedPath: String
+    public var mimeType: String
+    public var textContent: String?
+    public var binaryData: Data?
+    public var source: EmbedResourceSource
+
+    public init(
+        uri: String,
+        normalizedPath: String? = nil,
+        mimeType: String,
+        textContent: String? = nil,
+        binaryData: Data? = nil,
+        source: EmbedResourceSource
+    ) {
+        self.uri = uri
+        self.normalizedPath = normalizedPath ?? Self.normalizePath(uri)
+        self.mimeType = mimeType
+        self.textContent = textContent
+        self.binaryData = binaryData
+        self.source = source
+    }
+
+    public var isHTML: Bool {
+        mimeType.lowercased().contains("html") || normalizedPath.lowercased().hasSuffix(".html") || normalizedPath.lowercased().hasSuffix(".htm")
+    }
+
+    public var isSVG: Bool {
+        mimeType.lowercased().contains("svg") || normalizedPath.lowercased().hasSuffix(".svg")
+    }
+
+    public var isImage: Bool {
+        mimeType.lowercased().hasPrefix("image/")
+    }
+
+    public static func normalizePath(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.lowercased().hasPrefix("file://") {
+            s = String(s.dropFirst("file://".count))
+        }
+        if let decoded = s.removingPercentEncoding {
+            s = decoded
+        }
+        if let hashIdx = s.firstIndex(of: "#") {
+            s = String(s[..<hashIdx])
+        }
+        if let queryIdx = s.firstIndex(of: "?") {
+            s = String(s[..<queryIdx])
+        }
+        return s
+    }
+
+    public static func inferredMimeType(for rawPathOrURI: String) -> String {
+        let lower = normalizePath(rawPathOrURI).lowercased()
+        if lower.hasSuffix(".html") || lower.hasSuffix(".htm") { return "text/html" }
+        if lower.hasSuffix(".svg") { return "image/svg+xml" }
+        if lower.hasSuffix(".png") { return "image/png" }
+        if lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") { return "image/jpeg" }
+        if lower.hasSuffix(".webp") { return "image/webp" }
+        if lower.hasSuffix(".gif") { return "image/gif" }
+        if lower.hasSuffix(".md") || lower.hasSuffix(".markdown") { return "text/markdown" }
+        if lower.hasSuffix(".json") { return "application/json" }
+        if lower.hasSuffix(".css") { return "text/css" }
+        if lower.hasSuffix(".js") { return "application/javascript" }
+        return "text/plain"
+    }
+
+    public static func isEmbeddableTextArtifactPath(_ rawPathOrURI: String) -> Bool {
+        let lower = normalizePath(rawPathOrURI).lowercased()
+        return lower.hasSuffix(".html")
+            || lower.hasSuffix(".htm")
+            || lower.hasSuffix(".svg")
+            || lower.hasSuffix(".md")
+            || lower.hasSuffix(".markdown")
+            || lower.hasSuffix(".mmd")
+            || lower.hasSuffix(".mermaid")
+            || lower.hasSuffix(".json")
+    }
+
+    /// Decodes a `data:<mime>[;base64],<payload>` URI directly into a `ResolvedEmbedResource`.
+    public static func decodeDataURI(_ rawURI: String) -> ResolvedEmbedResource? {
+        let trimmed = rawURI.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("data:"),
+              let commaIdx = trimmed.firstIndex(of: ",") else {
+            return nil
+        }
+        let header = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 5)..<commaIdx])
+        let payload = String(trimmed[trimmed.index(after: commaIdx)...])
+        let parts = header.split(separator: ";").map(String.init)
+        let mime = (parts.first?.isEmpty == false) ? parts[0] : "text/plain"
+        let isBase64 = parts.contains { $0.lowercased() == "base64" }
+
+        if isBase64 {
+            guard let data = Data(base64Encoded: payload, options: .ignoreUnknownCharacters) else {
+                return nil
+            }
+            let text = mime.lowercased().hasPrefix("text/") || mime.lowercased().contains("svg")
+                ? String(data: data, encoding: .utf8)
+                : nil
+            return ResolvedEmbedResource(
+                uri: trimmed,
+                normalizedPath: trimmed,
+                mimeType: mime,
+                textContent: text,
+                binaryData: data,
+                source: .inlineDataURI
+            )
+        } else {
+            let decodedText = payload.removingPercentEncoding ?? payload
+            return ResolvedEmbedResource(
+                uri: trimmed,
+                normalizedPath: trimmed,
+                mimeType: mime,
+                textContent: decodedText,
+                binaryData: Data(decodedText.utf8),
+                source: .inlineDataURI
+            )
+        }
+    }
+}
+
 // MARK: - Implementation Plan Review Models (UE11)
 
 /// Proposed file modification or addition inside `ImplementationPlanReviewViewController` (`UE11`).
