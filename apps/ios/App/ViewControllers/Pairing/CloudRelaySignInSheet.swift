@@ -130,7 +130,7 @@ public struct CloudRelaySignInSheet: View {
                             .foregroundStyle(AntigravityTheme.statusDone)
                         Text("Google Remote Control Sign-In")
                             .font(.system(size: 14.5, weight: .semibold))
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(AntigravityTheme.inkReading)
                     }
                     Text(currentURLDisplay)
                         .font(.system(size: 11, weight: .regular, design: .monospaced))
@@ -165,6 +165,11 @@ public struct CloudRelaySignInSheet: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(AntigravityTheme.surfaceCard)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(AntigravityTheme.subtleDivider)
+                    .frame(height: 1)
+            }
 
             if isLoadingPage {
                 ProgressView()
@@ -359,6 +364,7 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = AntigravityTheme.canvasObsidianUIColor
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         let userContentController = WKUserContentController()

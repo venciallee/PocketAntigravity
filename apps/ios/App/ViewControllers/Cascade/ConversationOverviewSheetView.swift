@@ -42,7 +42,6 @@ public struct ConversationOverviewSheetView: View {
                 await store.refreshConversationOverview()
             }
         }
-        .preferredColorScheme(.dark)
         .accessibilityIdentifier("sheet_conversation_overview")
     }
 

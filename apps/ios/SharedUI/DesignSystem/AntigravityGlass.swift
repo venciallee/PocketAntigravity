@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Liquid Glass container & Amber Approval card modifiers matching the 13 official iOS UE screens.
 public struct AntigravityGlassModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
     public var cornerRadius: CGFloat
     public var isHighlighted: Bool
     public var isAmberWarning: Bool
@@ -15,16 +16,16 @@ public struct AntigravityGlassModifier: ViewModifier {
     public func body(content: Content) -> some View {
         let strokeColor: Color = {
             if isAmberWarning {
-                return AntigravityTheme.statusWaiting.opacity(0.36)
+                return AntigravityTheme.statusWaiting.opacity(colorScheme == .dark ? 0.36 : 0.45)
             } else if isHighlighted {
-                return AntigravityTheme.accentPeriwinkle.opacity(0.45)
+                return AntigravityTheme.accentPeriwinkle.opacity(colorScheme == .dark ? 0.45 : 0.55)
             } else {
                 return AntigravityTheme.glassHairline
             }
         }()
 
         let fillOverlay: Color = isAmberWarning
-            ? AntigravityTheme.statusWaiting.opacity(0.07)
+            ? AntigravityTheme.statusWaiting.opacity(colorScheme == .dark ? 0.07 : 0.08)
             : Color.clear
 
         content
@@ -39,6 +40,12 @@ public struct AntigravityGlassModifier: ViewModifier {
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(strokeColor, lineWidth: 1)
+            )
+            .shadow(
+                color: colorScheme == .light ? AntigravityTheme.glassShadow : .clear,
+                radius: colorScheme == .light ? 8 : 0,
+                x: 0,
+                y: colorScheme == .light ? 2 : 0
             )
     }
 }
@@ -78,7 +85,7 @@ public struct AntigravityFourDotLoadingView: View {
         isAnimated: Bool = true,
         dotSize: CGFloat = 4.5,
         spacing: CGFloat = 3.5,
-        tint: Color = Color.white
+        tint: Color = AntigravityTheme.inkReading
     ) {
         self.isAnimated = isAnimated
         self.dotSize = dotSize
@@ -154,7 +161,7 @@ public struct AntigravityRunningArcIndicatorView: View {
     private func arcRing(angleDegrees: Double) -> some View {
         ZStack {
             Circle()
-                .stroke(Color(red: 0x2A / 255.0, green: 0x31 / 255.0, blue: 0x42 / 255.0), lineWidth: 2)
+                .stroke(AntigravityTheme.ringTrack, lineWidth: 2)
                 .frame(width: 15, height: 15)
             Circle()
                 .trim(from: 0.0, to: 0.32)

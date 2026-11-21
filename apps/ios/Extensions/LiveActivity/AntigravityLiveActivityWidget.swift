@@ -227,7 +227,8 @@ public struct AntigravityLiveActivityWidget: Widget {
                 attributes: context.attributes,
                 state: context.state
             )
-            .activityBackgroundTint(LiveActivityPalette.codeBox)
+            .activityBackgroundTint(AntigravityTheme.surfaceCard)
+            .activitySystemActionForegroundColor(AntigravityTheme.inkReading)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -446,35 +447,35 @@ public struct AntigravityLiveActivityView: View {
             HStack(spacing: 6) {
                 Image(systemName: "eye")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.6))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
                 Text("\(attributes.workspaceName) · \(attributes.hostName)")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.65))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
                 Spacer()
                 Text(state.formattedElapsed)
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
             }
 
             HStack(spacing: 10) {
                 Circle()
-                    .fill(state.phase == .waitingApproval ? LiveActivityPalette.warmAmber : LiveActivityPalette.runningBlue)
+                    .fill(state.phase == .waitingApproval ? AntigravityTheme.statusWaiting : AntigravityTheme.statusRunning)
                     .frame(width: 8, height: 8)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(attributes.cascadeTitle)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(AntigravityTheme.inkReading)
                         .lineLimit(1)
                     if let cmd = state.pendingApprovalCommand {
                         Text("Approve: \(cmd)")
                             .font(.system(size: 12))
-                            .foregroundStyle(LiveActivityPalette.warmAmber)
+                            .foregroundStyle(AntigravityTheme.statusWaiting)
                             .lineLimit(1)
                     } else {
                         Text("\(attributes.hostName) · step \(state.currentStepIndex) of \(state.totalSteps)")
                             .font(.system(size: 12))
-                            .foregroundStyle(Color.white.opacity(0.6))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
                     }
                 }
 
@@ -487,10 +488,10 @@ public struct AntigravityLiveActivityView: View {
                     )) {
                         Text("Review")
                             .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(LiveActivityPalette.darkCTAInk)
+                            .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                             .padding(.horizontal, 14)
                             .frame(minHeight: 44)
-                            .background(LiveActivityPalette.warmAmber)
+                            .background(AntigravityTheme.statusWaiting)
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -498,7 +499,7 @@ public struct AntigravityLiveActivityView: View {
             }
         }
         .padding(14)
-        .background(LiveActivityPalette.codeBox)
+        .background(AntigravityTheme.surfaceCard)
     }
 }
 

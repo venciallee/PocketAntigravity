@@ -18,14 +18,6 @@ public struct ImplementationPlanReviewViewController: View {
     @State private var isAddingSelectionComment: Bool = false
     @State private var newSelectionCommentDraft: String = ""
 
-    private static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
-    private static let warmAmber = Color(red: 0xEB / 255.0, green: 0xB3 / 255.0, blue: 0x65 / 255.0) // #EBB365
-    private static let emeraldDone = Color(red: 0x57 / 255.0, green: 0xC8 / 255.0, blue: 0x8A / 255.0) // #57C88A
-    private static let inkOnCTA = Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0) // #0A0E17
-    private static let cardSurface = Color(red: 0x16 / 255.0, green: 0x17 / 255.0, blue: 0x1D / 255.0)
-    private static let amberBannerBg = Color(red: 0x22 / 255.0, green: 0x1B / 255.0, blue: 0x0F / 255.0)
-    private static let pillBg = Color(red: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x24 / 255.0)
-
     public init(store: AntigravitySessionStore) {
         self.store = store
     }
@@ -64,7 +56,7 @@ public struct ImplementationPlanReviewViewController: View {
                                     HStack {
                                         Text("\(comment.authorName) · \(comment.statusLabel)")
                                             .font(.system(size: 12.5, weight: .semibold))
-                                            .foregroundStyle(Self.warmAmber)
+                                            .foregroundStyle(AntigravityTheme.statusWaiting)
                                         Spacer()
                                         Text(comment.targetFilePath)
                                             .font(.system(size: 11, design: .monospaced))
@@ -75,7 +67,11 @@ public struct ImplementationPlanReviewViewController: View {
                                         .foregroundStyle(AntigravityTheme.inkReading)
                                 }
                                 .padding(12)
-                                .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 12))
+                                .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 12))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
+                                )
                             }
                         }
 
@@ -100,7 +96,7 @@ public struct ImplementationPlanReviewViewController: View {
                         // Change 1: MODIFY settlement/batch.go + Amber Highlight + WL You Pending Card
                         batchChangeWithPendingComment
 
-                        // Floating White `[💬 Comment | Copy]` Selection Callout + Change 2
+                        // Floating Inverted `[💬 Comment | Copy]` Selection Callout + Change 2
                         selectionCalloutAndSettlementTestChange
 
                         if isAddingSelectionComment {
@@ -122,7 +118,7 @@ public struct ImplementationPlanReviewViewController: View {
             }
 
             Divider()
-                .overlay(Color.white.opacity(0.08))
+                .overlay(AntigravityTheme.subtleDivider)
 
             // 5. Sticky Bottom Bar (`Proceed` + `Send comments`)
             bottomDecisionBar
@@ -149,7 +145,7 @@ public struct ImplementationPlanReviewViewController: View {
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Self.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
             }
             .buttonStyle(.plain)
@@ -181,7 +177,7 @@ public struct ImplementationPlanReviewViewController: View {
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .padding(.horizontal, 12)
                 .frame(minWidth: 52, minHeight: AntigravityTheme.minTouchTargetPt)
-                .background(Self.pillBg)
+                .background(AntigravityTheme.surfacePill)
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -206,22 +202,29 @@ public struct ImplementationPlanReviewViewController: View {
     private var pausedReviewBanner: some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(Self.warmAmber)
+                .fill(AntigravityTheme.statusWaiting)
                 .frame(width: 8, height: 8)
 
             Text("Agent is paused until you review. Long-press any text to comment.")
                 .font(.system(size: 13.5, weight: .medium))
-                .foregroundStyle(Self.warmAmber)
+                .foregroundStyle(AntigravityTheme.statusWaiting)
                 .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .background(Self.amberBannerBg)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(AntigravityTheme.surfaceCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(AntigravityTheme.surfaceAmberTint)
+                )
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Self.warmAmber.opacity(0.26), lineWidth: 1)
+                .stroke(AntigravityTheme.statusWaiting.opacity(0.26), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .accessibilityIdentifier("plan-paused-banner")
@@ -240,7 +243,7 @@ public struct ImplementationPlanReviewViewController: View {
     private var batchChangeWithPendingComment: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                changeKindBadge(label: "MODIFY", tint: Self.warmAmber)
+                changeKindBadge(label: "MODIFY", tint: AntigravityTheme.statusWaiting)
                 Text("settlement/batch.go")
                     .font(.system(size: 13.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(AntigravityTheme.inkReading)
@@ -257,10 +260,10 @@ public struct ImplementationPlanReviewViewController: View {
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 3)
                         .padding(.vertical, 1)
-                        .background(Self.warmAmber.opacity(0.22))
+                        .background(AntigravityTheme.statusWaiting.opacity(0.22))
                         .overlay(alignment: .bottom) {
                             Rectangle()
-                                .fill(Self.warmAmber)
+                                .fill(AntigravityTheme.statusWaiting)
                                 .frame(height: 1.5)
                         }
                     Text(".")
@@ -274,7 +277,7 @@ public struct ImplementationPlanReviewViewController: View {
                 HStack(spacing: 8) {
                     ZStack {
                         Circle()
-                            .fill(Color.white.opacity(0.14))
+                            .fill(AntigravityTheme.surfaceElevated)
                             .frame(width: 24, height: 24)
                         Text("WL")
                             .font(.system(size: 10, weight: .bold))
@@ -298,10 +301,10 @@ public struct ImplementationPlanReviewViewController: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(12)
-            .background(Self.cardSurface)
+            .background(AntigravityTheme.surfaceCard)
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .padding(.leading, 8)
@@ -311,7 +314,7 @@ public struct ImplementationPlanReviewViewController: View {
 
     private var selectionCalloutAndSettlementTestChange: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Floating White `[💬 Comment | Copy]` Callout Pill
+            // Floating Inverted `[💬 Comment | Copy]` Callout Pill
             HStack {
                 Spacer()
                 HStack(spacing: 0) {
@@ -324,7 +327,7 @@ public struct ImplementationPlanReviewViewController: View {
                             Text("Comment")
                                 .font(.system(size: 14, weight: .semibold))
                         }
-                        .foregroundStyle(Self.inkOnCTA)
+                        .foregroundStyle(AntigravityTheme.pillActiveForeground)
                         .padding(.horizontal, 14)
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                     }
@@ -332,7 +335,7 @@ public struct ImplementationPlanReviewViewController: View {
                     .accessibilityIdentifier("selection-callout-comment")
 
                     Rectangle()
-                        .fill(Color.black.opacity(0.14))
+                        .fill(AntigravityTheme.pillActiveForeground.opacity(0.20))
                         .frame(width: 1, height: 22)
 
                     Button {
@@ -340,21 +343,21 @@ public struct ImplementationPlanReviewViewController: View {
                     } label: {
                         Text("Copy")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Self.inkOnCTA)
+                            .foregroundStyle(AntigravityTheme.pillActiveForeground)
                             .padding(.horizontal, 14)
                             .frame(minWidth: 60, minHeight: AntigravityTheme.minTouchTargetPt)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("selection-callout-copy")
                 }
-                .background(Color(red: 0.96, green: 0.97, blue: 0.99))
+                .background(AntigravityTheme.pillActiveBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: Color.black.opacity(0.35), radius: 10, y: 4)
+                .shadow(color: AntigravityTheme.glassShadow, radius: 10, y: 4)
                 Spacer()
             }
 
             HStack(spacing: 8) {
-                changeKindBadge(label: "MODIFY", tint: Self.warmAmber)
+                changeKindBadge(label: "MODIFY", tint: AntigravityTheme.statusWaiting)
                 Text("settlement/settlement_test.go")
                     .font(.system(size: 13.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(AntigravityTheme.inkReading)
@@ -370,7 +373,7 @@ public struct ImplementationPlanReviewViewController: View {
                         .font(.system(size: 14.5))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 3)
-                        .background(Self.periwinkle.opacity(0.28))
+                        .background(AntigravityTheme.accentPeriwinkle.opacity(0.28))
                 }
 
                 HStack(spacing: 0) {
@@ -378,7 +381,7 @@ public struct ImplementationPlanReviewViewController: View {
                         .font(.system(size: 14.5))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 3)
-                        .background(Self.periwinkle.opacity(0.28))
+                        .background(AntigravityTheme.accentPeriwinkle.opacity(0.28))
                     Text(".")
                         .font(.system(size: 14.5))
                         .foregroundStyle(AntigravityTheme.inkLabel)
@@ -394,7 +397,11 @@ public struct ImplementationPlanReviewViewController: View {
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .padding(.horizontal, 12)
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                .background(Self.cardSurface)
+                .background(AntigravityTheme.surfaceInput)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Button {
@@ -406,10 +413,10 @@ public struct ImplementationPlanReviewViewController: View {
             } label: {
                 Text("Save")
                     .font(.system(size: 13.5, weight: .bold))
-                    .foregroundStyle(Self.inkOnCTA)
+                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .padding(.horizontal, 14)
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                    .background(Self.periwinkle)
+                    .background(AntigravityTheme.accentPeriwinkle)
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -419,7 +426,7 @@ public struct ImplementationPlanReviewViewController: View {
     private var newClockHelperChange: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                changeKindBadge(label: "NEW", tint: Self.emeraldDone)
+                changeKindBadge(label: "NEW", tint: AntigravityTheme.statusDone)
                 Text("testutil/clock.go")
                     .font(.system(size: 13.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(AntigravityTheme.inkReading)
@@ -455,10 +462,10 @@ public struct ImplementationPlanReviewViewController: View {
                     .font(.system(size: 15.5, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(Self.pillBg)
+                    .background(AntigravityTheme.surfacePill)
                     .overlay(
                         Capsule()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
                     )
                     .clipShape(Capsule())
             }
@@ -472,9 +479,9 @@ public struct ImplementationPlanReviewViewController: View {
             } label: {
                 Text("Send \(commentCount) comments")
                     .font(.system(size: 15.5, weight: .bold))
-                    .foregroundStyle(Self.inkOnCTA)
+                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(Self.periwinkle)
+                    .background(AntigravityTheme.accentPeriwinkle)
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)

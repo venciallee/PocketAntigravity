@@ -6,22 +6,6 @@ import LocalAuthentication
 
 // MARK: - UE07 Native Chat Stream Cards (`StepCellViews.swift`)
 
-internal enum StepCardPalette {
-    static let periwinkle = Color(red: 0x8E / 255.0, green: 0xB4 / 255.0, blue: 0xFF / 255.0) // #8EB4FF
-    static let warmAmber = Color(red: 0xEB / 255.0, green: 0xB3 / 255.0, blue: 0x65 / 255.0) // #EBB365
-    static let emeraldDone = Color(red: 0x57 / 255.0, green: 0xC8 / 255.0, blue: 0x8A / 255.0) // #57C88A
-    static let coralError = Color(red: 0xF0 / 255.0, green: 0x71 / 255.0, blue: 0x67 / 255.0) // #F07167
-    static let softViolet = Color(red: 0xA7 / 255.0, green: 0x8B / 255.0, blue: 0xFA / 255.0) // #A78BFA
-    static let inlineCodeInk = Color(red: 0xDC / 255.0, green: 0xE6 / 255.0, blue: 0xFF / 255.0)
-    static let inkOnCTA = Color(red: 0x0A / 255.0, green: 0x0E / 255.0, blue: 0x17 / 255.0) // #0A0E17
-    static let cardSurface = Color(red: 0x14 / 255.0, green: 0x15 / 255.0, blue: 0x19 / 255.0) // #141519
-    static let amberCardSurface = Color(red: 0x1A / 255.0, green: 0x16 / 255.0, blue: 0x0E / 255.0)
-    static let errorCardSurface = Color(red: 0x1E / 255.0, green: 0x11 / 255.0, blue: 0x13 / 255.0)
-    static let codeBlockBg = Color(red: 0x0C / 255.0, green: 0x0D / 255.0, blue: 0x10 / 255.0)
-    static let neutralButtonBg = Color(red: 0x24 / 255.0, green: 0x24 / 255.0, blue: 0x28 / 255.0)
-    static let darkTrack = Color(red: 0x26 / 255.0, green: 0x29 / 255.0, blue: 0x32 / 255.0)
-}
-
 /// Previous user prompt bubble with context chips `[@transfers.go]` `[Skill · go-testing]`.
 public struct UserPromptContextBubbleView: View {
     public let promptText: String?
@@ -55,7 +39,7 @@ public struct UserPromptContextBubbleView: View {
                                     .foregroundStyle(AntigravityTheme.inkLabel)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
-                                    .background(Color.white.opacity(0.08))
+                                    .background(AntigravityTheme.surfacePopover)
                                     .clipShape(Capsule())
                             }
                         }
@@ -119,7 +103,7 @@ public struct CollapsibleThoughtRowView: View {
                             let elapsed = Int(max(Double(durationSeconds), context.date.timeIntervalSince(startedAt ?? context.date)))
                             Text("Thinking · \(max(1, elapsed))s…")
                                 .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(StepCardPalette.periwinkle)
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         }
                     } else {
                         Image(systemName: "eye")
@@ -131,7 +115,7 @@ public struct CollapsibleThoughtRowView: View {
                     }
                     Image(systemName: effectiveExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isStreaming ? StepCardPalette.periwinkle : AntigravityTheme.inkSecondary)
+                        .foregroundStyle(isStreaming ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary)
                     Spacer()
                 }
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -145,7 +129,7 @@ public struct CollapsibleThoughtRowView: View {
                     AntigravityMarkdownView(markdown: reasoningSummary, variant: .thought, store: store)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(StepCardPalette.cardSurface)
+                        .background(AntigravityTheme.surfaceCard)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 } else if isStreaming {
                     Text("Analyzing workspace context and planning next steps…")
@@ -153,7 +137,7 @@ public struct CollapsibleThoughtRowView: View {
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(StepCardPalette.cardSurface)
+                        .background(AntigravityTheme.surfaceCard)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
@@ -182,11 +166,11 @@ public struct EmbeddedImplementationPlanCardView: View {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(StepCardPalette.periwinkle.opacity(0.14))
+                        .fill(AntigravityTheme.accentPeriwinkle.opacity(0.14))
                         .frame(width: 38, height: 38)
                     Image(systemName: "doc.text")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -207,10 +191,10 @@ public struct EmbeddedImplementationPlanCardView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(minHeight: 58)
-            .background(StepCardPalette.cardSurface)
+            .background(AntigravityTheme.surfaceCard)
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
@@ -294,7 +278,7 @@ public struct SevenSegmentTaskProgressCardView: View {
                     HStack(spacing: 9) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(StepCardPalette.emeraldDone)
+                            .foregroundStyle(AntigravityTheme.statusDone)
                             .frame(width: 12)
                         Text("Wire limiter into router")
                             .font(.system(size: 13.5))
@@ -305,7 +289,7 @@ public struct SevenSegmentTaskProgressCardView: View {
                     HStack(spacing: 9) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(StepCardPalette.emeraldDone)
+                            .foregroundStyle(AntigravityTheme.statusDone)
                             .frame(width: 12)
                         Text("go test ./internal/...")
                             .font(.system(size: 13, design: .monospaced))
@@ -313,17 +297,17 @@ public struct SevenSegmentTaskProgressCardView: View {
                         Spacer()
                         Text("42 passed")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(StepCardPalette.emeraldDone)
+                            .foregroundStyle(AntigravityTheme.statusDone)
                     }
 
                     HStack(spacing: 9) {
                         Circle()
-                            .fill(StepCardPalette.warmAmber)
+                            .fill(AntigravityTheme.statusWaiting)
                             .frame(width: 8, height: 8)
                             .frame(width: 12)
                         Text("Load test with vegeta")
                             .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(StepCardPalette.warmAmber)
+                            .foregroundStyle(AntigravityTheme.statusWaiting)
                         Spacer()
                     }
                 }
@@ -340,7 +324,7 @@ public struct SevenSegmentTaskProgressCardView: View {
                             if let badge = item.trailingBadge, !badge.isEmpty {
                                 Text(badge)
                                     .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(StepCardPalette.emeraldDone)
+                                    .foregroundStyle(AntigravityTheme.statusDone)
                             }
                         }
                     }
@@ -350,11 +334,11 @@ public struct SevenSegmentTaskProgressCardView: View {
                     if let status = taskStatus?.trimmingCharacters(in: .whitespacesAndNewlines), !status.isEmpty {
                         HStack(spacing: 7) {
                             Circle()
-                                .fill(StepCardPalette.periwinkle)
+                                .fill(AntigravityTheme.accentPeriwinkle)
                                 .frame(width: 6, height: 6)
                             Text(status)
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(StepCardPalette.periwinkle)
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -370,10 +354,10 @@ public struct SevenSegmentTaskProgressCardView: View {
             }
         }
         .padding(14)
-        .background(StepCardPalette.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .accessibilityElement(children: .contain)
@@ -382,12 +366,12 @@ public struct SevenSegmentTaskProgressCardView: View {
 
     private func segmentColor(at index: Int) -> Color {
         if index < completedCount {
-            return StepCardPalette.periwinkle
+            return AntigravityTheme.accentPeriwinkle
         }
         if index == completedCount {
-            return StepCardPalette.warmAmber
+            return AntigravityTheme.statusWaiting
         }
-        return StepCardPalette.darkTrack
+        return AntigravityTheme.ringTrack
     }
 
     @ViewBuilder
@@ -396,16 +380,16 @@ public struct SevenSegmentTaskProgressCardView: View {
         case .done:
             Image(systemName: "checkmark")
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(StepCardPalette.emeraldDone)
+                .foregroundStyle(AntigravityTheme.statusDone)
                 .frame(width: 12)
         case .waiting:
             Circle()
-                .fill(StepCardPalette.warmAmber)
+                .fill(AntigravityTheme.statusWaiting)
                 .frame(width: 8, height: 8)
                 .frame(width: 12)
         case .inProgress:
             Circle()
-                .fill(StepCardPalette.periwinkle)
+                .fill(AntigravityTheme.accentPeriwinkle)
                 .frame(width: 8, height: 8)
                 .frame(width: 12)
         case .pending:
@@ -418,7 +402,7 @@ public struct SevenSegmentTaskProgressCardView: View {
 
     private func checklistTextColor(for status: TaskChecklistStatus) -> Color {
         switch status {
-        case .waiting: return StepCardPalette.warmAmber
+        case .waiting: return AntigravityTheme.statusWaiting
         case .inProgress: return AntigravityTheme.inkReading
         case .done, .pending: return AntigravityTheme.inkSecondary
         }
@@ -457,10 +441,10 @@ public struct InlineCommandApprovalCardView: View {
             HStack(spacing: 8) {
                 Image(systemName: "terminal")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.warmAmber)
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
                 Text(resolutionState ?? "Run this command?")
                     .font(.system(size: 14.5, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.warmAmber)
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
                 Spacer()
             }
 
@@ -470,10 +454,10 @@ public struct InlineCommandApprovalCardView: View {
                 .lineSpacing(2)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(StepCardPalette.codeBlockBg)
+                .background(AntigravityTheme.surfaceCodeBlock)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                        .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
@@ -488,7 +472,7 @@ public struct InlineCommandApprovalCardView: View {
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(StepCardPalette.neutralButtonBg)
+                        .background(AntigravityTheme.surfaceElevated)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -503,9 +487,9 @@ public struct InlineCommandApprovalCardView: View {
                         Text("Allow")
                             .font(.system(size: 14.5, weight: .bold))
                     }
-                    .foregroundStyle(StepCardPalette.inkOnCTA)
+                    .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                     .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(StepCardPalette.warmAmber)
+                    .background(AntigravityTheme.statusWaiting)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -513,10 +497,17 @@ public struct InlineCommandApprovalCardView: View {
             }
         }
         .padding(14)
-        .background(StepCardPalette.amberCardSurface)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AntigravityTheme.surfaceCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(AntigravityTheme.surfaceAmberTint)
+                )
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(StepCardPalette.warmAmber.opacity(0.30), lineWidth: 1)
+                .stroke(AntigravityTheme.statusWaiting.opacity(0.30), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .accessibilityElement(children: .contain)
@@ -630,11 +621,11 @@ public struct CascadeEvidenceGroupCardView: View {
                         AntigravityRunningArcIndicatorView(isAnimated: true)
                     } else {
                         Image(systemName: "doc.on.doc")
-                            .foregroundStyle(StepCardPalette.periwinkle)
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     }
                     Text(summaryTitle)
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(isActivelyRunning ? StepCardPalette.periwinkle : AntigravityTheme.inkReading)
+                        .foregroundStyle(isActivelyRunning ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkReading)
                     Spacer()
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
@@ -655,7 +646,7 @@ public struct CascadeEvidenceGroupCardView: View {
                             HStack {
                                 Image(systemName: ca.isArtifactFile ? "sparkles.rectangle.stack" : "pencil")
                                     .font(.system(size: 11.5))
-                                    .foregroundStyle(StepCardPalette.periwinkle)
+                                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                 Text(ca.fileName)
                                     .font(.system(size: 13, design: .monospaced))
                                     .foregroundStyle(AntigravityTheme.inkReading)
@@ -664,7 +655,7 @@ public struct CascadeEvidenceGroupCardView: View {
                                 if ca.additions > 0 || ca.deletions > 0 {
                                     Text("+\(ca.additions) -\(ca.deletions)")
                                         .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(StepCardPalette.emeraldDone)
+                                        .foregroundStyle(AntigravityTheme.statusDone)
                                 }
                             }
                             .frame(minHeight: 34)
@@ -707,7 +698,7 @@ public struct CascadeEvidenceGroupCardView: View {
             }
         }
         .padding(12)
-        .background(StepCardPalette.cardSurface)
+        .background(AntigravityTheme.surfaceCard)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
@@ -762,16 +753,23 @@ public struct CascadeStepCellView: View {
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(StepCardPalette.coralError)
+                                    .foregroundStyle(AntigravityTheme.statusError)
                                     .padding(.top, 2)
                                 AntigravityMarkdownView(markdown: prose, variant: .assistant, store: store)
                             }
                             .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(StepCardPalette.errorCardSurface)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(AntigravityTheme.surfaceCard)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .fill(AntigravityTheme.surfaceDiffRemove)
+                                    )
+                            )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(StepCardPalette.coralError.opacity(0.32), lineWidth: 1)
+                                    .stroke(AntigravityTheme.statusError.opacity(0.32), lineWidth: 1)
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .accessibilityIdentifier("step-error-\(step.stepIndex)")
@@ -787,11 +785,11 @@ public struct CascadeStepCellView: View {
                                     isAnimated: true,
                                     dotSize: 4.0,
                                     spacing: 3.0,
-                                    tint: StepCardPalette.periwinkle
+                                    tint: AntigravityTheme.accentPeriwinkle
                                 )
                                 Text("Generating…")
                                     .font(.system(size: 12.5, weight: .medium))
-                                    .foregroundStyle(StepCardPalette.periwinkle)
+                                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             }
                             .padding(.top, 2)
                         }
@@ -845,7 +843,7 @@ public struct CascadeStepCellView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "terminal")
                                 .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(StepCardPalette.periwinkle)
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             Text(cmd.commandLine)
                                 .font(.system(size: 12.5, design: .monospaced))
                                 .foregroundStyle(AntigravityTheme.inkReading)
@@ -854,14 +852,14 @@ public struct CascadeStepCellView: View {
                             if let code = cmd.exitCode {
                                 Text(code == 0 ? "exit 0" : "exit \(code)")
                                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(code == 0 ? StepCardPalette.emeraldDone : AntigravityTheme.statusError)
+                                    .foregroundStyle(code == 0 ? AntigravityTheme.statusDone : AntigravityTheme.statusError)
                             } else if (step.status == .inProgress || step.status == .pending) && shouldAnimateLive {
                                 HStack(spacing: 5) {
                                     AntigravityRunningArcIndicatorView(isAnimated: true)
                                         .scaleEffect(0.82)
                                     Text("running")
                                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(StepCardPalette.periwinkle)
+                                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                 }
                             }
                         }
@@ -878,14 +876,14 @@ public struct CascadeStepCellView: View {
                                     .multilineTextAlignment(.leading)
                                     .padding(8)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(StepCardPalette.codeBlockBg)
+                                    .background(AntigravityTheme.surfaceCodeBlock)
                                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
                             .buttonStyle(.plain)
                         }
                     }
                     .padding(11)
-                    .background(StepCardPalette.cardSurface)
+                    .background(AntigravityTheme.surfaceCard)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
 
@@ -902,7 +900,7 @@ public struct CascadeStepCellView: View {
                         HStack(spacing: 10) {
                             Image(systemName: ca.isArtifactFile ? "sparkles.rectangle.stack" : "doc.badge.gearshape")
                                 .font(.system(size: 14))
-                                .foregroundStyle(StepCardPalette.periwinkle)
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(ca.fileName)
                                     .font(.system(size: 13.5, weight: .semibold, design: .monospaced))
@@ -917,15 +915,15 @@ public struct CascadeStepCellView: View {
                             if ca.additions > 0 || ca.deletions > 0 {
                                 Text("+\(ca.additions) -\(ca.deletions)")
                                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(StepCardPalette.emeraldDone)
+                                    .foregroundStyle(AntigravityTheme.statusDone)
                             } else if ca.isArtifactFile || ca.fileContent != nil {
                                 Image(systemName: "arrow.up.right.square")
                                     .font(.system(size: 12.5, weight: .medium))
-                                    .foregroundStyle(StepCardPalette.periwinkle)
+                                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             }
                         }
                         .padding(12)
-                        .background(StepCardPalette.cardSurface)
+                        .background(AntigravityTheme.surfaceCard)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -944,7 +942,7 @@ public struct CascadeStepCellView: View {
                         Spacer()
                     }
                     .padding(10)
-                    .background(StepCardPalette.cardSurface)
+                    .background(AntigravityTheme.surfaceCard)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
@@ -961,7 +959,7 @@ public struct CascadeStepCellView: View {
                         Spacer()
                     }
                     .padding(10)
-                    .background(StepCardPalette.cardSurface)
+                    .background(AntigravityTheme.surfaceCard)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
@@ -998,7 +996,7 @@ public struct CascadeStepCellView: View {
                 HStack(spacing: 9) {
                     Image(systemName: step.type == .browserSubagent ? "safari" : "globe")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(StepCardPalette.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     Text(step.plannerResponse?.response ?? (step.type == .browserSubagent ? "Browser subagent activity" : "Read web page"))
                         .font(.system(size: 13, design: step.type == .readUrlContent ? .monospaced : .default))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -1007,7 +1005,7 @@ public struct CascadeStepCellView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
-                .background(StepCardPalette.cardSurface)
+                .background(AntigravityTheme.surfaceCard)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             default:
@@ -1064,7 +1062,7 @@ private struct UnknownStepFallbackCardView: View {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles.rectangle.stack")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(StepCardPalette.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 Text(formattedTypeLabel)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkReading)
@@ -1075,7 +1073,7 @@ private struct UnknownStepFallbackCardView: View {
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.06), in: Capsule())
+                    .background(AntigravityTheme.surfaceBadge, in: Capsule())
             }
             if let summary = fallbackSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
                 Text(summary)
@@ -1089,10 +1087,10 @@ private struct UnknownStepFallbackCardView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(StepCardPalette.cardSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                .stroke(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .accessibilityIdentifier("card-unknown-forward-step-\(stepIndex)")
     }

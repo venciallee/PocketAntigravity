@@ -7,11 +7,6 @@ public struct PermissionsPresetListCard: View {
     @Bindable public var store: AntigravitySessionStore
     public var onSelectPreset: ((AgentPermissionPreset) -> Void)?
 
-    private static let periwinkle = AntigravityTheme.accentPeriwinkle // #8EB4FF
-    private static let warmAmber = AntigravityTheme.statusWaiting // #EBB365
-    private static let cardSurface = Color(red: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x24 / 255.0)
-    private static let selectedSubtitleColor = Color(red: 0xB0 / 255.0, green: 0xB8 / 255.0, blue: 0xC8 / 255.0)
-
     public init(
         store: AntigravitySessionStore,
         onSelectPreset: ((AgentPermissionPreset) -> Void)? = nil
@@ -39,16 +34,16 @@ public struct PermissionsPresetListCard: View {
                     presetRow(preset)
                     if idx < presets.count - 1 {
                         Divider()
-                            .overlay(Color.white.opacity(0.06))
+                            .overlay(AntigravityTheme.subtleDivider)
                             .padding(.leading, 56)
                     }
                 }
             }
-            .background(Self.cardSurface)
+            .background(AntigravityTheme.surfaceSheetGroup)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
 
             HStack(spacing: 5) {
@@ -71,7 +66,7 @@ public struct PermissionsPresetListCard: View {
     private func presetRow(_ preset: AgentPermissionPreset) -> some View {
         let isSelected = store.activePermissionPreset == preset
         let isDefault = preset == defaultPreset
-        let accentColor: Color = (preset == .turbo) ? Self.warmAmber : Self.periwinkle
+        let accentColor: Color = (preset == .turbo) ? AntigravityTheme.statusWaiting : AntigravityTheme.accentPeriwinkle
 
         return Button {
             withAnimation(.snappy(duration: 0.2)) {
@@ -82,7 +77,7 @@ public struct PermissionsPresetListCard: View {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(isSelected ? accentColor.opacity(0.18) : Color.white.opacity(0.06))
+                        .fill(isSelected ? accentColor.opacity(0.16) : AntigravityTheme.surfaceSubtleBox)
                         .frame(width: 30, height: 30)
                     Image(systemName: preset.semanticIcon.sfSymbolName)
                         .font(.system(size: 14, weight: .semibold))
@@ -108,14 +103,14 @@ public struct PermissionsPresetListCard: View {
                             .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2.5)
-                            .background(Color.white.opacity(0.08))
+                            .background(AntigravityTheme.inkSecondary.opacity(0.14))
                             .clipShape(Capsule())
                         }
                     }
 
                     Text(preset.summaryDescription)
                         .font(.system(size: 12.5))
-                        .foregroundStyle(isSelected ? Self.selectedSubtitleColor : AntigravityTheme.inkSecondary)
+                        .foregroundStyle(isSelected ? AntigravityTheme.inkLabel : AntigravityTheme.inkSecondary)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -144,8 +139,7 @@ public struct PermissionsSheetView: View {
     @Bindable public var store: AntigravitySessionStore
     public var onDismiss: (() -> Void)?
 
-    public static let sheetSurfaceColor = Color(red: 0x13 / 255.0, green: 0x14 / 255.0, blue: 0x1A / 255.0)
-    private static let periwinkle = AntigravityTheme.accentPeriwinkle
+    public static let sheetSurfaceColor = AntigravityTheme.surfaceSheet
 
     public init(
         store: AntigravitySessionStore,
@@ -173,13 +167,13 @@ public struct PermissionsSheetView: View {
                     } label: {
                         Text("Done")
                             .font(.system(size: 14.5, weight: .semibold))
-                            .foregroundStyle(Self.periwinkle)
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             .padding(.horizontal, 14)
                             .frame(height: 32)
-                            .background(Self.periwinkle.opacity(0.14))
+                            .background(AntigravityTheme.accentPeriwinkle.opacity(0.14))
                             .overlay(
                                 Capsule()
-                                    .strokeBorder(Self.periwinkle.opacity(0.28), lineWidth: 1)
+                                    .strokeBorder(AntigravityTheme.accentPeriwinkle.opacity(0.28), lineWidth: 1)
                             )
                             .clipShape(Capsule())
                             .frame(
@@ -199,7 +193,7 @@ public struct PermissionsSheetView: View {
             .padding(.bottom, 8)
 
             Divider()
-                .overlay(Color.white.opacity(0.06))
+                .overlay(AntigravityTheme.subtleDivider)
 
             ScrollView(.vertical, showsIndicators: false) {
                 PermissionsPresetListCard(store: store)

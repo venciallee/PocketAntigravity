@@ -499,8 +499,16 @@ extension AntigravitySessionStore {
         saveAppearancePreferences()
     }
 
+    public func setAppearanceMode(_ mode: AppAppearanceMode) {
+        hasModifiedAppearanceModeInSession = true
+        appearancePreferences.appearanceMode = mode
+        preferencesStore.set(mode.rawValue, forKey: Self.appearanceModeDefaultsKey)
+        saveAppearancePreferences()
+    }
+
     public func saveAppearancePreferences() {
         let snapshot = appearancePreferences
+        preferencesStore.set(snapshot.appearanceMode.rawValue, forKey: Self.appearanceModeDefaultsKey)
         let storeRef = projectionStore
         Task {
             await storeRef.saveAppearancePreferences(snapshot)
@@ -508,7 +516,12 @@ extension AntigravitySessionStore {
     }
 
     public func loadPersistedV233Preferences() async {
-        if let prefs = await projectionStore.loadAppearancePreferences() {
+        if var prefs = await projectionStore.loadAppearancePreferences() {
+            if hasModifiedAppearanceModeInSession {
+                prefs.appearanceMode = appearancePreferences.appearanceMode
+            } else {
+                preferencesStore.set(prefs.appearanceMode.rawValue, forKey: Self.appearanceModeDefaultsKey)
+            }
             appearancePreferences = prefs
             for idx in projects.indices {
                 projects[idx].isExpandedInHome = !prefs.collapsedProjectIds.contains(projects[idx].id)

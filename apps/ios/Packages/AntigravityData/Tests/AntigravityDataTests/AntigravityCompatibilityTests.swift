@@ -531,6 +531,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(try decodeUnknown(SemanticIcon.self), .embedArtifact)
         XCTAssertEqual(try decodeUnknown(PrimaryTab.self), .agents)
         XCTAssertEqual(try decodeUnknown(AppThemePreset.self), .obsidian)
+        XCTAssertEqual(try decodeUnknown(AppAppearanceMode.self), .system)
     }
 
     func testUnknownFutureEnumTriggersSecondaryKeyStripFallbackAndCaches() async throws {

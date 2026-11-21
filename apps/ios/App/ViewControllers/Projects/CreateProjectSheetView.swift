@@ -98,10 +98,11 @@ public struct CreateProjectSheetView: View {
     public var body: some View {
         ZStack(alignment: .bottom) {
             AntigravityTheme.canvasObsidian.ignoresSafeArea()
+            AntigravityTheme.scrimOverlay.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 Capsule()
-                    .fill(Color.white.opacity(0.24))
+                    .fill(AntigravityTheme.sheetHandle)
                     .frame(width: 38, height: 5)
                     .padding(.top, 9)
 
@@ -157,7 +158,7 @@ public struct CreateProjectSheetView: View {
             } label: {
                 Text("Cancel")
                     .font(.system(size: 16.5, weight: .regular))
-                    .foregroundStyle(Color(red: 0x9D / 255.0, green: 0xA2 / 255.0, blue: 0xB0 / 255.0))
+                    .foregroundStyle(AntigravityTheme.textSecondary)
                     .frame(minWidth: 64, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .leading)
             }
             .buttonStyle(.plain)
@@ -167,7 +168,7 @@ public struct CreateProjectSheetView: View {
 
             Text("New Project")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color.white)
+                .foregroundStyle(AntigravityTheme.textPrimary)
 
             Spacer()
 
@@ -233,13 +234,13 @@ public struct CreateProjectSheetView: View {
                 Text(target.rawValue)
                     .font(.system(size: 14.5, weight: isSelected ? .semibold : .medium))
             }
-            .foregroundStyle(isSelected ? Color.white : AntigravityTheme.textSecondary)
+            .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
             .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
             .background(
                 Group {
                     if isSelected {
                         RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .fill(Color(red: 0x33 / 255.0, green: 0x36 / 255.0, blue: 0x41 / 255.0))
+                            .fill(AntigravityTheme.surfaceActiveTabSlot)
                     }
                 }
             )
@@ -288,7 +289,7 @@ public struct CreateProjectSheetView: View {
                     .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.textSecondary)
                 Text(kind.rawValue)
                     .font(.system(size: 14.5, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                     .lineLimit(1)
             }
             .padding(.horizontal, 14)
@@ -298,14 +299,14 @@ public struct CreateProjectSheetView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(
                         isSelected
-                            ? Color(red: 0x1F / 255.0, green: 0x24 / 255.0, blue: 0x30 / 255.0)
+                            ? AntigravityTheme.surfaceSelectionTint
                             : AntigravityTheme.surfaceSheetGroup
                     )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(
-                        isSelected ? AntigravityTheme.accentPeriwinkle : Color.white.opacity(0.07),
+                        isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.glassHairline,
                         lineWidth: isSelected ? 1.5 : 1
                     )
             )
@@ -335,7 +336,7 @@ public struct CreateProjectSheetView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .accessibilityIdentifier("repo-search-input")
     }
@@ -366,7 +367,7 @@ public struct CreateProjectSheetView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(repo.fullName)
                                     .font(.system(size: 14.5, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(Color.white)
+                                    .foregroundStyle(AntigravityTheme.textPrimary)
                                 Text(repo.metadata)
                                     .font(.system(size: 12.5, weight: .regular))
                                     .foregroundStyle(AntigravityTheme.textSecondary)
@@ -426,7 +427,7 @@ public struct CreateProjectSheetView: View {
                 HStack {
                     Text("Branch & worktree")
                         .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 5) {
                         Text(branchWorktreeLabel)
@@ -449,7 +450,7 @@ public struct CreateProjectSheetView: View {
             HStack {
                 Text("Name")
                     .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
                 Spacer()
                 TextField("Project name", text: $projectName)
                     .font(.system(size: 14.5, weight: .regular))
@@ -467,7 +468,7 @@ public struct CreateProjectSheetView: View {
                 HStack {
                     Text("Drive URL")
                         .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     TextField("Optional Google Drive folder link", text: Binding(
                         get: { store.newProjectDraft.driveResourceLinks.first ?? "" },

@@ -13,15 +13,7 @@ public struct ModelAndModeSheetView: View {
     public var onSelectConfiguration: ((String, String, String) -> Void)?
     public var onDismiss: (() -> Void)?
 
-    public static let sheetSurfaceColor = Color(red: 0x13 / 255.0, green: 0x14 / 255.0, blue: 0x1A / 255.0)
-    private static let periwinkle = AntigravityTheme.accentPeriwinkle // #8EB4FF
-    private static let emerald = AntigravityTheme.statusDone // #57C88A
-    private static let cardSurface = Color(red: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x24 / 255.0)
-    private static let modeSelectedTop = Color(red: 0x21 / 255.0, green: 0x2A / 255.0, blue: 0x3E / 255.0)
-    private static let modeSelectedBottom = Color(red: 0x18 / 255.0, green: 0x1E / 255.0, blue: 0x2C / 255.0)
-    private static let modeDescriptionSelected = Color(red: 0xB0 / 255.0, green: 0xB8 / 255.0, blue: 0xC8 / 255.0)
-    private static let segmentTrackSurface = Color(red: 0x11 / 255.0, green: 0x12 / 255.0, blue: 0x17 / 255.0)
-    private static let segmentActiveSurface = Color(red: 0x25 / 255.0, green: 0x30 / 255.0, blue: 0x47 / 255.0)
+    public static let sheetSurfaceColor = AntigravityTheme.surfaceSheet
 
     private struct ModelEffortVariant: Identifiable {
         let option: CascadeModelConfig
@@ -122,7 +114,7 @@ public struct ModelAndModeSheetView: View {
                                 topTrailingRadius: 28,
                                 style: .continuous
                             )
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                         )
                         .padding(.top, 118)
                         .ignoresSafeArea(edges: .bottom)
@@ -145,7 +137,7 @@ public struct ModelAndModeSheetView: View {
         VStack(spacing: 0) {
             if !isPresentedAsNativeSheet {
                 Capsule()
-                    .fill(Color.white.opacity(0.24))
+                    .fill(AntigravityTheme.sheetHandle)
                     .frame(width: 36, height: 4.5)
                     .padding(.top, 10)
             }
@@ -156,7 +148,7 @@ public struct ModelAndModeSheetView: View {
                 .padding(.bottom, 8)
 
             Divider()
-                .overlay(Color.white.opacity(0.06))
+                .overlay(AntigravityTheme.subtleDivider)
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
@@ -167,14 +159,18 @@ public struct ModelAndModeSheetView: View {
                     if isLiveAntigravity2Mode && store.selectedModelConfig.isOrchestrator {
                         HStack(spacing: 8) {
                             Image(systemName: "cpu.fill")
-                                .foregroundStyle(Self.periwinkle)
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             Text("Orchestrator uses fixed Planner (\(store.selectedModelConfig.plannerModelName ?? "Gemini 4 Neon")) + Executor (\(store.selectedModelConfig.executorModelName ?? "Gemini 4 Hydrogen")) settings.")
                                 .font(.system(size: 12))
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                         }
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 12))
+                        .background(AntigravityTheme.surfaceSheetGroup, in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                        )
                     }
 
                     modelSection
@@ -212,8 +208,8 @@ public struct ModelAndModeSheetView: View {
                 quotaMiniBar(label: "Partner Wk", pct: store.usageQuota.partnerWeeklyPercent)
             }
             .padding(12)
-            .background(Self.cardSurface, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+            .background(AntigravityTheme.surfaceSheetGroup, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
         }
         .accessibilityIdentifier("model-usage-quota-card")
     }
@@ -225,7 +221,7 @@ public struct ModelAndModeSheetView: View {
                 .foregroundStyle(AntigravityTheme.inkSecondary)
             Text("\(pct)%")
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
-                .foregroundStyle(pct > 25 ? Self.periwinkle : AntigravityTheme.statusWaiting)
+                .foregroundStyle(pct > 25 ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.statusWaiting)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -256,13 +252,13 @@ public struct ModelAndModeSheetView: View {
                 } label: {
                     Text("Done")
                         .font(.system(size: 14.5, weight: .semibold))
-                        .foregroundStyle(Self.periwinkle)
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .padding(.horizontal, 14)
                         .frame(height: 32)
-                        .background(Self.periwinkle.opacity(0.14))
+                        .background(AntigravityTheme.accentPeriwinkle.opacity(0.14))
                         .overlay(
                             Capsule()
-                                .strokeBorder(Self.periwinkle.opacity(0.28), lineWidth: 1)
+                                .strokeBorder(AntigravityTheme.accentPeriwinkle.opacity(0.28), lineWidth: 1)
                         )
                         .clipShape(Capsule())
                         .frame(
@@ -336,11 +332,11 @@ public struct ModelAndModeSheetView: View {
                 HStack(spacing: 8) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(isSelected ? Self.periwinkle.opacity(0.18) : Color.white.opacity(0.06))
+                            .fill(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.16) : AntigravityTheme.surfaceSubtleBox)
                             .frame(width: 28, height: 28)
                         Image(systemName: isSelected ? activeIconName : iconName)
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(isSelected ? Self.periwinkle : AntigravityTheme.inkSecondary)
+                            .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary)
                     }
 
                     Text(mode.rawValue)
@@ -354,17 +350,17 @@ public struct ModelAndModeSheetView: View {
                     if isSelected {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Self.periwinkle)
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     } else {
                         Circle()
-                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1.25)
+                            .strokeBorder(AntigravityTheme.inkSecondary.opacity(0.35), lineWidth: 1.25)
                             .frame(width: 16, height: 16)
                     }
                 }
 
                 Text(description)
                     .font(.system(size: 12.5, weight: .regular))
-                    .foregroundStyle(isSelected ? Self.modeDescriptionSelected : AntigravityTheme.inkSecondary)
+                    .foregroundStyle(isSelected ? AntigravityTheme.inkLabel : AntigravityTheme.inkSecondary)
                     .lineSpacing(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -373,26 +369,16 @@ public struct ModelAndModeSheetView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(
-                        isSelected
-                            ? AnyShapeStyle(
-                                LinearGradient(
-                                    colors: [Self.modeSelectedTop, Self.modeSelectedBottom],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            : AnyShapeStyle(Self.cardSurface)
-                    )
+                    .fill(isSelected ? AntigravityTheme.surfaceSelectionTint : AntigravityTheme.surfaceSheetGroup)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(
-                        isSelected ? Self.periwinkle.opacity(0.85) : Color.white.opacity(0.07),
+                        isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.85) : AntigravityTheme.cardBorder,
                         lineWidth: isSelected ? 1.4 : 1
                     )
             )
-            .shadow(color: isSelected ? Self.periwinkle.opacity(0.12) : .clear, radius: 10, x: 0, y: 3)
+            .shadow(color: isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.12) : .clear, radius: 10, x: 0, y: 3)
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -411,16 +397,16 @@ public struct ModelAndModeSheetView: View {
                     modelGroupRow(group)
                     if idx < groups.count - 1 {
                         Divider()
-                            .overlay(Color.white.opacity(0.06))
+                            .overlay(AntigravityTheme.subtleDivider)
                             .padding(.leading, 14)
                     }
                 }
             }
-            .background(Self.cardSurface)
+            .background(AntigravityTheme.surfaceSheetGroup)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
 
             HStack(spacing: 5) {
@@ -481,7 +467,7 @@ public struct ModelAndModeSheetView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .background(isSelected ? Self.periwinkle.opacity(0.08) : Color.clear)
+            .background(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.08) : Color.clear)
         } else {
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
@@ -500,7 +486,7 @@ public struct ModelAndModeSheetView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-                .background(isSelected ? Self.periwinkle.opacity(0.08) : Color.clear)
+                .background(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.08) : Color.clear)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -528,12 +514,12 @@ public struct ModelAndModeSheetView: View {
                     if let tagBadge {
                         Text(tagBadge)
                             .font(.system(size: 10.5, weight: .bold))
-                            .foregroundStyle(Self.emerald)
+                            .foregroundStyle(AntigravityTheme.statusDone)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 6.5)
                             .padding(.vertical, 2)
-                            .background(Self.emerald.opacity(0.14))
+                            .background(AntigravityTheme.statusDone.opacity(0.14))
                             .clipShape(Capsule())
                     }
 
@@ -545,7 +531,7 @@ public struct ModelAndModeSheetView: View {
                             .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 6.5)
                             .padding(.vertical, 2)
-                            .background(Color.white.opacity(0.08))
+                            .background(AntigravityTheme.inkSecondary.opacity(0.14))
                             .clipShape(Capsule())
                     }
 
@@ -557,14 +543,14 @@ public struct ModelAndModeSheetView: View {
                             .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 6.5)
                             .padding(.vertical, 2)
-                            .background(Color.white.opacity(0.09))
+                            .background(AntigravityTheme.inkSecondary.opacity(0.14))
                             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                 }
 
                 Text(subtitle)
                     .font(.system(size: 12.5))
-                    .foregroundStyle(isSelected ? Self.modeDescriptionSelected : AntigravityTheme.inkSecondary)
+                    .foregroundStyle(isSelected ? AntigravityTheme.inkLabel : AntigravityTheme.inkSecondary)
                     .lineLimit(1)
             }
 
@@ -573,7 +559,7 @@ public struct ModelAndModeSheetView: View {
             if isSelected {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Self.periwinkle)
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
             } else if let tierCount = unselectedTierCount {
                 Text("\(tierCount) levels")
                     .font(.system(size: 11, weight: .medium))
@@ -582,7 +568,7 @@ public struct ModelAndModeSheetView: View {
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.06))
+                    .background(AntigravityTheme.inkSecondary.opacity(0.14))
                     .clipShape(Capsule())
             }
         }
@@ -600,19 +586,19 @@ public struct ModelAndModeSheetView: View {
                 } label: {
                     Text(variant.effortLabel)
                         .font(.system(size: 12.5, weight: isVariantSelected ? .semibold : .medium))
-                        .foregroundStyle(isVariantSelected ? Self.periwinkle : AntigravityTheme.inkSecondary)
+                        .foregroundStyle(isVariantSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .frame(maxWidth: .infinity)
                         .frame(height: 32)
                         .background(
                             RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                                .fill(isVariantSelected ? Self.segmentActiveSurface : Color.clear)
+                                .fill(isVariantSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 8.5, style: .continuous)
                                 .strokeBorder(
-                                    isVariantSelected ? Self.periwinkle.opacity(0.45) : Color.clear,
+                                    isVariantSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.45) : Color.clear,
                                     lineWidth: 1
                                 )
                         )
@@ -625,11 +611,11 @@ public struct ModelAndModeSheetView: View {
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Self.segmentTrackSurface)
+                .fill(AntigravityTheme.surfaceObsidian)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
         )
     }
 
@@ -686,13 +672,13 @@ public struct ModelAndModeSheetView: View {
                         ? .system(size: 13, weight: isSelected ? .bold : .medium, design: .monospaced)
                         : .system(size: 13.5, weight: .semibold)
                 )
-                .foregroundStyle(isSelected ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.inkLabel)
+                .foregroundStyle(isSelected ? AntigravityTheme.pillActiveForeground : AntigravityTheme.inkLabel)
                 .padding(.horizontal, 16)
                 .frame(height: 36)
-                .background(isSelected ? Color.white : Self.cardSurface)
+                .background(isSelected ? AntigravityTheme.pillActiveBackground : AntigravityTheme.surfaceSheetGroup)
                 .overlay(
                     Capsule()
-                        .strokeBorder(isSelected ? Color.clear : Color.white.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(isSelected ? Color.clear : AntigravityTheme.cardBorder, lineWidth: 1)
                 )
                 .clipShape(Capsule())
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)

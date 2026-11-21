@@ -138,7 +138,6 @@ public struct SideQuestionSheetView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .accessibilityIdentifier("sheet_side_question")
     }
 }
