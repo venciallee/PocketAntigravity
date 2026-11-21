@@ -1141,7 +1141,7 @@ def main():
     parser = argparse.ArgumentParser(description="ESDD E2E & @3x Visual Parity Verifier")
     parser.add_argument("--auto", action="store_true", help="Run impact-scoped ESDD gates based on git diff + working tree")
     parser.add_argument("--full", action="store_true", help="Force all 4 ESDD stages (16/16 TCs + 13/13 @3x screens)")
-    parser.add_argument("--release", action="store_true", help="Force mandatory 100% Release Full ESDD")
+    parser.add_argument("--release", action="store_true", help="Force mandatory full Release ESDD (all 4 gates)")
     parser.add_argument("--plan", default=None, help="Path to JSON plan from e2e_impact_planner.py")
     parser.add_argument("--stages", default=None, help="Comma-separated stages to run (e.g. 1,2)")
     parser.add_argument("--cases", default=None, help="Comma-separated interactive test IDs (e.g. TC-06,TC-07)")

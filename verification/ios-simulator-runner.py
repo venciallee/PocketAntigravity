@@ -244,7 +244,7 @@ def main() -> None:
         default=None,
         help="Execution mode (defaults to 'full' when neither --plan nor --mode is specified)",
     )
-    parser.add_argument("--release", action="store_true", help="Shorthand for --mode release (mandatory 100% full E2E)")
+    parser.add_argument("--release", action="store_true", help="Shorthand for --mode release (mandatory full E2E)")
     parser.add_argument("--only-testing", action="append", default=None, help="Comma-separated XCUITest method name(s), 'all', or 'none'")
     parser.add_argument("--screens", default=None, help="Comma-separated UE state IDs, 'all', or 'none'")
     parser.add_argument("--skip-live-rpc", action="store_true", help="Skip Step 4 Live Connect-RPC App Handshake")
