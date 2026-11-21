@@ -151,6 +151,8 @@ public actor AntigravityRPCClient {
     private var authUser: String
     private var targetInstanceIdentifier: String
     private var resolvedInstanceUuid: String?
+    private var relayApiKey: String?
+    private var hasAttemptedApiKeyDiscovery: Bool = false
     private var preferredCloudInstanceUuid: String? = nil
     private var cachedRelayInstances: [RelayInstanceInfo] = []
     private var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
@@ -195,6 +197,7 @@ public actor AntigravityRPCClient {
         sessionCookie: String? = nil,
         authUser: String? = nil,
         resolvedInstanceUuid: String? = nil,
+        relayApiKey: String? = nil,
         pinnedFingerprintSHA256: String? = nil,
         urlSession: URLSession? = nil
     ) {
@@ -206,6 +209,9 @@ public actor AntigravityRPCClient {
         let extractedId = parsedTarget?.instanceId.isEmpty == false ? parsedTarget!.instanceId : host.instanceId
         self.targetInstanceIdentifier = extractedId
         self.resolvedInstanceUuid = resolvedInstanceUuid
+        let trimmedRelayKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.relayApiKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
+            ?? SAPISIDHashGenerator.configuredRelayWebApiKeyOverride()
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         self.explicitAuthUser = effectiveAuthUser
         self.authUser = effectiveAuthUser ?? "0"
@@ -238,6 +244,7 @@ public actor AntigravityRPCClient {
         sessionCookie: String? = nil,
         authUser: String? = nil,
         resolvedInstanceUuid: String? = nil,
+        relayApiKey: String? = nil,
         pinnedFingerprintSHA256: String? = nil,
         urlSession: URLSession? = nil
     ) {
@@ -248,6 +255,9 @@ public actor AntigravityRPCClient {
         self.relayOriginURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin) ?? baseURL
         self.targetInstanceIdentifier = parsedTarget?.instanceId ?? ""
         self.resolvedInstanceUuid = resolvedInstanceUuid
+        let trimmedRelayKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.relayApiKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
+            ?? SAPISIDHashGenerator.configuredRelayWebApiKeyOverride()
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         self.explicitAuthUser = effectiveAuthUser
         self.authUser = effectiveAuthUser ?? "0"
@@ -305,6 +315,147 @@ public actor AntigravityRPCClient {
         return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
+    // MARK: - Cloud Relay Public Web API Key Runtime Discovery
+
+    /// Returns the currently active Cloud Relay public web API key (captured via Sign-In WebView,
+    /// discovered dynamically from the relay web frontend, or supplied via environment/Info.plist).
+    public func currentRelayApiKey() -> String? {
+        relayApiKey
+    }
+
+    /// Resolves the public browser `X-Goog-Api-Key` required by Google Boq `ApiService`
+    /// without hardcoding any API key literal in source code.
+    public func resolveRelayApiKey(forceRefresh: Bool = false) async -> String? {
+        let originStr = SAPISIDHashGenerator.normalizeOrigin(relayOriginURL.absoluteString)
+        let isLoopback = SAPISIDHashGenerator.isLoopbackOrigin(originStr)
+
+        if forceRefresh {
+            relayApiKey = nil
+            hasAttemptedApiKeyDiscovery = false
+            if !isLoopback {
+                await KeychainStore.shared.clearRelayWebApiKey(forOrigin: originStr)
+            }
+        } else if let existing = relayApiKey, !existing.isEmpty {
+            return existing
+        } else if !isLoopback,
+                  let cached = await KeychainStore.shared.loadRelayWebApiKey(forOrigin: originStr) {
+            relayApiKey = cached
+            return cached
+        }
+
+        guard !hasAttemptedApiKeyDiscovery else {
+            return relayApiKey
+        }
+        hasAttemptedApiKeyDiscovery = true
+
+        if let discovered = await discoverRelayWebApiKeyFromOrigin(originStr: originStr) {
+            relayApiKey = discovered
+            if !isLoopback {
+                await KeychainStore.shared.saveRelayWebApiKey(discovered, forOrigin: originStr)
+            }
+            return discovered
+        }
+        return relayApiKey
+    }
+
+    private func makeBootstrapGetRequest(
+        for url: URL,
+        originStr: String,
+        includeSessionCookie: Bool
+    ) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 8
+        req.setValue("text/html,application/xhtml+xml,application/javascript,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        req.setValue(SAPISIDHashGenerator.mobileRemoteUserAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("\(originStr)/", forHTTPHeaderField: "Referer")
+        if includeSessionCookie,
+           var cleanedCookie = sessionCookie?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !cleanedCookie.isEmpty {
+            if cleanedCookie.lowercased().hasPrefix("cookie:") {
+                cleanedCookie = String(cleanedCookie.dropFirst("cookie:".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if !cleanedCookie.isEmpty
+                && !cleanedCookie.lowercased().hasPrefix("bearer ")
+                && !cleanedCookie.hasPrefix("ya29.") {
+                req.setValue(cleanedCookie, forHTTPHeaderField: "Cookie")
+            }
+        }
+        return req
+    }
+
+    private func discoverRelayWebApiKeyFromOrigin(originStr: String) async -> String? {
+        let originHost = relayOriginURL.host?.lowercased()
+        var candidatePages: [URL] = []
+        if endpointURL.host?.lowercased() == originHost {
+            candidatePages.append(endpointURL)
+        }
+        if let rootURL = URL(string: "\(originStr)/"),
+           !candidatePages.contains(where: { $0.absoluteString == rootURL.absoluteString }) {
+            candidatePages.append(rootURL)
+        }
+
+        for pageURL in candidatePages {
+            let pageReq = makeBootstrapGetRequest(
+                for: pageURL,
+                originStr: originStr,
+                includeSessionCookie: pageURL.host?.lowercased() == originHost
+            )
+            guard let (data, response) = try? await urlSession.data(for: pageReq),
+                  let http = response as? HTTPURLResponse,
+                  (200..<400).contains(http.statusCode) else {
+                continue
+            }
+
+            if let finalHost = http.url?.host?.lowercased(),
+               let expectedHost = originHost,
+               finalHost != expectedHost,
+               !RemoteHostInstance.isAntigravityRelayHost(finalHost) {
+                continue
+            }
+
+            if let headerKey = http.value(forHTTPHeaderField: "X-Goog-Api-Key")?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !headerKey.isEmpty {
+                return headerKey
+            }
+
+            let html = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1)
+                ?? ""
+            if let inlineKey = SAPISIDHashGenerator.extractWebApiKey(from: html) {
+                return inlineKey
+            }
+
+            let effectiveBaseURL = http.url ?? pageURL
+            let scriptURLs = SAPISIDHashGenerator.extractBootstrapScriptURLs(
+                fromHTML: html,
+                baseURL: effectiveBaseURL,
+                limit: 8
+            )
+            for scriptURL in scriptURLs {
+                let scriptReq = makeBootstrapGetRequest(
+                    for: scriptURL,
+                    originStr: originStr,
+                    includeSessionCookie: scriptURL.host?.lowercased() == originHost
+                )
+                guard let (scriptData, scriptResp) = try? await urlSession.data(for: scriptReq),
+                      let scriptHTTP = scriptResp as? HTTPURLResponse,
+                      (200..<300).contains(scriptHTTP.statusCode) else {
+                    continue
+                }
+                let scriptText = String(data: scriptData, encoding: .utf8)
+                    ?? String(data: scriptData, encoding: .isoLatin1)
+                    ?? ""
+                if let scriptKey = SAPISIDHashGenerator.extractWebApiKey(from: scriptText) {
+                    return scriptKey
+                }
+            }
+        }
+        return nil
+    }
+
     // MARK: - Cloud Relay `ApiService/ListInstances` & Instance Resolution
 
     /// Queries `POST /$rpc/devtools_jetski_boq_api_proto.ApiService/ListInstances` for a given `X-Goog-AuthUser`.
@@ -317,23 +468,42 @@ public actor AntigravityRPCClient {
         guard let url = URL(string: urlString) else {
             throw AntigravityRPCError.invalidEndpoint
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        if let timeoutInterval {
-            request.timeoutInterval = timeoutInterval
-        }
-        SAPISIDHashGenerator.applyApiServiceHeaders(
-            to: &request,
-            cookieHeader: sessionCookie ?? "",
-            origin: relayOriginURL.absoluteString,
-            authUser: activeAuthUser
-        )
-        request.httpBody = CloudRelayJSPBCodec.encodeListInstancesRequest()
 
-        let (data, response) = try await urlSession.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw AntigravityRPCError.invalidEndpoint
+        func performRequest(apiKey: String?) async throws -> (Data, HTTPURLResponse) {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            if let timeoutInterval {
+                request.timeoutInterval = timeoutInterval
+            }
+            SAPISIDHashGenerator.applyApiServiceHeaders(
+                to: &request,
+                cookieHeader: sessionCookie ?? "",
+                origin: relayOriginURL.absoluteString,
+                authUser: activeAuthUser,
+                apiKey: apiKey
+            )
+            request.httpBody = CloudRelayJSPBCodec.encodeListInstancesRequest()
+
+            let (data, response) = try await urlSession.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw AntigravityRPCError.invalidEndpoint
+            }
+            return (data, http)
         }
+
+        var activeApiKey = await resolveRelayApiKey()
+        var (data, http) = try await performRequest(apiKey: activeApiKey)
+
+        if http.statusCode == 400 || http.statusCode == 403 {
+            let text = String(data: data, encoding: .utf8) ?? ""
+            if SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: text),
+               let refreshedKey = await resolveRelayApiKey(forceRefresh: true),
+               refreshedKey != activeApiKey {
+                activeApiKey = refreshedKey
+                (data, http) = try await performRequest(apiKey: activeApiKey)
+            }
+        }
+
         if http.statusCode == 401 || http.statusCode == 403 {
             let text = String(data: data, encoding: .utf8) ?? "Google session expired or unauthorized"
             throw AntigravityRPCError.unauthorized(text)
@@ -1304,7 +1474,12 @@ public actor AntigravityRPCClient {
         let currentAuthUser = authUser
         let session = urlSession
 
-        func sendOnce(to targetUuid: String, authUserOverride: String? = nil) async throws -> (payload: Data, headers: [String: String]) {
+        func sendOnce(
+            to targetUuid: String,
+            authUserOverride: String? = nil,
+            didRetryInvalidApiKey: Bool = false
+        ) async throws -> (payload: Data, headers: [String: String]) {
+            let activeApiKey = await resolveRelayApiKey()
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             if let timeoutInterval {
@@ -1315,6 +1490,7 @@ public actor AntigravityRPCClient {
                 cookieHeader: currentCookie,
                 origin: originStr,
                 authUser: authUserOverride ?? currentAuthUser,
+                apiKey: activeApiKey,
                 isStreaming: false
             )
             request.httpBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
@@ -1328,6 +1504,18 @@ public actor AntigravityRPCClient {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw AntigravityRPCError.invalidEndpoint
+            }
+            if !didRetryInvalidApiKey && (http.statusCode == 400 || http.statusCode == 403) {
+                let text = String(data: data, encoding: .utf8) ?? ""
+                if SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: text),
+                   let refreshedKey = await resolveRelayApiKey(forceRefresh: true),
+                   refreshedKey != activeApiKey {
+                    return try await sendOnce(
+                        to: targetUuid,
+                        authUserOverride: authUserOverride,
+                        didRetryInvalidApiKey: true
+                    )
+                }
             }
             if http.statusCode == 401 || http.statusCode == 403 {
                 let text = String(data: data, encoding: .utf8) ?? "Unauthorized"
@@ -4762,32 +4950,74 @@ public actor AntigravityRPCClient {
             guard let relayURL = comps.url else {
                 throw AntigravityRPCError.invalidEndpoint
             }
-            var relayRequest = URLRequest(url: relayURL)
-            relayRequest.httpMethod = "POST"
-            relayRequest.timeoutInterval = 300
-            SAPISIDHashGenerator.applyApiServiceHeaders(
-                to: &relayRequest,
-                cookieHeader: sessionCookie ?? "",
-                origin: originStr,
-                authUser: authUser,
-                isStreaming: true
-            )
-            relayRequest.httpBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
+            let encodedStreamBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
                 targetInstanceUuid: targetUuid,
                 rpcPath: "\(Self.servicePrefix)/\(method)",
                 payload: framedPayload,
                 contentType: "application/connect+json",
                 isStreaming: true
             )
-
+            let capturedCookie = sessionCookie ?? ""
+            let capturedAuthUser = authUser
+            let cachedApiKey = relayApiKey
             let session = self.streamingURLSession
-            let immutableRelayReq = relayRequest
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {
-                        let (bytes, response) = try await session.bytes(for: immutableRelayReq)
-                        guard let http = response as? HTTPURLResponse else {
+                        func makeStreamRequest(apiKey: String?) -> URLRequest {
+                            var req = URLRequest(url: relayURL)
+                            req.httpMethod = "POST"
+                            req.timeoutInterval = 300
+                            SAPISIDHashGenerator.applyApiServiceHeaders(
+                                to: &req,
+                                cookieHeader: capturedCookie,
+                                origin: originStr,
+                                authUser: capturedAuthUser,
+                                apiKey: apiKey,
+                                isStreaming: true
+                            )
+                            req.httpBody = encodedStreamBody
+                            return req
+                        }
+
+                        var activeApiKey: String?
+                        if let cachedApiKey, !cachedApiKey.isEmpty {
+                            activeApiKey = cachedApiKey
+                        } else {
+                            activeApiKey = await self.resolveRelayApiKey()
+                        }
+
+                        var (bytes, response) = try await session.bytes(for: makeStreamRequest(apiKey: activeApiKey))
+                        guard var http = response as? HTTPURLResponse else {
                             throw AntigravityRPCError.invalidEndpoint
+                        }
+                        if http.statusCode == 400 || http.statusCode == 403 {
+                            var errBytes: [UInt8] = []
+                            for try await byte in bytes {
+                                errBytes.append(byte)
+                                if errBytes.count >= 2048 { break }
+                            }
+                            let errText = String(decoding: errBytes, as: UTF8.self)
+                            if SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: errText),
+                               let refreshedKey = await self.resolveRelayApiKey(forceRefresh: true),
+                               refreshedKey != activeApiKey {
+                                activeApiKey = refreshedKey
+                                let retryResult = try await session.bytes(for: makeStreamRequest(apiKey: activeApiKey))
+                                bytes = retryResult.0
+                                guard let retryHTTP = retryResult.1 as? HTTPURLResponse else {
+                                    throw AntigravityRPCError.invalidEndpoint
+                                }
+                                http = retryHTTP
+                            } else if http.statusCode == 403 {
+                                throw AntigravityRPCError.unauthorized(
+                                    errText.isEmpty ? "StreamProxyCommand HTTP 403" : errText
+                                )
+                            } else {
+                                throw AntigravityRPCError.httpError(
+                                    statusCode: http.statusCode,
+                                    body: errText.isEmpty ? "StreamProxyCommand HTTP \(http.statusCode)" : errText
+                                )
+                            }
                         }
                         if http.statusCode == 401 || http.statusCode == 403 {
                             throw AntigravityRPCError.unauthorized("StreamProxyCommand HTTP \(http.statusCode)")

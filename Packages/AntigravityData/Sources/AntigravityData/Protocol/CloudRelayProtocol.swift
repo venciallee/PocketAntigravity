@@ -114,10 +114,180 @@ public struct RelayInstanceInfo: Codable, Sendable, Equatable, Identifiable {
 public enum SAPISIDHashGenerator: Sendable {
     public static let defaultOrigin = "https://antigravity.google.com"
     public static let apiServicePrefix = "/$rpc/devtools_jetski_boq_api_proto.ApiService"
-    public static let publicWebApiKey = "AIzaSyCUicsvglkMf8CM2MPlGjopIcIxu3VJEDU"
+    public static let relayApiKeyEnvVarName = "ANTIGRAVITY_RELAY_API_KEY"
+    public static let relayApiKeyInfoPlistKey = "AntigravityRelayAPIKey"
     public static let antigravityTestHeaderName = "x-antigravity-test-72e4dd1c-e8ae-4e97-873b-c3d3a01b735d"
     public static let mobileRemoteUserAgent =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Antigravity-iOS/2.0"
+
+    /// Optional explicit override via process environment (`ANTIGRAVITY_RELAY_API_KEY`)
+    /// or `Info.plist` (`AntigravityRelayAPIKey`). Never hardcodes any API key in source.
+    public static func configuredRelayWebApiKeyOverride() -> String? {
+        if let envVal = ProcessInfo.processInfo.environment[relayApiKeyEnvVarName]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !envVal.isEmpty,
+           !envVal.hasPrefix("$(") {
+            return envVal
+        }
+        if let plistVal = (Bundle.main.object(forInfoDictionaryKey: relayApiKeyInfoPlistKey) as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !plistVal.isEmpty,
+           !plistVal.hasPrefix("$(") {
+            return plistVal
+        }
+        return nil
+    }
+
+    /// Returns `true` for loopback hosts (`127.0.0.1`, `localhost`, `::1`) used by local mock servers and tests.
+    public static func isLoopbackOrigin(_ rawOrigin: String) -> Bool {
+        guard let host = URLComponents(string: rawOrigin.trimmingCharacters(in: .whitespacesAndNewlines))?
+            .host?.lowercased() else {
+            return false
+        }
+        return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+    }
+
+    /// Returns `true` when an HTTP 400/403 response indicates an invalid, missing, or rotated `X-Goog-Api-Key`.
+    public static func isInvalidApiKeyError(statusCode: Int, responseBody: String) -> Bool {
+        guard statusCode == 400 || statusCode == 403 else { return false }
+        let lower = responseBody.lowercased()
+        let markers = [
+            "api_key_invalid",
+            "api key not valid",
+            "api key expired",
+            "invalid api key",
+            "x-goog-api-key",
+            "unregistered callers"
+        ]
+        return markers.contains { lower.contains($0) }
+    }
+
+    /// Extracts the public frontend `X-Goog-Api-Key` dynamically from `antigravity.google.com`
+    /// HTML, `WIZ_global_data`, loaded JS bundles, or explicit relay metadata tags.
+    public static func extractWebApiKey(from rawText: String) -> String? {
+        guard !rawText.isEmpty else { return nil }
+        let fullRange = NSRange(rawText.startIndex..<rawText.endIndex, in: rawText)
+
+        func firstCapture(
+            pattern: String,
+            options: NSRegularExpression.Options = []
+        ) -> String? {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: options),
+                  let match = regex.firstMatch(in: rawText, options: [], range: fullRange) else {
+                return nil
+            }
+            let groupIndex = match.numberOfRanges > 1 ? 1 : 0
+            guard let range = Range(match.range(at: groupIndex), in: rawText) else {
+                return nil
+            }
+            let extracted = String(rawText[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return extracted.isEmpty ? nil : extracted
+        }
+
+        // 1. Contextual Google Boq/Wiz config keys paired with a 39-char Google browser API key
+        if let contextual = firstCapture(
+            pattern: #"(?:x-goog-api-key|WIu0Nc|QrtxK|P10xbc|apiKey|api_key|webApiKey)["']?\s*[:=]\s*["'](AIza[0-9A-Za-z_\-]{35})["']"#,
+            options: [.caseInsensitive]
+        ) {
+            return contextual
+        }
+
+        // 2. Standalone Google browser API key token in HTML/JS bootstrap
+        if let standalone = firstCapture(
+            pattern: #"(?<![0-9A-Za-z_\-])(AIza[0-9A-Za-z_\-]{35})(?![0-9A-Za-z_\-])"#
+        ) {
+            return standalone
+        }
+
+        // 3. Explicit relay metadata tag (used by custom/mock relays in verification & testing)
+        if let metaNameFirst = firstCapture(
+            pattern: #"<meta\b[^>]*\bname\s*=\s*["']antigravity-relay-api-key["'][^>]*\bcontent\s*=\s*["']([A-Za-z0-9_\-\.]{8,128})["']"#,
+            options: [.caseInsensitive]
+        ) {
+            return metaNameFirst
+        }
+        if let metaContentFirst = firstCapture(
+            pattern: #"<meta\b[^>]*\bcontent\s*=\s*["']([A-Za-z0-9_\-\.]{8,128})["'][^>]*\bname\s*=\s*["']antigravity-relay-api-key["']"#,
+            options: [.caseInsensitive]
+        ) {
+            return metaContentFirst
+        }
+        if let explicitHeaderJson = firstCapture(
+            pattern: #"["']x-goog-api-key["']\s*[:=]\s*["']([A-Za-z0-9_\-\.]{8,128})["']"#,
+            options: [.caseInsensitive]
+        ) {
+            return explicitHeaderJson
+        }
+
+        return nil
+    }
+
+    /// Extracts trusted same-origin or Google-hosted `<script src="...">` bootstrap bundle URLs from HTML.
+    public static func extractBootstrapScriptURLs(
+        fromHTML html: String,
+        baseURL: URL,
+        limit: Int = 8
+    ) -> [URL] {
+        guard !html.isEmpty, limit > 0 else { return [] }
+        let pattern = #"<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        let baseHost = baseURL.host?.lowercased()
+        let fullRange = NSRange(html.startIndex..<html.endIndex, in: html)
+        let matches = regex.matches(in: html, options: [], range: fullRange)
+
+        var seen = Set<String>()
+        var prioritized: [URL] = []
+        var secondary: [URL] = []
+
+        for match in matches {
+            guard match.numberOfRanges > 1,
+                  let range = Range(match.range(at: 1), in: html) else {
+                continue
+            }
+            let rawSrc = String(html[range])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "&amp;", with: "&")
+            guard !rawSrc.isEmpty,
+                  let resolved = URL(string: rawSrc, relativeTo: baseURL)?.absoluteURL,
+                  let scheme = resolved.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http",
+                  let host = resolved.host?.lowercased() else {
+                continue
+            }
+            let isTrustedHost =
+                (baseHost != nil && host == baseHost) ||
+                host == "google.com" ||
+                host.hasSuffix(".google.com") ||
+                host == "gstatic.com" ||
+                host.hasSuffix(".gstatic.com") ||
+                host.hasSuffix(".googleusercontent.com")
+            guard isTrustedHost else { continue }
+
+            let key = resolved.absoluteString
+            guard seen.insert(key).inserted else { continue }
+
+            let lowerURL = key.lowercased()
+            let isPriorityBundle =
+                lowerURL.contains("antigravity") ||
+                lowerURL.contains("jetski") ||
+                lowerURL.contains("boq") ||
+                lowerURL.contains("/_/") ||
+                lowerURL.contains("main") ||
+                lowerURL.contains("app") ||
+                lowerURL.contains("bundle") ||
+                lowerURL.contains("chunk") ||
+                lowerURL.contains("bootstrap")
+            if isPriorityBundle {
+                prioritized.append(resolved)
+            } else {
+                secondary.append(resolved)
+            }
+        }
+
+        return Array((prioritized + secondary).prefix(limit))
+    }
 
     /// Parses a semicolon-delimited HTTP `Cookie` header into `[name: value]`.
     public static func parseCookies(_ rawCookieHeader: String) -> [String: String] {
@@ -196,6 +366,7 @@ public enum SAPISIDHashGenerator: Sendable {
         cookieHeader: String,
         origin: String = defaultOrigin,
         authUser: String = "0",
+        apiKey: String? = nil,
         isStreaming: Bool? = nil,
         timestamp: Int = Int(Date().timeIntervalSince1970)
     ) {
@@ -203,7 +374,12 @@ public enum SAPISIDHashGenerator: Sendable {
         request.setValue("application/json+protobuf", forHTTPHeaderField: "Content-Type")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
         request.setValue("grpc-web-javascript/0.1", forHTTPHeaderField: "X-User-Agent")
-        request.setValue(publicWebApiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        let explicitKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveApiKey = (explicitKey?.isEmpty == false ? explicitKey : nil)
+            ?? configuredRelayWebApiKeyOverride()
+        if let effectiveApiKey, !effectiveApiKey.isEmpty {
+            request.setValue(effectiveApiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        }
         request.setValue(authUser.isEmpty ? "0" : authUser, forHTTPHeaderField: "X-Goog-AuthUser")
         if isStreaming != true {
             request.setValue("base64", forHTTPHeaderField: "X-Goog-Encode-Response-If-Executable")

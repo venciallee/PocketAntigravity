@@ -41,10 +41,12 @@ public struct AntigravityApp: App {
                     if let relayURL = env["ANTIGRAVITY_RELAY_URL"], !relayURL.isEmpty {
                         let cookie = env["ANTIGRAVITY_RELAY_COOKIE"] ?? ""
                         let authUser = env["ANTIGRAVITY_AUTHUSER"]
+                        let relayApiKey = env[SAPISIDHashGenerator.relayApiKeyEnvVarName]
                         _ = await store.connectCloudRelay(
                             relayURLString: relayURL,
                             sessionCookie: cookie,
                             authUser: authUser,
+                            relayApiKey: relayApiKey,
                             hostName: env["ANTIGRAVITY_HOST_NAME"] ?? "Antigravity Desktop"
                         )
                     } else if let backendURL = env["ANTIGRAVITY_BACKEND_URL"], !backendURL.isEmpty {
