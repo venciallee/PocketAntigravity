@@ -289,8 +289,14 @@ public struct AntigravityRootContainerView: View {
             withTransaction(transaction) {
                 syncNavigationPath(from: store.activeRoute)
             }
+            #if canImport(UIKit)
+            popGestureHandler.currentStackDepth = navigationPath.count
+            #endif
         }
         .onChange(of: navigationPath) { _, newPath in
+            #if canImport(UIKit)
+            popGestureHandler.currentStackDepth = newPath.count
+            #endif
             syncActiveRoute(from: newPath)
         }
         .sheet(item: $activeModalSheet) { sheet in
@@ -404,7 +410,12 @@ public struct AntigravityRootContainerView: View {
         content.background {
             InteractivePopGestureEnabler(
                 handler: popGestureHandler,
-                stackDepth: navigationPath.count
+                stackDepth: navigationPath.count,
+                onPopRequested: {
+                    withAnimation(.easeOut(duration: 0.22)) {
+                        popTopDestination()
+                    }
+                }
             )
             .frame(width: 0, height: 0)
         }
@@ -599,40 +610,126 @@ public struct AntigravityRootContainerView: View {
 
 #if canImport(UIKit)
 /// Dedicated `UIGestureRecognizerDelegate` that preserves native iOS left-edge interactive
-/// swipe-back (`interactivePopGestureRecognizer`) when SwiftUI hides the system navigation bar
-/// in favor of custom UE v2.0 top headers, while safely disabling edge-swipe at stack root.
+/// swipe-back (`interactivePopGestureRecognizer` + left-edge fallback pan for hidden-navbar `NavigationStack`)
+/// when SwiftUI hides the system navigation bar in favor of custom UE v2.0 top headers,
+/// while safely disabling edge-swipe at stack root.
 @MainActor
 private final class InteractivePopGestureHandler: NSObject, UIGestureRecognizerDelegate {
     private weak var navigationController: UINavigationController?
+    private weak var attachedPanHostView: UIView?
+    private lazy var edgeFallbackPanGesture: UIPanGestureRecognizer = {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleEdgeFallbackPan(_:)))
+        pan.delegate = self
+        pan.cancelsTouchesInView = false
+        pan.delaysTouchesBegan = false
+        pan.delaysTouchesEnded = false
+        pan.maximumNumberOfTouches = 1
+        return pan
+    }()
+
+    var currentStackDepth: Int = 0
+    var onPopRequested: (() -> Void)?
+    private var beganStackDepth: Int = 0
 
     override init() {
         super.init()
     }
 
-    func attach(to navController: UINavigationController) {
-        if self.navigationController !== navController {
-            self.navigationController = navController
-            navController.view.backgroundColor = UIColor(
-                red: 0x09 / 255.0,
-                green: 0x0A / 255.0,
-                blue: 0x0D / 255.0,
-                alpha: 1.0
-            )
+    func attach(to navController: UINavigationController?, fallbackHostView: UIView?) {
+        if let navController {
+            if self.navigationController !== navController {
+                self.navigationController = navController
+                navController.view.backgroundColor = UIColor(
+                    red: 0x09 / 255.0,
+                    green: 0x0A / 255.0,
+                    blue: 0x0D / 255.0,
+                    alpha: 1.0
+                )
+            }
+            if let popGesture = navController.interactivePopGestureRecognizer {
+                if popGesture.delegate !== self {
+                    popGesture.delegate = self
+                }
+                if !popGesture.isEnabled {
+                    popGesture.isEnabled = true
+                }
+                if popGesture.requiresExclusiveTouchType {
+                    popGesture.requiresExclusiveTouchType = false
+                }
+            }
         }
-        if let popGesture = navController.interactivePopGestureRecognizer {
-            if popGesture.delegate !== self {
-                popGesture.delegate = self
-            }
-            if !popGesture.isEnabled {
-                popGesture.isEnabled = true
-            }
-            if popGesture.requiresExclusiveTouchType {
-                popGesture.requiresExclusiveTouchType = false
-            }
+
+        if let targetHostView = navController?.view ?? fallbackHostView,
+           attachedPanHostView !== targetHostView {
+            attachedPanHostView?.removeGestureRecognizer(edgeFallbackPanGesture)
+            targetHostView.addGestureRecognizer(edgeFallbackPanGesture)
+            attachedPanHostView = targetHostView
         }
     }
 
+    @objc private func handleEdgeFallbackPan(_ pan: UIPanGestureRecognizer) {
+        guard pan.state == .ended, let hostView = pan.view else { return }
+        guard currentStackDepth > 0, currentStackDepth == beganStackDepth else { return }
+        guard navigationController?.presentedViewController == nil,
+              navigationController?.transitionCoordinator == nil else {
+            return
+        }
+        if let nav = navigationController, nav.viewControllers.count <= 1 && currentStackDepth == 0 {
+            return
+        }
+
+        let translation = pan.translation(in: hostView)
+        let velocity = pan.velocity(in: hostView)
+        let isRTL = hostView.effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let horizontalTranslation = isRTL ? -translation.x : translation.x
+        let horizontalVelocity = isRTL ? -velocity.x : velocity.x
+        let completedSwipe = (horizontalTranslation > 64.0 || (horizontalTranslation > 28.0 && horizontalVelocity > 350.0))
+            && abs(translation.y) < max(96.0, abs(horizontalTranslation) * 0.75)
+
+        if completedSwipe {
+            _ = hostView.endEditing(true)
+            onPopRequested?()
+        }
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer === edgeFallbackPanGesture {
+            guard currentStackDepth > 0 else { return false }
+            guard navigationController?.presentedViewController == nil else { return false }
+            guard let hostView = gestureRecognizer.view else { return false }
+            let loc = touch.location(in: hostView)
+            let isRTL = hostView.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            let leadingDistance = isRTL ? (hostView.bounds.width - loc.x) : loc.x
+            guard leadingDistance >= 0 && leadingDistance <= 32.0 else { return false }
+            beganStackDepth = currentStackDepth
+            return true
+        }
+        return true
+    }
+
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === edgeFallbackPanGesture {
+            guard currentStackDepth > 0 else { return false }
+            guard navigationController?.presentedViewController == nil,
+                  navigationController?.transitionCoordinator == nil else {
+                return false
+            }
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+                  let hostView = pan.view else {
+                return false
+            }
+            let velocity = pan.velocity(in: hostView)
+            let isRTL = hostView.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            let horizontalVelocity = isRTL ? -velocity.x : velocity.x
+            if horizontalVelocity <= 0 {
+                return false
+            }
+            if abs(velocity.y) > abs(velocity.x) * 1.4 && abs(velocity.y) > 40 {
+                return false
+            }
+            return true
+        }
+
         guard let nav = navigationController else { return false }
         guard nav.viewControllers.count > 1 else { return false }
         guard nav.presentedViewController == nil else { return false }
@@ -663,8 +760,21 @@ private final class InteractivePopGestureHandler: NSObject, UIGestureRecognizerD
 
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        if gestureRecognizer === edgeFallbackPanGesture || otherGestureRecognizer === edgeFallbackPanGesture {
+            return true
+        }
+        return false
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
         shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
+        if gestureRecognizer === edgeFallbackPanGesture || otherGestureRecognizer === edgeFallbackPanGesture {
+            return false
+        }
         guard let nav = navigationController else { return false }
         guard nav.viewControllers.count > 1 else { return false }
         guard nav.presentedViewController == nil else { return false }
@@ -675,13 +785,19 @@ private final class InteractivePopGestureHandler: NSObject, UIGestureRecognizerD
 private struct InteractivePopGestureEnabler: UIViewControllerRepresentable {
     let handler: InteractivePopGestureHandler
     let stackDepth: Int
+    let onPopRequested: () -> Void
 
     func makeUIViewController(context: Context) -> InteractivePopGestureAnchorViewController {
-        InteractivePopGestureAnchorViewController(handler: handler)
+        let vc = InteractivePopGestureAnchorViewController(handler: handler)
+        handler.currentStackDepth = stackDepth
+        handler.onPopRequested = onPopRequested
+        return vc
     }
 
     func updateUIViewController(_ uiViewController: InteractivePopGestureAnchorViewController, context: Context) {
         uiViewController.handler = handler
+        handler.currentStackDepth = stackDepth
+        handler.onPopRequested = onPopRequested
         uiViewController.configureNavigationController()
     }
 }
@@ -733,8 +849,8 @@ private final class InteractivePopGestureAnchorViewController: UIViewController 
     }
 
     func configureNavigationController() {
-        guard let navController = resolveNavigationController() else { return }
-        handler.attach(to: navController)
+        let navController = resolveNavigationController()
+        handler.attach(to: navController, fallbackHostView: self.view.window)
     }
 
     private func resolveNavigationController() -> UINavigationController? {
@@ -757,6 +873,16 @@ private final class InteractivePopGestureAnchorViewController: UIViewController 
                 return nav
             }
             responder = current.next
+        }
+        if let rootVC = self.view.window?.rootViewController {
+            var queue: [UIViewController] = [rootVC]
+            while !queue.isEmpty {
+                let candidate = queue.removeFirst()
+                if let nav = candidate as? UINavigationController {
+                    return nav
+                }
+                queue.append(contentsOf: candidate.children)
+            }
         }
         return nil
     }
