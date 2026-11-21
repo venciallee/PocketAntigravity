@@ -2,7 +2,9 @@
 # ==============================================================================
 # iOSAntigravity — Real macOS + Xcode + Antigravity Desktop E2E Verifier
 # Run on your Mac:
-#   bash scripts/mac-real-env-verify.sh
+#   bash scripts/mac-real-env-verify.sh            # Interactive live Mac preview
+#   bash scripts/mac-real-env-verify.sh --auto     # Impact-scoped E2E (skips unaffected tests)
+#   bash scripts/mac-real-env-verify.sh --release  # Mandatory 100% Full Release E2E
 # ==============================================================================
 set -euo pipefail
 
@@ -13,11 +15,35 @@ export NO_PROXY="127.0.0.1,localhost,::1${NO_PROXY:+,$NO_PROXY}"
 export no_proxy="127.0.0.1,localhost,::1${no_proxy:+,$no_proxy}"
 
 LIVE_ONLY=0
+E2E_PLAN_MODE=""
 for arg in "$@"; do
-  if [[ "$arg" == "--live-only" ]]; then
-    LIVE_ONLY=1
-  fi
+  case "$arg" in
+    --live-only) LIVE_ONLY=1 ;;
+    --auto) E2E_PLAN_MODE="auto" ;;
+    --full) E2E_PLAN_MODE="full" ;;
+    --release) E2E_PLAN_MODE="release" ;;
+  esac
 done
+
+if [[ -n "$E2E_PLAN_MODE" ]]; then
+  PLAN_PATH="verification/output/e2e-plan.json"
+  python3 verification/e2e_impact_planner.py --mode "$E2E_PLAN_MODE" --include-working-tree --plan-out "$PLAN_PATH"
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    python3 verification/esdd-verify.py --plan "$PLAN_PATH"
+    exit 0
+  fi
+  if python3 -c "import json; p=json.load(open('$PLAN_PATH')); raise SystemExit(0 if p['gates']['gate1SwiftDataTests'] else 1)"; then
+    swift test --package-path Packages/AntigravityData
+  fi
+  if python3 -c "import json; p=json.load(open('$PLAN_PATH')); raise SystemExit(0 if p['gates']['gate2LiveRPC'] else 1)"; then
+    python3 verification/verify-live-rpc-flow.py
+  fi
+  if python3 -c "import json; p=json.load(open('$PLAN_PATH')); raise SystemExit(0 if p['gates']['gate2V233Capabilities'] else 1)"; then
+    python3 verification/verify-v233-capabilities.py
+  fi
+  PYTHONUNBUFFERED=1 python3 verification/ios-simulator-runner.py --plan "$PLAN_PATH"
+  exit 0
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "[!] macOS not detected ($(uname -s)). Running cross-platform live RPC + ESDD suite instead..."

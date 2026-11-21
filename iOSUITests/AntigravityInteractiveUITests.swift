@@ -531,22 +531,23 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
 @MainActor
 final class AntigravityInteractiveUITests: XCTestCase {
 
-    /// End-to-end real UI touch/click test on iOS Simulator against a live Connect-RPC Desktop server:
-    /// 1. Verifies cloud project (`venciallee/iOSAntigravity` -> `Antigravity iOS App Architecture Research`) and its 2×2 four-dot loading indicator (`loading-four-dots-cid-arch-research`), while filtering out 0-step blank tabs and synthetic `iOS Connect-RPC Handshake` probes.
-    /// 2. Taps a live conversation row on `Agents` home and verifies `CascadeChatViewController` opens & renders steps, then injects a live PC message and verifies iOS receives it automatically without user interaction.
-    /// 3. Navigates back, opens `ProjectDetailViewController`, taps a conversation row inside the project, and returns.
-    /// 4. Taps the Periwinkle Compose FAB, types a prompt, taps Send, and verifies live `StartCascade` + `SendUserCascadeMessage` round-trip.
-    func testLiveConversationRowTapProjectNavigationAndSendMessage() throws {
-        let server = try EmbeddedDesktopMockServer()
-        defer { server.stop() }
-
+    private func launchLiveApp(serverPort: UInt16) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["ANTIGRAVITY_BACKEND_URL"] = "http://127.0.0.1:\(server.port)"
+        app.launchEnvironment["ANTIGRAVITY_BACKEND_URL"] = "http://127.0.0.1:\(serverPort)"
         app.launchEnvironment["ANTIGRAVITY_CSRF_TOKEN"] = "uitest-csrf-token"
         app.launchEnvironment["ANTIGRAVITY_HOST_NAME"] = "MacBook-Pro-Live"
         app.launchEnvironment["NO_PROXY"] = "127.0.0.1,localhost,::1"
         app.launchEnvironment["no_proxy"] = "127.0.0.1,localhost,::1"
         app.launch()
+        return app
+    }
+
+    /// Domain: Agents Home (`UE01`) + Cascade Chat (`UE07`) + Real-Time PC Sync + Inline/Status Permission Gate.
+    func testHomeCloudLocalBadgesAndChatRealtimeSyncAndApprovalGate() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
+
+        let app = launchLiveApp(serverPort: server.port)
 
         // 1. Verify live Desktop sessions load on Agents Home, 2x2 four-dot loading indicator is present, and synthetic probe / 0-step placeholder are filtered out
         let reviewRow = app.buttons["conv-row-cid-slardar-review"]
@@ -645,11 +646,34 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertFalse(app.buttons["composer-chip-ratelimit"].exists, "Offline @ratelimit.go mock chip must not appear in live mode")
         XCTAssertFalse(app.buttons["chat-diff-pill"].exists, "Offline +128/-14 mock diff pill must not appear when live diffs are zero")
         attachScreenshot(named: "02_Opened_Live_Conversation_Detail")
+    }
 
-        // 3. Navigate back -> open Project Detail -> tap conversation row inside Project Detail
-        backToSessionsButton.tap()
-        XCTAssertTrue(reviewRow.waitForExistence(timeout: 5), "Back button must return to Agents Home")
+    /// Domain: Project Detail (`UE04`) + Navigation Stack + Native iOS Left-Edge Swipe-Back (`interactivePopGestureRecognizer`).
+    func testProjectDetailNavigationAndEdgeSwipeBack() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
 
+        let app = launchLiveApp(serverPort: server.port)
+
+        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+
+        // 1. Open Conversation from Agents Home -> edge-swipe right -> must pop back to Agents Home
+        reviewRow.tap()
+        let backToSessionsButton = app.buttons["btn-back-sessions"]
+        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 6))
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 5),
+            "Swiping from the left edge on Conversation must pop back to Agents Home"
+        )
+        XCTAssertFalse(
+            backToSessionsButton.exists,
+            "Conversation screen must be popped after completing edge-swipe back"
+        )
+
+        // 2. Open Project Detail -> tap conversation row -> verify NOTIFY_USER -> button back navigation
         let projectHeader = app.buttons["project-header-slardar_app_ai"]
         XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
         projectHeader.tap()
@@ -675,13 +699,46 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "CORTEX_STEP_TYPE_NOTIFY_USER content must render in CascadeChatViewController"
         )
 
-        // Back from project-launched chat returns to ProjectDetail, then back to Agents Home
+        // Back button from project-launched chat returns to ProjectDetail, then back to Agents Home
         backToSessionsButton.tap()
         XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
         backToAgentsButton.tap()
         XCTAssertTrue(reviewRow.waitForExistence(timeout: 5))
 
-        // 3b. Simulate Desktop / Bridge going offline -> verify top pill & local project subtitle immediately show Offline while Cloud stays Cloud, then auto-recover!
+        // 3. Re-enter Project Detail -> Conversation -> edge-swipe back to Project Detail -> edge-swipe back to Agents Home
+        projectHeader.tap()
+        XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
+        projectConvRow.tap()
+        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 5))
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            backToAgentsButton.waitForExistence(timeout: 5),
+            "Edge-swipe back from a project-launched Conversation must pop back to Project Detail"
+        )
+
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 5),
+            "Edge-swipe back from Project Detail must pop back to Agents Home"
+        )
+    }
+
+    /// Domain: Host Reachability / Offline Recovery + Settings Copyright & App Store 5.2.2 Attribution.
+    func testOfflineHostRecoveryAndSettingsAttribution() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
+
+        let app = launchLiveApp(serverPort: server.port)
+
+        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+        XCTAssertTrue(
+            waitForTextContaining("Local · MacBook-Pro-Live · main", in: app, timeout: 6),
+            "Initial online host subtitle must display Local · MacBook-Pro-Live · main"
+        )
+
+        // 1. Simulate Desktop / Bridge going offline -> verify top pill & local project subtitle show Offline while Cloud stays Cloud, then auto-recover!
         server.setSimulatedOffline(true)
         XCTAssertTrue(
             waitForTextContaining("MacBook-Pro-Live · Offline", in: app, timeout: 18),
@@ -704,7 +761,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "App must automatically reconnect and restore online status when Desktop returns"
         )
 
-        // 3c. Open Settings tab -> verify in-app App Icon & Google LLC Copyright / Trademark attribution card
+        // 2. Open Settings tab -> verify in-app App Icon & Google LLC Copyright / Trademark attribution card
         let settingsTab = app.buttons["tab-item-settings"]
         XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
         settingsTab.tap()
@@ -717,7 +774,18 @@ final class AntigravityInteractiveUITests: XCTestCase {
             waitForTextContaining("Google LLC", in: app, timeout: 5),
             "Settings screen must display Google LLC App Icon & Trademark copyright attribution"
         )
-        // 3d. Open Automations tab -> verify 'Create with Prompt' & 'New' buttons -> verify Create with Prompt opens an unsent draft instead of immediately creating/streaming
+    }
+
+    /// Domain: Automations (`UE06`) — 'Create with Prompt' unsent draft flow & '+ New' entry points.
+    func testAutomationsCreateWithPromptDraftFlow() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
+
+        let app = launchLiveApp(serverPort: server.port)
+
+        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+
         let automationsTab = app.buttons["tab-item-automations"]
         XCTAssertTrue(automationsTab.waitForExistence(timeout: 5))
         automationsTab.tap()
@@ -742,6 +810,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
         )
 
         createWithPromptButton.tap()
+        let backToSessionsButton = app.buttons["btn-back-sessions"]
         XCTAssertTrue(
             backToSessionsButton.waitForExistence(timeout: 5),
             "Tapping Create with Prompt must open the draft composer view"
@@ -771,15 +840,23 @@ final class AntigravityInteractiveUITests: XCTestCase {
             createWithPromptButton.waitForExistence(timeout: 5),
             "Navigating back from an unsent Create with Prompt draft must return cleanly to Automations"
         )
+    }
 
-        let agentsTab = app.buttons["tab-item-agents"]
-        XCTAssertTrue(agentsTab.waitForExistence(timeout: 5))
-        agentsTab.tap()
+    /// Domain: Compose FAB + ChatComposerView (`UE07`) -> Live `StartCascade` + `SendUserCascadeMessage` round-trip.
+    func testComposeFABStartCascadeAndStreamedReply() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
 
-        // 4. Tap Compose FAB -> send live message -> verify StartCascade + SendUserCascadeMessage round-trip
+        let app = launchLiveApp(serverPort: server.port)
+
+        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+
         let composeFAB = app.buttons["fab-compose"]
         XCTAssertTrue(composeFAB.waitForExistence(timeout: 5))
         composeFAB.tap()
+
+        let backToSessionsButton = app.buttons["btn-back-sessions"]
         XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 5))
 
         let composerInput = app.descendants(matching: .any)["composer-text-input"].firstMatch
@@ -796,65 +873,6 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Sending a message in Composer must dispatch StartCascade + SendUserCascadeMessage and render streamed reply"
         )
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
-    }
-
-    /// Verifies native iOS left-edge swipe-back (`interactivePopGestureRecognizer`) on Conversation
-    /// (`CascadeChatViewController`) returns smoothly to `AgentsHomeViewController`, and when opened
-    /// from `ProjectDetailViewController`, returns to Project Detail and then to Agents Home.
-    func testConversationEdgeSwipeBackToAgentsHomeAndProjectDetail() throws {
-        let server = try EmbeddedDesktopMockServer()
-        defer { server.stop() }
-
-        let app = XCUIApplication()
-        app.launchEnvironment["ANTIGRAVITY_BACKEND_URL"] = "http://127.0.0.1:\(server.port)"
-        app.launchEnvironment["ANTIGRAVITY_CSRF_TOKEN"] = "uitest-csrf-token"
-        app.launchEnvironment["ANTIGRAVITY_HOST_NAME"] = "MacBook-Pro-Live"
-        app.launchEnvironment["NO_PROXY"] = "127.0.0.1,localhost,::1"
-        app.launchEnvironment["no_proxy"] = "127.0.0.1,localhost,::1"
-        app.launch()
-
-        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
-        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
-
-        // 1. Open Conversation from Agents Home -> edge-swipe right -> must pop back to Agents Home
-        reviewRow.tap()
-        let backToSessionsButton = app.buttons["btn-back-sessions"]
-        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 6))
-
-        performEdgeSwipeBack(in: app)
-        XCTAssertTrue(
-            reviewRow.waitForExistence(timeout: 5),
-            "Swiping from the left edge on Conversation must pop back to Agents Home"
-        )
-        XCTAssertFalse(
-            backToSessionsButton.exists,
-            "Conversation screen must be popped after completing edge-swipe back"
-        )
-
-        // 2. Open Project Detail -> Conversation -> edge-swipe back to Project Detail -> edge-swipe back to Agents Home
-        let projectHeader = app.buttons["project-header-slardar_app_ai"]
-        XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
-        projectHeader.tap()
-
-        let backToAgentsButton = app.buttons["btn-back-agents"]
-        XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
-
-        let projectConvRow = app.buttons["project-conv-row-cid-slardar-tracking"]
-        XCTAssertTrue(projectConvRow.waitForExistence(timeout: 5))
-        projectConvRow.tap()
-        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 5))
-
-        performEdgeSwipeBack(in: app)
-        XCTAssertTrue(
-            backToAgentsButton.waitForExistence(timeout: 5),
-            "Edge-swipe back from a project-launched Conversation must pop back to Project Detail"
-        )
-
-        performEdgeSwipeBack(in: app)
-        XCTAssertTrue(
-            reviewRow.waitForExistence(timeout: 5),
-            "Edge-swipe back from Project Detail must pop back to Agents Home"
-        )
     }
 
     private func performEdgeSwipeBack(in app: XCUIApplication) {

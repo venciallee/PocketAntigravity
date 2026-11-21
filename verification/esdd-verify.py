@@ -15,12 +15,14 @@ Executes all 4 automated ESDD gates:
    comparison sheets (`CMP_UE01.png` .. `CMP_UE13.png`), composite `ESDD_13_SCREENS_OVERVIEW.png`,
    `results.json`, and `report.md`.
 """
+import argparse
 import base64
 import json
 import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -31,9 +33,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from PIL import Image, ImageDraw, ImageFont
-from wsproto import ConnectionType, WSConnection
-from wsproto.events import AcceptConnection, CloseConnection, Message, Ping, Request
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    Image = ImageDraw = ImageFont = None
+
+try:
+    from wsproto import ConnectionType, WSConnection
+    from wsproto.events import AcceptConnection, CloseConnection, Message, Ping, Request
+except ImportError:
+    ConnectionType = WSConnection = AcceptConnection = CloseConnection = Message = Ping = Request = None
 
 from esdd_inspector import inspect_esdd_spec_and_swift_contracts
 from mock_language_server import (
@@ -683,183 +692,224 @@ def run_connect_rpc_e2e_tests(port: int) -> dict:
     return {"passed": True, "stepCountDecoded": step_count, "tests": results}
 
 
-def run_interactive_e2e_suite(page: CDPPageDriver, scene_port: int, rpc_port: int) -> list[dict]:
-    """Executes all 16 Interactive E2E Test Cases (`TC-01` .. `TC-16`) in headless mobile viewport."""
+def run_interactive_e2e_suite(
+    page: CDPPageDriver | None,
+    scene_port: int | None,
+    rpc_port: int,
+    selected_cases: list[str] | None = None,
+) -> list[dict]:
+    """Executes all or a scoped subset of Interactive E2E Test Cases (`TC-01` .. `TC-15`)."""
     cases = []
+    wanted = set(selected_cases) if selected_cases is not None else None
+
+    def should_run(tc_id: str) -> bool:
+        return wanted is None or tc_id in wanted
 
     def scene_url(state_id: str) -> str:
+        assert scene_port is not None
         return f"http://127.0.0.1:{scene_port}/scene/{state_id}?rpcPort={rpc_port}"
 
     # TC-01: UE01_AGENTS_HOME filter pills & online status
-    page.goto(scene_url("UE01_AGENTS_HOME"))
-    assert page.evaluate("document.querySelector(\"[data-testid='host-switcher-pill']\").dataset.online") == "true"
-    page.click("[data-testid='filter-pill-needs-you']")
-    assert page.evaluate("document.body.dataset.activeFilter") == "needs-you"
-    visible_titles = page.evaluate(
-        "Array.from(document.querySelectorAll('.conv-row')).filter(r => r.style.display !== 'none').map(r => r.dataset.title)"
-    )
-    assert visible_titles == ["Fix flaky TestSettlementBatch"], f"TC-01 filter mismatch: {visible_titles}"
-    assert page.evaluate("window.__AGY_AX_REPORT.overflowPx") == 0
-    cases.append({"id": "TC-01", "screen": "UE01_AGENTS_HOME", "passed": True, "detail": "Host online dot + 'Needs you 1' filter isolated Fix flaky TestSettlementBatch (0px overflow)"})
+    if should_run("TC-01"):
+        assert page is not None
+        page.goto(scene_url("UE01_AGENTS_HOME"))
+        assert page.evaluate("document.querySelector(\"[data-testid='host-switcher-pill']\").dataset.online") == "true"
+        page.click("[data-testid='filter-pill-needs-you']")
+        assert page.evaluate("document.body.dataset.activeFilter") == "needs-you"
+        visible_titles = page.evaluate(
+            "Array.from(document.querySelectorAll('.conv-row')).filter(r => r.style.display !== 'none').map(r => r.dataset.title)"
+        )
+        assert visible_titles == ["Fix flaky TestSettlementBatch"], f"TC-01 filter mismatch: {visible_titles}"
+        assert page.evaluate("window.__AGY_AX_REPORT.overflowPx") == 0
+        cases.append({"id": "TC-01", "screen": "UE01_AGENTS_HOME", "passed": True, "detail": "Host online dot + 'Needs you 1' filter isolated Fix flaky TestSettlementBatch (0px overflow)"})
 
     # TC-02: UE02_DISPLAY_OPTIONS inspect Sort popover, toggle Auto Pin, Mark All as Read & Reset
-    page.goto(scene_url("UE02_DISPLAY_OPTIONS"))
-    pop_text = page.text_of("[data-testid='sort-popover-menu']")
-    assert "Last Updated" in pop_text and "Newest First" in pop_text
-    page.click("[data-testid='sort-popover-menu'] .sort-opt[data-sort='Last Updated']")
-    page.click("[data-testid='toggle-auto-pin']")
-    assert page.evaluate("document.querySelector(\"[data-testid='toggle-auto-pin']\").dataset.checked") == "true"
-    page.click("[data-testid='btn-mark-all-read']")
-    assert page.text_of("#unread-count-label") == "0 unread"
-    page.click("[data-testid='sheet-reset-btn']")
-    assert page.text_of("#unread-count-label") == "3 unread"
-    cases.append({"id": "TC-02", "screen": "UE02_DISPLAY_OPTIONS", "passed": True, "detail": "Sort popover rendered, Auto Pin toggled, Mark All as Read dropped 3->0 unread, Reset restored"})
+    if should_run("TC-02"):
+        assert page is not None
+        page.goto(scene_url("UE02_DISPLAY_OPTIONS"))
+        pop_text = page.text_of("[data-testid='sort-popover-menu']")
+        assert "Last Updated" in pop_text and "Newest First" in pop_text
+        page.click("[data-testid='sort-popover-menu'] .sort-opt[data-sort='Last Updated']")
+        page.click("[data-testid='toggle-auto-pin']")
+        assert page.evaluate("document.querySelector(\"[data-testid='toggle-auto-pin']\").dataset.checked") == "true"
+        page.click("[data-testid='btn-mark-all-read']")
+        assert page.text_of("#unread-count-label") == "0 unread"
+        page.click("[data-testid='sheet-reset-btn']")
+        assert page.text_of("#unread-count-label") == "3 unread"
+        cases.append({"id": "TC-02", "screen": "UE02_DISPLAY_OPTIONS", "passed": True, "detail": "Sort popover rendered, Auto Pin toggled, Mark All as Read dropped 3->0 unread, Reset restored"})
 
     # TC-03: UE03_CONTEXT_MENU_PIN preview card + Pin & Archive swipe actions
-    page.goto(scene_url("UE03_CONTEXT_MENU_PIN"))
-    assert "Implementation Plan" in page.text_of("[data-testid='chip-implementation-plan']")
-    assert "Awaiting review" in page.text_of("[data-testid='chip-awaiting-review']")
-    page.click("[data-testid='menu-action-pin']")
-    page.click("[data-testid='swipe-action-pin']")
-    page.click("[data-testid='swipe-action-archive']")
-    assert page.evaluate("document.body.dataset.swipePinned === 'true' && document.body.dataset.swipeArchived === 'true'")
-    cases.append({"id": "TC-03", "screen": "UE03_CONTEXT_MENU_PIN", "passed": True, "detail": "Context preview pills + 6 menu actions + Swipe Pin (#8EB4FF) & Archive verified"})
+    if should_run("TC-03"):
+        assert page is not None
+        page.goto(scene_url("UE03_CONTEXT_MENU_PIN"))
+        assert "Implementation Plan" in page.text_of("[data-testid='chip-implementation-plan']")
+        assert "Awaiting review" in page.text_of("[data-testid='chip-awaiting-review']")
+        page.click("[data-testid='menu-action-pin']")
+        page.click("[data-testid='swipe-action-pin']")
+        page.click("[data-testid='swipe-action-archive']")
+        assert page.evaluate("document.body.dataset.swipePinned === 'true' && document.body.dataset.swipeArchived === 'true'")
+        cases.append({"id": "TC-03", "screen": "UE03_CONTEXT_MENU_PIN", "passed": True, "detail": "Context preview pills + 6 menu actions + Swipe Pin (#8EB4FF) & Archive verified"})
 
     # TC-04: UE04_PROJECT_DETAIL tabs & New Conversation CTA
-    page.goto(scene_url("UE04_PROJECT_DETAIL"))
-    assert page.text_of("[data-testid='project-hero-title']") == "ledger-svc"
-    page.click("[data-testid='project-tab-archived']")
-    assert page.evaluate("document.body.dataset.activeProjectTab") == "archived"
-    page.click("[data-testid='project-tab-active']")
-    page.click("[data-testid='btn-new-conv-in-project']")
-    assert page.evaluate("document.body.dataset.newConvOpened") == "true"
-    cases.append({"id": "TC-04", "screen": "UE04_PROJECT_DETAIL", "passed": True, "detail": "~/code/ledger-svc metadata, Active/Archived/Automations tab switching & New Conversation CTA verified"})
+    if should_run("TC-04"):
+        assert page is not None
+        page.goto(scene_url("UE04_PROJECT_DETAIL"))
+        assert page.text_of("[data-testid='project-hero-title']") == "ledger-svc"
+        page.click("[data-testid='project-tab-archived']")
+        assert page.evaluate("document.body.dataset.activeProjectTab") == "archived"
+        page.click("[data-testid='project-tab-active']")
+        page.click("[data-testid='btn-new-conv-in-project']")
+        assert page.evaluate("document.body.dataset.newConvOpened") == "true"
+        cases.append({"id": "TC-04", "screen": "UE04_PROJECT_DETAIL", "passed": True, "detail": "~/code/ledger-svc metadata, Active/Archived/Automations tab switching & New Conversation CTA verified"})
 
     # TC-05: UE05_CREATE_PROJECT Cloud + GitHub + acme/ledger-svc -> CreateProjectWorkspace RPC
-    page.goto(scene_url("UE05_CREATE_PROJECT"))
-    page.click("[data-testid='seg-runs-on-cloud']")
-    page.click("[data-testid='source-card-github']")
-    page.click("[data-testid='repo-row-ledger-svc']")
-    page.click("[data-testid='btn-submit-create-project']")
-    assert page.evaluate("document.body.dataset.createdProject") == "ledger-svc-cloud"
-    assert page.evaluate("window.__AGY_LAST_RPC && window.__AGY_LAST_RPC.method") == "CreateProjectWorkspace"
-    cases.append({"id": "TC-05", "screen": "UE05_CREATE_PROJECT", "passed": True, "detail": "Created 'ledger-svc-cloud' via live CreateProjectWorkspace RPC"})
+    if should_run("TC-05"):
+        assert page is not None
+        page.goto(scene_url("UE05_CREATE_PROJECT"))
+        page.click("[data-testid='seg-runs-on-cloud']")
+        page.click("[data-testid='source-card-github']")
+        page.click("[data-testid='repo-row-ledger-svc']")
+        page.click("[data-testid='btn-submit-create-project']")
+        assert page.evaluate("document.body.dataset.createdProject") == "ledger-svc-cloud"
+        assert page.evaluate("window.__AGY_LAST_RPC && window.__AGY_LAST_RPC.method") == "CreateProjectWorkspace"
+        cases.append({"id": "TC-05", "screen": "UE05_CREATE_PROJECT", "passed": True, "detail": "Created 'ledger-svc-cloud' via live CreateProjectWorkspace RPC"})
 
     # TC-06: UE06_AUTOMATIONS NL prompt Create + Run nightly + Resume paused
-    page.goto(scene_url("UE06_AUTOMATIONS"))
-    page.fill("[data-testid='automation-prompt-input']", "Every weekday at 9, summarize")
-    page.click("[data-testid='btn-create-automation-inline']")
-    assert "SCHEDULED · 3" in page.text_of("#scheduled-header")
-    page.click("[data-testid='btn-run-nightly']")
-    assert page.evaluate("document.body.dataset.nightlyTriggered") == "true"
-    page.click("[data-testid='btn-resume-paused']")
-    assert page.evaluate("document.body.dataset.resumedPaused") == "true"
-    cases.append({"id": "TC-06", "screen": "UE06_AUTOMATIONS", "passed": True, "detail": "Created NL schedule, triggered Nightly dependency audit RPC & resumed Bundle size watch"})
+    if should_run("TC-06"):
+        assert page is not None
+        page.goto(scene_url("UE06_AUTOMATIONS"))
+        page.fill("[data-testid='automation-prompt-input']", "Every weekday at 9, summarize")
+        page.click("[data-testid='btn-create-automation-inline']")
+        assert "SCHEDULED · 3" in page.text_of("#scheduled-header")
+        page.click("[data-testid='btn-run-nightly']")
+        assert page.evaluate("document.body.dataset.nightlyTriggered") == "true"
+        page.click("[data-testid='btn-resume-paused']")
+        assert page.evaluate("document.body.dataset.resumedPaused") == "true"
+        cases.append({"id": "TC-06", "screen": "UE06_AUTOMATIONS", "passed": True, "detail": "Created NL schedule, triggered Nightly dependency audit RPC & resumed Bundle size watch"})
 
     # TC-07: UE07_CHAT_AND_COMPOSER +128 -14 badge, 7-segment progress bar & Thought expansion
-    page.goto(scene_url("UE07_CHAT_AND_COMPOSER"))
-    diff_txt = page.text_of("[data-testid='chat-diff-pill']")
-    assert "+128" in diff_txt and "-14" in diff_txt
-    seg_count = page.evaluate("document.querySelectorAll('[data-testid=\"card-task-progress-7seg\"] .seg-bar').length")
-    assert seg_count == 7
-    page.click("[data-testid='row-thought-14s']")
-    assert page.evaluate("document.querySelector(\"[data-testid='row-thought-14s']\").dataset.expanded") == "true"
-    cases.append({"id": "TC-07", "screen": "UE07_CHAT_AND_COMPOSER", "passed": True, "detail": "+128 -14 diff badge, 7-segment task bar (4 blue + 1 amber + 2 dark) & Thought expansion verified"})
+    if should_run("TC-07"):
+        assert page is not None
+        page.goto(scene_url("UE07_CHAT_AND_COMPOSER"))
+        diff_txt = page.text_of("[data-testid='chat-diff-pill']")
+        assert "+128" in diff_txt and "-14" in diff_txt
+        seg_count = page.evaluate("document.querySelectorAll('[data-testid=\"card-task-progress-7seg\"] .seg-bar').length")
+        assert seg_count == 7
+        page.click("[data-testid='row-thought-14s']")
+        assert page.evaluate("document.querySelector(\"[data-testid='row-thought-14s']\").dataset.expanded") == "true"
+        cases.append({"id": "TC-07", "screen": "UE07_CHAT_AND_COMPOSER", "passed": True, "detail": "+128 -14 diff badge, 7-segment task bar (4 blue + 1 amber + 2 dark) & Thought expansion verified"})
 
     # TC-08: UE07_CHAT_AND_COMPOSER Face ID Allow on vegeta attack + Composer send
-    page.click("[data-testid='btn-command-allow-faceid']")
-    assert page.evaluate("document.body.dataset.commandStatus") == "running"
-    assert page.evaluate("window.__AGY_LAST_RPC_RESPONSE && window.__AGY_LAST_RPC_RESPONSE.faceIdVerified") is True
-    page.fill("#composer-input", "Run staging at 1000 req/s and capture p99")
-    page.click("[data-testid='composer-btn-send']")
-    assert page.evaluate("document.body.dataset.lastSentMessage") == "Run staging at 1000 req/s and capture p99"
-    chip_hidden = page.evaluate("document.querySelector(\"[data-testid='composer-chip-ratelimit']\").style.display === 'none'")
-    assert chip_hidden is True
-    cases.append({"id": "TC-08", "screen": "UE07_CHAT_AND_COMPOSER", "passed": True, "detail": "Face ID Allow dispatched signed runCommand RPC (Waiting->Running) & Composer send cleared @ratelimit.go"})
+    if should_run("TC-08"):
+        assert page is not None
+        if not should_run("TC-07"):
+            page.goto(scene_url("UE07_CHAT_AND_COMPOSER"))
+        page.click("[data-testid='btn-command-allow-faceid']")
+        assert page.evaluate("document.body.dataset.commandStatus") == "running"
+        assert page.evaluate("window.__AGY_LAST_RPC_RESPONSE && window.__AGY_LAST_RPC_RESPONSE.faceIdVerified") is True
+        page.fill("#composer-input", "Run staging at 1000 req/s and capture p99")
+        page.click("[data-testid='composer-btn-send']")
+        assert page.evaluate("document.body.dataset.lastSentMessage") == "Run staging at 1000 req/s and capture p99"
+        chip_hidden = page.evaluate("document.querySelector(\"[data-testid='composer-chip-ratelimit']\").style.display === 'none'")
+        assert chip_hidden is True
+        cases.append({"id": "TC-08", "screen": "UE07_CHAT_AND_COMPOSER", "passed": True, "detail": "Face ID Allow dispatched signed runCommand RPC (Waiting->Running) & Composer send cleared @ratelimit.go"})
 
     # TC-09: UE08_ADD_CONTEXT filter tiles, 3 selected items & Add to message
-    page.goto(scene_url("UE08_ADD_CONTEXT"))
-    page.click("[data-testid='tile-skills']")
-    page.click("[data-testid='tile-files']")
-    assert page.text_of("#ctx-selected-label") == "3 selected"
-    page.click("[data-testid='btn-add-to-message']")
-    injected = page.evaluate("document.body.dataset.injectedChips")
-    assert injected == "ratelimit.go,Idempotency keys for payouts,go-testing"
-    cases.append({"id": "TC-09", "screen": "UE08_ADD_CONTEXT", "passed": True, "detail": "Injected ratelimit.go, Idempotency keys for payouts & go-testing chips into Composer"})
+    if should_run("TC-09"):
+        assert page is not None
+        page.goto(scene_url("UE08_ADD_CONTEXT"))
+        page.click("[data-testid='tile-skills']")
+        page.click("[data-testid='tile-files']")
+        assert page.text_of("#ctx-selected-label") == "3 selected"
+        page.click("[data-testid='btn-add-to-message']")
+        injected = page.evaluate("document.body.dataset.injectedChips")
+        assert injected == "ratelimit.go,Idempotency keys for payouts,go-testing"
+        cases.append({"id": "TC-09", "screen": "UE08_ADD_CONTEXT", "passed": True, "detail": "Injected ratelimit.go, Idempotency keys for payouts & go-testing chips into Composer"})
 
     # TC-10: UE09_MODEL_AND_MODE Planning/Fast + Claude Opus 5.5 + go-reviewer
-    page.goto(scene_url("UE09_MODEL_AND_MODE"))
-    page.click("[data-testid='mode-card-fast']")
-    page.click("[data-testid='mode-card-planning']")
-    page.click("[data-testid='model-row-claude-opus']")
-    page.click("[data-testid='agent-pill-go-reviewer']")
-    page.click("[data-testid='btn-model-done']")
-    sel_state = page.evaluate("({mode: document.body.dataset.selectedMode, model: document.body.dataset.selectedModel, agent: document.body.dataset.selectedAgent})")
-    assert sel_state == {"mode": "Planning", "model": "Claude Opus 5.5", "agent": "go-reviewer"}
-    cases.append({"id": "TC-10", "screen": "UE09_MODEL_AND_MODE", "passed": True, "detail": "Selected Planning + Claude Opus 5.5 [Thinking] + go-reviewer persona"})
+    if should_run("TC-10"):
+        assert page is not None
+        page.goto(scene_url("UE09_MODEL_AND_MODE"))
+        page.click("[data-testid='mode-card-fast']")
+        page.click("[data-testid='mode-card-planning']")
+        page.click("[data-testid='model-row-claude-opus']")
+        page.click("[data-testid='agent-pill-go-reviewer']")
+        page.click("[data-testid='btn-model-done']")
+        sel_state = page.evaluate("({mode: document.body.dataset.selectedMode, model: document.body.dataset.selectedModel, agent: document.body.dataset.selectedAgent})")
+        assert sel_state == {"mode": "Planning", "model": "Claude Opus 5.5", "agent": "go-reviewer"}
+        cases.append({"id": "TC-10", "screen": "UE09_MODEL_AND_MODE", "passed": True, "detail": "Selected Planning + Claude Opus 5.5 [Thinking] + go-reviewer persona"})
 
     # TC-11: UE10_STRUCTURED_QUESTION multi-select + Something else + Next -> 3 Retention -> Submit
-    page.goto(scene_url("UE10_STRUCTURED_QUESTION"))
-    page.click("[data-testid='q-opt-role']")
-    page.fill("[data-testid='q-input-something-else']", "API key rotations")
-    page.click("[data-testid='q-btn-next']")
-    assert page.evaluate("document.body.dataset.currentStep") == "3"
-    page.click("[data-testid='q-btn-next']")
-    assert page.evaluate("document.body.dataset.questionSubmitted") == "true"
-    assert page.evaluate("window.__AGY_LAST_RPC && window.__AGY_LAST_RPC.method") == "HandleCascadeUserInteraction"
-    cases.append({"id": "TC-11", "screen": "UE10_STRUCTURED_QUESTION", "passed": True, "detail": "Stepper 2 Actions -> 3 Retention -> Submit dispatched askQuestion HandleCascadeUserInteraction"})
+    if should_run("TC-11"):
+        assert page is not None
+        page.goto(scene_url("UE10_STRUCTURED_QUESTION"))
+        page.click("[data-testid='q-opt-role']")
+        page.fill("[data-testid='q-input-something-else']", "API key rotations")
+        page.click("[data-testid='q-btn-next']")
+        assert page.evaluate("document.body.dataset.currentStep") == "3"
+        page.click("[data-testid='q-btn-next']")
+        assert page.evaluate("document.body.dataset.questionSubmitted") == "true"
+        assert page.evaluate("window.__AGY_LAST_RPC && window.__AGY_LAST_RPC.method") == "HandleCascadeUserInteraction"
+        cases.append({"id": "TC-11", "screen": "UE10_STRUCTURED_QUESTION", "passed": True, "detail": "Stepper 2 Actions -> 3 Retention -> Submit dispatched askQuestion HandleCascadeUserInteraction"})
 
     # TC-12: UE11_PLAN_REVIEW selection Comment callout + Send comments
-    page.goto(scene_url("UE11_PLAN_REVIEW"))
-    assert "paused" in page.text_of("[data-testid='plan-paused-banner']")
-    page.click("[data-testid='selection-callout-comment']")
-    assert page.text_of("#plan-comment-count") == "3"
-    page.click("[data-testid='btn-plan-send-comments']")
-    assert page.evaluate("document.body.dataset.planCommentsSent") == "true"
-    cases.append({"id": "TC-12", "screen": "UE11_PLAN_REVIEW", "passed": True, "detail": "Inline selection Comment incremented badge [2->3] and dispatched plan review feedback"})
+    if should_run("TC-12"):
+        assert page is not None
+        page.goto(scene_url("UE11_PLAN_REVIEW"))
+        assert "paused" in page.text_of("[data-testid='plan-paused-banner']")
+        page.click("[data-testid='selection-callout-comment']")
+        assert page.text_of("#plan-comment-count") == "3"
+        page.click("[data-testid='btn-plan-send-comments']")
+        assert page.evaluate("document.body.dataset.planCommentsSent") == "true"
+        cases.append({"id": "TC-12", "screen": "UE11_PLAN_REVIEW", "passed": True, "detail": "Inline selection Comment incremented badge [2->3] and dispatched plan review feedback"})
 
     # TC-13: UE12_TURN_DIFF_REVIEW line 29 comment, Send to agent, Viewed & Accept file
-    page.goto(scene_url("UE12_TURN_DIFF_REVIEW"))
-    page.click("[data-testid='diff-line-29']")
-    page.click("[data-testid='btn-send-to-agent']")
-    page.click("[data-testid='checkbox-viewed']")
-    page.click("[data-testid='btn-accept-file']")
-    assert page.evaluate("document.body.dataset.lineCommentSent === 'true' && document.body.dataset.fileAccepted === 'true'")
-    cases.append({"id": "TC-13", "screen": "UE12_TURN_DIFF_REVIEW", "passed": True, "detail": "+96 -4 word-level diff, Line 29 review comment sent, Viewed checked & file accepted"})
+    if should_run("TC-13"):
+        assert page is not None
+        page.goto(scene_url("UE12_TURN_DIFF_REVIEW"))
+        page.click("[data-testid='diff-line-29']")
+        page.click("[data-testid='btn-send-to-agent']")
+        page.click("[data-testid='checkbox-viewed']")
+        page.click("[data-testid='btn-accept-file']")
+        assert page.evaluate("document.body.dataset.lineCommentSent === 'true' && document.body.dataset.fileAccepted === 'true'")
+        cases.append({"id": "TC-13", "screen": "UE12_TURN_DIFF_REVIEW", "passed": True, "detail": "+96 -4 word-level diff, Line 29 review comment sent, Viewed checked & file accepted"})
 
     # TC-14: UE13_LIVE_ACTIVITY_SPEC all 7 Dynamic Island & Lock Screen variants
-    page.goto(scene_url("UE13_LIVE_ACTIVITY_SPEC"), width=800, height=500, scale=3)
-    di_sels = [
-        "[data-testid='di-compact-running']",
-        "[data-testid='di-compact-waiting']",
-        "[data-testid='di-minimal-ring']",
-        "[data-testid='di-compact-done']",
-        "[data-testid='di-expanded-running']",
-        "[data-testid='di-expanded-waiting']",
-        "[data-testid='lockscreen-multi-agent-card']",
-    ]
-    all_di_present = page.evaluate(f"({json.dumps(di_sels)}).every(s => Boolean(document.querySelector(s)))")
-    assert all_di_present is True
-    cases.append({"id": "TC-14", "screen": "UE13_LIVE_ACTIVITY_SPEC", "passed": True, "detail": "All 7 Dynamic Island (Compact/Minimal/Expanded Face ID) & Lock Screen Multi-Agent states verified"})
+    if should_run("TC-14"):
+        assert page is not None
+        page.goto(scene_url("UE13_LIVE_ACTIVITY_SPEC"), width=800, height=500, scale=3)
+        di_sels = [
+            "[data-testid='di-compact-running']",
+            "[data-testid='di-compact-waiting']",
+            "[data-testid='di-minimal-ring']",
+            "[data-testid='di-compact-done']",
+            "[data-testid='di-expanded-running']",
+            "[data-testid='di-expanded-waiting']",
+            "[data-testid='lockscreen-multi-agent-card']",
+        ]
+        all_di_present = page.evaluate(f"({json.dumps(di_sels)}).every(s => Boolean(document.querySelector(s)))")
+        assert all_di_present is True
+        cases.append({"id": "TC-14", "screen": "UE13_LIVE_ACTIVITY_SPEC", "passed": True, "detail": "All 7 Dynamic Island (Compact/Minimal/Expanded Face ID) & Lock Screen Multi-Agent states verified"})
 
-    # TC-15: Connect-RPC 605-Step Binary Protobuf Ceiling E2E
-    req_proto = urllib.request.Request(
-        f"http://127.0.0.1:{rpc_port}/exa.language_server_pb.LanguageServerService/GetCascadeTrajectorySteps",
-        data=b"\x0a\x10cas-rate-limiter",
-        headers={"Content-Type": "application/proto", "Accept": "application/proto"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req_proto, timeout=5) as resp:
-        buf = resp.read()
-        off, cnt = 0, 0
-        while off < len(buf):
-            t, off = decode_varint(buf, off)
-            ln, off = decode_varint(buf, off)
-            off += ln
-            if (t >> 3) == 1:
-                cnt += 1
-        assert cnt == 605
-    cases.append({"id": "TC-15", "screen": "Connect-RPC Binary Proto", "passed": True, "detail": "Decoded 605 binary application/proto trajectory steps without 600-step JSON truncation"})
+    # TC-15: Connect-RPC 605-Step Binary Protobuf Ceiling E2E (pure HTTP/Proto — does not need Chromium)
+    if should_run("TC-15"):
+        req_proto = urllib.request.Request(
+            f"http://127.0.0.1:{rpc_port}/exa.language_server_pb.LanguageServerService/GetCascadeTrajectorySteps",
+            data=b"\x0a\x10cas-rate-limiter",
+            headers={"Content-Type": "application/proto", "Accept": "application/proto"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_proto, timeout=5) as resp:
+            buf = resp.read()
+            off, cnt = 0, 0
+            while off < len(buf):
+                t, off = decode_varint(buf, off)
+                ln, off = decode_varint(buf, off)
+                off += ln
+                if (t >> 3) == 1:
+                    cnt += 1
+            assert cnt == 605
+        cases.append({"id": "TC-15", "screen": "Connect-RPC Binary Proto", "passed": True, "detail": "Decoded 605 binary application/proto trajectory steps without 600-step JSON truncation"})
 
     # TC-16 placeholder finalized after Stage 4 @3x visual + side-by-side comparison generation
     return cases
@@ -1006,9 +1056,105 @@ def build_13_screen_master_overview(screenshot_entries: list, output_path: Path)
     grid.save(output_path, format="PNG")
 
 
+def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids: list[str]) -> dict:
+    all_tcs = [f"TC-{i:02d}" for i in range(1, 17)]
+    is_full = True
+    is_release = bool(args.release)
+    stages = {1, 2, 3, 4}
+    selected_tcs = list(all_tcs)
+    selected_screens = list(all_state_ids)
+    mode_label = "release" if is_release else "full"
+
+    if args.plan or args.auto:
+        if args.plan:
+            plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        else:
+            sys.path.insert(0, str(repo_root / "verification"))
+            import e2e_impact_planner as planner
+
+            diff_base = args.base
+            if not diff_base:
+                for candidate in ("origin/main", "main", "HEAD~1"):
+                    try:
+                        subprocess.check_output(["git", "rev-parse", "--verify", candidate], cwd=repo_root, stderr=subprocess.DEVNULL)
+                        diff_base = candidate
+                        break
+                    except Exception:
+                        continue
+            diff_files = planner._git_diff_files(repo_root, diff_base, args.head or "HEAD") if diff_base else None
+            working_files = planner._git_working_tree_files(repo_root)
+            changed = sorted(set(diff_files or []) | set(working_files))
+            ver_bump = planner.detect_version_bump_in_git_diff(repo_root, diff_base, args.head or "HEAD", include_working_tree=True)
+            plan = planner.build_verification_plan(
+                changed_files=changed,
+                force_mode="release" if is_release else ("full" if args.full else "auto"),
+                version_bump_detected=ver_bump,
+                diff_unavailable=(diff_files is None and not working_files),
+            )
+        esdd_plan = plan["esdd"]
+        is_release = bool(plan.get("isRelease", False)) or is_release
+        is_full = bool(esdd_plan.get("full", False)) or is_release or bool(args.full)
+        mode_label = plan.get("mode", "scoped")
+        if not is_full:
+            stages = set(esdd_plan.get("stages", [1]))
+            selected_tcs = list(esdd_plan.get("testCases", []))
+            selected_screens = list(esdd_plan.get("screens", []))
+
+    if args.stages:
+        stages = {int(s.strip()) for s in args.stages.split(",") if s.strip()}
+        is_full = stages == {1, 2, 3, 4} and not args.cases and not args.screens
+
+    if args.cases:
+        selected_tcs = [c.strip().upper() for c in args.cases.split(",") if c.strip()]
+        stages.add(3)
+        is_full = False
+
+    if args.screens:
+        selected_screens = [s.strip() for s in args.screens.split(",") if s.strip()]
+        stages.add(4)
+        is_full = False
+
+    if args.full or args.release:
+        is_full = True
+        stages = {1, 2, 3, 4}
+        selected_tcs = list(all_tcs)
+        selected_screens = list(all_state_ids)
+        mode_label = "release" if args.release else "full"
+    elif not is_full:
+        mode_label = "scoped"
+        if 3 not in stages:
+            selected_tcs = []
+        if 4 not in stages:
+            selected_screens = []
+
+    return {
+        "mode": mode_label,
+        "isFull": is_full,
+        "isRelease": is_release,
+        "stages": sorted(stages),
+        "testCases": selected_tcs,
+        "screens": selected_screens,
+    }
+
+
 def main():
+    parser = argparse.ArgumentParser(description="ESDD E2E & @3x Visual Parity Verifier")
+    parser.add_argument("--auto", action="store_true", help="Run impact-scoped ESDD gates based on git diff + working tree")
+    parser.add_argument("--full", action="store_true", help="Force all 4 ESDD stages (16/16 TCs + 13/13 @3x screens)")
+    parser.add_argument("--release", action="store_true", help="Force mandatory 100% Release Full ESDD")
+    parser.add_argument("--plan", default=None, help="Path to JSON plan from e2e_impact_planner.py")
+    parser.add_argument("--stages", default=None, help="Comma-separated stages to run (e.g. 1,2)")
+    parser.add_argument("--cases", default=None, help="Comma-separated interactive test IDs (e.g. TC-06,TC-07)")
+    parser.add_argument("--screens", default=None, help="Comma-separated UE state IDs (e.g. UE06_AUTOMATIONS)")
+    parser.add_argument("--base", default=None, help="Git base ref for --auto")
+    parser.add_argument("--head", default=None, help="Git head ref for --auto")
+    args = parser.parse_args()
+
     repo_root = Path(__file__).resolve().parents[1]
     ir = json.loads((repo_root / "specs" / "esdd-ir.json").read_text(encoding="utf-8"))
+    all_state_ids = [s["id"] for s in ir["states"]]
+    scope = _resolve_esdd_scope(args, repo_root, all_state_ids)
+
     out_dir = repo_root / "verification" / "output"
     shots_dir = out_dir / "screenshots"
     cmp_dir = out_dir / "comparisons"
@@ -1017,6 +1163,11 @@ def main():
     cmp_dir.mkdir(parents=True, exist_ok=True)
     ax_dir.mkdir(parents=True, exist_ok=True)
 
+    print(
+        f"=== ESDD Mode: {scope['mode']} (full={scope['isFull']}, release={scope['isRelease']}, "
+        f"stages={scope['stages']}, TCs={len(scope['testCases'])}/16, screens={len(scope['screens'])}/13) ==="
+    )
+
     print("=== [Stage 1/4] ESDD Spec-DAG & Contract Inspection ===")
     spec_report = inspect_esdd_spec_and_swift_contracts(repo_root)
     for chk in spec_report["checks"]:
@@ -1024,116 +1175,176 @@ def main():
     if not spec_report["passed"]:
         raise SystemExit(f"Spec inspection failed: {spec_report['errors']}")
 
-    chromium_bin = shutil.which("chromium") or shutil.which("google-chrome")
-    if not chromium_bin:
-        raise RuntimeError("Chromium not found for headless E2E & @3x visual verification")
+    run_stage2 = 2 in scope["stages"]
+    run_stage3 = 3 in scope["stages"] and len(scope["testCases"]) > 0
+    run_stage4 = 4 in scope["stages"] and len(scope["screens"]) > 0
+
+    browser_tcs = [tc for tc in scope["testCases"] if tc not in ("TC-15", "TC-16")]
+    needs_chromium = (run_stage3 and len(browser_tcs) > 0) or run_stage4
+    needs_mock_server = run_stage2 or run_stage3 or run_stage4
+
+    rpc_report = {"passed": True, "skipped": True, "tests": []}
+    tc_results = []
+    claim_results = []
+    screenshot_entries = []
+    comparison_paths = []
 
     states_by_id = {s["id"]: s for s in ir["states"]}
     claims_by_state = {c["state"]: c for c in ir["claims"]}
 
-    with LiveMockServer() as mock_ls, SceneRenderServer(states_by_id, mock_ls.port) as scene_srv, CDPPageDriver(chromium_bin) as page:
-        print("\n=== [Stage 2/4] Live Connect-RPC & Binary Protobuf E2E Verification ===")
-        rpc_report = run_connect_rpc_e2e_tests(mock_ls.port)
-        for t in rpc_report["tests"]:
-            print(f"  ✓ {t}")
+    if needs_mock_server:
+        chromium_bin = None
+        if needs_chromium:
+            if WSConnection is None:
+                raise RuntimeError("wsproto is required for Stage 3/4 Headless Chromium CDP verification (pip install wsproto)")
+            if run_stage4 and Image is None:
+                raise RuntimeError("Pillow is required for Stage 4 @3x visual audit (pip install pillow)")
+            chromium_bin = shutil.which("chromium") or shutil.which("google-chrome")
+            if not chromium_bin:
+                raise RuntimeError("Chromium not found for headless E2E & @3x visual verification")
 
-        print("\n=== [Stage 3/4] 16 Interactive Mobile E2E Test Cases (TC-01 .. TC-16) ===")
-        tc_results = run_interactive_e2e_suite(page, scene_srv.port, mock_ls.port)
-        for tc in tc_results:
-            print(f"  ✓ [{tc['id']}] {tc['screen']} -> {tc['detail']}")
+        with LiveMockServer() as mock_ls:
+            if run_stage2:
+                print("\n=== [Stage 2/4] Live Connect-RPC & Binary Protobuf E2E Verification ===")
+                rpc_report = run_connect_rpc_e2e_tests(mock_ls.port)
+                for t in rpc_report["tests"]:
+                    print(f"  ✓ {t}")
+            else:
+                print("\n=== [Stage 2/4] Skipped (unaffected by change scope) ===")
 
-        print("\n=== [Stage 4/4] @3x Visual Rendering, HIG Audit & Side-by-Side UE Comparisons ===")
-        claim_results = []
-        screenshot_entries = []
-        comparison_paths = []
+            if needs_chromium:
+                assert chromium_bin is not None
+                with SceneRenderServer(states_by_id, mock_ls.port) as scene_srv, CDPPageDriver(chromium_bin) as page:
+                    if run_stage3:
+                        print(f"\n=== [Stage 3/4] Interactive Mobile E2E Test Cases ({len(scope['testCases'])}/16 selected) ===")
+                        tc_results = run_interactive_e2e_suite(page, scene_srv.port, mock_ls.port, selected_cases=scope["testCases"])
+                        for tc in tc_results:
+                            print(f"  ✓ [{tc['id']}] {tc['screen']} -> {tc['detail']}")
+                    else:
+                        print("\n=== [Stage 3/4] Skipped (0/16 interactive cases impacted) ===")
 
-        for idx, state in enumerate(ir["states"], start=1):
-            state_id = state["id"]
-            claim = claims_by_state[state_id]
-            vp = state.get("viewportOverridePt") or ir["targetPlatform"]["viewportPt"]
-            vp_w, vp_h = int(vp["width"]), int(vp["height"])
-            scale = int(ir["targetPlatform"]["scaleFactor"])
-            exp_px_w, exp_px_h = vp_w * scale, vp_h * scale
+                    if run_stage4:
+                        print(f"\n=== [Stage 4/4] @3x Visual Rendering, HIG Audit & Side-by-Side UE Comparisons ({len(scope['screens'])}/13 selected) ===")
+                        selected_screen_set = set(scope["screens"])
+                        for idx, state in enumerate(ir["states"], start=1):
+                            state_id = state["id"]
+                            if state_id not in selected_screen_set:
+                                continue
+                            claim = claims_by_state[state_id]
+                            vp = state.get("viewportOverridePt") or ir["targetPlatform"]["viewportPt"]
+                            vp_w, vp_h = int(vp["width"]), int(vp["height"])
+                            scale = int(ir["targetPlatform"]["scaleFactor"])
+                            exp_px_w, exp_px_h = vp_w * scale, vp_h * scale
 
-            url = f"http://127.0.0.1:{scene_srv.port}/scene/{state_id}?rpcPort={mock_ls.port}"
-            page.goto(url, width=vp_w, height=vp_h, scale=scale)
+                            url = f"http://127.0.0.1:{scene_srv.port}/scene/{state_id}?rpcPort={mock_ls.port}"
+                            page.goto(url, width=vp_w, height=vp_h, scale=scale)
 
-            png_path = shots_dir / f"{state_id}.png"
-            page.screenshot(png_path)
+                            png_path = shots_dir / f"{state_id}.png"
+                            page.screenshot(png_path)
 
-            with Image.open(png_path) as im:
-                px_w, px_h = im.size
+                            with Image.open(png_path) as im:
+                                px_w, px_h = im.size
 
-            ax = page.evaluate("window.__AGY_AX_REPORT") or scene_srv.ax_reports.get(state_id, {})
-            ax_path = ax_dir / f"{state_id}.json"
-            ax_path.write_text(json.dumps(ax, indent=2), encoding="utf-8")
+                            ax = page.evaluate("window.__AGY_AX_REPORT") or scene_srv.ax_reports.get(state_id, {})
+                            ax_path = ax_dir / f"{state_id}.json"
+                            ax_path.write_text(json.dumps(ax, indent=2), encoding="utf-8")
 
-            violations = []
-            if (px_w, px_h) != (exp_px_w, exp_px_h):
-                violations.append(f"Expected @3x {exp_px_w}x{exp_px_h}px, got {px_w}x{px_h}px")
+                            violations = []
+                            if (px_w, px_h) != (exp_px_w, exp_px_h):
+                                violations.append(f"Expected @3x {exp_px_w}x{exp_px_h}px, got {px_w}x{px_h}px")
 
-            if ax.get("scrollWidth", vp_w) > vp_w:
-                violations.append(
-                    f"Horizontal overflow: scrollWidth={ax.get('scrollWidth')} > viewportWidth={vp_w}"
-                )
+                            if ax.get("scrollWidth", vp_w) > vp_w:
+                                violations.append(
+                                    f"Horizontal overflow: scrollWidth={ax.get('scrollWidth')} > viewportWidth={vp_w}"
+                                )
 
-            elements = ax.get("elements", {})
-            for req_sel in state["requiredSelectors"]:
-                info = elements.get(req_sel, {})
-                if not info.get("exists"):
-                    violations.append(f"Missing required selector {req_sel}")
+                            elements = ax.get("elements", {})
+                            for req_sel in state["requiredSelectors"]:
+                                info = elements.get(req_sel, {})
+                                if not info.get("exists"):
+                                    violations.append(f"Missing required selector {req_sel}")
 
-            touch_targets = PRIMARY_TOUCH_TARGETS_BY_STATE.get(state_id, [])
-            for t_sel in touch_targets:
-                info = elements.get(t_sel, {})
-                if not info.get("exists"):
-                    violations.append(f"Missing primary touch target {t_sel}")
-                elif info["height"] < 44 or info["width"] < 44:
-                    violations.append(
-                        f"HIG 44pt violation on {t_sel}: {info['width']}x{info['height']}pt"
-                    )
+                            touch_targets = PRIMARY_TOUCH_TARGETS_BY_STATE.get(state_id, [])
+                            for t_sel in touch_targets:
+                                info = elements.get(t_sel, {})
+                                if not info.get("exists"):
+                                    violations.append(f"Missing primary touch target {t_sel}")
+                                elif info["height"] < 44 or info["width"] < 44:
+                                    violations.append(
+                                        f"HIG 44pt violation on {t_sel}: {info['width']}x{info['height']}pt"
+                                    )
 
-            if violations:
-                raise SystemExit(f"Stage 4 Visual/HIG Audit failed on {state_id}: {violations}")
+                            if violations:
+                                raise SystemExit(f"Stage 4 Visual/HIG Audit failed on {state_id}: {violations}")
 
-            cmp_path = cmp_dir / f"CMP_UE{idx:02d}.png"
-            build_side_by_side_comparison(
-                idx_1based=idx,
-                state_id=state_id,
-                ref_png_path=Path(state["referenceUEImage"]),
-                rendered_png_path=png_path,
-                out_cmp_path=cmp_path,
-                is_landscape=(vp_w > vp_h),
-            )
-            comparison_paths.append(str(cmp_path.relative_to(repo_root)))
-            screenshot_entries.append((state_id, png_path))
+                            cmp_path = cmp_dir / f"CMP_UE{idx:02d}.png"
+                            build_side_by_side_comparison(
+                                idx_1based=idx,
+                                state_id=state_id,
+                                ref_png_path=Path(state["referenceUEImage"]),
+                                rendered_png_path=png_path,
+                                out_cmp_path=cmp_path,
+                                is_landscape=(vp_w > vp_h),
+                            )
+                            comparison_paths.append(str(cmp_path.relative_to(repo_root)))
+                            screenshot_entries.append((state_id, png_path))
 
-            print(
-                f"  ✓ [{claim['id']}] {state_id} -> {png_path.name} ({px_w}x{px_h}px, overflow=0px) + {cmp_path.name}"
-            )
-            claim_results.append(
-                {
-                    "claimId": claim["id"],
-                    "state": state_id,
-                    "description": claim["description"],
-                    "passed": True,
-                    "screenshot": str(png_path.relative_to(repo_root)),
-                    "comparison": str(cmp_path.relative_to(repo_root)),
-                    "resolutionPx": f"{px_w}x{px_h}",
-                    "axSnapshot": str(ax_path.relative_to(repo_root)),
-                    "verifiedSelectors": len(state["requiredSelectors"]),
-                    "verifiedTouchTargets": len(touch_targets),
-                }
-            )
+                            print(
+                                f"  ✓ [{claim['id']}] {state_id} -> {png_path.name} ({px_w}x{px_h}px, overflow=0px) + {cmp_path.name}"
+                            )
+                            claim_results.append(
+                                {
+                                    "claimId": claim["id"],
+                                    "state": state_id,
+                                    "description": claim["description"],
+                                    "passed": True,
+                                    "screenshot": str(png_path.relative_to(repo_root)),
+                                    "comparison": str(cmp_path.relative_to(repo_root)),
+                                    "resolutionPx": f"{px_w}x{px_h}",
+                                    "axSnapshot": str(ax_path.relative_to(repo_root)),
+                                    "verifiedSelectors": len(state["requiredSelectors"]),
+                                    "verifiedTouchTargets": len(touch_targets),
+                                }
+                            )
 
-        tc16 = {
-            "id": "TC-16",
-            "screen": "ALL_13_SCREENS",
-            "passed": True,
-            "detail": f"0px overflow across 13/13 screens, HIG >=44pt primary controls verified & 13/13 CMP_UE01..CMP_UE13 generated",
+                        if scope["isFull"]:
+                            tc16 = {
+                                "id": "TC-16",
+                                "screen": "ALL_13_SCREENS",
+                                "passed": True,
+                                "detail": "0px overflow across 13/13 screens, HIG >=44pt primary controls verified & 13/13 CMP_UE01..CMP_UE13 generated",
+                            }
+                            tc_results.append(tc16)
+                            print(f"  ✓ [{tc16['id']}] {tc16['screen']} -> {tc16['detail']}")
+                    else:
+                        print("\n=== [Stage 4/4] Skipped (0/13 screens impacted) ===")
+            elif run_stage3:
+                # Non-browser Stage 3 case(s) only (e.g., TC-15 Binary Protobuf)
+                print(f"\n=== [Stage 3/4] Non-Browser Interactive E2E Cases ({len(scope['testCases'])} selected) ===")
+                tc_results = run_interactive_e2e_suite(None, None, mock_ls.port, selected_cases=scope["testCases"])
+                for tc in tc_results:
+                    print(f"  ✓ [{tc['id']}] {tc['screen']} -> {tc['detail']}")
+                print("\n=== [Stage 4/4] Skipped (0/13 screens impacted) ===")
+    else:
+        print("\n=== [Stage 2-4] Skipped (impact scope requires Stage 1 Spec/Hygiene check only) ===")
+
+    if not scope["isFull"]:
+        scoped_payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "mode": scope["mode"],
+            "isFull": False,
+            "isRelease": scope["isRelease"],
+            "stagesExecuted": scope["stages"],
+            "overallPassed": True,
+            "specInspection": spec_report,
+            "connectRpcE2E": rpc_report,
+            "interactiveTests": tc_results,
+            "claims": claim_results,
         }
-        tc_results.append(tc16)
-        print(f"  ✓ [{tc16['id']}] {tc16['screen']} -> {tc16['detail']}")
+        scoped_out = out_dir / "scoped-results.json"
+        scoped_out.write_text(json.dumps(scoped_payload, indent=2), encoding="utf-8")
+        print(f"\n=== Scoped ESDD Verification PASSED -> {scoped_out.relative_to(repo_root)} ===")
+        return
 
     overview_path = shots_dir / "ESDD_13_SCREENS_OVERVIEW.png"
     build_13_screen_master_overview(screenshot_entries, overview_path)
@@ -1143,6 +1354,9 @@ def main():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "specVersion": ir.get("specVersion", "2.0.0"),
         "methodology": "ESDD (Executable Spec Driven Development)",
+        "mode": scope["mode"],
+        "isFull": True,
+        "isRelease": scope["isRelease"],
         "overallPassed": True,
         "specInspection": spec_report,
         "connectRpcE2E": rpc_report,
