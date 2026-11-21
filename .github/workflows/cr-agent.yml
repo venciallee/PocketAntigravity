@@ -177,7 +177,7 @@ jobs:
 
       - name: Upload Layer 1 SARIF to GitHub Code Scanning
         if: always() && needs.gatekeeper.outputs.is_fork != 'true' && hashFiles('cr-agent-out/cr-agent.sarif') != ''
-        uses: github/codeql-action/upload-sarif@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4
         with:
           sarif_file: cr-agent-out/cr-agent.sarif
           category: client-security-cr-agent
@@ -193,17 +193,20 @@ jobs:
       - name: Enforce Layer 1 Deterministic P0 Hard Gate
         run: |
           set -euo pipefail
-          python3 -c '
-          import json, sys
-          data = json.load(open("cr-agent-out/static-findings.json", encoding="utf-8"))
+          python3 - <<'PY'
+          import json
+          import sys
+
+          with open("cr-agent-out/static-findings.json", encoding="utf-8") as fh:
+              data = json.load(fh)
           p0 = [f for f in data.get("findings", []) if f.get("severity") == "P0"]
           if p0:
               print(f"Layer 1 Hard Gate FAILED: {len(p0)} deterministic P0 finding(s).", file=sys.stderr)
               for f in p0:
-                  print(f"  - [{f[\"rule_id\"]}] {f[\"file\"]}:{f[\"line\"]} {f[\"title\"]}", file=sys.stderr)
+                  print(f"  - [{f['rule_id']}] {f['file']}:{f['line']} {f['title']}", file=sys.stderr)
               sys.exit(1)
           print("Layer 1 Deterministic P0 Hard Gate PASSED.")
-          '
+          PY
 
   ai-review-agent:
     name: "[Stage 2-4] Multi-Agent Client & Security Review + Sticky Summary"

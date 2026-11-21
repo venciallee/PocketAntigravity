@@ -136,8 +136,12 @@ def main() -> int:
 
     # 5. Layer 1 Deterministic Scan
     if args.static_findings_in and Path(args.static_findings_in).exists():
-        static_findings = _load_findings_json(Path(args.static_findings_in))
+        static_path = Path(args.static_findings_in)
+        raw_static = json.loads(static_path.read_text(encoding="utf-8"))
+        static_findings = _load_findings_json(static_path)
         _, exemptions, layer1_summary = scan_diff_static(file_diffs, repo_root=REPO_ROOT, run_repo_guardrails=False)
+        if isinstance(raw_static, dict) and isinstance(raw_static.get("layer1_summary"), dict):
+            layer1_summary = raw_static["layer1_summary"]
     else:
         static_findings, exemptions, layer1_summary = scan_diff_static(file_diffs, repo_root=REPO_ROOT)
 

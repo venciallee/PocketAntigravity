@@ -251,16 +251,17 @@ def run_eval_suite(repo_root: Path) -> dict[str, Any]:
     )
     l1_findings, _, _ = scan_diff_static(inj_diff, run_repo_guardrails=False)
     routed_inj = route_context(repo_root, list(inj_diff.keys()))
-    _, merged_findings, ai_status, _ = run_multi_agent_review(
-        repo_root=repo_root,
-        file_diffs=inj_diff,
-        routed=routed_inj,
-        static_findings=l1_findings,
-        pr_title=secret_pr_phrase,
-        pr_body=secret_pr_phrase,
-        dry_run=False,
-        complete_fn=fake_llm,
-    )
+    with tempfile.TemporaryDirectory() as clean_workspace:
+        _, merged_findings, ai_status, _ = run_multi_agent_review(
+            repo_root=Path(clean_workspace),
+            file_diffs=inj_diff,
+            routed=routed_inj,
+            static_findings=l1_findings,
+            pr_title=secret_pr_phrase,
+            pr_body=secret_pr_phrase,
+            dry_run=False,
+            complete_fn=fake_llm,
+        )
     agent_b_prompts = [u for s, u in seen_prompts if "Agent B" in s]
     agent_b_isolated = bool(agent_b_prompts) and all(secret_pr_phrase not in u for u in agent_b_prompts)
     layer1_preserved = any(f.rule_id == "SEC-DATA-004" and f.source == "static" for f in merged_findings)
