@@ -25,9 +25,8 @@ public struct AntigravityApp: App {
             initialStore.activeRoute = .pairingSettings
             initialStore.isInitialSessionCheckComplete = true
         } else {
-            initialStore = AntigravitySessionStore.makeLiveStore(
-                kmpEngine: KmpCoreEngineAdapter.makeDefault()
-            )
+            initialStore = AntigravitySessionStore.makeLiveStore()
+            initialStore.prepareFastLaunchSessionState()
         }
         if let appearanceOverride {
             initialStore.appearancePreferences.appearanceMode = appearanceOverride
@@ -55,16 +54,33 @@ public struct AntigravityApp: App {
                     defer {
                         store.isInitialSessionCheckComplete = true
                     }
-                    await store.loadPersistedV233Preferences()
-                    if let launchAppearanceOverride {
-                        store.appearancePreferences.appearanceMode = launchAppearanceOverride
+                    // Initialize Kotlin/Native KMP coordinator off the main thread in parallel with
+                    // instant disk hydration so UILaunchScreen & Frame 0 enter Conversations immediately.
+                    let kmpInitTask: Task<(any AntigravityKmpEnginePort)?, Never>? = (store.kmpEngine == nil)
+                        ? Task.detached(priority: .userInitiated) {
+                            KmpCoreEngineAdapter.makeDefault()
+                        }
+                        : nil
+
+                    // Load non-critical preferences & pending Live Activity actions concurrently so they
+                    // never delay entering Conversations or restoring cached sessions.
+                    let activeStore = store
+                    let appearanceOverride = launchAppearanceOverride
+                    Task {
+                        await activeStore.loadPersistedV233Preferences()
+                        if let appearanceOverride {
+                            activeStore.appearancePreferences.appearanceMode = appearanceOverride
+                        }
+                        await activeStore.consumePendingLiveActivityActions()
                     }
-                    await store.consumePendingLiveActivityActions()
                     let env = ProcessInfo.processInfo.environment
                     if let relayURL = env["ANTIGRAVITY_RELAY_URL"], !relayURL.isEmpty {
                         let cookie = env["ANTIGRAVITY_RELAY_COOKIE"] ?? ""
                         let authUser = env["ANTIGRAVITY_AUTHUSER"]
                         let relayApiKey = env[SAPISIDHashGenerator.relayApiKeyEnvVarName]
+                        if store.kmpEngine == nil, let kmpInitTask {
+                            store.kmpEngine = await kmpInitTask.value
+                        }
                         _ = await store.connectCloudRelay(
                             relayURLString: relayURL,
                             sessionCookie: cookie,
@@ -75,14 +91,26 @@ public struct AntigravityApp: App {
                     } else if let backendURL = env["ANTIGRAVITY_BACKEND_URL"], !backendURL.isEmpty {
                         let csrf = env["ANTIGRAVITY_CSRF_TOKEN"] ?? ""
                         let sha256 = env["ANTIGRAVITY_CERT_SHA256"]
+                        if store.kmpEngine == nil, let kmpInitTask {
+                            store.kmpEngine = await kmpInitTask.value
+                        }
                         _ = await store.connectDirectLAN(
                             endpointURLString: backendURL,
                             csrfToken: csrf,
                             certSHA256: sha256,
                             hostName: env["ANTIGRAVITY_HOST_NAME"] ?? "MacBook Pro"
                         )
-                    } else {
-                        _ = await store.restoreSavedBackendSession()
+                    } else if let saved = await store.hydrateSavedSessionFromDisk() {
+                        if store.kmpEngine == nil, let kmpInitTask {
+                            store.kmpEngine = await kmpInitTask.value
+                        }
+                        _ = await store.connectSavedCredentials(saved)
+                    } else if store.kmpEngine == nil, let kmpInitTask {
+                        Task {
+                            if activeStore.kmpEngine == nil {
+                                activeStore.kmpEngine = await kmpInitTask.value
+                            }
+                        }
                     }
                     LiveActivityCoordinator.shared.sync(with: store)
                 }
@@ -102,7 +130,10 @@ public struct AntigravityApp: App {
                         store.suspendNetworkingForBackground()
                     case .active:
                         applyUIKitWindowInterfaceStyle(resolvedColorScheme)
-                        guard store.isInitialSessionCheckComplete || store.isNetworkingSuspended else { return }
+                        guard store.isNetworkingSuspended
+                                || (store.isInitialSessionCheckComplete && !store.isConnectingToBackend && store.hasPairedBackend && !store.isLiveBackendConnected) else {
+                            return
+                        }
                         Task {
                             await store.consumePendingLiveActivityActions()
                             await store.resumeNetworkingFromForeground()
@@ -154,23 +185,46 @@ public struct AntigravityApp: App {
                         activeVerifyCase = nil
                         launchAppearanceOverride = nil
                         if store.isVerificationMode {
-                            let liveStore = AntigravitySessionStore.makeLiveStore(
-                                kmpEngine: KmpCoreEngineAdapter.makeDefault()
-                            )
+                            let liveStore = AntigravitySessionStore.makeLiveStore()
                             liveStore.isInitialSessionCheckComplete = true
                             store = liveStore
                         }
+                        let activeStore = store
+                        if RemoteHostInstance.isDirectLANPairingURI(rawURL),
+                           let comps = URLComponents(string: rawURL),
+                           let targetURL = comps.queryItems?.first(where: { $0.name == "url" })?.value {
+                            let name = comps.queryItems?.first(where: { $0.name == "name" })?.value ?? "MacBook Pro"
+                            activeStore.beginOptimisticConnectingSession(
+                                hostName: name,
+                                channel: .directHost,
+                                endpointURLString: targetURL
+                            )
+                        } else if let target = RemoteHostInstance.parseRemoteControlTarget(rawURL) {
+                            let displayHost = target.instanceId.isEmpty ? "Antigravity Desktop" : target.instanceId
+                            activeStore.beginOptimisticConnectingSession(
+                                hostName: displayHost,
+                                channel: .cloudRelay,
+                                endpointURLString: target.canonicalRelayURLString,
+                                instanceId: target.instanceId,
+                                deepLinkedConversationId: target.conversationId
+                            )
+                        }
                         Task {
+                            if activeStore.kmpEngine == nil {
+                                activeStore.kmpEngine = await Task.detached(priority: .userInitiated) {
+                                    KmpCoreEngineAdapter.makeDefault()
+                                }.value
+                            }
                             let webCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader() ?? ""
-                            let ok = await store.connectWithPairingURI(rawURL, fallbackCookie: webCookie)
+                            let ok = await activeStore.connectWithPairingURI(rawURL, fallbackCookie: webCookie)
                             if ok {
-                                if case .cascadeChat = store.activeRoute {
+                                if case .cascadeChat = activeStore.activeRoute {
                                     // Keep deep-linked conversation open (`?p=c%2F<cascadeId>`)
                                 } else {
-                                    store.activeRoute = .tabRoot
+                                    activeStore.activeRoute = .tabRoot
                                 }
-                            } else {
-                                store.activeRoute = .pairingSettings
+                            } else if activeStore.hasPairedBackend {
+                                activeStore.activeRoute = .pairingSettings
                             }
                         }
                     }

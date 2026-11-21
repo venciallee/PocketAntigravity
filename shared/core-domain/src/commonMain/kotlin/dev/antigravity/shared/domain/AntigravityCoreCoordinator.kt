@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Unified KMP Core Coordinator exported to both iOS (via SKIE `AsyncSequence` + `async throws`)
@@ -360,7 +361,9 @@ public class AntigravityCoreCoordinator(
             if (startSummaryStream) {
                 conversationSyncStore.startSummarySubscriptionStream(client, host)
             }
-            chatStore.replayPendingOutbox(client)
+            scope.launch {
+                runCatching { chatStore.replayPendingOutbox(client) }
+            }
         }
     }
 }

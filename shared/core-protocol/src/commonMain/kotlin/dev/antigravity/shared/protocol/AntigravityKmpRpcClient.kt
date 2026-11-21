@@ -32,6 +32,9 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.content.ByteArrayContent
 import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
@@ -448,8 +451,9 @@ public class AntigravityKmpRpcClient(
                         updateRelayCache(candidateUser, fam.uuid, instances)
                         return RelayResolutionResult(fam, instances, candidateUser)
                     }
+                    val exactTargetMatch = instances.firstOrNull { it.matches(rawTarget) }
                     if (bestOfflineMatch == null) {
-                        val offline = instances.firstOrNull { it.matches(rawTarget) }
+                        val offline = exactTargetMatch
                             ?: instances.firstOrNull { it.sameHostFamily(rawTarget) }
                         if (offline != null) bestOfflineMatch = Triple(offline, instances, candidateUser)
                     }
@@ -457,6 +461,9 @@ public class AntigravityKmpRpcClient(
                         instances.firstOrNull { it.status.isReachable }?.let { anyOnline ->
                             bestReachableFallback = Triple(anyOnline, instances, candidateUser)
                         }
+                    }
+                    if (exactTargetMatch != null) {
+                        break
                     }
                 } else {
                     instances.firstOrNull { it.status.isReachable }?.let { online ->
@@ -942,8 +949,15 @@ public class AntigravityKmpRpcClient(
     ): FederatedWorkspaceSyncResult {
         val startMs = currentTimeMillis()
         if (channel == RemoteConnectionChannel.DIRECT_HOST) {
-            val workspaces = runCatching { getWorkspaceInfos(originHostName = host.hostname) }.getOrElse { emptyList() }
-            val summaries = getAllCascadeTrajectories(originHostName = host.hostname)
+            val (workspaces, summaries) = coroutineScope {
+                val wsDeferred = async {
+                    runCatching { getWorkspaceInfos(originHostName = host.hostname) }.getOrElse { emptyList() }
+                }
+                val sumDeferred = async {
+                    getAllCascadeTrajectories(originHostName = host.hostname)
+                }
+                wsDeferred.await() to sumDeferred.await()
+            }
             val elapsedMs = max(1L, currentTimeMillis() - startMs).toInt()
             return FederatedWorkspaceSyncResult(
                 workspaces = workspaces,
@@ -978,15 +992,26 @@ public class AntigravityKmpRpcClient(
         val mergedSummaries = linkedMapOf<String, CascadeSummary>()
         val succeededUuids = mutableListOf<String>()
 
-        for (inst in targets) {
-            val wsList = runCatching {
-                getWorkspaceInfos(instanceUuidOverride = inst.uuid, originHostName = inst.name)
-            }.getOrElse { emptyList() }
-            for (ws in wsList) mergedWorkspaces[ws.workspaceUri] = ws
+        val perInstanceResults = coroutineScope {
+            targets.map { inst ->
+                async {
+                    val wsDeferred = async {
+                        runCatching {
+                            getWorkspaceInfos(instanceUuidOverride = inst.uuid, originHostName = inst.name)
+                        }.getOrElse { emptyList() }
+                    }
+                    val trajDeferred = async {
+                        runCatching {
+                            getAllCascadeTrajectories(instanceUuidOverride = inst.uuid, originHostName = inst.name)
+                        }
+                    }
+                    Triple(inst, wsDeferred.await(), trajDeferred.await())
+                }
+            }.awaitAll()
+        }
 
-            val trajResult = runCatching {
-                getAllCascadeTrajectories(instanceUuidOverride = inst.uuid, originHostName = inst.name)
-            }
+        for ((inst, wsList, trajResult) in perInstanceResults) {
+            for (ws in wsList) mergedWorkspaces[ws.workspaceUri] = ws
             trajResult.onSuccess { list ->
                 succeededUuids.add(inst.uuid)
                 for (s in list) {

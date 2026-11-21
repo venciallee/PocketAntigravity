@@ -494,6 +494,14 @@ extension AntigravitySessionStore {
             let updatedUuid = activeHost.instanceId
             let updatedEndpoint = activeHost.endpointURL.absoluteString
             let updatedAuthUser = activeAuthUser
+            persistPairedHostLaunchHint(
+                PairedHostLaunchHint(
+                    instanceId: updatedUuid,
+                    hostname: updatedHostname,
+                    channel: .cloudRelay,
+                    endpointURLString: updatedEndpoint
+                )
+            )
             let secretStoreRef = secretStore
             Task {
                 if var saved = await secretStoreRef.loadCredentials(),
@@ -1002,10 +1010,13 @@ extension AntigravitySessionStore {
         // Confirmed-offline peer Mac (while another Mac is online), iPhone no-network, or pre-handshake cold start:
         // serve persisted steps immediately from disk without issuing cross-host failover RPCs against another online Mac.
         guard isDeviceNetworkReachable, !isConfirmedOfflinePeerHost, let client = rpcClient else {
-            isLoadingSteps = false
+            let isActivelyConnecting = !isConfirmedOfflinePeerHost
+                && !isLiveBackendConnected
+                && (isConnectingToBackend || connectionLifecyclePhase == .connecting)
             let offlineHostLabel = initialSummary?.originHostName ?? activeHost.hostname
-            let shouldNoteUncachedOffline = isKnownOfflineLocal && !isBrandNewEmptySession
+            let shouldNoteUncachedOffline = isKnownOfflineLocal && !isBrandNewEmptySession && !isActivelyConnecting
             if (stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                isLoadingSteps = isActivelyConnecting && !isBrandNewEmptySession
                 stepPollingTask = Task { [weak self] in
                     defer {
                         if let self, self.stepSyncGeneration == generation {
@@ -1020,12 +1031,22 @@ extension AntigravitySessionStore {
                             self.harvestEmbedResources(from: cached)
                         }
                         if self.activeCascadeId == cascadeId {
+                            self.isLoadingSteps = false
                             self.stepLoadErrorText = nil
                         }
                     } else if shouldNoteUncachedOffline && self.activeCascadeId == cascadeId {
+                        self.isLoadingSteps = false
                         self.stepLoadErrorText = "\(offlineHostLabel) is currently offline and this conversation has not been cached on this device yet."
+                    } else {
+                        let stillConnecting = !self.isLiveBackendConnected
+                            && (self.isConnectingToBackend || self.connectionLifecyclePhase == .connecting)
+                        if !stillConnecting && self.activeCascadeId == cascadeId {
+                            self.isLoadingSteps = false
+                        }
                     }
                 }
+            } else {
+                isLoadingSteps = false
             }
             return
         }

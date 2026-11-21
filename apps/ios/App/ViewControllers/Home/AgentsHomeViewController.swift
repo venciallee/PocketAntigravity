@@ -357,6 +357,14 @@ public struct AgentsHomeViewController: View {
         #endif
     }
 
+    private var isConnectingToHost: Bool {
+        !store.isVerificationMode
+            && store.hasPairedBackend
+            && store.isDeviceNetworkReachable
+            && !store.isLiveBackendConnected
+            && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting)
+    }
+
     private var hostSwitcherDotColor: Color {
         switch selectedHost {
         case .antigravityCloud:
@@ -379,13 +387,22 @@ public struct AgentsHomeViewController: View {
         case .localHost(let id, let fallbackName):
             let resolved = selectedLocalHostResolvedName(id: id, fallback: fallbackName)
             if store.hasPairedBackend {
+                if isConnectingToHost {
+                    return resolved
+                }
                 return isSelectedHostOnline ? resolved : "\(resolved) · Offline"
             }
             return resolved
         case .allHosts:
             if store.hasPairedBackend {
                 if pairedLocalHosts.count > 1 {
+                    if isConnectingToHost {
+                        return "All Hosts"
+                    }
                     return isSelectedHostOnline ? "All Hosts" : "All Hosts · Offline"
+                }
+                if isConnectingToHost {
+                    return store.activeHost.hostname
                 }
                 return isSelectedHostOnline
                     ? store.activeHost.hostname
@@ -466,7 +483,7 @@ public struct AgentsHomeViewController: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    if store.isRefreshingSelectedHost || store.isSwitchingHost {
+                    if isConnectingToHost || store.isRefreshingSelectedHost || store.isSwitchingHost {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(AntigravityTheme.accentPeriwinkle)
@@ -1062,6 +1079,13 @@ public struct AgentsHomeViewController: View {
     // MARK: - Filtering & Live Store Binding
 
     private var syncingStatusMessage: String {
+        if isConnectingToHost {
+            let trimmedStatus = store.connectionStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedStatus.isEmpty && trimmedStatus != "Not Connected" {
+                return trimmedStatus
+            }
+            return "Connecting to \(selectedHostDisplayName)..."
+        }
         switch selectedHost {
         case .antigravityCloud:
             return "Syncing Antigravity Cloud sessions..."
@@ -1072,14 +1096,29 @@ public struct AgentsHomeViewController: View {
         }
     }
 
+    private var isShowingLoadingEmptyState: Bool {
+        isConnectingToHost || store.isRefreshingSummaries || store.isRefreshingSelectedHost || store.isSwitchingHost
+    }
+
     private var liveEmptyConversationsCard: some View {
         VStack(spacing: 10) {
-            if store.isRefreshingSummaries || store.isSwitchingHost {
-                ProgressView()
-                    .tint(AntigravityTheme.accentPeriwinkle)
-                Text(syncingStatusMessage)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(AntigravityTheme.textSecondary)
+            if isShowingLoadingEmptyState {
+                VStack(spacing: 10) {
+                    AntigravityFourDotLoadingView(
+                        isAnimated: shouldAnimateLive,
+                        dotSize: 5.5,
+                        spacing: 4.5,
+                        tint: AntigravityTheme.accentPeriwinkle
+                    )
+                    Text(isConnectingToHost ? "Loading conversations..." : "Syncing conversations...")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                        .accessibilityIdentifier("agents-loading-conversations")
+                    Text(syncingStatusMessage)
+                        .font(.system(size: 13.5, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
             } else if selectedHost == .antigravityCloud && searchText.isEmpty && selectedFilter == .all {
                 Image(systemName: "cloud")
                     .font(.system(size: 28, weight: .light))
@@ -1130,24 +1169,45 @@ public struct AgentsHomeViewController: View {
                     .foregroundStyle(AntigravityTheme.textSecondary)
                     .multilineTextAlignment(.center)
 
-                Button {
-                    Task {
-                        await store.reconnectNow(userInitiated: true)
+                HStack(spacing: 10) {
+                    Button {
+                        Task {
+                            await store.reconnectNow(userInitiated: true)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 12.5, weight: .bold))
+                            Text("Retry Connection")
+                                .font(.system(size: 13.5, weight: .semibold))
+                        }
+                        .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 38)
+                        .background(AntigravityTheme.accentPeriwinkle)
+                        .clipShape(Capsule())
                     }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12.5, weight: .bold))
-                        Text("Retry Connection")
-                            .font(.system(size: 13.5, weight: .semibold))
+                    .buttonStyle(.plain)
+
+                    if let onSelectTab {
+                        Button {
+                            onSelectTab(.settings)
+                        } label: {
+                            Text("Settings")
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.textPrimary)
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 38)
+                                .background(AntigravityTheme.surfacePill)
+                                .overlay(
+                                    Capsule()
+                                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                                )
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 38)
-                    .background(AntigravityTheme.accentPeriwinkle)
-                    .clipShape(Capsule())
                 }
-                .buttonStyle(.plain)
                 .padding(.top, 4)
             } else {
                 Image(systemName: searchText.isEmpty && selectedFilter == .all ? "bubble.left.and.bubble.right" : "magnifyingglass")
@@ -1182,7 +1242,8 @@ public struct AgentsHomeViewController: View {
                 .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
         )
         .padding(.top, 8)
-        .accessibilityIdentifier("agents-empty-state")
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(isShowingLoadingEmptyState ? "agents-loading-conversations" : "agents-empty-state")
     }
 
     private var usesLiveStoreData: Bool {

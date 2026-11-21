@@ -178,14 +178,19 @@ extension AntigravityRPCClient {
                         return (familyOnline, instances, candidateUser)
                     }
                     // 3. Record offline match on the target device and optional cross-host fallback
+                    let exactTargetMatch = instances.first(where: { $0.matches(identifier: rawTarget) })
                     if bestOfflineMatch == nil,
-                       let exactOffline = instances.first(where: { $0.matches(identifier: rawTarget) })
-                           ?? instances.first(where: { $0.sameHostFamily(as: rawTarget) }) {
-                        bestOfflineMatch = (exactOffline, instances, candidateUser)
+                       let offlineMatch = exactTargetMatch ?? instances.first(where: { $0.sameHostFamily(as: rawTarget) }) {
+                        bestOfflineMatch = (offlineMatch, instances, candidateUser)
                     }
                     if bestReachableFallback == nil,
                        let anyOnline = instances.first(where: \.status.isReachable) {
                         bestReachableFallback = (anyOnline, instances, candidateUser)
+                    }
+                    // The exact target UUID/slug belongs to this Google account (just currently offline);
+                    // avoid wasting up to 4 extra sequential ListInstances round-trips on authUser 1..4.
+                    if exactTargetMatch != nil {
+                        break
                     }
                 } else if let online = instances.first(where: \.status.isReachable) {
                     self.authUser = candidateUser
@@ -609,41 +614,24 @@ extension AntigravityRPCClient {
             return reachableInstances
         }()
 
-        // 1. Fetch Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects (reuse cache on lightweight periodic ticks)
-        let cloudProjectOutcome: (projects: [ProjectWorkspace], warmingUp: Bool)
-        if !includeCloud {
-            cloudProjectOutcome = (Array(cachedCloudProjectsById.values), false)
-        } else if lightweightPoll && !cachedCloudProjectsById.isEmpty {
-            cloudProjectOutcome = (Array(cachedCloudProjectsById.values), false)
-        } else {
-            cloudProjectOutcome = await fetchCloudProjects(
+        // 1. Kick off Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects fetch concurrently
+        //    so Cloud project listing never blocks local Mac workspace/trajectory queries.
+        let cachedCloudValues = Array(cachedCloudProjectsById.values)
+        let shouldQueryCloudProjects = includeCloud && !(lightweightPoll && !cachedCloudValues.isEmpty)
+        async let cloudProjectsTask: (projects: [ProjectWorkspace], warmingUp: Bool) = shouldQueryCloudProjects
+            ? self.fetchCloudProjects(
                 candidateInstances: reachableInstances,
                 timeoutInterval: timeoutInterval
             )
-        }
-        let cloudProjects = cloudProjectOutcome.projects
+            : (cachedCloudValues, false)
 
         var mergedWorkspacesByKey: [String: WorkspaceInfo] = [:]
-        if includeCloud {
-            for cp in cloudProjects {
-                let wsKey = "cloud|\(cp.workspaceUri)"
-                mergedWorkspacesByKey[wsKey] = WorkspaceInfo(
-                    workspaceUri: cp.workspaceUri,
-                    displayName: cp.name,
-                    activeBranch: cp.activeBranch,
-                    isCloud: true,
-                    originInstanceUuid: cp.originInstanceUuid,
-                    originHostName: "Antigravity"
-                )
-            }
-        }
-
         var mergedSummariesById: [String: CascadeSummary] = [:]
         var succeededInstanceUuids = Set<String>()
         var cloudSucceeded = false
+        let cloudProjectOutcome: (projects: [ProjectWorkspace], warmingUp: Bool)
 
         if channel == .cloudRelay {
-            let cloudProjectsSnapshot = self.cachedCloudProjectsById
             var anyInstanceSucceeded = false
 
             // Order Cloud candidate instances with the instance that served Cloud projects first
@@ -665,27 +653,16 @@ extension AntigravityRPCClient {
                 )
                 : ([], false)
 
+            var resultsByUuid: [String: (ok: Bool, ws: [WorkspaceInfo], mem: [CascadeSummary], jb: [CascadeSummary])] = [:]
             if !localInstancesToQuery.isEmpty {
-                var resultsByUuid: [String: (ok: Bool, ws: [WorkspaceInfo], mem: [CascadeSummary], jb: [CascadeSummary])] = [:]
                 await withTaskGroup(of: (String, Bool, [WorkspaceInfo], [CascadeSummary], [CascadeSummary]).self) { group in
                     for inst in localInstancesToQuery {
                         group.addTask {
-                            var instOk = false
-                            let ws: [WorkspaceInfo]
-                            do {
-                                ws = try await self.getWorkspaceInfos(
-                                    instanceUuidOverride: inst.uuid,
-                                    originHostName: inst.name,
-                                    timeoutInterval: timeoutInterval
-                                )
-                                instOk = true
-                            } catch let AntigravityRPCError.httpError(code, _) where code == 404 {
-                                ws = []
-                                instOk = true
-                            } catch {
-                                ws = []
-                            }
-
+                            async let wsOutcomeTask = self.fetchWorkspaceInfosOutcome(
+                                instanceUuidOverride: inst.uuid,
+                                originHostName: inst.name,
+                                timeoutInterval: timeoutInterval
+                            )
                             async let memTask = self.getAllCascadeTrajectories(
                                 instanceUuidOverride: inst.uuid,
                                 originHostName: inst.name,
@@ -695,15 +672,14 @@ extension AntigravityRPCClient {
                                 cloud: false,
                                 instanceUuidOverride: inst.uuid,
                                 originHostName: inst.name,
-                                snapshotTimeout: 4.0
+                                snapshotTimeout: 2.0
                             )
 
+                            let wsOutcome = await wsOutcomeTask
                             let memResult = try? await memTask
                             let jbLocal = await jbLocalTask
-                            if memResult != nil || !jbLocal.isEmpty {
-                                instOk = true
-                            }
-                            return (inst.uuid, instOk, ws, memResult ?? [], jbLocal)
+                            let instOk = wsOutcome.ok || memResult != nil || !jbLocal.isEmpty
+                            return (inst.uuid, instOk, wsOutcome.ws, memResult ?? [], jbLocal)
                         }
                     }
 
@@ -711,7 +687,28 @@ extension AntigravityRPCClient {
                         resultsByUuid[instUuid] = (instOk, wsList, memList, jbLocalList)
                     }
                 }
+            }
 
+            cloudProjectOutcome = await cloudProjectsTask
+            let cloudProjects = cloudProjectOutcome.projects
+            if includeCloud {
+                for cp in cloudProjects {
+                    let wsKey = "cloud|\(cp.workspaceUri)"
+                    mergedWorkspacesByKey[wsKey] = WorkspaceInfo(
+                        workspaceUri: cp.workspaceUri,
+                        displayName: cp.name,
+                        activeBranch: cp.activeBranch,
+                        isCloud: true,
+                        originInstanceUuid: cp.originInstanceUuid,
+                        originHostName: "Antigravity"
+                    )
+                }
+            }
+
+            let cloudOutcome = await cloudOutcomeTask
+            let updatedCloudProjects = self.cachedCloudProjectsById
+
+            if !localInstancesToQuery.isEmpty {
                 // Merge in deterministic priority order (`preferredUuid` first) so shared-disk windows on the same Mac
                 // never randomly steal `originInstanceUuid` from the active host.
                 var failedLocalUuids = Set<String>()
@@ -733,7 +730,7 @@ extension AntigravityRPCClient {
                         Self.mergeSummaryEntry(
                             s,
                             into: &mergedSummariesById,
-                            cloudProjectsById: cloudProjectsSnapshot,
+                            cloudProjectsById: updatedCloudProjects,
                             preferredInstanceUuid: preferredUuid
                         )
                     }
@@ -745,8 +742,6 @@ extension AntigravityRPCClient {
                 }
             }
 
-            let cloudOutcome = await cloudOutcomeTask
-            let updatedCloudProjects = self.cachedCloudProjectsById
             if includeCloud && (cloudOutcome.succeeded || !cloudOutcome.summaries.isEmpty || !cloudProjects.isEmpty) {
                 cloudSucceeded = true
                 if !cloudOutcome.summaries.isEmpty {
@@ -785,15 +780,31 @@ extension AntigravityRPCClient {
             // Direct LAN / Companion / Mock server mode
             async let workspacesTask = getWorkspaceInfosOptional(timeoutInterval: timeoutInterval)
             async let summariesTask = getAllCascadeTrajectories(timeoutInterval: timeoutInterval)
-            let workspaces = try await workspacesTask
-            let summaries = try await summariesTask
-            let cloudSummaries = includeCloud
-                ? await fetchJetboxSummariesSnapshot(
+            async let cloudSummariesTask: [CascadeSummary] = includeCloud
+                ? self.fetchJetboxSummariesSnapshot(
                     cloud: true,
                     originHostName: "Antigravity",
                     snapshotTimeout: 1.5
                 )
                 : []
+            let workspaces = try await workspacesTask
+            let summaries = try await summariesTask
+            cloudProjectOutcome = await cloudProjectsTask
+            let cloudProjects = cloudProjectOutcome.projects
+            if includeCloud {
+                for cp in cloudProjects {
+                    let wsKey = "cloud|\(cp.workspaceUri)"
+                    mergedWorkspacesByKey[wsKey] = WorkspaceInfo(
+                        workspaceUri: cp.workspaceUri,
+                        displayName: cp.name,
+                        activeBranch: cp.activeBranch,
+                        isCloud: true,
+                        originInstanceUuid: cp.originInstanceUuid,
+                        originHostName: "Antigravity"
+                    )
+                }
+            }
+            let cloudSummaries = await cloudSummariesTask
             cloudSucceeded = includeCloud && (!cloudSummaries.isEmpty || !cloudProjects.isEmpty)
             let cloudProjectsSnapshot = self.cachedCloudProjectsById
             for w in workspaces {
@@ -811,6 +822,7 @@ extension AntigravityRPCClient {
                 )
             }
         }
+        let cloudProjects = cloudProjectOutcome.projects
 
         Self.reconcileBatchUnreadStates(&mergedSummariesById)
 
@@ -830,6 +842,25 @@ extension AntigravityRPCClient {
             succeededInstanceUuids,
             cloudSucceeded
         )
+    }
+
+    private func fetchWorkspaceInfosOutcome(
+        instanceUuidOverride: String?,
+        originHostName: String?,
+        timeoutInterval: TimeInterval?
+    ) async -> (ok: Bool, ws: [WorkspaceInfo]) {
+        do {
+            let ws = try await getWorkspaceInfos(
+                instanceUuidOverride: instanceUuidOverride,
+                originHostName: originHostName,
+                timeoutInterval: timeoutInterval
+            )
+            return (true, ws)
+        } catch let AntigravityRPCError.httpError(code, _) where code == 404 {
+            return (true, [])
+        } catch {
+            return (false, [])
+        }
     }
 
     /// Refreshes workspaces & conversation summaries scoped to a single `AgentsHostFilterScope` target:
@@ -1081,7 +1112,7 @@ extension AntigravityRPCClient {
                 cloud: true,
                 instanceUuidOverride: inst.uuid,
                 originHostName: "Antigravity",
-                snapshotTimeout: 4.5
+                snapshotTimeout: 2.5
             )
             async let unaryTask = getAllCascadeTrajectoriesCloud(
                 instanceUuidOverride: inst.uuid,
@@ -1444,16 +1475,37 @@ extension AntigravityRPCClient {
                 let ids = listResp["projectIds"]?.arrayValue?.compactMap(\.stringValue).filter { !$0.isEmpty } ?? []
                 guard !ids.isEmpty else { continue }
 
+                var loadedByIndex: [Int: ProjectWorkspace] = [:]
+                let readTimeout = timeoutInterval ?? 8.0
+                await withTaskGroup(of: (Int, ProjectWorkspace?).self) { group in
+                    for (idx, pid) in ids.enumerated() {
+                        group.addTask {
+                            guard let readResp = try? await self.callUnaryJSON(
+                                method: "ReadProject",
+                                body: ["id": .string(pid)],
+                                instanceUuidOverride: targetUuid,
+                                timeoutInterval: readTimeout
+                            ),
+                            let projObj = readResp["project"]?.objectValue else {
+                                return (idx, nil)
+                            }
+                            let parsed = Self.decodeCloudProjectObject(
+                                projObj,
+                                fallbackId: pid,
+                                originInstanceUuid: targetUuid
+                            )
+                            return (idx, parsed)
+                        }
+                    }
+                    for await (idx, parsed) in group {
+                        if let parsed {
+                            loadedByIndex[idx] = parsed
+                        }
+                    }
+                }
                 var loaded: [ProjectWorkspace] = []
-                for pid in ids {
-                    if let readResp = try? await callUnaryJSON(
-                        method: "ReadProject",
-                        body: ["id": .string(pid)],
-                        instanceUuidOverride: targetUuid,
-                        timeoutInterval: timeoutInterval ?? 8.0
-                    ),
-                    let projObj = readResp["project"]?.objectValue {
-                        let parsed = Self.decodeCloudProjectObject(projObj, fallbackId: pid, originInstanceUuid: targetUuid)
+                for idx in ids.indices {
+                    if let parsed = loadedByIndex[idx] {
                         cachedCloudProjectsById[parsed.id] = parsed
                         loaded.append(parsed)
                     }
