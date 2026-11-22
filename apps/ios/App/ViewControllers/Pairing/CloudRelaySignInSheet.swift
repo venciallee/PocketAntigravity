@@ -135,7 +135,8 @@ public struct CloudRelaySignInSheet: View {
 
                 Button {
                     Task {
-                        let targetHost = initialURL.host ?? "antigravity.google.com"
+                        let liveHost = latestFullURLString.flatMap { URL(string: $0)?.host }
+                        let targetHost = liveHost ?? initialURL.host ?? "antigravity.google.com"
                         if let cookie = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: targetHost) {
                             let parsed = latestFullURLString.flatMap {
                                 RemoteHostInstance.parseRemoteControlTarget($0)
@@ -238,8 +239,14 @@ private final class WeakRelayScriptMessageHandler: NSObject, WKScriptMessageHand
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
-        guard let rawKey = message.body as? String else { return }
-        owner?.recordCapturedWebApiKey(rawKey)
+        if let dict = message.body as? [String: Any] {
+            let kind = (dict["kind"] as? String) ?? "fallbackKey"
+            let apiKey = dict["apiKey"] as? String
+            let authUser = dict["authUser"] as? String
+            owner?.recordInterceptedRelaySignal(kind: kind, apiKey: apiKey, authUser: authUser)
+        } else if let rawKey = message.body as? String {
+            owner?.recordInterceptedRelaySignal(kind: "fallbackKey", apiKey: rawKey, authUser: nil)
+        }
     }
 }
 
@@ -259,59 +266,159 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
           || host === '127.0.0.1'
           || host === 'localhost';
       }
-      function record(val) {
+      function isApiServiceUrl(rawUrl) {
+        if (!rawUrl || typeof rawUrl !== 'string') { return false; }
+        var lower = rawUrl.toLowerCase();
+        return lower.indexOf('/$rpc/') !== -1
+          || lower.indexOf('devtools_jetski_boq_api_proto') !== -1
+          || lower.indexOf('apiservice/listinstances') !== -1
+          || lower.indexOf('apiservice/proxycommand') !== -1;
+      }
+      function isUnrelatedTelemetryUrl(rawUrl) {
+        if (!rawUrl || typeof rawUrl !== 'string') { return false; }
+        var lower = rawUrl.toLowerCase();
+        return lower.indexOf('play.google.com') !== -1
+          || lower.indexOf('ogs.google.com') !== -1
+          || lower.indexOf('ogads-pa') !== -1
+          || lower.indexOf('waa-pa') !== -1
+          || lower.indexOf('people-pa') !== -1
+          || lower.indexOf('accounts.google.com') !== -1;
+      }
+      function postSignal(kind, apiKey, authUser) {
         if (!isRelayHost()) { return; }
-        if (typeof val !== 'string') { return; }
-        var trimmed = val.trim();
-        if (trimmed.length < 8 || trimmed.length > 128) { return; }
-        window.__agCapturedRelayApiKey = trimmed;
+        var cleanKey = (typeof apiKey === 'string') ? apiKey.trim() : '';
+        var cleanUser = (typeof authUser === 'string') ? authUser.trim() : '';
+        if (kind === 'apiServiceKey' || kind === 'apiServiceVerified') {
+          if (cleanKey.length >= 8 && cleanKey.length <= 128) {
+            window.__agApiServiceKey = cleanKey;
+            window.__agCapturedRelayApiKey = cleanKey;
+          }
+          if (cleanUser.length > 0) {
+            window.__agApiServiceAuthUser = cleanUser;
+          }
+        } else if (cleanKey.length >= 8 && cleanKey.length <= 128 && !window.__agApiServiceKey) {
+          window.__agCapturedRelayApiKey = cleanKey;
+        }
         try {
           if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(apiKeyMessageHandlerName)) {
-            window.webkit.messageHandlers.\(apiKeyMessageHandlerName).postMessage(trimmed);
+            window.webkit.messageHandlers.\(apiKeyMessageHandlerName).postMessage({
+              kind: kind,
+              apiKey: cleanKey,
+              authUser: cleanUser
+            });
           }
         } catch (_) {}
       }
-      function inspectHeaders(headers) {
-        if (!headers) { return; }
+      function extractHeader(headers, targetLower) {
+        if (!headers) { return ''; }
         try {
           if (typeof headers.get === 'function') {
-            var direct = headers.get('x-goog-api-key') || headers.get('X-Goog-Api-Key');
-            if (direct) { record(direct); return; }
+            var direct = headers.get(targetLower);
+            if (direct) { return String(direct); }
           }
           if (Array.isArray(headers)) {
             for (var i = 0; i < headers.length; i++) {
               var pair = headers[i];
-              if (Array.isArray(pair) && pair.length >= 2 && String(pair[0]).toLowerCase() === 'x-goog-api-key') {
-                record(String(pair[1]));
-                return;
+              if (Array.isArray(pair) && pair.length >= 2 && String(pair[0]).toLowerCase() === targetLower) {
+                return String(pair[1]);
               }
             }
           } else if (typeof headers === 'object') {
             var keys = Object.keys(headers);
             for (var j = 0; j < keys.length; j++) {
-              if (keys[j].toLowerCase() === 'x-goog-api-key') {
-                record(String(headers[keys[j]]));
-                return;
+              if (keys[j].toLowerCase() === targetLower) {
+                return String(headers[keys[j]]);
               }
             }
           }
         } catch (_) {}
+        return '';
+      }
+      var origOpen = XMLHttpRequest.prototype.open;
+      if (typeof origOpen === 'function') {
+        XMLHttpRequest.prototype.open = function(method, url) {
+          try {
+            this.__agReqUrl = (typeof url === 'string') ? url : String(url || '');
+            this.__agReqHeaders = {};
+          } catch (_) {}
+          return origOpen.apply(this, arguments);
+        };
       }
       var origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
       if (typeof origSetHeader === 'function') {
         XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-          if (typeof name === 'string' && name.toLowerCase() === 'x-goog-api-key') {
-            record(String(value));
-          }
+          try {
+            if (typeof name === 'string') {
+              var lowerName = name.toLowerCase();
+              if (!this.__agReqHeaders) { this.__agReqHeaders = {}; }
+              this.__agReqHeaders[lowerName] = String(value);
+              if (lowerName === 'x-goog-api-key') {
+                var reqUrl = this.__agReqUrl || '';
+                if (isApiServiceUrl(reqUrl)) {
+                  postSignal('apiServiceKey', String(value), this.__agReqHeaders['x-goog-authuser'] || '');
+                } else if (!isUnrelatedTelemetryUrl(reqUrl)) {
+                  postSignal('fallbackKey', String(value), this.__agReqHeaders['x-goog-authuser'] || '');
+                }
+              }
+            }
+          } catch (_) {}
           return origSetHeader.apply(this, arguments);
+        };
+      }
+      var origSend = XMLHttpRequest.prototype.send;
+      if (typeof origSend === 'function') {
+        XMLHttpRequest.prototype.send = function() {
+          try {
+            var reqUrl = this.__agReqUrl || '';
+            if (isApiServiceUrl(reqUrl)) {
+              var hdrs = this.__agReqHeaders || {};
+              if (hdrs['x-goog-api-key']) {
+                postSignal('apiServiceKey', hdrs['x-goog-api-key'], hdrs['x-goog-authuser'] || '');
+              }
+              this.addEventListener('load', function() {
+                if (this.status >= 200 && this.status < 300) {
+                  var h = this.__agReqHeaders || {};
+                  postSignal('apiServiceVerified', h['x-goog-api-key'] || window.__agApiServiceKey || '', h['x-goog-authuser'] || window.__agApiServiceAuthUser || '');
+                }
+              });
+            }
+          } catch (_) {}
+          return origSend.apply(this, arguments);
         };
       }
       if (typeof window.fetch === 'function') {
         var origFetch = window.fetch;
         window.fetch = function(input, init) {
-          if (init && init.headers) { inspectHeaders(init.headers); }
-          if (input && typeof input === 'object' && input.headers) { inspectHeaders(input.headers); }
-          return origFetch.apply(this, arguments);
+          var reqUrl = '';
+          var apiKey = '';
+          var authUser = '';
+          try {
+            reqUrl = (typeof input === 'string') ? input : ((input && input.url) ? String(input.url) : '');
+            if (init && init.headers) {
+              apiKey = extractHeader(init.headers, 'x-goog-api-key');
+              authUser = extractHeader(init.headers, 'x-goog-authuser');
+            }
+            if (!apiKey && input && typeof input === 'object' && input.headers) {
+              apiKey = extractHeader(input.headers, 'x-goog-api-key');
+              if (!authUser) { authUser = extractHeader(input.headers, 'x-goog-authuser'); }
+            }
+            if (apiKey) {
+              if (isApiServiceUrl(reqUrl)) {
+                postSignal('apiServiceKey', apiKey, authUser);
+              } else if (!isUnrelatedTelemetryUrl(reqUrl)) {
+                postSignal('fallbackKey', apiKey, authUser);
+              }
+            }
+          } catch (_) {}
+          var promise = origFetch.apply(this, arguments);
+          if (isApiServiceUrl(reqUrl) && promise && typeof promise.then === 'function') {
+            promise.then(function(resp) {
+              if (resp && resp.status >= 200 && resp.status < 300) {
+                postSignal('apiServiceVerified', apiKey || window.__agApiServiceKey || '', authUser || window.__agApiServiceAuthUser || '');
+              }
+            }, function() {});
+          }
+          return promise;
         };
       }
     })();
@@ -320,22 +427,16 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
     private static let apiKeyInspectScriptSource = """
     (function() {
       try {
-        if (typeof window.__agCapturedRelayApiKey === 'string' && window.__agCapturedRelayApiKey.length >= 8) {
-          return window.__agCapturedRelayApiKey;
+        if (typeof window.__agApiServiceKey === 'string' && window.__agApiServiceKey.length >= 8) {
+          return window.__agApiServiceKey;
         }
         var meta = document.querySelector('meta[name="antigravity-relay-api-key"]');
         if (meta && meta.getAttribute('content')) {
           return meta.getAttribute('content');
         }
-        var re = new RegExp('(?:^|[^0-9A-Za-z_-])(AI' + 'za[0-9A-Za-z_-]{35})(?![0-9A-Za-z_-])');
-        if (window.WIZ_global_data) {
-          var wizStr = JSON.stringify(window.WIZ_global_data);
-          var wizMatch = wizStr.match(re);
-          if (wizMatch && wizMatch[1]) { return wizMatch[1]; }
+        if (typeof window.__agCapturedRelayApiKey === 'string' && window.__agCapturedRelayApiKey.length >= 8) {
+          return window.__agCapturedRelayApiKey;
         }
-        var html = document.documentElement ? document.documentElement.innerHTML : '';
-        var htmlMatch = html.match(re);
-        if (htmlMatch && htmlMatch[1]) { return htmlMatch[1]; }
       } catch (_) {}
       return '';
     })();
@@ -350,8 +451,15 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
     private var didCompleteCapture = false
     private var isObservingCookieStore = false
     private var isReadyForAutoCapture = false
-    private var capturedRelayApiKey: String?
+    private var verifiedApiServiceKey: String?
+    private var fallbackRelayApiKey: String?
+    private var capturedApiServiceAuthUser: String?
+    private var didObserveApiServiceSuccess = false
     private var pendingCompletionFallbackTask: Task<Void, Never>?
+
+    private var bestCapturedRelayApiKey: String? {
+        verifiedApiServiceKey ?? fallbackRelayApiKey
+    }
 
     init(initialURL: URL, clearExistingSession: Bool = false) {
         self.initialURL = initialURL
@@ -437,7 +545,7 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
             webView.url?.absoluteString,
             true,
             false,
-            capturedRelayApiKey
+            bestCapturedRelayApiKey
         )
     }
 
@@ -447,32 +555,52 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         }
     }
 
-    func recordCapturedWebApiKey(_ rawValue: String) {
-        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 8, trimmed.count <= 128 else { return }
-        let normalized = SAPISIDHashGenerator.extractWebApiKey(from: trimmed) ?? trimmed
-        capturedRelayApiKey = normalized
-        if pendingCompletionFallbackTask != nil {
+    func recordInterceptedRelaySignal(kind: String, apiKey: String?, authUser: String?) {
+        if let authUser {
+            let cleanUser = authUser.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleanUser.isEmpty {
+                capturedApiServiceAuthUser = cleanUser
+            }
+        }
+        if let apiKey {
+            let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.count >= 8, trimmed.count <= 128 {
+                let normalized = SAPISIDHashGenerator.extractWebApiKey(from: trimmed) ?? trimmed
+                if kind == "apiServiceKey" || kind == "apiServiceVerified" {
+                    verifiedApiServiceKey = normalized
+                } else if fallbackRelayApiKey == nil {
+                    fallbackRelayApiKey = normalized
+                }
+            }
+        }
+        if kind == "apiServiceVerified" {
+            didObserveApiServiceSuccess = true
+        }
+        if kind == "apiServiceVerified" || (kind == "apiServiceKey" && !webView.isLoading) {
             pendingCompletionFallbackTask?.cancel()
             pendingCompletionFallbackTask = nil
             Task { @MainActor [weak self] in
+                // Allow WKHTTPCookieStore a brief tick to flush Set-Cookie from the verified response
+                try? await Task.sleep(nanoseconds: 150_000_000)
                 await self?.evaluateSessionReadiness(autoFinishIfOnRelayHost: true)
             }
         }
     }
 
     private func extractWebApiKeyFromWebView() async -> String? {
-        if let existing = capturedRelayApiKey, !existing.isEmpty {
+        if let existing = verifiedApiServiceKey, !existing.isEmpty {
             return existing
         }
         guard let raw = (try? await webView.evaluateJavaScript(Self.apiKeyInspectScriptSource)) as? String else {
-            return nil
+            return fallbackRelayApiKey
         }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty else { return fallbackRelayApiKey }
         let extracted = SAPISIDHashGenerator.extractWebApiKey(from: trimmed) ?? trimmed
-        capturedRelayApiKey = extracted
-        return extracted
+        if fallbackRelayApiKey == nil {
+            fallbackRelayApiKey = extracted
+        }
+        return verifiedApiServiceKey ?? extracted
     }
 
     private func completeCapture(cookieHeader: String, currentURL: URL?) {
@@ -482,7 +610,8 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         pendingCompletionFallbackTask = nil
         let finalURLStr = currentURL?.absoluteString
         let parsed = finalURLStr.flatMap { RemoteHostInstance.parseRemoteControlTarget($0) }
-        onAutoCapturedSession?(cookieHeader, finalURLStr, parsed?.authUser, capturedRelayApiKey)
+        let resolvedAuthUser = capturedApiServiceAuthUser ?? parsed?.authUser
+        onAutoCapturedSession?(cookieHeader, finalURLStr, resolvedAuthUser, bestCapturedRelayApiKey)
     }
 
     private func evaluateSessionReadiness(autoFinishIfOnRelayHost: Bool) async {
@@ -490,10 +619,6 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         let currentURL = webView.url
         let host = currentURL?.host?.lowercased() ?? ""
         let isOnAntigravityRelay = RemoteHostInstance.isAntigravityRelayHost(host)
-
-        if isOnAntigravityRelay && capturedRelayApiKey == nil {
-            _ = await extractWebApiKeyFromWebView()
-        }
 
         let targetHost = host.isEmpty ? (initialURL.host ?? "antigravity.google.com") : host
         let cookieHeader = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: targetHost)
@@ -503,27 +628,37 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
             currentURL?.absoluteString,
             webView.isLoading,
             hasCookies,
-            capturedRelayApiKey
+            bestCapturedRelayApiKey
         )
 
-        if autoFinishIfOnRelayHost && isOnAntigravityRelay, let cookieHeader {
-            if capturedRelayApiKey != nil {
-                completeCapture(cookieHeader: cookieHeader, currentURL: currentURL)
-            } else if pendingCompletionFallbackTask == nil {
-                // Allow the antigravity.google.com SPA up to 2.5s to boot and issue its first
-                // XHR/fetch carrying `X-Goog-Api-Key` (or redirect to accounts.google.com if stale).
-                pendingCompletionFallbackTask = Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: 2_500_000_000)
-                    guard let self, !Task.isCancelled, !self.didCompleteCapture else { return }
-                    let liveHost = self.webView.url?.host?.lowercased() ?? ""
-                    guard RemoteHostInstance.isAntigravityRelayHost(liveHost) else {
-                        self.pendingCompletionFallbackTask = nil
-                        return
-                    }
-                    _ = await self.extractWebApiKeyFromWebView()
-                    let latestCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: liveHost) ?? cookieHeader
-                    self.completeCapture(cookieHeader: latestCookie, currentURL: self.webView.url ?? currentURL)
+        guard autoFinishIfOnRelayHost && isOnAntigravityRelay, let cookieHeader else {
+            return
+        }
+
+        // Fast verified path: antigravity.google.com itself issued an ApiService RPC carrying X-Goog-Api-Key
+        // (and completed Google's OSID redirect bounce).
+        if didObserveApiServiceSuccess || (verifiedApiServiceKey != nil && !webView.isLoading) {
+            completeCapture(cookieHeader: cookieHeader, currentURL: currentURL)
+            return
+        }
+
+        // Never auto-dismiss while WKWebView is still navigating/redirecting (e.g. Google's passive `osid=1` bounce).
+        guard !webView.isLoading else { return }
+
+        if pendingCompletionFallbackTask == nil {
+            // Wait up to 6s after the relay page finishes loading so the Antigravity SPA can boot and fire its
+            // first ApiService/ListInstances call (captured instantaneously via XHR/fetch hooks above).
+            pendingCompletionFallbackTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                guard let self, !Task.isCancelled, !self.didCompleteCapture else { return }
+                let liveHost = self.webView.url?.host?.lowercased() ?? ""
+                guard !self.webView.isLoading, RemoteHostInstance.isAntigravityRelayHost(liveHost) else {
+                    self.pendingCompletionFallbackTask = nil
+                    return
                 }
+                _ = await self.extractWebApiKeyFromWebView()
+                let latestCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: liveHost) ?? cookieHeader
+                self.completeCapture(cookieHeader: latestCookie, currentURL: self.webView.url ?? currentURL)
             }
         }
     }

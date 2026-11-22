@@ -218,7 +218,8 @@ public struct AntigravityWelcomeView: View {
                             relayURLString: effectiveURL,
                             sessionCookie: cookieHeader,
                             authUser: detectedAuthUser,
-                            relayApiKey: detectedRelayApiKey
+                            relayApiKey: detectedRelayApiKey,
+                            ignoreCachedRelayApiKey: true
                         )
                         if ok {
                             onConnectedCallback?()
@@ -292,37 +293,20 @@ public struct AntigravityWelcomeView: View {
         let target = targetInput.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveURL = target.isEmpty ? SAPISIDHashGenerator.defaultOrigin : target
 
-        var existingCookie: String? = nil
-        var savedAuthUser: String? = nil
-        if let cached = await store.loadSavedSessionCookie() {
-            existingCookie = cached.cookie
-            savedAuthUser = cached.authUser
-        } else if let webKitCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader() {
-            existingCookie = webKitCookie
-        }
-
-        if let existingCookie, !existingCookie.isEmpty {
-            let activeStore = store
-            let onConnectedCallback = onConnected
-            let parsed = RemoteHostInstance.parseRemoteControlTarget(effectiveURL)
-            let displayHost = parsed?.instanceId.isEmpty == false ? parsed!.instanceId : "Antigravity Desktop"
-            activeStore.beginOptimisticConnectingSession(
-                hostName: displayHost,
-                channel: .cloudRelay,
-                endpointURLString: effectiveURL,
-                instanceId: parsed?.instanceId,
-                deepLinkedConversationId: parsed?.conversationId
+        if let cached = await store.loadSavedSessionCookie(), !cached.cookie.isEmpty {
+            let ok = await store.connectCloudRelay(
+                relayURLString: effectiveURL,
+                sessionCookie: cached.cookie,
+                authUser: cached.authUser
             )
-            onConnectedCallback?()
-            Task {
-                let ok = await activeStore.connectCloudRelay(
-                    relayURLString: effectiveURL,
-                    sessionCookie: existingCookie,
-                    authUser: savedAuthUser
-                )
-                if ok {
-                    onConnectedCallback?()
-                }
+            if ok {
+                onConnected?()
+                return
+            }
+            if store.connectionStatusText.contains("Expired")
+                || (store.connectionErrorText?.lowercased().contains("unauthorized") ?? false) {
+                shouldClearGoogleCookiesOnSignIn = true
+                isShowingGoogleSignIn = true
             }
             return
         }

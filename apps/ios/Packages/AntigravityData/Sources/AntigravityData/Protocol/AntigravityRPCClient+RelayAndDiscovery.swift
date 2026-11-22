@@ -38,21 +38,46 @@ extension AntigravityRPCClient {
         }
 
         var activeApiKey = await resolveRelayApiKey()
+        var triedKeys = Set<String>([activeApiKey ?? ""])
         var (data, http) = try await performRequest(apiKey: activeApiKey)
 
         if http.statusCode == 400 || http.statusCode == 403 {
-            let text = String(data: data, encoding: .utf8) ?? ""
-            if SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: text),
-               let refreshedKey = await resolveRelayApiKey(forceRefresh: true),
-               refreshedKey != activeApiKey {
-                activeApiKey = refreshedKey
-                (data, http) = try await performRequest(apiKey: activeApiKey)
+            let unwrapped = CloudRelayJSPBCodec.unwrapGoogleRPCBody(data, responseHeaders: http.allHeaderFields)
+            let text = String(data: unwrapped, encoding: .utf8)
+                ?? String(data: data, encoding: .utf8)
+                ?? ""
+            let shouldRotate = (activeApiKey?.isEmpty != false)
+                || SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: text)
+                || http.statusCode == 403
+            if shouldRotate {
+                let originStr = SAPISIDHashGenerator.normalizeOrigin(relayOriginURL.absoluteString)
+                let candidates = await discoverRelayWebApiKeysFromOrigin(originStr: originStr)
+                for candidateKey in candidates.prefix(6) {
+                    guard !candidateKey.isEmpty, triedKeys.insert(candidateKey).inserted else { continue }
+                    let retry = try await performRequest(apiKey: candidateKey)
+                    data = retry.0
+                    http = retry.1
+                    activeApiKey = candidateKey
+                    if (200..<300).contains(http.statusCode) {
+                        relayApiKey = candidateKey
+                        if !SAPISIDHashGenerator.isLoopbackOrigin(originStr) {
+                            await KeychainStore.shared.saveRelayWebApiKey(candidateKey, forOrigin: originStr)
+                        }
+                        break
+                    }
+                    if http.statusCode != 400 && http.statusCode != 403 {
+                        break
+                    }
+                }
             }
         }
 
         if http.statusCode == 401 || http.statusCode == 403 {
-            let text = String(data: data, encoding: .utf8) ?? "Google session expired or unauthorized"
-            throw AntigravityRPCError.unauthorized(text)
+            let unwrapped = CloudRelayJSPBCodec.unwrapGoogleRPCBody(data, responseHeaders: http.allHeaderFields)
+            let text = String(data: unwrapped, encoding: .utf8)
+                ?? String(data: data, encoding: .utf8)
+                ?? "Google session expired or unauthorized"
+            throw AntigravityRPCError.unauthorized("HTTP \(http.statusCode) [ListInstances]: \(text)")
         }
         guard (200..<300).contains(http.statusCode) else {
             let text = String(data: data, encoding: .utf8) ?? ""

@@ -261,6 +261,7 @@ public class AntigravityKmpRpcClient(
         parsedTarget?.instanceId?.takeIf { it.isNotEmpty() } ?: host.instanceId
     private var resolvedInstanceUuidState: String? = resolvedInstanceUuid
     private var currentRelayApiKey: String? = relayApiKey?.trim()?.takeIf { it.isNotEmpty() }
+    private var discoveredRelayApiKeyCandidates: List<String> = emptyList()
     private var attemptedApiKeyDiscovery: Boolean = false
     private var cachedRelayInstances: List<RelayInstanceInfo> = emptyList()
     private var preferredCloudInstanceUuid: String? = null
@@ -466,6 +467,7 @@ public class AntigravityKmpRpcClient(
         val existing = stateMutex.withLock {
             if (forceRefresh) {
                 currentRelayApiKey = null
+                discoveredRelayApiKeyCandidates = emptyList()
                 attemptedApiKeyDiscovery = true
                 return@withLock null
             }
@@ -476,14 +478,36 @@ public class AntigravityKmpRpcClient(
         }
         if (existing != null) return existing
 
-        val discovered = discoverRelayWebApiKeyFromOrigin()
-        if (!discovered.isNullOrEmpty()) {
-            stateMutex.withLock { currentRelayApiKey = discovered }
+        val discovered = discoverRelayWebApiKeysFromOrigin()
+        if (discovered.isNotEmpty()) {
+            stateMutex.withLock {
+                discoveredRelayApiKeyCandidates = discovered
+                if (currentRelayApiKey.isNullOrEmpty()) {
+                    currentRelayApiKey = discovered.first()
+                }
+            }
         }
-        return discovered
+        return discovered.firstOrNull()
     }
 
-    private suspend fun discoverRelayWebApiKeyFromOrigin(): String? {
+    private suspend fun discoverCandidateRelayApiKeys(forceRefresh: Boolean = false): List<String> {
+        val cached = stateMutex.withLock {
+            if (!forceRefresh && discoveredRelayApiKeyCandidates.isNotEmpty()) {
+                discoveredRelayApiKeyCandidates
+            } else {
+                null
+            }
+        }
+        if (cached != null) return cached
+        val fresh = discoverRelayWebApiKeysFromOrigin()
+        stateMutex.withLock {
+            attemptedApiKeyDiscovery = true
+            discoveredRelayApiKeyCandidates = fresh
+        }
+        return fresh
+    }
+
+    private suspend fun discoverRelayWebApiKeysFromOrigin(): List<String> {
         val originHost = extractHostFromUrl(relayOrigin).lowercase()
         val candidatePages = buildList {
             if (extractHostFromUrl(endpointBaseUrl).lowercase() == originHost && endpointBaseUrl.isNotEmpty()) {
@@ -501,10 +525,13 @@ public class AntigravityKmpRpcClient(
             it.isNotEmpty() && !it.lowercase().startsWith("bearer ") && !it.startsWith("ya29.")
         }
 
+        val collectedKeys = linkedSetOf<String>()
+        val scriptUrlsToInspect = linkedSetOf<String>()
+
         for (pageUrl in candidatePages) {
             val pageHost = extractHostFromUrl(pageUrl).lowercase()
             val pageResp = try {
-                withTimeoutOrNull(8_000L) {
+                withTimeoutOrNull(10_000L) {
                     httpClient.get(pageUrl) {
                         header("Accept", "text/html,application/xhtml+xml,application/javascript,*/*;q=0.8")
                         header("User-Agent", SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT)
@@ -531,21 +558,29 @@ public class AntigravityKmpRpcClient(
                 continue
             }
 
-            pageResp.headers["X-Goog-Api-Key"]?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+            pageResp.headers["X-Goog-Api-Key"]?.trim()?.takeIf { it.isNotEmpty() }?.let { collectedKeys.add(it) }
 
             val html = runCatching { pageResp.bodyAsText() }.getOrDefault("")
-            SapisidHashGenerator.extractWebApiKey(html)?.let { return it }
+            collectedKeys.addAll(SapisidHashGenerator.extractAllWebApiKeys(html))
 
             val effectiveBaseUrl = pageResp.call.request.url.toString().ifBlank { pageUrl }
-            val scriptUrls = SapisidHashGenerator.extractBootstrapScriptUrls(
-                html = html,
-                baseUrl = effectiveBaseUrl,
-                limit = 8,
+            scriptUrlsToInspect.addAll(
+                SapisidHashGenerator.extractBootstrapScriptUrls(
+                    html = html,
+                    baseUrl = effectiveBaseUrl,
+                    limit = 12,
+                )
             )
-            for (scriptUrl in scriptUrls) {
+            if (collectedKeys.size >= 4) break
+        }
+
+        // Inspect bootstrap script bundles whenever fewer than 3 distinct keys were found in HTML
+        // (Google Boq pages often include an OneGoogle/Feedback key in HTML while the ApiService key lives in JS).
+        if (collectedKeys.size < 3) {
+            for (scriptUrl in scriptUrlsToInspect.take(12)) {
                 val scriptHost = extractHostFromUrl(scriptUrl).lowercase()
                 val scriptText = try {
-                    withTimeoutOrNull(6_000L) {
+                    withTimeoutOrNull(12_000L) {
                         val sResp = httpClient.get(scriptUrl) {
                             header("Accept", "application/javascript,*/*;q=0.8")
                             header("User-Agent", SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT)
@@ -561,10 +596,40 @@ public class AntigravityKmpRpcClient(
                 } catch (_: Throwable) {
                     null
                 } ?: continue
-                SapisidHashGenerator.extractWebApiKey(scriptText)?.let { return it }
+                collectedKeys.addAll(SapisidHashGenerator.extractAllWebApiKeys(scriptText))
+                if (collectedKeys.size >= 6) break
             }
         }
-        return null
+        return collectedKeys.toList()
+    }
+
+    private fun unwrapErrorBodyText(rawBytes: ByteArray, responseHeaders: Map<String, String>): String {
+        val unwrapped = runCatching {
+            CloudRelayJspbCodec.unwrapGoogleRpcBody(rawBytes, responseHeaders)
+        }.getOrDefault(rawBytes)
+        return runCatching { unwrapped.decodeToString() }
+            .getOrElse { runCatching { rawBytes.decodeToString() }.getOrDefault("") }
+            .trim()
+    }
+
+    private fun buildUnauthorizedDiagnostic(
+        operation: String,
+        statusCode: Int,
+        responseHeaders: Map<String, String>,
+        rawBytes: ByteArray,
+        apiKey: String?,
+        authUser: String,
+    ): String {
+        val decoded = unwrapErrorBodyText(rawBytes, responseHeaders)
+            .replace("\r", " ")
+            .replace("\n", " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val snippet = if (decoded.length > 160) decoded.take(160) + "…" else decoded
+        val keyState = if (apiKey.isNullOrEmpty()) "none" else "len:${apiKey.length}"
+        val ckState = SapisidHashGenerator.summarizeCookieNames(sessionCookie.orEmpty())
+        val base = "HTTP $statusCode [$operation u=$authUser key=$keyState ck=$ckState]"
+        return if (snippet.isEmpty()) base else "$base: $snippet"
     }
 
     public suspend fun currentActiveRelayInstance(): RelayInstanceInfo? = stateMutex.withLock {
@@ -623,30 +688,58 @@ public class AntigravityKmpRpcClient(
         }
 
         var activeApiKey = ensureRelayWebApiKey()
+        val triedKeys = mutableSetOf<String>()
+        triedKeys.add(activeApiKey.orEmpty())
+
         var (response, rawBytes) = perform(activeApiKey)
         var statusCode = response.status.value
+        var respHeaders = response.flattenHeaders()
 
         if (statusCode == 400 || statusCode == 403) {
-            val text = rawBytes.decodeToString()
-            if (SapisidHashGenerator.isInvalidApiKeyError(statusCode, text)) {
-                val refreshedKey = ensureRelayWebApiKey(forceRefresh = true)
-                if (!refreshedKey.isNullOrEmpty() && refreshedKey != activeApiKey) {
-                    activeApiKey = refreshedKey
-                    val retry = perform(activeApiKey)
+            val unwrappedText = unwrapErrorBodyText(rawBytes, respHeaders)
+            val shouldRotateApiKey = activeApiKey.isNullOrEmpty() ||
+                SapisidHashGenerator.isInvalidApiKeyError(statusCode, unwrappedText) ||
+                statusCode == 403
+            if (shouldRotateApiKey) {
+                val candidates = discoverCandidateRelayApiKeys(forceRefresh = true)
+                for (candidateKey in candidates.take(6)) {
+                    if (candidateKey.isBlank() || !triedKeys.add(candidateKey)) continue
+                    val retry = perform(candidateKey)
                     response = retry.first
                     rawBytes = retry.second
                     statusCode = response.status.value
+                    respHeaders = response.flattenHeaders()
+                    activeApiKey = candidateKey
+                    if (statusCode in 200..299) {
+                        stateMutex.withLock { currentRelayApiKey = candidateKey }
+                        break
+                    }
+                    if (statusCode != 400 && statusCode != 403) {
+                        break
+                    }
                 }
             }
         }
 
         if (statusCode == 401 || statusCode == 403) {
-            throw AntigravityRpcError.Unauthorized
+            throw AntigravityRpcError.Unauthorized(
+                buildUnauthorizedDiagnostic(
+                    operation = "ListInstances",
+                    statusCode = statusCode,
+                    responseHeaders = respHeaders,
+                    rawBytes = rawBytes,
+                    apiKey = activeApiKey,
+                    authUser = activeAuthUser,
+                )
+            )
         }
         if (statusCode !in 200..299) {
-            throw AntigravityRpcError.HttpError(statusCode, rawBytes.decodeToString())
+            throw AntigravityRpcError.HttpError(statusCode, unwrapErrorBodyText(rawBytes, respHeaders))
         }
-        return CloudRelayJspbCodec.decodeListInstancesResponse(rawBytes, response.flattenHeaders())
+        if (!activeApiKey.isNullOrEmpty()) {
+            stateMutex.withLock { currentRelayApiKey = activeApiKey }
+        }
+        return CloudRelayJspbCodec.decodeListInstancesResponse(rawBytes, respHeaders)
     }
 
     @Throws(Throwable::class)
@@ -668,6 +761,7 @@ public class AntigravityKmpRpcClient(
         var bestReachableFallback: Triple<RelayInstanceInfo, List<RelayInstanceInfo>, String>? = null
         var bestOfflineMatch: Triple<RelayInstanceInfo, List<RelayInstanceInfo>, String>? = null
         var anySucceededCall = false
+        var primaryError: Throwable? = null
         var lastError: Throwable? = null
 
         for ((userIdx, candidateUser) in candidateAuthUsers.withIndex()) {
@@ -715,6 +809,7 @@ public class AntigravityKmpRpcClient(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (primaryError == null) primaryError = e
                 lastError = e
             }
         }
@@ -749,7 +844,7 @@ public class AntigravityKmpRpcClient(
             updateRelayCache(auth, rawTarget, listOf(direct))
             return RelayResolutionResult(direct, listOf(direct), auth)
         }
-        throw lastError ?: AntigravityRpcError.Unauthorized
+        throw primaryError ?: lastError ?: AntigravityRpcError.Unauthorized("No reachable Cloud Relay instance resolved")
     }
 
     private suspend fun updateRelayCache(authUser: String, resolvedUuid: String, instances: List<RelayInstanceInfo>) {
@@ -896,7 +991,7 @@ public class AntigravityKmpRpcClient(
             }
 
             if (statusCode == 401 || statusCode == 403) {
-                throw AntigravityRpcError.Unauthorized
+                throw AntigravityRpcError.Unauthorized("HTTP $statusCode [$method]")
             }
             if (statusCode !in 200..299) {
                 val errText = rawBytes.decodeToString()
@@ -1095,26 +1190,53 @@ public class AntigravityKmpRpcClient(
             }
 
             var activeApiKey = ensureRelayWebApiKey()
+            val triedKeys = mutableSetOf<String>()
+            triedKeys.add(activeApiKey.orEmpty())
+
             var (response, rawBytes) = postWithKey(activeApiKey)
             var code = response.status.value
+            var respHeaders = response.flattenHeaders()
 
             if (code == 400 || code == 403) {
-                val text = rawBytes.decodeToString()
-                if (SapisidHashGenerator.isInvalidApiKeyError(code, text)) {
-                    val refreshedKey = ensureRelayWebApiKey(forceRefresh = true)
-                    if (!refreshedKey.isNullOrEmpty() && refreshedKey != activeApiKey) {
-                        activeApiKey = refreshedKey
-                        val retry = postWithKey(activeApiKey)
+                val unwrappedText = unwrapErrorBodyText(rawBytes, respHeaders)
+                val shouldRotate = activeApiKey.isNullOrEmpty() ||
+                    SapisidHashGenerator.isInvalidApiKeyError(code, unwrappedText) ||
+                    code == 403
+                if (shouldRotate) {
+                    val candidates = discoverCandidateRelayApiKeys(forceRefresh = true)
+                    for (candidateKey in candidates.take(6)) {
+                        if (candidateKey.isBlank() || !triedKeys.add(candidateKey)) continue
+                        val retry = postWithKey(candidateKey)
                         response = retry.first
                         rawBytes = retry.second
                         code = response.status.value
+                        respHeaders = response.flattenHeaders()
+                        activeApiKey = candidateKey
+                        if (code in 200..299) {
+                            stateMutex.withLock { currentRelayApiKey = candidateKey }
+                            break
+                        }
+                        if (code != 400 && code != 403) {
+                            break
+                        }
                     }
                 }
             }
 
-            if (code == 401 || code == 403) throw AntigravityRpcError.Unauthorized
-            if (code !in 200..299) throw AntigravityRpcError.HttpError(code, rawBytes.decodeToString())
-            return CloudRelayJspbCodec.decodeProxyCommandResponse(rawBytes, response.flattenHeaders())
+            if (code == 401 || code == 403) {
+                throw AntigravityRpcError.Unauthorized(
+                    buildUnauthorizedDiagnostic(
+                        operation = "ProxyCommand/$method",
+                        statusCode = code,
+                        responseHeaders = respHeaders,
+                        rawBytes = rawBytes,
+                        apiKey = activeApiKey,
+                        authUser = activeAuth,
+                    )
+                )
+            }
+            if (code !in 200..299) throw AntigravityRpcError.HttpError(code, unwrapErrorBodyText(rawBytes, respHeaders))
+            return CloudRelayJspbCodec.decodeProxyCommandResponse(rawBytes, respHeaders)
         }
 
         return try {
@@ -1236,7 +1358,7 @@ public class AntigravityKmpRpcClient(
                     val confirm = (rc["confirm"] as? JsonPrimitive)?.booleanOrNull == true
                     val verified = (rc["faceIdVerified"] as? JsonPrimitive)?.booleanOrNull == true
                     if (confirm && !verified) {
-                        throw AntigravityRpcError.Unauthorized
+                        throw AntigravityRpcError.Unauthorized("Biometric Face ID verification required")
                     }
                     val cleanedRc = JsonObject(rc.filterKeys { it != "faceIdVerified" })
                     val cleanedInteraction = JsonObject(interaction.toMutableMap().apply { put("runCommand", cleanedRc) })
@@ -1764,7 +1886,7 @@ public class AntigravityKmpRpcClient(
         }
         val data = response.bodyAsBytes()
         val code = response.status.value
-        if (code == 401 || code == 403) throw AntigravityRpcError.Unauthorized
+        if (code == 401 || code == 403) throw AntigravityRpcError.Unauthorized("HTTP $code [GetCascadeTrajectorySteps]")
         if (code !in 200..299) {
             val bodyText = runCatching { data.decodeToString() }.getOrDefault("")
             throw AntigravityRpcError.HttpError(code, bodyText.ifBlank { "Binary step fetch failed" })
@@ -3641,10 +3763,11 @@ public class AntigravityKmpRpcClient(
                 ?: throw AntigravityRpcError.HttpError(503, "Selected Antigravity Desktop host is offline")
             val url = "$relayOrigin${SapisidHashGenerator.API_SERVICE_PREFIX}/StreamProxyCommand?\$unique=$method"
             val apiKey = ensureRelayWebApiKey()
+            val activeAuth = currentAuthUser()
             val headers = SapisidHashGenerator.buildApiServiceHeaders(
                 cookieHeader = sessionCookie.orEmpty(),
                 origin = relayOrigin,
-                authUser = currentAuthUser(),
+                authUser = activeAuth,
                 apiKey = apiKey,
                 isStreaming = true,
                 timestampSeconds = currentTimeMillis() / 1000L,
@@ -3663,7 +3786,19 @@ public class AntigravityKmpRpcClient(
                 setBody(ByteArrayContent(reqBytes, ContentType.parse("application/json+protobuf")))
             }.execute { response ->
                 val code = response.status.value
-                if (code == 401 || code == 403) throw AntigravityRpcError.Unauthorized
+                if (code == 401 || code == 403) {
+                    val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
+                    throw AntigravityRpcError.Unauthorized(
+                        buildUnauthorizedDiagnostic(
+                            operation = "StreamProxyCommand/$method",
+                            statusCode = code,
+                            responseHeaders = response.flattenHeaders(),
+                            rawBytes = errBytes,
+                            apiKey = apiKey,
+                            authUser = activeAuth,
+                        )
+                    )
+                }
                 if (code !in 200..299) throw AntigravityRpcError.HttpError(code, "StreamProxyCommand HTTP $code")
                 val respHeaders = response.flattenHeaders()
                 val headerBase64 = respHeaders.any { (k, v) ->
@@ -3713,7 +3848,7 @@ public class AntigravityKmpRpcClient(
                 setBody(ByteArrayContent(innerPayload, ContentType.parse("application/connect+json")))
             }.execute { response ->
                 val code = response.status.value
-                if (code == 401 || code == 403) throw AntigravityRpcError.Unauthorized
+                if (code == 401 || code == 403) throw AntigravityRpcError.Unauthorized("HTTP $code [Stream/$method]")
                 if (code !in 200..299) throw AntigravityRpcError.HttpError(code, "Stream HTTP $code")
                 val connectParser = ConnectStreamParser()
                 val channelReader = response.bodyAsChannel()
