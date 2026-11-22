@@ -4013,6 +4013,54 @@ final class AntigravityProtocolTests: XCTestCase {
             XCTFail("Expected AntigravityRPCError.unauthorized, got: \(error)")
         }
     }
+
+    func testCookiePathFilteringExcludesSlashRScopedCookiesAndExtractAllWebApiKeysFindsMultipleKeys() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let future = now.addingTimeInterval(3600)
+
+        let descriptors: [SAPISIDHashGenerator.RelayCookieDescriptor] = [
+            .init(name: "SAPISID", value: "root-sapisid", domain: ".google.com", path: "/", expiresDate: future),
+            .init(name: "SID", value: "root-sid", domain: ".google.com", path: "/", expiresDate: future),
+            // A `/r`-scoped cookie MUST NOT shadow a root `/` cookie for `/$rpc` requests
+            .init(name: "SAPISID", value: "wrong-slash-r-sapisid", domain: "antigravity.google.com", path: "/r", expiresDate: future)
+        ]
+
+        let header = SAPISIDHashGenerator.buildCookieHeader(
+            from: descriptors,
+            forHost: "antigravity.google.com",
+            now: now
+        )
+        let parsed = SAPISIDHashGenerator.parseCookies(header ?? "")
+        XCTAssertEqual(parsed["SAPISID"], "root-sapisid")
+        XCTAssertFalse(SAPISIDHashGenerator.cookiePath("/r", appliesToRequestPath: "/$rpc"))
+        XCTAssertTrue(SAPISIDHashGenerator.cookiePath("/", appliesToRequestPath: "/$rpc"))
+
+        let key1 = "AI" + "zaSyFIRSTOGSKEY0000000000000000000000"
+        let key2 = "AI" + "zaSySECONDAPISVC111111111111111111111"
+        let html = """
+            <html><head>
+            <script>window.WIZ_global_data = {"a":"\(key1)","x-goog-api-key":"\(key2)"};</script>
+            <link rel="modulepreload" href="/_/boq/app_entry.mjs">
+            </head></html>
+            """
+        let keys = SAPISIDHashGenerator.extractAllWebApiKeys(from: html)
+        XCTAssertEqual(keys.first, key2, "Contextual x-goog-api-key must be prioritized ahead of generic keys")
+        XCTAssertTrue(keys.contains(key1))
+        XCTAssertTrue(keys.contains(key2))
+
+        let scripts = SAPISIDHashGenerator.extractBootstrapScriptURLs(
+            fromHTML: html,
+            baseURL: URL(string: "https://antigravity.google.com/r/test")!
+        )
+        XCTAssertTrue(scripts.contains(where: { $0.absoluteString.hasSuffix("/_/boq/app_entry.mjs") }))
+
+        XCTAssertTrue(
+            SAPISIDHashGenerator.isInvalidApiKeyError(
+                statusCode: 403,
+                responseBody: "[7,\"Requests to this API devtools_jetski_boq_api_proto.ApiService method ListInstances are blocked.\"]"
+            )
+        )
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {

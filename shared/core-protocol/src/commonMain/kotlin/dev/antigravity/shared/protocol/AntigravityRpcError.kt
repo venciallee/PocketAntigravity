@@ -4,7 +4,8 @@ package dev.antigravity.shared.protocol
  * Typed protocol & transport error hierarchy shared across Direct LAN and Google Cloud Relay channels.
  */
 public sealed class AntigravityRpcError(message: String) : Exception(message) {
-    public data object Unauthorized : AntigravityRpcError("Unauthorized (401/403)")
+    public data class Unauthorized(public val detail: String = "Unauthorized (401/403)") :
+        AntigravityRpcError(detail)
     public data class InvalidEndpoint(public val rawEndpoint: String) :
         AntigravityRpcError("Invalid endpoint: $rawEndpoint")
     public data class HttpError(public val statusCode: Int, public val body: String) :

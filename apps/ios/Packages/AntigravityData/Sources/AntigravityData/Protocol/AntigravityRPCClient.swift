@@ -281,6 +281,10 @@ public actor AntigravityRPCClient {
     }
 
     internal func discoverRelayWebApiKeyFromOrigin(originStr: String) async -> String? {
+        await discoverRelayWebApiKeysFromOrigin(originStr: originStr).first
+    }
+
+    internal func discoverRelayWebApiKeysFromOrigin(originStr: String) async -> [String] {
         let originHost = relayOriginURL.host?.lowercased()
         var candidatePages: [URL] = []
         if endpointURL.host?.lowercased() == originHost {
@@ -289,6 +293,18 @@ public actor AntigravityRPCClient {
         if let rootURL = URL(string: "\(originStr)/"),
            !candidatePages.contains(where: { $0.absoluteString == rootURL.absoluteString }) {
             candidatePages.append(rootURL)
+        }
+
+        var seenKeys = Set<String>()
+        var collectedKeys: [String] = []
+        var seenScripts = Set<String>()
+        var scriptURLsToInspect: [URL] = []
+
+        func appendKey(_ raw: String) {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && seenKeys.insert(trimmed).inserted {
+                collectedKeys.append(trimmed)
+            }
         }
 
         for pageURL in candidatePages {
@@ -310,31 +326,40 @@ public actor AntigravityRPCClient {
                 continue
             }
 
-            if let headerKey = http.value(forHTTPHeaderField: "X-Goog-Api-Key")?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !headerKey.isEmpty {
-                return headerKey
+            if let headerKey = http.value(forHTTPHeaderField: "X-Goog-Api-Key") {
+                appendKey(headerKey)
             }
 
             let html = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
                 ?? ""
-            if let inlineKey = SAPISIDHashGenerator.extractWebApiKey(from: html) {
-                return inlineKey
+            for key in SAPISIDHashGenerator.extractAllWebApiKeys(from: html) {
+                appendKey(key)
             }
 
             let effectiveBaseURL = http.url ?? pageURL
-            let scriptURLs = SAPISIDHashGenerator.extractBootstrapScriptURLs(
+            for scriptURL in SAPISIDHashGenerator.extractBootstrapScriptURLs(
                 fromHTML: html,
                 baseURL: effectiveBaseURL,
-                limit: 8
-            )
-            for scriptURL in scriptURLs {
-                let scriptReq = makeBootstrapGetRequest(
+                limit: 12
+            ) {
+                if seenScripts.insert(scriptURL.absoluteString).inserted {
+                    scriptURLsToInspect.append(scriptURL)
+                }
+            }
+            if collectedKeys.count >= 4 {
+                break
+            }
+        }
+
+        if collectedKeys.count < 3 {
+            for scriptURL in scriptURLsToInspect.prefix(12) {
+                var scriptReq = makeBootstrapGetRequest(
                     for: scriptURL,
                     originStr: originStr,
                     includeSessionCookie: scriptURL.host?.lowercased() == originHost
                 )
+                scriptReq.timeoutInterval = 12
                 guard let (scriptData, scriptResp) = try? await urlSession.data(for: scriptReq),
                       let scriptHTTP = scriptResp as? HTTPURLResponse,
                       (200..<300).contains(scriptHTTP.statusCode) else {
@@ -343,12 +368,16 @@ public actor AntigravityRPCClient {
                 let scriptText = String(data: scriptData, encoding: .utf8)
                     ?? String(data: scriptData, encoding: .isoLatin1)
                     ?? ""
-                if let scriptKey = SAPISIDHashGenerator.extractWebApiKey(from: scriptText) {
-                    return scriptKey
+                for key in SAPISIDHashGenerator.extractAllWebApiKeys(from: scriptText) {
+                    appendKey(key)
+                }
+                if collectedKeys.count >= 6 {
+                    break
                 }
             }
         }
-        return nil
+
+        return collectedKeys
     }
 
 
