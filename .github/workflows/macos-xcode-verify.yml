@@ -77,6 +77,7 @@ jobs:
             verification/verify-live-rpc-flow.py \
             verification/verify-v233-capabilities.py \
             verification/verify_compat_guardrails.py \
+            verification/verify_advisory_hygiene.py \
             verification/verify-compat-matrix.py \
             verification/e2e_impact_planner.py \
             verification/ios-simulator-runner.py \
@@ -89,6 +90,8 @@ jobs:
           else
             echo "[SKIP] Compatibility static guardrails skipped (Protocol/Models/Store/Bridge untouched)."
           fi
+          python3 verification/verify_advisory_hygiene.py --self-test
+          python3 verification/verify_advisory_hygiene.py || true
           python3 scripts/prepare-cr-context.py --validate-config --self-test
           python3 verification/e2e_impact_planner.py --self-test
           bash -n scripts/sync-xcode.sh scripts/install-on-iphone.sh scripts/mac-real-env-verify.sh .githooks/post-merge .githooks/post-checkout
