@@ -2,7 +2,7 @@
 
 Native Android client for **PocketAntigravity** (`minSdk = 29`, `compileSdk = 36`, `targetSdk = 36`), built with **Kotlin 2.1.21**, **Jetpack Compose** (`compose-bom 2025.10.00`), and **Material 3** (Expressive dark Matte Obsidian `#090A0D` / Periwinkle `#8EB4FF` / Amber Approval `#EBB365`, plus optional Material You Dynamic Color).
 
-See the normative specifications in [`specs/android/`](../../specs/android/):
+See the cross-platform capability matrix in [`docs/PLATFORM_STATUS.md`](../../docs/PLATFORM_STATUS.md) and the normative specifications in [`specs/android/`](../../specs/android/):
 - [`01-prd-and-ux-spec.md`](../../specs/android/01-prd-and-ux-spec.md) — Product requirements & Material 3 UX parity across `UE01`..`UE13`
 - [`02-tech-architecture-and-kmp-parity.md`](../../specs/android/02-tech-architecture-and-kmp-parity.md) — KMP parity, protocol forward compatibility, and Android module design
 - [`03-unit-and-e2e-test-plan.md`](../../specs/android/03-unit-and-e2e-test-plan.md) — 4-layer test matrix (`ATC-01`..`ATC-18`) & Roborazzi visual QA plan

@@ -4,9 +4,10 @@
 
 **Native iOS & Android Mobile Client for Google Antigravity Remote Control**
 
-[![Platforms](https://img.shields.io/badge/Platforms-iOS%2018%2B%20%7C%20Android-5B8DEF?style=flat-square)](#4-overall-architecture)
-[![Shared Core](https://img.shields.io/badge/Shared%20Core-Kotlin%20Multiplatform%20%2B%20Swift%206-7C6EE6?style=flat-square)](#4-overall-architecture)
-[![Protocol](https://img.shields.io/badge/Protocol-Connect--RPC%20%2B%20Cloud%20Relay-2E9679?style=flat-square)](#3-core-principle--how-it-interacts-with-antigravity)
+[![Platforms](https://img.shields.io/badge/Platforms-iOS%2018%2B%20%7C%20Android%2010%E2%80%9316-5B8DEF?style=flat-square)](#2-current-status--supported-platforms)
+[![Shared Core](https://img.shields.io/badge/Shared%20Core-KMP%20%2B%20Swift%206%20%2B%20Compose-7C6EE6?style=flat-square)](#5-overall-architecture)
+[![Protocol](https://img.shields.io/badge/Protocol-Connect--RPC%20%2B%20Cloud%20Relay-2E9679?style=flat-square)](#4-core-principle--how-it-interacts-with-antigravity)
+[![Status](https://img.shields.io/badge/Status-iOS%20%26%20Android%20Implemented-3FB950?style=flat-square)](docs/PLATFORM_STATUS.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-EBB365?style=flat-square)](LICENSE)
 
 </div>
@@ -15,17 +16,32 @@
 
 ## 1. What Is This Project?
 
-**AG Pocket (`PocketAntigravity`)** is an open-source **native iOS and Android client** for **Google Antigravity**, enabling **one-tap pairing and real-time remote control** of your Antigravity PC / Desktop and Cloud agent sessions straight from your phone. Built with 100% native mobile UI (Swift 6 SwiftUI/UIKit on iOS and Kotlin Jetpack Compose on Android) backed by a Kotlin Multiplatform (KMP) protocol core, it speaks directly to Antigravity's `LanguageServerService` with zero web-bundle overhead.
+**AG Pocket (`PocketAntigravity`)** is an open-source **native iOS and Android client** for **Google Antigravity**, enabling **one-tap pairing and real-time remote control** of your Antigravity PC / Desktop and Cloud agent sessions straight from your phone. Built with 100% native mobile UI (Swift 6 SwiftUI/UIKit on iOS and Kotlin Jetpack Compose Material 3 on Android) backed by a shared Kotlin Multiplatform (KMP) protocol & domain core, it speaks directly to Antigravity's `LanguageServerService` with zero web-bundle overhead.
 
 ---
 
-## 2. Why I Built This
+## 2. Current Status & Supported Platforms
 
-With the recent leap in **Gemini**'s reasoning and coding capabilities, Antigravity quickly became my daily driver for software engineering. I love using its **Remote Control** workflow to launch tasks, monitor progress, review implementation plans, and approve terminal commands while away from my desk — yet I was surprised to discover that Antigravity had **no official native mobile app** for iOS or Android. Relying on a desktop web wrapper on a phone felt sluggish and disconnected from real mobile ergonomics (Face ID / biometric approvals, Dynamic Island & Live Activities, offline resilience, and fluid native gestures), so I built this native app from the ground up.
+Both **native iOS** and **native Android** clients are implemented on `main` and verified continuously in GitHub Actions on top of the shared **KMP core**.
+
+| Platform / Layer | Support Range | Status | Highlights |
+| :--- | :--- | :---: | :--- |
+| **iOS** ([`apps/ios/`](apps/ios/)) | **iOS 18.0+** (Swift 6 · Xcode 16+) | **Implemented & CI-Verified** | All 13 UE screens (`UE01`–`UE13`) + v2.33 sheets, Floating Liquid Glass shell, Dynamic Island & Lock Screen Live Activities, Face ID gate, Share Extension (<30 MB), live Camera QR scanner, WebView Google Cloud Relay sign-in, native `SFSpeechRecognizer` voice input, Frame-0 launch. |
+| **Android** ([`apps/android/`](apps/android/README.md)) | **Android 10–16** (`minSdk 29` / `targetSdk 36`, Jetpack Compose + Material 3) | **Implemented & CI-Verified** | All 13 UE screens (`UE01`–`UE13`) adapted idiomatically to Material 3 + v2.33 sheets, Android 16 `NotificationCompat.ProgressStyle` Live Updates + Android 10–15 Foreground Service fallback, Jetpack Glance widget, `BiometricPrompt`, Tink + Keystore encryption, Material You Dynamic Color opt-in, native Share receiver, verified via Roborazzi 13-screen visual QA & KVM API 35 Emulator E2E. *(On-device CameraX QR viewfinder, in-app WebView OAuth sheet & live `SpeechRecognizer` mic capture are next.)* |
+| **KMP Shared Core** ([`shared/`](shared/)) | JVM · Android · iOS (`AntigravityShared.xcframework`) | **Full Parity & CI-Verified** | 5 shared modules (`core-model`, `core-protocol`, `core-markdown`, `core-domain`, `umbrella`) providing Connect-RPC 5-byte streaming, Binary-first Protobuf + adaptive JSON fallback, `SAPISIDHASH` Cloud Relay, 7 `StateFlow` domain stores, `DurableOutbox`, `HostCapabilityRegistry`, `ProtocolCompatibilityEngine`, and forward-compatible resilient enums. |
+| **Antigravity Hosts** | Desktop PC · Antigravity Cloud (`v1/...`) · LAN / Tailscale | **Bidirectional Compat** | Connects over Official Cloud Relay or Direct LAN/Tailscale TLS, automatically negotiating host capabilities across older and newer Desktop versions (`v2.20`–`v2.33+` and future step/interaction/artifact types). |
+
+> **Full Screen-by-Screen & Feature Breakdown**: See **[`docs/PLATFORM_STATUS.md`](docs/PLATFORM_STATUS.md)** for the complete iOS vs Android vs KMP feature matrix (`UE01`–`UE13`, v2.33 workflows, OS integrations, CI coverage, 13-screen visual comparison overview, and remaining roadmap).
 
 ---
 
-## 3. Core Principle — How It Interacts with Antigravity
+## 3. Why I Built This
+
+With the recent leap in **Gemini**'s reasoning and coding capabilities, Antigravity quickly became my daily driver for software engineering. I love using its **Remote Control** workflow to launch tasks, monitor progress, review implementation plans, and approve terminal commands while away from my desk — yet I was surprised to discover that Antigravity had **no official native mobile app** for iOS or Android. Relying on a desktop web wrapper on a phone felt sluggish and disconnected from real mobile ergonomics (Face ID / `BiometricPrompt` approvals, Dynamic Island & Android 16 Live Updates, offline resilience, and fluid native gestures), so I built this native app from the ground up.
+
+---
+
+## 4. Core Principle — How It Interacts with Antigravity
 
 Rather than embedding a mobile browser or wrapping the ~9 MB desktop React bundle, the client speaks Antigravity's native **Connect-RPC wire protocol** (`exa.language_server_pb.LanguageServerService`) directly over the **Official Cloud Relay** — working seamlessly across Wi-Fi and 5G with zero desktop scripts or network configuration:
 
@@ -54,7 +70,7 @@ Rather than embedding a mobile browser or wrapping the ~9 MB desktop React bundl
 
 ---
 
-## 4. Overall Architecture
+## 5. Overall Architecture
 
 The codebase follows a strict **three-layer architecture** designed to keep platform UI 100% native while maximizing shared protocol, model, and rendering logic across iOS and Android via **Kotlin Multiplatform (KMP)**.
 
@@ -70,50 +86,55 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 
 | Layer | Responsibility | Key Modules & Paths |
 | :--- | :--- | :--- |
-| **Layer 1 · Application Layer** | **100% Native UI, Navigation & OS Extensions.** Owns all visual surfaces, gestures, haptics, and platform extensions while observing state unidirectionally. | • **iOS (`apps/ios/App/`, `apps/ios/SharedUI/`, `apps/ios/Extensions/`)**: Swift 6 + SwiftUI/UIKit implementing all 13 UE screens (`UE01`–`UE13`), Floating Liquid Glass shell, `KmpCoreEngineAdapter` SKIE bridge, Dynamic Island & Lock Screen Live Activity, Share Extension, Face ID, and Voice Input.<br>• **Android (`apps/android/` · Planned)**: Native Kotlin / Jetpack Compose Material 3 UI, `BiometricPrompt`, and live progress notifications consuming the KMP `shared/` modules directly.<br>• **Design System**: Matte Obsidian (`#090A0D`), Periwinkle CTA (`#8EB4FF`), Face ID Amber (`#EBB365`), and cross-platform `SemanticIcon` tokens. |
-| **Layer 2 · Capability Layer** | **Domain Orchestration, Offline Continuity & Universal Rendering.** Coordinates multi-host state, offline storage, streaming rich content, and OS services. | • **Shared Domain Orchestration (`shared/core-domain/`)**: `StateFlow`-backed `ConnectionDomainStore`, `ConversationSyncStore`, `CascadeChatDomainStore`, `DurableOutbox`, and `AntigravityCoreCoordinator` exported to iOS via SKIE (`async/await` & `AsyncSequence`) and consumed natively on Android.<br>• **iOS Session Adapter & Offline Store (`apps/ios/Packages/AntigravityData/`)**: `@Observable` `AntigravitySessionStore` delegating live connection, sync, step loading, and PC interactions via pure-Swift `AntigravityKmpEnginePort` + per-host sharded `LocalProjectionStore`.<br>• **Universal Rendering & Review (`shared/core-markdown/`, `apps/ios/App/Views/Cascade/`, `apps/ios/App/ViewControllers/Inspector/`)**: Streaming Markdown AST, TextKit code pills, Mermaid diagrams, `<agent-embed>` previews, Implementation Plan inline comments, and line-level Turn Diff review.<br>• **Approvals & OS Coordinators (`apps/ios/App/Services/`)**: Biometric interaction gate, structured Q&A wizard, `LiveActivityCoordinator`, `NotificationCoordinator`, and `VoiceInputManager`. |
-| **Layer 3 · Core Layer** | **Cross-Platform Shared Core, Wire Protocol & Platform Ports.** Pure, UI-free protocol and model engine compiled for both iOS and Android. | • **KMP Shared Core (`shared/`)**: `:shared:core-model` (canonical models), `:shared:core-protocol` (Ktor OkHttp/Darwin + SHA-256 TLS pinning, 5B Connect framing, Binary Protobuf codec, `SAPISIDHASH` Cloud Relay, `InteractionBuilder`), `:shared:core-markdown` (AST parser), `:shared:core-domain` (StateFlow stores), and `:shared:umbrella` (SKIE-enhanced static `AntigravityShared.xcframework` + JVM/Android).<br>• **Extension-Safe Pure Swift 6 Data Package (`apps/ios/Packages/AntigravityData/`)**: Zero-UIKit / zero-KMP-binary Swift package keeping iOS WidgetKit & Share extensions safely under the 30 MB memory ceiling.<br>• **Platform Ports (`PlatformPorts`)**: `expect`/`actual` & protocol contracts abstracting `SecretStore` (Keychain / Keystore), `NetworkReachabilityMonitoring` (`NWPathMonitor` / `ConnectivityManager`), `PowerStateProviding`, `KeyValuePreferencesStore`, and Biometrics. |
+| **Layer 1 · Application Layer** | **100% Native UI, Navigation & OS Extensions.** Owns all visual surfaces, gestures, haptics, and platform extensions while observing state unidirectionally. | • **iOS (`apps/ios/App/`, `apps/ios/SharedUI/`, `apps/ios/Extensions/`)**: Swift 6 + SwiftUI/UIKit implementing all 13 UE screens (`UE01`–`UE13`) + v2.33 sheets, Floating Liquid Glass shell, `KmpCoreEngineAdapter` SKIE bridge, Dynamic Island & Lock Screen Live Activity, Share Extension, Face ID, Camera QR scanner, WebView Cloud Relay sign-in, and Voice Input.<br>• **Android (`apps/android/app/`, `apps/android/core-ui/`, `apps/android/core-platform/`)**: Native Kotlin + Jetpack Compose + Material 3 (`1.4.0`) implementing all 13 UE screens (`UE01`–`UE13`) + v2.33 sheets, adaptive `NavigationSuiteScaffold`, Android 16 `NotificationCompat.ProgressStyle` Live Updates + Android 10–15 Foreground Service fallback, Jetpack Glance widget, `BiometricPrompt`, Material You Dynamic Color opt-in, and native Share receiver.<br>• **Design System**: Matte Obsidian (`#090A0D`), Periwinkle CTA (`#8EB4FF`), Biometric Amber (`#EBB365`), Light/Dark/Theme presets, and cross-platform `SemanticIcon` tokens. |
+| **Layer 2 · Capability Layer** | **Domain Orchestration, Offline Continuity & Universal Rendering.** Coordinates multi-host state, offline storage, streaming rich content, and OS services. | • **Shared Domain Orchestration (`shared/core-domain/`)**: 7 `StateFlow`-backed stores (`ConnectionDomainStore`, `ConversationSyncStore`, `CascadeChatDomainStore`, `WorkspaceAndAutomationStore`, `ReviewAndVcsStore`, `OrchestrationAndSideChannelStore`, `SettingsAndCustomizationStore`), `DurableOutbox`, `EsddVerificationFixtures`, and `AntigravityCoreCoordinator` exported to iOS via SKIE (`async/await` & `AsyncSequence`) and consumed directly on Android.<br>• **iOS Session Adapter & Offline Store (`apps/ios/Packages/AntigravityData/`)**: `@Observable` `AntigravitySessionStore` delegating live connection, sync, step loading, and PC interactions via pure-Swift `AntigravityKmpEnginePort` + per-host sharded `LocalProjectionStore`.<br>• **Universal Rendering & Review (`shared/core-markdown/`, `apps/ios/App/Views/Cascade/`, `apps/android/core-ui/`)**: Streaming Markdown AST, code pills, Mermaid diagrams, `<agent-embed>` previews, Implementation Plan inline comments, line-level Turn Diff review, and Rich Artifact viewer.<br>• **Approvals & OS Coordinators (`apps/ios/App/Services/`, `apps/android/core-platform/`)**: Face ID / `BiometricPrompt` interaction gate, structured Q&A wizard, `LiveActivityCoordinator` / `AndroidLiveUpdateBuilder`, `AgentProgressForegroundService`, `NotificationCoordinator`, and `VoiceInputManager`. |
+| **Layer 3 · Core Layer** | **Cross-Platform Shared Core, Wire Protocol & Platform Ports.** Pure, UI-free protocol and model engine compiled for both iOS and Android. | • **KMP Shared Core (`shared/`)**: `:shared:core-model` (canonical models + resilient forward-compatible enums), `:shared:core-protocol` (Ktor OkHttp/Darwin + SHA-256 TLS pinning, 5B Connect framing, Binary-first Protobuf codec, `SAPISIDHASH` Cloud Relay, `HostCapabilityRegistry`, `ProtocolCompatibilityEngine`, ~26 v2.33 RPCs), `:shared:core-markdown` (AST parser), `:shared:core-domain` (7 StateFlow stores), and `:shared:umbrella` (SKIE-enhanced static `AntigravityShared.xcframework` + JVM/Android).<br>• **Extension-Safe Pure Swift 6 Data Package (`apps/ios/Packages/AntigravityData/`)**: Zero-UIKit / zero-KMP-binary Swift package keeping iOS WidgetKit & Share extensions safely under the 30 MB memory ceiling.<br>• **Platform Ports (`PlatformPorts`)**: `expect`/`actual` & protocol contracts abstracting `SecretStore` (iOS Keychain / Android Keystore + Tink AEAD), `NetworkReachabilityMonitoring` (`NWPathMonitor` / `ConnectivityManager`), `PowerStateProviding`, `KeyValuePreferencesStore`, and Biometrics. |
 
 ### Repository Layout (KMP Monorepo)
 
 ```text
 .
 ├── apps/
-│   ├── ios/                        # Native Swift 6 iOS client
-│   │   ├── App/                    #   13 UE screens, shell, KMP SKIE bridge (Bridge/), pairing, services
+│   ├── ios/                        # Native Swift 6 iOS client (iOS 18+)
+│   │   ├── App/                    #   13 UE screens + v2.33 sheets, shell, KMP SKIE bridge (Bridge/), pairing, services
 │   │   ├── Extensions/             #   WidgetKit Dynamic Island / Live Activity & Share Extension
 │   │   ├── SharedUI/               #   iOS-only Design System tokens, Liquid Glass & Live Activity models
 │   │   └── Packages/
 │   │       └── AntigravityData/    #   Pure Swift 6 store, port protocols & extension-safe RPC package
-│   └── android/                    # Native Android Jetpack Compose client (Phase 3 · consumes shared/)
+│   └── android/                    # Native Kotlin + Jetpack Compose Material 3 client (Android 10–16)
+│       ├── app/                    #   13 UE screens + v2.33 sheets, FGS Live Updates, Glance widget, E2E & Roborazzi tests
+│       ├── core-ui/                #   Material 3 theme (Dark/Light/Material You), SemanticIcon mapper & Markdown components
+│       ├── core-platform/          #   AndroidLiveUpdateBuilder, BiometricPrompt, Tink+Keystore SecretStore & OS adapters
+│       └── README.md               #   Android build, Roborazzi visual QA & KVM Emulator E2E guide
 ├── shared/                         # Kotlin Multiplatform (KMP) shared core for iOS & Android
-│   ├── core-model/                 #   Canonical Cascade, Workspace, Artifact & Interaction models
-│   ├── core-protocol/              #   Ktor (OkHttp/Darwin), TLS Pinning, 5B Connect, Binary Protobuf & Cloud Relay
+│   ├── core-model/                 #   Canonical Cascade, Workspace, Artifact, LiveProgress & resilient-enum models
+│   ├── core-protocol/              #   Ktor (OkHttp/Darwin), TLS Pinning, 5B Connect, Binary Protobuf, Cloud Relay & Compat Engine
 │   ├── core-markdown/              #   Cross-platform streaming Markdown AST parser
-│   ├── core-domain/                #   StateFlow Connection, ConversationSync, CascadeChat & DurableOutbox stores
+│   ├── core-domain/                #   7 StateFlow domain stores, DurableOutbox & shared ESDD verification fixtures
 │   └── umbrella/                   #   SKIE facade exporting AntigravityShared.xcframework & JVM/Android
 ├── tests/
 │   └── ios-ui/                     # Native iOS XCUITest interactive tap & flow suite (AntigravityUITests)
 ├── project.yml                     # Root XcodeGen spec assembling apps/ios/*, tests/ios-ui & AntigravityShared.xcframework
-├── docs/                           # Architecture SVG diagrams & upstream documentation snapshots
-├── scripts/                        # Unified verify CLI, icon renderer & upstream doc-sync automation
-├── specs/                          # Normative ESDD product, protocol & E2E test specifications
-└── verification/                   # 4-gate ESDD verifier, mock LanguageServer & Simulator E2E runner
+├── docs/                           # Platform feature matrix (PLATFORM_STATUS.md), architecture SVGs & upstream snapshots
+├── scripts/                        # Unified verify CLI, Xcode sync, icon renderer & upstream doc-sync automation
+├── specs/                          # Normative iOS & Android (specs/android/) ESDD product, protocol & E2E specifications
+└── verification/                   # 4-gate ESDD verifier, Android Roborazzi visual comparer, compat guardrails & Simulator E2E runner
 ```
 
 ---
 
-## 5. How to Contribute
+## 6. How to Contribute
 
-Contributions of all kinds are welcome — from Android Jetpack Compose screens and KMP core parity to upstream protocol features, bug fixes, accessibility improvements, and documentation!
+Contributions of all kinds are welcome — from Android hardware hooks and real-device field testing to upstream protocol sync, release packaging, localization, and accessibility!
 
 ### Prerequisites
 
 - **iOS Development**: macOS with Xcode 16+ (Swift 6) and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
-- **KMP / Android Shared Core**: JDK 21 and Gradle (`./gradlew` included).
+- **Android Development**: JDK 21 and Android SDK (`compileSdk 36`, `ANDROID_HOME` or `local.properties`) / Android Studio.
+- **KMP Shared Core**: JDK 21 and Gradle (`./gradlew` included).
 - **Protocol & ESDD Verification**: Python 3.10+ (zero external server dependencies for mock RPC tests).
 
-### Building & Opening in Xcode (macOS)
+### Building & Running iOS in Xcode (macOS)
 
 `PocketAntigravity.xcodeproj` and `AntigravityShared.xcframework` are generated locally and excluded from Git. After cloning or running `git pull`, always sync the Xcode project before building:
 
@@ -132,9 +153,29 @@ bash scripts/sync-xcode.sh --swift-only --open
 bash scripts/install-on-iphone.sh
 ```
 
+### Building & Verifying Android (Linux / macOS / Windows)
+
+`settings.gradle.kts` automatically includes `:apps:android:*` whenever an Android SDK is detected (`ANDROID_HOME`, `ANDROID_SDK_ROOT`, or `local.properties`). See [`apps/android/README.md`](apps/android/README.md) for the complete Android developer guide:
+
+```bash
+# Build debug APK, run Android Lint, record 13-screen Roborazzi screenshots & run JVM unit + Compose E2E tests
+./gradlew \
+  :apps:android:app:assembleDebug \
+  :apps:android:app:lintDebug \
+  :apps:android:app:recordRoborazziDebug \
+  :apps:android:app:testDebugUnitTest \
+  --no-daemon
+
+# Run Android Roborazzi + JVM E2E + 1:1 iOS↔Android visual comparison via unified CLI
+./scripts/verify.py --suite android --keep-artifacts
+
+# Run instrumented E2E on a connected Android device or running API 35 Emulator
+./gradlew :apps:android:app:connectedDebugAndroidTest --no-daemon
+```
+
 ### Local Verification CLI (Human & Coding-Agent Friendly)
 
-Use the single stateless [`scripts/verify.py`](scripts/verify.py) CLI from any directory — it auto-detects available toolchains on Linux/macOS, suppresses noisy HTTP logs, keeps `git status` clean, and supports machine-readable `--json` output:
+Use the single stateless [`scripts/verify.py`](scripts/verify.py) CLI from any directory — it auto-detects available toolchains on Linux/macOS (including Android SDK & Xcode), suppresses noisy HTTP logs, keeps `git status` clean, and supports machine-readable `--json` output:
 
 ```bash
 # Fast default gates: Spec-DAG + live mock Connect-RPC + v2.33 + 3-version compat matrix (~7s)
@@ -149,7 +190,7 @@ Use the single stateless [`scripts/verify.py`](scripts/verify.py) CLI from any d
 # Machine-readable JSON report (ideal for coding agents & CI tooling)
 ./scripts/verify.py --json
 
-# Run specific suite(s) only: spec | rpc | v233 | compat | esdd | kmp | swift | bridge | sim
+# Run specific suite(s) only: spec | rpc | v233 | compat | esdd | kmp | swift | android | bridge | sim
 ./scripts/verify.py --suite rpc,compat,kmp
 ./scripts/verify.py --list
 
@@ -163,18 +204,18 @@ swift test --package-path apps/ios/Packages/AntigravityData
 1. **Fork** the repository and create a clean branch off `main` (`feat/<topic>`, `fix/<topic>`, or `docs/<topic>`).
 2. Follow the architectural boundaries and ESDD guidelines documented in [`AGENTS.md`](AGENTS.md) and [`specs/`](specs/).
 3. Ensure zero hardcoded secrets/API keys and verify all local gates pass.
-4. Open a **Pull Request** targeting `main` with a concise summary and verification checklist. GitHub Actions automatically runs impact-scoped verification on PRs (`macos-xcode-verify.yml` skips macOS entirely on pure documentation/Android/KMP-only changes and runs only impacted gates/screens; `kmp-verify.yml` runs when `shared/**` changes; releases always enforce 100% full E2E).
+4. Open a **Pull Request** targeting `main` with a concise summary and verification checklist. GitHub Actions automatically runs impact-scoped verification on PRs (`macos-xcode-verify.yml` skips macOS entirely on pure docs/Android/KMP-only PRs; `android-verify.yml` runs Lint, Roborazzi 13-screen visual compare & KVM Emulator E2E on `apps/android/**` / `shared/**` changes; `kmp-verify.yml` runs when `shared/**` changes; releases always enforce 100% full E2E across all platforms).
 
 ### Great Areas to Help Out
 
-- **Android Native UI**: Building out the native Jetpack Compose screens (`UE01`–`UE13`) and foreground progress notifications on top of `shared/`.
-- **KMP Shared Core Parity**: Expanding `:shared:core-protocol` and domain stores for full iOS + Android feature parity.
-- **Protocol & Upstream Sync**: Supporting newly introduced `LanguageServerService` step types, artifact formats, and interaction gates.
-- **UX, Localization & Testing**: Improving accessibility, localization, and real-device edge-case coverage.
+- **Android On-Device Hardware Hooks**: Wiring CameraX / ML Kit live QR scanning, an in-app Android `WebView` Google Cloud Relay sign-in sheet (`CloudRelayCookieBridge`), and live `SpeechRecognizer` audio capture inside `VoiceModeSheet`.
+- **Real-Device Field Testing & Distribution**: Testing Android 16 promoted Live Updates on physical Pixel devices, tablets/foldables, Wi-Fi ↔ 5G handoffs, and automating signed TestFlight / APK / Play Store releases.
+- **Protocol & Upstream Sync**: Tracking newly introduced upstream Google Antigravity `LanguageServerService` step types, artifact formats, and interaction gates across Swift + KMP + Companion Bridge.
+- **UX, Localization & Accessibility**: Multi-language localization (i18n), screen-reader polish (VoiceOver / TalkBack), and edge-case coverage.
 
 ---
 
-## 6. License & Declarations
+## 7. License & Declarations
 
 ### Open-Source License
 

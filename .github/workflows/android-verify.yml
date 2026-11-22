@@ -64,20 +64,24 @@ jobs:
             --quiet
 
       - name: Set up JDK 21
+        if: github.event_name != 'pull_request' || steps.plan.outputs.android_unit_and_roborazzi == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Setup Gradle
+        if: github.event_name != 'pull_request' || steps.plan.outputs.android_unit_and_roborazzi == 'true'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run Bidirectional Compatibility Guardrails
+        if: github.event_name != 'pull_request' || steps.plan.outputs.android_unit_and_roborazzi == 'true'
         run: |
           set -euo pipefail
           python3 verification/verify_compat_guardrails.py
 
       - name: Assemble Debug APK, Lint, Roborazzi Capture & JVM Unit/Compose E2E Tests
+        if: github.event_name != 'pull_request' || steps.plan.outputs.android_unit_and_roborazzi == 'true'
         run: |
           set -euo pipefail
           chmod +x ./gradlew
@@ -85,10 +89,11 @@ jobs:
             :apps:android:app:assembleDebug \
             :apps:android:app:lintDebug \
             :apps:android:app:recordRoborazziDebug \
-            :apps:android:app:testDebugUnitTest \
+            :apps:android:app:testDebugUnitTest --rerun \
             --no-daemon
 
       - name: Generate iOS vs Android 13-Screen Side-by-Side Visual Comparisons
+        if: github.event_name != 'pull_request' || steps.plan.outputs.android_unit_and_roborazzi == 'true'
         run: |
           set -euo pipefail
           python3 -c "import PIL" 2>/dev/null || python3 -m pip install --break-system-packages --quiet pillow || pip3 install --quiet pillow
@@ -96,7 +101,7 @@ jobs:
           ls -la verification/output/android/ verification/output/android/comparisons/
 
       - name: Upload Android Visual Comparisons Artifact
-        if: always()
+        if: always() && (github.event_name != 'pull_request' || steps.plan.outputs.android_unit_and_roborazzi == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: android-visual-comparisons
