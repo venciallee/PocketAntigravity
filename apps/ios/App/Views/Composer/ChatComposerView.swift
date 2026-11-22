@@ -43,7 +43,7 @@ public struct ChatComposerView: View {
 
     private var activeSlashCommands: [SlashCommandItem] {
         guard !store.isVerificationMode, !store.isSlashPopupDismissedManually else { return [] }
-        return store.filteredSlashCommands(for: draftMessageText)
+        return store.filteredSlashCommands(for: draftMessageText).filter { $0.command != "/btw" }
     }
 
     private var activeQueuedMessages: [QueuedMessageItem] {
@@ -221,74 +221,6 @@ public struct ChatComposerView: View {
                             RoundedRectangle(cornerRadius: 10)
                                 .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                         )
-                    }
-                }
-            }
-
-            // Live-mode Quick Controls Strip (Permission Preset + /btw + Voice Mode + Attach File)
-            if !store.isVerificationMode {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        Menu {
-                            ForEach(AgentPermissionPreset.allCases) { preset in
-                                Button {
-                                    store.setConversationPermissionPreset(preset)
-                                } label: {
-                                    Text(preset.rawValue)
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "shield.lefthalf.filled")
-                                    .font(.system(size: 10.5))
-                                Text(store.effectivePermissionPreset().rawValue)
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            .foregroundStyle(AntigravityTheme.inkSecondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(AntigravityTheme.surfacePill, in: Capsule())
-                        }
-                        .accessibilityIdentifier("composer-permission-preset")
-
-                        Button {
-                            store.openSideQuestion()
-                        } label: {
-                            Label("/btw", systemImage: "questionmark.bubble")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(AntigravityTheme.accentPeriwinkle.opacity(0.12), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("composer-btn-btw")
-
-                        Button {
-                            store.startVoiceMode()
-                        } label: {
-                            Label("Voice", systemImage: "waveform")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(AntigravityTheme.inkLabel)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(AntigravityTheme.surfacePill, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("composer-btn-voice-mode")
-
-                        Button {
-                            isShowingFileImporter = true
-                        } label: {
-                            Label("Attach", systemImage: "paperclip")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(AntigravityTheme.inkLabel)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(AntigravityTheme.surfacePill, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("composer-btn-attach-file")
                     }
                 }
             }
@@ -601,6 +533,12 @@ public struct ChatComposerView: View {
                 onAddLabels: { added in
                     for item in added where !attachedChipLabels.contains(item) {
                         attachedChipLabels.append(item)
+                    }
+                },
+                onPickDeviceFile: {
+                    isShowingAddContextSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        isShowingFileImporter = true
                     }
                 },
                 onDismiss: {

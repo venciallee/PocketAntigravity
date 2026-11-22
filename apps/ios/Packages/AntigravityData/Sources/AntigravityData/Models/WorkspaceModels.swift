@@ -1732,14 +1732,6 @@ public struct SlashCommandItem: Codable, Sendable, Equatable, Identifiable {
             requiresPaidPlan: true
         ),
         SlashCommandItem(
-            command: "/btw",
-            title: "Side Question Tab",
-            summary: "Ask a multi-turn read-only side question without interrupting the main thread",
-            icon: .commandSideQuestion,
-            category: .appAndCLI,
-            availableInRemoteAgent: false
-        ),
-        SlashCommandItem(
             command: "/schedule",
             title: "In-Conversation Schedule",
             summary: "Set a timer or recurring cron check-in inside the active conversation",

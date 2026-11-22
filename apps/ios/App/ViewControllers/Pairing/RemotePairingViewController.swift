@@ -401,6 +401,7 @@ public struct RemotePairingViewController: View {
         .sheet(isPresented: $isShowingGoogleSignIn) {
             CloudRelaySignInSheet(
                 targetRelayURLString: pendingRelayURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : pendingRelayURL,
+                clearExistingSession: store.connectionStatusText.contains("Expired"),
                 onAuthenticated: { cookieHeader, finalURL, detectedAuthUser, detectedRelayApiKey in
                     isShowingGoogleSignIn = false
                     let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(

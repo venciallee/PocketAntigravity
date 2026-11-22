@@ -633,11 +633,6 @@ public struct CascadeChatViewController: View {
                     Label("Conversation Overview", systemImage: "sidebar.right")
                 }
                 Button {
-                    store.openSideQuestion()
-                } label: {
-                    Label("/btw Side Question", systemImage: "questionmark.bubble")
-                }
-                Button {
                     store.startVoiceMode()
                 } label: {
                     Label("Start Voice Mode", systemImage: "waveform")

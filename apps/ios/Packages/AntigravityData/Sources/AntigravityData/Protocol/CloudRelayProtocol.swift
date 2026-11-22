@@ -320,6 +320,100 @@ public enum SAPISIDHashGenerator: Sendable {
         return result
     }
 
+    /// Lightweight platform-independent cookie representation for RFC 6265 domain matching and deduplication.
+    public struct RelayCookieDescriptor: Sendable, Equatable {
+        public let name: String
+        public let value: String
+        public let domain: String
+        public let path: String
+        public let expiresDate: Date?
+
+        public init(
+            name: String,
+            value: String,
+            domain: String,
+            path: String = "/",
+            expiresDate: Date? = nil
+        ) {
+            self.name = name
+            self.value = value
+            self.domain = domain
+            self.path = path
+            self.expiresDate = expiresDate
+        }
+    }
+
+    /// Returns `true` iff a cookie scoped to `cookieDomain` is valid to send to `targetHost` per RFC 6265
+    /// (exact host match or proper parent-domain suffix, strictly excluding unrelated sibling subdomains
+    /// such as `accounts.google.com` or `myaccount.google.com` when sending to `antigravity.google.com`).
+    public static func cookieDomain(_ cookieDomain: String, appliesToHost targetHost: String) -> Bool {
+        let host = targetHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let rawDomain = cookieDomain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cleanDomain = rawDomain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard !host.isEmpty, !cleanDomain.isEmpty else { return false }
+        if host == cleanDomain {
+            return true
+        }
+        return host.hasSuffix(".\(cleanDomain)")
+    }
+
+    /// Builds a deduplicated `Cookie` header strictly scoped to `targetHost` (default `antigravity.google.com`).
+    /// Excludes expired cookies and unrelated sibling subdomains, and deduplicates by cookie `name`
+    /// preferring exact-host cookies over parent-domain cookies and deeper paths over root paths.
+    public static func buildCookieHeader(
+        from cookies: [RelayCookieDescriptor],
+        forHost targetHost: String = "antigravity.google.com",
+        now: Date = Date()
+    ) -> String? {
+        let normalizedHost = targetHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var bestByName: [String: (cookie: RelayCookieDescriptor, isExactHost: Bool, domainLength: Int, pathLength: Int)] = [:]
+
+        for cookie in cookies {
+            let trimmedName = cookie.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedValue = cookie.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty, !trimmedValue.isEmpty else { continue }
+            if let expires = cookie.expiresDate, expires <= now {
+                continue
+            }
+            guard cookieDomain(cookie.domain, appliesToHost: normalizedHost) else {
+                continue
+            }
+            let cleanDomain = cookie.domain.trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            let isExactHost = (cleanDomain == normalizedHost)
+            let candidate = (cookie: cookie, isExactHost: isExactHost, domainLength: cleanDomain.count, pathLength: cookie.path.count)
+
+            if let existing = bestByName[trimmedName] {
+                let candidateWins: Bool
+                if candidate.isExactHost != existing.isExactHost {
+                    candidateWins = candidate.isExactHost
+                } else if candidate.domainLength != existing.domainLength {
+                    candidateWins = candidate.domainLength > existing.domainLength
+                } else if candidate.pathLength != existing.pathLength {
+                    candidateWins = candidate.pathLength > existing.pathLength
+                } else {
+                    let candExp = candidate.cookie.expiresDate?.timeIntervalSince1970 ?? Double.greatestFiniteMagnitude
+                    let existExp = existing.cookie.expiresDate?.timeIntervalSince1970 ?? Double.greatestFiniteMagnitude
+                    candidateWins = candExp > existExp
+                }
+                if candidateWins {
+                    bestByName[trimmedName] = candidate
+                }
+            } else {
+                bestByName[trimmedName] = candidate
+            }
+        }
+
+        guard !bestByName.isEmpty else { return nil }
+        let orderedPairs = bestByName.keys.sorted().compactMap { name -> String? in
+            guard let entry = bestByName[name] else { return nil }
+            return "\(entry.cookie.name)=\(entry.cookie.value)"
+        }
+        let header = orderedPairs.joined(separator: "; ")
+        return hasRequiredGoogleAuthCookies(header) ? header : nil
+    }
+
     /// Returns `true` when the cookie string or token contains valid Google session credentials
     /// (`SAPISID` / `__Secure-1PAPISID` / `__Secure-3PAPISID`, or an OAuth `Bearer` token).
     public static func hasRequiredGoogleAuthCookies(_ rawCookieOrToken: String) -> Bool {

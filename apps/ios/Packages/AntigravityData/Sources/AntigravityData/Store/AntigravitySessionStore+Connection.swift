@@ -460,13 +460,7 @@ extension AntigravitySessionStore {
             return
         }
 
-        var launchHint = loadPairedHostLaunchHint()
-        if launchHint == nil, secretStore is KeychainStore {
-            if let keyChainHint = KeychainStore.peekSavedHostLaunchHintSync() {
-                persistPairedHostLaunchHint(keyChainHint)
-                launchHint = keyChainHint
-            }
-        }
+        let launchHint = loadPairedHostLaunchHint()
 
         if let hint = launchHint {
             if let savedScope = loadPersistedSelectedHostScope() {
@@ -507,6 +501,7 @@ extension AntigravitySessionStore {
             isInitialSessionCheckComplete = true
             return nil
         }
+        persistPairedHostLaunchHint(from: saved)
         await hydratePersistedHostProjectionsIfNeeded(savedCredentials: saved)
         return saved
     }
@@ -899,10 +894,12 @@ extension AntigravitySessionStore {
             let finalAuthUser = handshake.resolvedAuthUser ?? effectiveAuthUser ?? "0"
             let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
             let finalRelayURL = URL(string: "\(originPrefix)/r/\(finalUuid)") ?? url
-            let kmpSavedApiKey: String? = (kmpEngine != nil)
+            let handshakeApiKey = handshake.resolvedRelayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let kmpSavedApiKey: String? = (kmpEngine != nil && (handshakeApiKey?.isEmpty != false))
                 ? await secretStore.loadCredentials()?.relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
                 : nil
-            let finalRelayApiKey = await candidateClient.currentRelayApiKey()
+            let finalRelayApiKey = (handshakeApiKey?.isEmpty == false ? handshakeApiKey : nil)
+                ?? await candidateClient.currentRelayApiKey()
                 ?? effectiveRelayApiKey
                 ?? (kmpSavedApiKey?.isEmpty == false ? kmpSavedApiKey : nil)
 

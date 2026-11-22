@@ -24,6 +24,7 @@ public struct BackendHandshakeResult: Sendable, Equatable {
     public let resolvedHostname: String?
     public let resolvedInstanceUuid: String?
     public let resolvedAuthUser: String?
+    public let resolvedRelayApiKey: String?
     public let availableRelayInstances: [RelayInstanceInfo]
     public let isSelectedHostOnline: Bool
     public let hostCapabilities: HostCapabilityProfile
@@ -37,6 +38,7 @@ public struct BackendHandshakeResult: Sendable, Equatable {
         resolvedHostname: String? = nil,
         resolvedInstanceUuid: String? = nil,
         resolvedAuthUser: String? = nil,
+        resolvedRelayApiKey: String? = nil,
         availableRelayInstances: [RelayInstanceInfo] = [],
         isSelectedHostOnline: Bool = true,
         hostCapabilities: HostCapabilityProfile = HostCapabilityProfile()
@@ -49,6 +51,7 @@ public struct BackendHandshakeResult: Sendable, Equatable {
         self.resolvedHostname = resolvedHostname
         self.resolvedInstanceUuid = resolvedInstanceUuid
         self.resolvedAuthUser = resolvedAuthUser
+        self.resolvedRelayApiKey = resolvedRelayApiKey
         self.availableRelayInstances = availableRelayInstances
         self.isSelectedHostOnline = isSelectedHostOnline
         self.hostCapabilities = hostCapabilities
