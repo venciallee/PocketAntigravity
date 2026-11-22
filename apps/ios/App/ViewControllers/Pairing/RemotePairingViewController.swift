@@ -254,36 +254,11 @@ public struct RemotePairingViewController: View {
                 // First-level Appearance selector (System / Dark / Light), always available even when unpaired/offline
                 appearanceModeCard
 
-                // Antigravity 2.0 (v2.33) Permissions, Customizations Hub & Appearance Card
-                Button {
-                    store.presentedSheet = .customizationsSettings
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                            .frame(width: 38, height: 38)
-                            .background(AntigravityTheme.accentPeriwinkle.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Permissions, Customizations & Layout")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(AntigravityTheme.textPrimary)
-                            Text("\(store.appearancePreferences.appearanceMode.displayLabel) · \(store.appearancePreferences.globalPermissionPreset.rawValue) · \(store.customizations.plugins.filter(\.isInstalled).count) plugins · \(store.appearancePreferences.interfaceLayout.rawValue)")
-                                .font(.system(size: 12.5))
-                                .foregroundStyle(AntigravityTheme.textSecondary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(AntigravityTheme.textMuted)
-                    }
-                    .padding(14)
-                    .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("btn-open-customizations-settings")
+                // First-level Default Permissions selector (Request Review / Default / Auto / Turbo)
+                defaultPermissionsCard
+
+                // First-level Local Notifications preferences
+                notificationsCard
 
                 // Multi-instance switcher (shown only when >1 Desktop instance is paired on the signed-in Google account)
                 if store.availableRelayInstances.count > 1 {
@@ -596,6 +571,161 @@ public struct RemotePairingViewController: View {
         case .dark:   return "appearance-mode-dark"
         case .light:  return "appearance-mode-light"
         }
+    }
+
+    private var defaultPermissionsCard: some View {
+        let selected = store.localPermissionPreset
+        let badgeAccent: Color = (selected == .turbo) ? AntigravityTheme.statusWaiting : AntigravityTheme.accentPeriwinkle
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        AntigravityTheme.accentPeriwinkle.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Permissions")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                    Text("Default policy for commands & tools")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textSecondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(selected.displayTitle)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(badgeAccent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(selected == .turbo ? AntigravityTheme.surfaceAmberTint : AntigravityTheme.surfaceSelectionTint)
+                    )
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(badgeAccent.opacity(0.28), lineWidth: 1)
+                    )
+            }
+
+            PermissionsPresetListCard(
+                store: store,
+                isRemoteOverride: false,
+                accessibilityIdPrefix: "settings-permission",
+                footerTextOverride: "Applies to new turns on your paired Mac/PC. Fine-grained rules are managed in Antigravity Desktop."
+            )
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AntigravityTheme.surfaceCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("card-default-permissions")
+    }
+
+    private var notificationsCard: some View {
+        let alertsEnabled = store.appearancePreferences.notificationsEnabled
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: alertsEnabled ? "bell.badge.fill" : "bell.slash.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(alertsEnabled ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkMuted)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        (alertsEnabled ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkMuted).opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notifications")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                    Text("Local alerts while agents run in background")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textSecondary)
+                }
+
+                Spacer(minLength: 8)
+            }
+
+            VStack(spacing: 0) {
+                Toggle(isOn: $store.appearancePreferences.notificationsEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Approval & Completion Alerts")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.textPrimary)
+                        Text("Notify on waiting approval, run complete, or error")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(AntigravityTheme.accentPeriwinkle)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .accessibilityIdentifier("toggle-notifications-enabled")
+                .onChange(of: store.appearancePreferences.notificationsEnabled) { _, _ in
+                    store.saveAppearancePreferences()
+                    NotificationCoordinator.shared.requestAuthorizationIfNeeded(preferences: store.appearancePreferences)
+                }
+
+                Divider()
+                    .overlay(AntigravityTheme.subtleDivider)
+                    .padding(.leading, 12)
+
+                Toggle(isOn: $store.appearancePreferences.suppressManualStopNotification) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Quiet on Manual Stop")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.textPrimary)
+                        Text("Skip alert when you stop a run yourself")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(AntigravityTheme.accentPeriwinkle)
+                .disabled(!alertsEnabled)
+                .opacity(alertsEnabled ? 1.0 : 0.45)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .accessibilityIdentifier("toggle-notifications-suppress-manual-stop")
+                .onChange(of: store.appearancePreferences.suppressManualStopNotification) { _, _ in
+                    store.saveAppearancePreferences()
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AntigravityTheme.surfaceSubtleBox)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
+            )
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AntigravityTheme.surfaceCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("card-notifications-preferences")
     }
 
     private var appVersionLabel: String {

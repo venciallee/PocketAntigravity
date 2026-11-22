@@ -5,18 +5,31 @@ import AntigravityData
 /// Mirrors Antigravity Desktop's `Remote Permissions` / `Permissions` selector in Matte Obsidian + Liquid Glass.
 public struct PermissionsPresetListCard: View {
     @Bindable public var store: AntigravitySessionStore
+    public var isRemoteOverride: Bool?
+    public var accessibilityIdPrefix: String
+    public var footerTextOverride: String?
     public var onSelectPreset: ((AgentPermissionPreset) -> Void)?
 
     public init(
         store: AntigravitySessionStore,
+        isRemoteOverride: Bool? = nil,
+        accessibilityIdPrefix: String = "permission-row",
+        footerTextOverride: String? = nil,
         onSelectPreset: ((AgentPermissionPreset) -> Void)? = nil
     ) {
         self.store = store
+        self.isRemoteOverride = isRemoteOverride
+        self.accessibilityIdPrefix = accessibilityIdPrefix
+        self.footerTextOverride = footerTextOverride
         self.onSelectPreset = onSelectPreset
     }
 
     private var isRemote: Bool {
-        store.isActiveSessionCloud
+        isRemoteOverride ?? store.isActiveSessionCloud
+    }
+
+    private var selectedPreset: AgentPermissionPreset {
+        isRemote ? store.remotePermissionPreset : store.localPermissionPreset
     }
 
     private var presets: [AgentPermissionPreset] {
@@ -46,13 +59,16 @@ public struct PermissionsPresetListCard: View {
                     .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
             )
 
-            HStack(spacing: 5) {
+            HStack(alignment: .top, spacing: 5) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 11.5, weight: .medium))
+                    .padding(.top, 1.5)
                 Text(
-                    isRemote
-                        ? "Remote sessions default to Turbo inside an isolated Cloud VM."
-                        : "Controls terminal commands and tool approvals on the next turn."
+                    footerTextOverride ?? (
+                        isRemote
+                            ? "Remote sessions default to Turbo inside an isolated Cloud VM."
+                            : "Controls terminal commands and tool approvals on the next turn."
+                    )
                 )
                 .font(.system(size: 12))
                 .fixedSize(horizontal: false, vertical: true)
@@ -64,13 +80,13 @@ public struct PermissionsPresetListCard: View {
     }
 
     private func presetRow(_ preset: AgentPermissionPreset) -> some View {
-        let isSelected = store.activePermissionPreset == preset
+        let isSelected = (selectedPreset == preset)
         let isDefault = preset == defaultPreset
         let accentColor: Color = (preset == .turbo) ? AntigravityTheme.statusWaiting : AntigravityTheme.accentPeriwinkle
 
         return Button {
             withAnimation(.snappy(duration: 0.2)) {
-                store.setActivePermissionPreset(preset)
+                store.setActivePermissionPreset(preset, isRemoteOverride: isRemote)
             }
             onSelectPreset?(preset)
         } label: {
@@ -130,7 +146,9 @@ public struct PermissionsPresetListCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("permission-row-\(preset.rawValue)")
+        .accessibilityIdentifier("\(accessibilityIdPrefix)-\(preset.rawValue)")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .accessibilityValue(isSelected ? "selected" : "unselected")
     }
 }
 

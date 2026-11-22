@@ -178,8 +178,11 @@ public final class AntigravitySessionStore {
             }
         } else {
             localPermissionPreset = preset
+            appearancePreferences.globalPermissionPreset = preset
+            appearancePreferences.terminalSandboxEnabled = preset.usesTerminalSandbox
             if !isVerificationMode {
                 preferencesStore.set(preset.rawValue, forKey: Self.localPermissionDefaultsKey)
+                saveAppearancePreferences()
             }
         }
     }
@@ -623,10 +626,13 @@ public final class AntigravitySessionStore {
         store.availableGitHubRepos = []
         store.composerAttachments = []
         store.composerDraftText = ""
+        store.permissionRules = []
         store.connectionStatusText = "Not Connected"
         if let rawLocal = store.preferencesStore.string(forKey: Self.localPermissionDefaultsKey),
            let savedLocal = AgentPermissionPreset(rawValue: rawLocal) {
             store.localPermissionPreset = savedLocal
+            store.appearancePreferences.globalPermissionPreset = savedLocal
+            store.appearancePreferences.terminalSandboxEnabled = savedLocal.usesTerminalSandbox
         }
         if let rawRemote = store.preferencesStore.string(forKey: Self.remotePermissionDefaultsKey),
            let savedRemote = AgentPermissionPreset(rawValue: rawRemote) {

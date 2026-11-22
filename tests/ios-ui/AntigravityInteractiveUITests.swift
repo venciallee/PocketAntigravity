@@ -951,8 +951,8 @@ final class AntigravityInteractiveUITests: XCTestCase {
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
     }
 
-    /// Domain: Appearance Mode (`System` / `Dark` / `Light`) switching across 1st-level Settings,
-    /// 2nd-level `CustomizationsSettingsView` sheet, Agents Home (`UE01`), and Cascade Chat (`UE07`).
+    /// Domain: Flattened 1st-level Settings (Appearance `System`/`Dark`/`Light`, Default Permissions 4 presets,
+    /// Local Notifications toggles), lightweight Chat Permissions sheet sync, Agents Home (`UE01`), and Cascade Chat (`UE07`).
     func testAppearanceModeSwitchingLightAndDarkInSettingsAndChat() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
@@ -965,7 +965,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Agents Home must load live Desktop sessions before opening Settings"
         )
 
-        // 1. Open Settings tab and verify 1st-level Appearance Mode controls exist
+        // 1. Open Settings tab and verify 1st-level Appearance Mode controls exist (and bloated 2nd-level Customizations button is gone)
         let settingsTab = app.buttons["tab-item-settings"]
         XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
         settingsTab.tap()
@@ -975,6 +975,10 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertTrue(
             appearanceCard.waitForExistence(timeout: 6),
             "1st-level Settings must render card-appearance-mode"
+        )
+        XCTAssertFalse(
+            app.buttons["btn-open-customizations-settings"].exists,
+            "Bloated 2nd-level Customizations entry button must be removed from 1st-level Settings"
         )
 
         let systemButton = app.buttons["appearance-mode-system"]
@@ -994,60 +998,43 @@ final class AntigravityInteractiveUITests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         attachScreenshot(named: "06a_Settings_Light_Mode")
 
-        // 3. Open 2nd-level CustomizationsSettingsView sheet and verify Light Mode synced
-        let customizationsButton = app.buttons["btn-open-customizations-settings"]
-        scrollUntilHittable(customizationsButton, in: app, avoidBottomInset: 110)
+        // 3. Verify flattened 1st-level Default Permissions (4 presets) and select Auto
+        let permissionsAutoButton = app.buttons["settings-permission-auto"]
+        scrollUntilHittable(permissionsAutoButton, in: app, maxSwipes: 6, avoidBottomInset: 110)
         XCTAssertTrue(
-            customizationsButton.waitForExistence(timeout: 5),
-            "Settings must render btn-open-customizations-settings"
+            permissionsAutoButton.waitForExistence(timeout: 5),
+            "1st-level Settings must render flattened settings-permission-auto row"
         )
-        customizationsButton.tap()
-
-        let doneButton = app.buttons["Done"].firstMatch
+        permissionsAutoButton.tap()
         XCTAssertTrue(
-            doneButton.waitForExistence(timeout: 6),
-            "2nd-level CustomizationsSettingsView sheet must present with a Done toolbar button"
+            waitForAppearanceOptionSelected(permissionsAutoButton, timeout: 4),
+            "Tapping settings-permission-auto must select Auto in 1st-level Settings"
         )
 
-        let sheetLightButton = app.buttons["appearance-mode-sheet-light"]
-        scrollUntilHittable(sheetLightButton, in: app, maxSwipes: 8, avoidBottomInset: 40, allowReverseSwipe: false)
+        // 4. Verify flattened 1st-level Notifications card renders both real switches
+        let notificationsToggle = app.descendants(matching: .any)["toggle-notifications-enabled"].firstMatch
+        scrollUntilHittable(notificationsToggle, in: app, maxSwipes: 6, avoidBottomInset: 110)
         XCTAssertTrue(
-            sheetLightButton.waitForExistence(timeout: 5),
-            "2nd-level CustomizationsSettingsView must render appearance-mode-sheet-light"
+            notificationsToggle.waitForExistence(timeout: 5),
+            "1st-level Settings must render toggle-notifications-enabled"
         )
         XCTAssertTrue(
-            waitForAppearanceOptionSelected(sheetLightButton, timeout: 4),
-            "Light Mode selected in 1st-level Settings must be reflected in CustomizationsSettingsView"
+            app.descendants(matching: .any)["toggle-notifications-suppress-manual-stop"].firstMatch.waitForExistence(timeout: 4),
+            "1st-level Settings must render toggle-notifications-suppress-manual-stop"
         )
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
-        attachScreenshot(named: "06b_Customizations_Light_Mode")
+        attachScreenshot(named: "06b_Settings_Permissions_And_Notifications")
 
-        // 4. Switch to Dark Mode inside 2nd-level sheet, dismiss via Done, and verify 1st-level sync
-        let sheetDarkButton = app.buttons["appearance-mode-sheet-dark"]
-        XCTAssertTrue(sheetDarkButton.waitForExistence(timeout: 5), "appearance-mode-sheet-dark must exist")
-        scrollUntilHittable(sheetDarkButton, in: app, maxSwipes: 4, avoidBottomInset: 40, allowReverseSwipe: false)
-        sheetDarkButton.tap()
+        // 5. Switch to Dark Mode and back to Light Mode in 1st-level Settings
+        scrollUntilHittable(darkButton, in: app, maxSwipes: 6, avoidBottomInset: 110)
+        darkButton.tap()
         XCTAssertTrue(
-            waitForAppearanceOptionSelected(sheetDarkButton, timeout: 4),
-            "Tapping appearance-mode-sheet-dark must select Dark Mode inside sheet"
-        )
-
-        let navDoneButton = app.navigationBars.buttons["Done"].firstMatch
-        if navDoneButton.exists && navDoneButton.isHittable {
-            navDoneButton.tap()
-        } else {
-            doneButton.tap()
-        }
-
-        scrollUntilHittable(darkButton, in: app, avoidBottomInset: 110)
-        XCTAssertTrue(
-            waitForAppearanceOptionSelected(darkButton, timeout: 5),
-            "Dismissing CustomizationsSettingsView after selecting Dark must sync 1st-level appearance-mode-dark"
+            waitForAppearanceOptionSelected(darkButton, timeout: 4),
+            "Tapping appearance-mode-dark must select Dark Mode in 1st-level Settings"
         )
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         attachScreenshot(named: "06c_Settings_Dark_Mode")
 
-        // 5. Switch to Light Mode and verify Agents Home + Cascade Chat rendering in Light Mode
         scrollUntilHittable(lightButton, in: app, avoidBottomInset: 110)
         lightButton.tap()
         XCTAssertTrue(
@@ -1055,6 +1042,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Tapping appearance-mode-light must switch back to Light Mode"
         )
 
+        // 6. Verify Agents Home + Cascade Chat rendering in Light Mode and Permissions sync
         let agentsTab = app.buttons["tab-item-agents"]
         XCTAssertTrue(agentsTab.waitForExistence(timeout: 5))
         agentsTab.tap()
@@ -1079,13 +1067,48 @@ final class AntigravityInteractiveUITests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         attachScreenshot(named: "06e_CascadeChat_Light_Mode")
 
-        // 6. Navigate back to Agents Home -> Settings and restore System appearance mode
+        // 7. Open lightweight Permissions sheet from Chat overflow menu and verify Auto synced from 1st-level Settings
+        let chatMoreButton = app.buttons["btn-chat-more"]
+        XCTAssertTrue(chatMoreButton.waitForExistence(timeout: 5), "Cascade Chat must render btn-chat-more")
+        chatMoreButton.tap()
+
+        let chatPermissionsMenuItem = app.buttons["Permissions"].firstMatch
+        XCTAssertTrue(
+            chatPermissionsMenuItem.waitForExistence(timeout: 5),
+            "Chat overflow menu must offer lightweight Permissions item"
+        )
+        chatPermissionsMenuItem.tap()
+
+        let chatAutoRow = app.buttons["permission-row-auto"]
+        XCTAssertTrue(
+            chatAutoRow.waitForExistence(timeout: 5),
+            "Lightweight PermissionsSheetView must render permission-row-auto"
+        )
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(chatAutoRow, timeout: 4),
+            "Selecting Auto in 1st-level Settings must sync directly to Chat PermissionsSheetView"
+        )
+        let permissionsDoneButton = app.buttons["btn-permissions-done"]
+        XCTAssertTrue(permissionsDoneButton.waitForExistence(timeout: 5))
+        permissionsDoneButton.tap()
+
+        // 8. Navigate back to Agents Home -> Settings and restore Default permission & System appearance mode
         backToSessionsButton.tap()
         XCTAssertTrue(reviewRow.waitForExistence(timeout: 6))
 
         XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
         settingsTab.tap()
-        scrollUntilHittable(systemButton, in: app, avoidBottomInset: 110)
+
+        let permissionsDefaultButton = app.buttons["settings-permission-default"]
+        scrollUntilHittable(permissionsDefaultButton, in: app, maxSwipes: 6, avoidBottomInset: 110)
+        XCTAssertTrue(permissionsDefaultButton.waitForExistence(timeout: 5))
+        permissionsDefaultButton.tap()
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(permissionsDefaultButton, timeout: 4),
+            "Restoring Default permission must mark settings-permission-default as selected"
+        )
+
+        scrollUntilHittable(systemButton, in: app, maxSwipes: 6, avoidBottomInset: 110)
         XCTAssertTrue(systemButton.waitForExistence(timeout: 5))
         systemButton.tap()
         XCTAssertTrue(
