@@ -32,6 +32,7 @@ ALL_XCUITESTS: list[str] = [
     "testAutomationsCreateWithPromptDraftFlow",
     "testComposeFABStartCascadeAndStreamedReply",
     "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat",
+    "testDisplayOptionsPopoverDismissAndStoreSync",
 ]
 
 ALL_UE_STATES: list[str] = [
@@ -432,6 +433,7 @@ def classify_file(path: str) -> dict[str, Any]:
             res["xcuitests"] = [
                 "testOfflineHostRecoveryAndSettingsAttribution",
                 "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat",
+                "testDisplayOptionsPopoverDismissAndStoreSync",
             ]
             res["simulator_screens"] = ["UE11_PLAN_REVIEW", "UE12_TURN_DIFF_REVIEW"]
             res["esdd_stages"] = [1, 3, 4]
@@ -471,6 +473,7 @@ def classify_file(path: str) -> dict[str, Any]:
     if norm == "apps/ios/App/ViewControllers/Home/DisplayOptionsSheetView.swift":
         res = _empty_impact("ui-display-options", "Display Options sheet (UE02) changed")
         res["gate3_ios_build"] = True
+        res["xcuitests"] = ["testDisplayOptionsPopoverDismissAndStoreSync"]
         res["simulator_screens"] = ["UE02_DISPLAY_OPTIONS"]
         res["esdd_stages"] = [1, 3, 4]
         res["esdd_tcs"] = ["TC-02"]
@@ -1376,8 +1379,18 @@ def run_self_tests() -> None:
     )
     assert p16b["mode"] == "scoped"
     assert "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat" in p16b["xcuitests"]
+    assert "testDisplayOptionsPopoverDismissAndStoreSync" in p16b["xcuitests"]
 
-    print("✓ e2e_impact_planner self-test PASSED (16/16 scenarios + Android scoping + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
+    # 17. Display Options sheet (UE02) -> scoped Display Options XCUITest + UE02 screen
+    p17 = build_verification_plan(
+        changed_files=["apps/ios/App/ViewControllers/Home/DisplayOptionsSheetView.swift"]
+    )
+    assert p17["mode"] == "scoped" and not p17["isRelease"]
+    assert p17["gates"]["iosSimulatorMode"] == "scoped"
+    assert p17["xcuitests"] == ["testDisplayOptionsPopoverDismissAndStoreSync"]
+    assert p17["simulatorScreens"] == ["UE02_DISPLAY_OPTIONS"]
+
+    print("✓ e2e_impact_planner self-test PASSED (17/17 scenarios + Android scoping + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
 
 
 def main() -> int:

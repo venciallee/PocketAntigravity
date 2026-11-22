@@ -146,6 +146,88 @@ final class AntigravityProtocolTests: XCTestCase {
     }
 
     @MainActor
+    func testDisplayOptionsDefaultPopoverStateAndPersistence() async {
+        // Live store & non-UE02 verification scenes must default the Sort popover to closed
+        let freshDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ag-display-opts-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: freshDir) }
+
+        let placeholderHost = RemoteHostInstance(
+            instanceId: "test-display-options-host",
+            hostname: "MacBook Pro",
+            channel: .directHost,
+            endpointURL: URL(string: "https://127.0.0.1:42100")!,
+            isOnline: true
+        )
+        let projection = LocalProjectionStore(storageDirectory: freshDir)
+        let liveStore = AntigravitySessionStore(
+            hosts: [placeholderHost],
+            activeHost: placeholderHost,
+            projectionStore: projection,
+            createInitialRPCClient: false
+        )
+        XCTAssertFalse(liveStore.isSortPopoverPresented)
+
+        let verifyStore = AntigravitySessionStore.makeESDDVerificationStore()
+        XCTAssertFalse(verifyStore.isSortPopoverPresented)
+        verifyStore.configureForVerifyScene(.displayOptions)
+        XCTAssertTrue(verifyStore.isSortPopoverPresented)
+        verifyStore.configureForVerifyScene(.agentsHome)
+        XCTAssertFalse(verifyStore.isSortPopoverPresented)
+
+        // Updating Display Options on a live store persists asynchronously to LocalProjectionStore
+        liveStore.updateDisplayOptions { opts in
+            opts.groupBy = .host
+            opts.sortBy = .title
+            opts.newestFirst = false
+            opts.sortProjectsOrder = "Alphabetical"
+            opts.filterScopeLabel = "Active only"
+            opts.densityLabel = "Compact · Titles only"
+            opts.autoPinOnMessage = true
+            opts.archivedOnly = true
+        }
+        XCTAssertEqual(liveStore.displayOptions.groupBy, .host)
+        XCTAssertEqual(liveStore.displayOptions.sortBy, .title)
+        XCTAssertFalse(liveStore.displayOptions.newestFirst)
+        XCTAssertTrue(liveStore.displayOptions.autoPinOnMessage)
+        XCTAssertTrue(liveStore.displayOptions.archivedOnly)
+
+        // Wait briefly for the detached save task to flush to disk
+        var saved: AgentDisplayOptions?
+        for _ in 0..<40 {
+            if let loaded = await projection.loadDisplayOptions(), loaded.sortBy == .title {
+                saved = loaded
+                break
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertEqual(saved, liveStore.displayOptions)
+
+        // Hydrating a brand-new store restores persisted Display Options
+        let hydratedStore = AntigravitySessionStore(
+            hosts: [placeholderHost],
+            activeHost: placeholderHost,
+            projectionStore: projection,
+            createInitialRPCClient: false
+        )
+        await hydratedStore.loadPersistedV233Preferences()
+        XCTAssertEqual(hydratedStore.displayOptions, liveStore.displayOptions)
+
+        // Reset restores defaults and persists back to disk
+        hydratedStore.resetDisplayOptions()
+        XCTAssertEqual(hydratedStore.displayOptions, AgentDisplayOptions())
+        var resetSaved: AgentDisplayOptions?
+        for _ in 0..<40 {
+            if let loaded = await projection.loadDisplayOptions(), loaded == AgentDisplayOptions() {
+                resetSaved = loaded
+                break
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertEqual(resetSaved, AgentDisplayOptions())
+    }
+
+    @MainActor
     func testCreateProjectScopedConversationAndAutomations() {
         let store = AntigravitySessionStore.makeESDDVerificationStore()
 

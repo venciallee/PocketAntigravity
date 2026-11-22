@@ -1094,6 +1094,115 @@ final class AntigravityInteractiveUITests: XCTestCase {
         )
     }
 
+    /// Domain: Display Options (`UE02`) — Sort popover closed by default, dismissed on outside tap & option selection, and bound to live store state.
+    func testDisplayOptionsPopoverDismissAndStoreSync() throws {
+        let server = try EmbeddedDesktopMockServer()
+        defer { server.stop() }
+
+        let app = launchLiveApp(serverPort: server.port)
+        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 12),
+            "Live Agents Home must finish loading before opening Display Options"
+        )
+
+        // 1. Open Display Options sheet from Agents Home -> Sort popover MUST start closed
+        let displayOptionsButton = app.buttons["btn-display-options"]
+        XCTAssertTrue(displayOptionsButton.waitForExistence(timeout: 5))
+        displayOptionsButton.tap()
+
+        let sortRow = app.buttons["row-sort-conversations"]
+        XCTAssertTrue(
+            sortRow.waitForExistence(timeout: 6),
+            "Display Options sheet must present row-sort-conversations"
+        )
+        let sortMenu = app.descendants(matching: .any)["sort-popover-menu"].firstMatch
+        XCTAssertFalse(
+            sortMenu.exists,
+            "Sort Conversations popover MUST NOT open by default when user opens Display Options"
+        )
+
+        // 2. Tap Sort Conversations row -> popover opens
+        sortRow.tap()
+        XCTAssertTrue(
+            sortMenu.waitForExistence(timeout: 4),
+            "Tapping Sort Conversations row must open sort-popover-menu"
+        )
+
+        // 3. Tap outside the popover on the sheet -> popover MUST dismiss while sheet stays open
+        let dismissScrim = app.descendants(matching: .any)["sort-popover-dismiss-scrim"].firstMatch
+        XCTAssertTrue(
+            dismissScrim.waitForExistence(timeout: 3),
+            "Open sort popover must present transparent outside-tap dismiss scrim"
+        )
+        dismissScrim.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.88)).tap()
+        let dismissedAfterOutsideTap = waitUntilElementDisappears(sortMenu, timeout: 4)
+        XCTAssertTrue(
+            dismissedAfterOutsideTap,
+            "Tapping outside sort-popover-menu must dismiss the popover"
+        )
+        XCTAssertTrue(
+            sortRow.exists,
+            "Dismissing sort-popover-menu via outside tap must keep Display Options sheet open"
+        )
+
+        // 4. Re-open Sort Conversations -> select 'Title' -> popover dismisses & row updates to Title
+        sortRow.tap()
+        XCTAssertTrue(sortMenu.waitForExistence(timeout: 4))
+        let titleOption = app.buttons["sort-opt-title"]
+        XCTAssertTrue(titleOption.waitForExistence(timeout: 4))
+        titleOption.tap()
+        XCTAssertTrue(
+            waitUntilElementDisappears(sortMenu, timeout: 4),
+            "Selecting a sort option must automatically dismiss sort-popover-menu"
+        )
+        XCTAssertTrue(
+            waitForTextContaining("Title", in: app, timeout: 4),
+            "Selecting Title must update Sort Conversations value from store.displayOptions"
+        )
+
+        // 5. Verify Mark All as Read uses live unread count (not hardcoded 3 unread) and drops to 0 unread
+        let markAllReadButton = app.buttons["btn-mark-all-read"]
+        XCTAssertTrue(markAllReadButton.waitForExistence(timeout: 4))
+        XCTAssertFalse(
+            markAllReadButton.label.contains("3 unread"),
+            "Live Display Options must bind to real store.unreadCount instead of hardcoded 3 unread"
+        )
+        markAllReadButton.tap()
+        XCTAssertTrue(
+            waitForTextContaining("0 unread", in: app, timeout: 4),
+            "Tapping Mark All as Read must drop live unread count to 0 unread"
+        )
+
+        // 6. Reset restores default 'Last Updated', and Done dismisses the sheet
+        let resetButton = app.buttons["sheet-reset-btn"]
+        XCTAssertTrue(resetButton.waitForExistence(timeout: 4))
+        resetButton.tap()
+        XCTAssertTrue(
+            waitForTextContaining("Last Updated", in: app, timeout: 4),
+            "Tapping Reset must restore default sort field 'Last Updated'"
+        )
+
+        let doneButton = app.buttons["sheet-done-btn"]
+        XCTAssertTrue(doneButton.waitForExistence(timeout: 4))
+        doneButton.tap()
+        XCTAssertTrue(
+            waitUntilElementDisappears(sortRow, timeout: 5),
+            "Tapping Done must dismiss Display Options sheet back to Agents Home"
+        )
+    }
+
+    private func waitUntilElementDisappears(_ element: XCUIElement, timeout: TimeInterval = 4) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !element.exists {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return !element.exists
+    }
+
     private func isAppearanceOptionSelected(_ element: XCUIElement) -> Bool {
         if element.isSelected {
             return true

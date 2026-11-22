@@ -87,7 +87,7 @@ public final class AntigravitySessionStore {
     // MARK: - Agents Home, Display Options & Search State (`UE01`, `UE02`, `UE03`)
     public var quickFilter: AgentsQuickFilter = .all
     public var displayOptions: AgentDisplayOptions = AgentDisplayOptions()
-    public var isSortPopoverPresented: Bool = true
+    public var isSortPopoverPresented: Bool = false
     public var searchQuery: String = ""
     public var selectedFilterCategory: SessionFilterCategory = .all
     public var selectedWorktreeFilter: String? = nil
@@ -144,6 +144,7 @@ public final class AntigravitySessionStore {
     internal static let remotePermissionDefaultsKey = "antigravity.ios.permissionPreset.remote"
     public static let appearanceModeDefaultsKey = "antigravity.ios.appearanceMode"
     internal var hasModifiedAppearanceModeInSession: Bool = false
+    internal var hasModifiedDisplayOptionsInSession: Bool = false
 
     /// `true` when the active conversation or selected project targets Antigravity Cloud / Remote Agents.
     public var isActiveSessionCloud: Bool {

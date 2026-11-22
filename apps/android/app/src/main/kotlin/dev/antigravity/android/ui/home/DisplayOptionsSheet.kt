@@ -60,9 +60,13 @@ fun DisplayOptionsOverlayScreen(
     coordinator: AntigravityCoreCoordinator,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    initialSortMenuExpanded: Boolean = false,
 ) {
     val colors = MaterialTheme.antigravityColors
     val scrimColor = if (colors.isDark) Color.Black.copy(alpha = 0.58f) else Color.Black.copy(alpha = 0.36f)
+    var sortMenuExpanded by remember(initialSortMenuExpanded) {
+        mutableStateOf(initialSortMenuExpanded)
+    }
 
     Box(
         modifier = modifier
@@ -80,12 +84,19 @@ fun DisplayOptionsOverlayScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Material 3 scrim
+        // Material 3 scrim: dismisses open sort menu first, otherwise dismisses the sheet
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(scrimColor)
-                .clickable(onClick = onDismiss),
+                .testTag("display-options-scrim")
+                .clickable {
+                    if (sortMenuExpanded) {
+                        sortMenuExpanded = false
+                    } else {
+                        onDismiss()
+                    }
+                },
         )
 
         // Docked Material 3 Bottom Sheet surface
@@ -105,6 +116,9 @@ fun DisplayOptionsOverlayScreen(
             DisplayOptionsSheetContent(
                 coordinator = coordinator,
                 onDismiss = onDismiss,
+                initialSortMenuExpanded = initialSortMenuExpanded,
+                sortMenuExpanded = sortMenuExpanded,
+                onSortMenuExpandedChange = { sortMenuExpanded = it },
             )
         }
     }
@@ -119,6 +133,9 @@ fun DisplayOptionsSheetContent(
     coordinator: AntigravityCoreCoordinator,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    initialSortMenuExpanded: Boolean = false,
+    sortMenuExpanded: Boolean? = null,
+    onSortMenuExpandedChange: ((Boolean) -> Unit)? = null,
 ) {
     val colors = MaterialTheme.antigravityColors
     val workspaceState by coordinator.workspaceStore.state.collectAsStateWithLifecycle()
@@ -128,7 +145,14 @@ fun DisplayOptionsSheetContent(
     val unreadCount = remember(syncState.summaries) {
         syncState.summaries.count { it.isUnread }
     }
-    var sortMenuExpanded by remember { mutableStateOf(true) }
+    var localSortMenuExpanded by remember(initialSortMenuExpanded) {
+        mutableStateOf(initialSortMenuExpanded)
+    }
+    val isSortMenuExpanded = sortMenuExpanded ?: localSortMenuExpanded
+    fun setSortMenuExpanded(expanded: Boolean) {
+        localSortMenuExpanded = expanded
+        onSortMenuExpandedChange?.invoke(expanded)
+    }
 
     Column(
         modifier = modifier
@@ -154,7 +178,10 @@ fun DisplayOptionsSheetContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(
-                onClick = { coordinator.workspaceStore.resetDisplayOptions() },
+                onClick = {
+                    setSortMenuExpanded(false)
+                    coordinator.workspaceStore.resetDisplayOptions()
+                },
                 modifier = Modifier
                     .defaultMinSize(minWidth = 64.dp, minHeight = AntigravityDesignTokens.MinTouchTarget)
                     .testTag("sheet-reset-btn"),
@@ -184,7 +211,10 @@ fun DisplayOptionsSheetContent(
             Spacer(modifier = Modifier.weight(1f))
 
             TextButton(
-                onClick = onDismiss,
+                onClick = {
+                    setSortMenuExpanded(false)
+                    onDismiss()
+                },
                 modifier = Modifier
                     .defaultMinSize(minWidth = 64.dp, minHeight = AntigravityDesignTokens.MinTouchTarget)
                     .testTag("sheet-done-btn"),
@@ -220,6 +250,7 @@ fun DisplayOptionsSheetContent(
                         showSelectorArrows = true,
                         modifier = Modifier.testTag("row-group-by"),
                         onClick = {
+                            setSortMenuExpanded(false)
                             val entries = DisplayGroupBy.entries
                             val next = entries[(entries.indexOf(options.groupBy) + 1) % entries.size]
                             coordinator.workspaceStore.updateDisplayOptions { it.copy(groupBy = next) }
@@ -232,12 +263,12 @@ fun DisplayOptionsSheetContent(
                         label = "Sort Conversations",
                         value = options.sortBy.displayTitle,
                         showSelectorArrows = true,
-                        highlighted = sortMenuExpanded,
+                        highlighted = isSortMenuExpanded,
                         modifier = Modifier.testTag("row-sort-conversations"),
-                        onClick = { sortMenuExpanded = !sortMenuExpanded },
+                        onClick = { setSortMenuExpanded(!isSortMenuExpanded) },
                     )
 
-                    if (sortMenuExpanded) {
+                    if (isSortMenuExpanded) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -248,9 +279,11 @@ fun DisplayOptionsSheetContent(
                                 newestFirst = options.newestFirst,
                                 onSelectField = { field ->
                                     coordinator.workspaceStore.updateDisplayOptions { it.copy(sortBy = field) }
+                                    setSortMenuExpanded(false)
                                 },
                                 onSelectNewestFirst = { newest ->
                                     coordinator.workspaceStore.updateDisplayOptions { it.copy(newestFirst = newest) }
+                                    setSortMenuExpanded(false)
                                 },
                             )
                         }
@@ -263,6 +296,7 @@ fun DisplayOptionsSheetContent(
                         value = options.sortProjectsOrder,
                         showSelectorArrows = true,
                         onClick = {
+                            setSortMenuExpanded(false)
                             val nextOrder = if (options.sortProjectsOrder == "Custom Order") {
                                 "Alphabetical"
                             } else {
@@ -289,6 +323,7 @@ fun DisplayOptionsSheetContent(
                         value = options.filterScopeLabel,
                         showSelectorArrows = false,
                         onClick = {
+                            setSortMenuExpanded(false)
                             val nextFilter = if (options.filterScopeLabel == "All conversations") {
                                 "Active only"
                             } else {
@@ -307,6 +342,7 @@ fun DisplayOptionsSheetContent(
                         value = options.densityLabel,
                         showSelectorArrows = false,
                         onClick = {
+                            setSortMenuExpanded(false)
                             val nextDensity = if (options.densityLabel.startsWith("Comfortable")) {
                                 "Compact · Titles only"
                             } else {
@@ -334,6 +370,7 @@ fun DisplayOptionsSheetContent(
                         checked = options.autoPinOnMessage,
                         switchTag = "toggle-auto-pin",
                         onCheckedChange = { checked ->
+                            setSortMenuExpanded(false)
                             coordinator.workspaceStore.updateDisplayOptions {
                                 it.copy(autoPinOnMessage = checked)
                             }
@@ -348,6 +385,7 @@ fun DisplayOptionsSheetContent(
                         checked = options.archivedOnly,
                         switchTag = "toggle-archived-only",
                         onCheckedChange = { checked ->
+                            setSortMenuExpanded(false)
                             coordinator.workspaceStore.updateDisplayOptions {
                                 it.copy(archivedOnly = checked)
                             }
@@ -358,7 +396,10 @@ fun DisplayOptionsSheetContent(
 
             // Card 4: Mark All as Read Full-Width Action Card
             Surface(
-                onClick = { coordinator.markAllConversationsRead() },
+                onClick = {
+                    setSortMenuExpanded(false)
+                    coordinator.markAllConversationsRead()
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .defaultMinSize(minHeight = 52.dp)
