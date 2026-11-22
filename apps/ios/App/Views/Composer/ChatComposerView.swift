@@ -5,7 +5,7 @@ import AntigravityData
 /// Native Matte Obsidian / Liquid Glass Composer (`ChatComposerView`) pinned at the bottom of `UE07_CHAT_AND_COMPOSER`.
 /// Live Antigravity 2.x mode adopts a clean, Claude-inspired 4-control layout:
 /// - Clean multi-line `TextField` on top (contextual `/` slash popup, `@` mention popup, attached chips, workflow pill, and queued follow-ups appear only when active)
-/// - Single bottom toolbar: circular `+` Menu (`Add Context`, `Attach Files`, `Permissions`, `/btw`),
+/// - Single bottom toolbar: circular `+` Menu (`Add Context`, `Attach Files`, `Permissions`),
 ///   two-tone `[<Model>  <Effort>]` pill -> `ModelAndModeSheetView`, circular `mic` dictation button (`SFSpeechRecognizer`),
 ///   and an adaptive primary action circle (`Voice Mode` waveform when empty -> `Send ↑` when typing/attached -> `Stop ■` while streaming).
 /// - ESDD verification mode (`UE07`) preserves the `[Planning ⌄]` pill (`composer-pill-mode`) alongside `[Gemini 3.1 Pro ⌄]`.
@@ -50,7 +50,7 @@ public struct ChatComposerView: View {
 
     private var activeSlashCommands: [SlashCommandItem] {
         guard !store.isVerificationMode, !store.isSlashPopupDismissedManually else { return [] }
-        return store.filteredSlashCommands(for: draftMessageText)
+        return store.filteredSlashCommands(for: draftMessageText).filter { $0.command != "/btw" }
     }
 
     private var activeQueuedMessages: [QueuedMessageItem] {
@@ -488,6 +488,12 @@ public struct ChatComposerView: View {
                         attachedChipLabels.append(item)
                     }
                 },
+                onPickDeviceFile: {
+                    isShowingAddContextSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        isShowingFileImporter = true
+                    }
+                },
                 onDismiss: {
                     isShowingAddContextSheet = false
                 }
@@ -525,7 +531,7 @@ public struct ChatComposerView: View {
     private var liveClaudeStyleToolbar: some View {
         let modelPill = modelPillComponents
         return HStack(spacing: 8) {
-            // 1. Circular `+` Menu (`Add Context`, `Attach Files`, `Permissions`, `/btw`)
+            // 1. Circular `+` Menu (`Add Context`, `Attach Files`, `Permissions`)
             Menu {
                 Button {
                     isShowingAddContextSheet = true
@@ -548,12 +554,6 @@ public struct ChatComposerView: View {
                         "Permissions · \(store.activePermissionPreset.displayTitle)",
                         systemImage: store.activePermissionPreset.semanticIcon.sfSymbolName
                     )
-                }
-
-                Button {
-                    store.openSideQuestion()
-                } label: {
-                    Label("Side Question (/btw)", systemImage: "questionmark.bubble")
                 }
             } label: {
                 Image(systemName: "plus")

@@ -146,6 +146,7 @@ extension AntigravityRPCClient {
         var firstNonEmptyResult: (instances: [RelayInstanceInfo], authUser: String)? = nil
         var bestReachableFallback: (selected: RelayInstanceInfo, instances: [RelayInstanceInfo], authUser: String)? = nil
         var bestOfflineMatch: (selected: RelayInstanceInfo, instances: [RelayInstanceInfo], authUser: String)? = nil
+        var anySucceededCall = false
         var lastError: Error? = nil
 
         for (userIdx, candidateUser) in candidateAuthUsers.enumerated() {
@@ -155,6 +156,7 @@ extension AntigravityRPCClient {
                     authUserOverride: candidateUser,
                     timeoutInterval: perUserTimeout
                 )
+                anySucceededCall = true
                 if instances.isEmpty {
                     continue
                 }
@@ -248,7 +250,9 @@ extension AntigravityRPCClient {
             return (chosen, fallback.instances, fallback.authUser)
         }
 
-        if firstNonEmptyResult == nil && !isWildcardTarget && (rawTarget.hasSuffix("-v2") || rawTarget.count >= 32) {
+        // Only allow direct-UUID fallback when ListInstances genuinely succeeded (HTTP 200) with empty results.
+        // Never swallow Unauthorized (401/403) or network errors into a fake connected UUID host.
+        if anySucceededCall && lastError == nil && firstNonEmptyResult == nil && !isWildcardTarget && (rawTarget.hasSuffix("-v2") || rawTarget.count >= 32) {
             let directInfo = RelayInstanceInfo(
                 uuid: rawTarget,
                 name: rawTarget,
@@ -351,6 +355,7 @@ extension AntigravityRPCClient {
             resolvedHostname: latestActive?.name ?? resolvedName,
             resolvedInstanceUuid: selectedUuid ?? resolvedInstanceUuid,
             resolvedAuthUser: channel == .cloudRelay ? authUser : nil,
+            resolvedRelayApiKey: channel == .cloudRelay ? relayApiKey : nil,
             availableRelayInstances: latestInstances,
             isSelectedHostOnline: isSelectedHostOnline,
             hostCapabilities: activeProfile

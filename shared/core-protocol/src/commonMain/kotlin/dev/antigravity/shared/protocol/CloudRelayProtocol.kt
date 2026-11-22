@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -98,16 +99,112 @@ public object SapisidHashGenerator {
     public const val MOBILE_REMOTE_USER_AGENT: String =
         "Mozilla/5.0 (Mobile; Antigravity-KMP/2.0)"
 
-    private val googleWebApiKeyRegex = Regex("""(?<![0-9A-Za-z_-])AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])""")
+    private val contextualApiKeyRegex = Regex(
+        """(?:x-goog-api-key|WIu0Nc|QrtxK|P10xbc|apiKey|api_key|webApiKey)["']?\s*[:=]\s*["'](AIza[0-9A-Za-z_-]{35})["']""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val googleWebApiKeyRegex = Regex("""(?<![0-9A-Za-z_-])(AIza[0-9A-Za-z_-]{35})(?![0-9A-Za-z_-])""")
+    private val metaNameFirstRegex = Regex(
+        """<meta\b[^>]*\bname\s*=\s*["']antigravity-relay-api-key["'][^>]*\bcontent\s*=\s*["']([A-Za-z0-9_.\-]{8,128})["']""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val metaContentFirstRegex = Regex(
+        """<meta\b[^>]*\bcontent\s*=\s*["']([A-Za-z0-9_.\-]{8,128})["'][^>]*\bname\s*=\s*["']antigravity-relay-api-key["']""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val explicitHeaderJsonRegex = Regex(
+        """["']x-goog-api-key["']\s*[:=]\s*["']([A-Za-z0-9_.\-]{8,128})["']""",
+        RegexOption.IGNORE_CASE,
+    )
     private val explicitConfigKeyRegex = Regex(
         """(?:"apiKey"|'apiKey'|apiKey|"x-goog-api-key"|'x-goog-api-key'|"SNlM0e"|'SNlM0e')\s*[:=]\s*["']([^"'\s]{16,128})["']""",
         RegexOption.IGNORE_CASE,
     )
+    private val scriptSrcRegex = Regex(
+        """<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    public fun isLoopbackOrigin(rawOrigin: String): Boolean {
+        val normalized = normalizeOrigin(rawOrigin)
+        val authority = normalized.substringAfter("://", "")
+        val host = if (authority.startsWith("[")) {
+            authority.substringBefore(']').lowercase() + "]"
+        } else {
+            authority.substringBefore(':').lowercase()
+        }
+        return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+    }
 
     public fun extractWebApiKey(sourceText: String): String? {
         if (sourceText.isBlank()) return null
-        googleWebApiKeyRegex.find(sourceText)?.value?.let { return it }
-        return explicitConfigKeyRegex.find(sourceText)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+        contextualApiKeyRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        googleWebApiKeyRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        metaNameFirstRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        metaContentFirstRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        explicitHeaderJsonRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        explicitConfigKeyRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        return null
+    }
+
+    public fun extractBootstrapScriptUrls(
+        html: String,
+        baseUrl: String,
+        limit: Int = 8,
+    ): List<String> {
+        if (html.isBlank() || limit <= 0) return emptyList()
+        val normalizedBase = baseUrl.trim()
+        val baseOrigin = normalizeOrigin(normalizedBase)
+        val baseScheme = baseOrigin.substringBefore("://", "https")
+        val baseAuthority = baseOrigin.substringAfter("://", "")
+        val baseHost = baseAuthority.substringBefore(':').lowercase()
+        val basePathDir = run {
+            val afterOrigin = normalizedBase.removePrefix(baseOrigin)
+            val pathOnly = afterOrigin.substringBefore('?').substringBefore('#')
+            if (pathOnly.isEmpty() || pathOnly == "/") "/" else pathOnly.substringBeforeLast('/') + "/"
+        }
+
+        val seen = linkedSetOf<String>()
+        val prioritized = mutableListOf<String>()
+        val secondary = mutableListOf<String>()
+
+        for (match in scriptSrcRegex.findAll(html)) {
+            val rawSrc = match.groupValues.getOrNull(1)?.trim()?.replace("&amp;", "&").orEmpty()
+            if (rawSrc.isEmpty()) continue
+            val resolved = when {
+                rawSrc.startsWith("https://", ignoreCase = true) || rawSrc.startsWith("http://", ignoreCase = true) -> rawSrc
+                rawSrc.startsWith("//") -> "$baseScheme:$rawSrc"
+                rawSrc.startsWith("/") -> "$baseOrigin$rawSrc"
+                else -> "$baseOrigin$basePathDir$rawSrc"
+            }
+            val resolvedOrigin = normalizeOrigin(resolved)
+            val host = resolvedOrigin.substringAfter("://", "").substringBefore(':').lowercase()
+            val isTrustedHost = (baseHost.isNotEmpty() && host == baseHost) ||
+                host == "google.com" ||
+                host.endsWith(".google.com") ||
+                host == "gstatic.com" ||
+                host.endsWith(".gstatic.com") ||
+                host.endsWith(".googleusercontent.com")
+            if (!isTrustedHost) continue
+            if (!seen.add(resolved)) continue
+
+            val lowerPathAndQuery = resolved.removePrefix(resolvedOrigin).lowercase()
+            val isPriorityBundle = lowerPathAndQuery.contains("antigravity") ||
+                lowerPathAndQuery.contains("jetski") ||
+                lowerPathAndQuery.contains("boq") ||
+                lowerPathAndQuery.contains("/_/") ||
+                lowerPathAndQuery.contains("main") ||
+                lowerPathAndQuery.contains("app") ||
+                lowerPathAndQuery.contains("bundle") ||
+                lowerPathAndQuery.contains("chunk") ||
+                lowerPathAndQuery.contains("bootstrap")
+            if (isPriorityBundle) {
+                prioritized.add(resolved)
+            } else {
+                secondary.add(resolved)
+            }
+        }
+        return (prioritized + secondary).take(limit)
     }
 
     public fun isInvalidApiKeyError(statusCode: Int, responseBody: String): Boolean {
@@ -116,6 +213,7 @@ public object SapisidHashGenerator {
         return lower.contains("api_key_invalid") ||
             lower.contains("api key not valid") ||
             lower.contains("api key expired") ||
+            lower.contains("invalid api key") ||
             lower.contains("unregistered callers") ||
             lower.contains("x-goog-api-key")
     }
@@ -334,43 +432,138 @@ public object CloudRelayJspbCodec {
         val rootElement = runCatching { json.parseToJsonElement(unwrapped.decodeToString()) }.getOrElse {
             throw AntigravityRpcError.DecodingError("Invalid JSON in ListInstancesResponse: ${it.message}")
         }
-        val rootArray = rootElement as? JsonArray
-            ?: throw AntigravityRpcError.DecodingError("Expected JSPB array from ListInstances")
-        val rawInstances = rootArray.firstOrNull() as? JsonArray ?: return emptyList()
+        val rawInstances: JsonArray = when (rootElement) {
+            is JsonArray -> rootElement.firstOrNull() as? JsonArray ?: return emptyList()
+            is JsonObject -> rootElement["instances"] as? JsonArray ?: return emptyList()
+            else -> throw AntigravityRpcError.DecodingError("Expected JSPB array from ListInstances")
+        }
+
+        val preferredNameKeys = listOf(
+            "deviceName", "device_name",
+            "displayName", "display_name",
+            "customName", "custom_name",
+            "nickname", "hostname", "name",
+        )
+        val versionKeys = listOf("version", "appVersion", "app_version")
+
+        fun firstNonEmptyString(obj: JsonObject?, keys: List<String>): String? {
+            if (obj == null) return null
+            for (k in keys) {
+                val value = (obj[k] as? JsonPrimitive)?.contentOrNull?.trim()
+                if (!value.isNullOrEmpty()) return value
+            }
+            return null
+        }
+
+        fun decodeStatus(el: JsonElement?): RelayInstanceStatus {
+            val prim = el as? JsonPrimitive ?: return RelayInstanceStatus.UNKNOWN
+            prim.intOrNull?.let { return RelayInstanceStatus.fromRawCode(it) }
+            val upper = prim.contentOrNull?.uppercase().orEmpty()
+            return when {
+                upper.contains("CONNECTED") && !upper.contains("DISCONNECTED") -> RelayInstanceStatus.CONNECTED
+                upper.contains("IDLE") -> RelayInstanceStatus.IDLE
+                upper.contains("DISCONNECTED") || upper.contains("OFFLINE") -> RelayInstanceStatus.DISCONNECTED
+                else -> RelayInstanceStatus.UNKNOWN
+            }
+        }
+
+        fun decodeTimestampEpochMs(el: JsonElement?): Long? {
+            when (el) {
+                is JsonArray -> {
+                    val secs = (el.getOrNull(0) as? JsonPrimitive)?.let { it.doubleOrNull ?: it.contentOrNull?.toDoubleOrNull() }
+                    val nanos = (el.getOrNull(1) as? JsonPrimitive)?.let { it.doubleOrNull ?: it.contentOrNull?.toDoubleOrNull() } ?: 0.0
+                    if (secs != null && secs > 0.0) {
+                        return ((secs * 1000.0) + (nanos / 1_000_000.0)).toLong()
+                    }
+                }
+                is JsonObject -> {
+                    val secs = (el["seconds"] as? JsonPrimitive)?.let { it.doubleOrNull ?: it.contentOrNull?.toDoubleOrNull() }
+                    val nanos = (el["nanos"] as? JsonPrimitive)?.let { it.doubleOrNull ?: it.contentOrNull?.toDoubleOrNull() } ?: 0.0
+                    if (secs != null && secs > 0.0) {
+                        return ((secs * 1000.0) + (nanos / 1_000_000.0)).toLong()
+                    }
+                }
+                else -> Unit
+            }
+            return null
+        }
 
         return rawInstances.mapNotNull { item ->
-            val row = item as? JsonArray ?: return@mapNotNull null
-            val uuid = (row.getOrNull(0) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
-                ?: return@mapNotNull null
-            val metadataArr = row.getOrNull(1) as? JsonArray
-            val rawName = (metadataArr?.getOrNull(0) as? JsonPrimitive)?.contentOrNull?.trim()
-            val name = if (!rawName.isNullOrEmpty()) rawName else uuid
-            val version = (metadataArr?.getOrNull(1) as? JsonPrimitive)?.contentOrNull ?: "v2.32.0"
-            val supportsChunking = when (val chunkEl = metadataArr?.getOrNull(2) as? JsonPrimitive) {
-                null -> true
-                else -> chunkEl.booleanOrNull ?: ((chunkEl.intOrNull ?: 1) != 0)
-            }
-            val statusCode = (row.getOrNull(2) as? JsonPrimitive)?.intOrNull ?: 1
-            val status = RelayInstanceStatus.fromRawCode(statusCode)
+            when (item) {
+                is JsonArray -> {
+                    val uuid = (item.getOrNull(0) as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: return@mapNotNull null
+                    val metadataVal = item.getOrNull(1)
+                    val metadataArr = metadataVal as? JsonArray
+                    val metadataObj = metadataVal as? JsonObject
 
-            var updatedAtEpochMs: Long? = null
-            val tsArr = row.getOrNull(3) as? JsonArray
-            if (tsArr != null && tsArr.isNotEmpty()) {
-                val secs = (tsArr.getOrNull(0) as? JsonPrimitive)?.let { it.doubleOrNull ?: it.contentOrNull?.toDoubleOrNull() }
-                val nanos = (tsArr.getOrNull(1) as? JsonPrimitive)?.let { it.doubleOrNull ?: it.contentOrNull?.toDoubleOrNull() } ?: 0.0
-                if (secs != null && secs > 0.0) {
-                    updatedAtEpochMs = ((secs * 1000.0) + (nanos / 1_000_000.0)).toLong()
+                    val arrName = (metadataArr?.getOrNull(0) as? JsonPrimitive)?.contentOrNull?.trim()
+                    val objName = firstNonEmptyString(metadataObj, preferredNameKeys)
+                    val name = (objName ?: arrName)?.takeIf { it.isNotEmpty() } ?: uuid
+
+                    val arrVersion = (metadataArr?.getOrNull(1) as? JsonPrimitive)?.contentOrNull?.trim()
+                    val objVersion = firstNonEmptyString(metadataObj, versionKeys)
+                    val version = objVersion ?: arrVersion ?: ""
+
+                    val supportsChunking = when {
+                        (metadataObj?.get("supportsChunking") as? JsonPrimitive)?.booleanOrNull != null ->
+                            (metadataObj["supportsChunking"] as JsonPrimitive).booleanOrNull!!
+                        (metadataObj?.get("supports_chunking") as? JsonPrimitive)?.booleanOrNull != null ->
+                            (metadataObj["supports_chunking"] as JsonPrimitive).booleanOrNull!!
+                        else -> when (val chunkEl = metadataArr?.getOrNull(2) as? JsonPrimitive) {
+                            null -> true
+                            else -> chunkEl.booleanOrNull ?: ((chunkEl.intOrNull ?: 1) != 0)
+                        }
+                    }
+
+                    val status = if (item.size > 2) decodeStatus(item[2]) else RelayInstanceStatus.UNKNOWN
+                    val updatedAtEpochMs = if (item.size > 3) decodeTimestampEpochMs(item[3]) else null
+
+                    RelayInstanceInfo(
+                        uuid = uuid,
+                        name = name,
+                        version = version,
+                        supportsChunking = supportsChunking,
+                        status = status,
+                        updatedAtEpochMs = updatedAtEpochMs,
+                    )
                 }
-            }
+                is JsonObject -> {
+                    val uuid = firstNonEmptyString(item, listOf("uuid", "instanceId", "instance_id", "id"))
+                        ?: return@mapNotNull null
+                    val metadataObj = item["metadata"] as? JsonObject
+                    val metadataArr = item["metadata"] as? JsonArray
 
-            RelayInstanceInfo(
-                uuid = uuid,
-                name = name,
-                version = version,
-                supportsChunking = supportsChunking,
-                status = status,
-                updatedAtEpochMs = updatedAtEpochMs,
-            )
+                    val topName = firstNonEmptyString(item, preferredNameKeys)
+                    val metaName = firstNonEmptyString(metadataObj, preferredNameKeys)
+                    val arrName = (metadataArr?.getOrNull(0) as? JsonPrimitive)?.contentOrNull?.trim()
+                    val name = (topName ?: metaName ?: arrName)?.takeIf { it.isNotEmpty() } ?: uuid
+
+                    val version = firstNonEmptyString(item, versionKeys)
+                        ?: firstNonEmptyString(metadataObj, versionKeys)
+                        ?: (metadataArr?.getOrNull(1) as? JsonPrimitive)?.contentOrNull?.trim()
+                        ?: ""
+
+                    val supportsChunking = (item["supportsChunking"] as? JsonPrimitive)?.booleanOrNull
+                        ?: (item["supports_chunking"] as? JsonPrimitive)?.booleanOrNull
+                        ?: (metadataObj?.get("supportsChunking") as? JsonPrimitive)?.booleanOrNull
+                        ?: (metadataObj?.get("supports_chunking") as? JsonPrimitive)?.booleanOrNull
+                        ?: true
+
+                    val status = decodeStatus(item["status"] ?: item["connectionStatus"] ?: item["connection_status"])
+                    val updatedAtEpochMs = decodeTimestampEpochMs(item["updatedAt"] ?: item["updated_at"])
+
+                    RelayInstanceInfo(
+                        uuid = uuid,
+                        name = name,
+                        version = version,
+                        supportsChunking = supportsChunking,
+                        status = status,
+                        updatedAtEpochMs = updatedAtEpochMs,
+                    )
+                }
+                else -> null
+            }
         }
     }
 

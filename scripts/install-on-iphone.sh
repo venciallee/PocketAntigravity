@@ -512,6 +512,7 @@ while IFS='|' read -r -u 3 CAND_TEAM CAND_PREFIX CAND_REASON; do
     -allowProvisioningUpdates \
     DEVELOPMENT_TEAM="$TEAM_ID" \
     ANTIGRAVITY_BUNDLE_PREFIX="$BUNDLE_PREFIX" \
+    ENABLE_DEBUG_DYLIB=NO \
     build </dev/null >"$ATTEMPT_LOG" 2>&1; then
     cat "$ATTEMPT_LOG" >>"$BUILD_LOG"
     BUILD_SUCCEEDED=1

@@ -6,36 +6,26 @@ import UIKit
 #endif
 
 /// Extracts or clears Google Cloud Relay session cookies (`SAPISID`, `__Secure-1PAPISID`, `__Secure-3PAPISID`, `SID`, etc.)
-/// from `WKWebsiteDataStore.default()`.
+/// from `WKWebsiteDataStore.default()`, strictly scoped to `antigravity.google.com` per RFC 6265.
 @MainActor
 public enum CloudRelayCookieExtractor {
-    public static func readGoogleCookieHeader() async -> String? {
+    public static func readGoogleCookieHeader(forHost targetHost: String = "antigravity.google.com") async -> String? {
         #if canImport(WebKit) && canImport(UIKit)
         let store = WKWebsiteDataStore.default().httpCookieStore
         let allCookies = await store.allCookies()
-        let now = Date()
-        var pairs: [String] = []
-        var seenNames = Set<String>()
-
-        for cookie in allCookies {
-            if let expires = cookie.expiresDate, expires <= now {
-                continue
-            }
-            let domain = cookie.domain.lowercased()
-            let cleanDomain = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-            guard domain.hasSuffix("google.com")
-                || RemoteHostInstance.isAntigravityRelayHost(cleanDomain) else {
-                continue
-            }
-            // Prefer `.google.com` / `antigravity.google.com` entries first
-            let key = "\(cookie.name)=\(cookie.value)"
-            if !seenNames.contains(key) {
-                seenNames.insert(key)
-                pairs.append(key)
-            }
+        let descriptors = allCookies.map { cookie in
+            SAPISIDHashGenerator.RelayCookieDescriptor(
+                name: cookie.name,
+                value: cookie.value,
+                domain: cookie.domain,
+                path: cookie.path,
+                expiresDate: cookie.expiresDate
+            )
         }
-        let header = pairs.joined(separator: "; ")
-        return SAPISIDHashGenerator.hasRequiredGoogleAuthCookies(header) ? header : nil
+        return SAPISIDHashGenerator.buildCookieHeader(
+            from: descriptors,
+            forHost: targetHost
+        )
         #else
         return nil
         #endif
@@ -62,6 +52,7 @@ public enum CloudRelayCookieExtractor {
 /// to establish native Connect-RPC over `devtools_jetski_boq_api_proto.ApiService`.
 public struct CloudRelaySignInSheet: View {
     public let targetRelayURLString: String
+    public let clearExistingSession: Bool
     public var onAuthenticated: (
         _ cookieHeader: String,
         _ finalURLString: String?,
@@ -78,6 +69,7 @@ public struct CloudRelaySignInSheet: View {
 
     public init(
         targetRelayURLString: String,
+        clearExistingSession: Bool = false,
         onAuthenticated: @escaping (
             _ cookieHeader: String,
             _ finalURLString: String?,
@@ -87,6 +79,7 @@ public struct CloudRelaySignInSheet: View {
         onDismiss: @escaping () -> Void
     ) {
         self.targetRelayURLString = targetRelayURLString
+        self.clearExistingSession = clearExistingSession
         self.onAuthenticated = onAuthenticated
         self.onDismiss = onDismiss
     }
@@ -142,7 +135,8 @@ public struct CloudRelaySignInSheet: View {
 
                 Button {
                     Task {
-                        if let cookie = await CloudRelayCookieExtractor.readGoogleCookieHeader() {
+                        let targetHost = initialURL.host ?? "antigravity.google.com"
+                        if let cookie = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: targetHost) {
                             let parsed = latestFullURLString.flatMap {
                                 RemoteHostInstance.parseRemoteControlTarget($0)
                             }
@@ -180,6 +174,7 @@ public struct CloudRelaySignInSheet: View {
             #if canImport(WebKit) && canImport(UIKit)
             CloudRelayWebViewRepresentable(
                 initialURL: initialURL,
+                clearExistingSession: clearExistingSession,
                 onStateChange: { hostStr, fullURLStr, loading, cookiesReady, apiKey in
                     if let hostStr {
                         currentURLDisplay = hostStr
@@ -214,11 +209,15 @@ public struct CloudRelaySignInSheet: View {
 #if canImport(WebKit) && canImport(UIKit)
 private struct CloudRelayWebViewRepresentable: UIViewControllerRepresentable {
     let initialURL: URL
+    let clearExistingSession: Bool
     let onStateChange: (String?, String?, Bool, Bool, String?) -> Void
     let onAutoCapturedSession: (String, String?, String?, String?) -> Void
 
     func makeUIViewController(context: Context) -> CloudRelayWebAuthViewController {
-        let vc = CloudRelayWebAuthViewController(initialURL: initialURL)
+        let vc = CloudRelayWebAuthViewController(
+            initialURL: initialURL,
+            clearExistingSession: clearExistingSession
+        )
         vc.onStateChange = onStateChange
         vc.onAutoCapturedSession = onAutoCapturedSession
         return vc
@@ -343,17 +342,20 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
     """
 
     private let initialURL: URL
+    private let clearExistingSession: Bool
     var onStateChange: ((String?, String?, Bool, Bool, String?) -> Void)?
     var onAutoCapturedSession: ((String, String?, String?, String?) -> Void)?
 
     private var webView: WKWebView!
     private var didCompleteCapture = false
     private var isObservingCookieStore = false
+    private var isReadyForAutoCapture = false
     private var capturedRelayApiKey: String?
     private var pendingCompletionFallbackTask: Task<Void, Never>?
 
-    init(initialURL: URL) {
+    init(initialURL: URL, clearExistingSession: Bool = false) {
         self.initialURL = initialURL
+        self.clearExistingSession = clearExistingSession
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -389,7 +391,18 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         view.addSubview(wv)
         self.webView = wv
 
-        wv.load(URLRequest(url: initialURL))
+        if clearExistingSession {
+            isReadyForAutoCapture = false
+            Task { @MainActor [weak self] in
+                await CloudRelayCookieExtractor.clearGoogleCookies()
+                guard let self else { return }
+                self.isReadyForAutoCapture = true
+                self.webView.load(URLRequest(url: self.initialURL))
+            }
+        } else {
+            isReadyForAutoCapture = true
+            wv.load(URLRequest(url: initialURL))
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -417,6 +430,8 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        pendingCompletionFallbackTask?.cancel()
+        pendingCompletionFallbackTask = nil
         onStateChange?(
             webView.url?.host ?? initialURL.host,
             webView.url?.absoluteString,
@@ -471,7 +486,7 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
     }
 
     private func evaluateSessionReadiness(autoFinishIfOnRelayHost: Bool) async {
-        guard !didCompleteCapture else { return }
+        guard !didCompleteCapture, isReadyForAutoCapture else { return }
         let currentURL = webView.url
         let host = currentURL?.host?.lowercased() ?? ""
         let isOnAntigravityRelay = RemoteHostInstance.isAntigravityRelayHost(host)
@@ -480,7 +495,8 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
             _ = await extractWebApiKeyFromWebView()
         }
 
-        let cookieHeader = await CloudRelayCookieExtractor.readGoogleCookieHeader()
+        let targetHost = host.isEmpty ? (initialURL.host ?? "antigravity.google.com") : host
+        let cookieHeader = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: targetHost)
         let hasCookies = (cookieHeader != nil)
         onStateChange?(
             currentURL?.host ?? initialURL.host,
@@ -491,14 +507,21 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         )
 
         if autoFinishIfOnRelayHost && isOnAntigravityRelay, let cookieHeader {
-            if capturedRelayApiKey != nil || !webView.isLoading {
+            if capturedRelayApiKey != nil {
                 completeCapture(cookieHeader: cookieHeader, currentURL: currentURL)
             } else if pendingCompletionFallbackTask == nil {
+                // Allow the antigravity.google.com SPA up to 2.5s to boot and issue its first
+                // XHR/fetch carrying `X-Goog-Api-Key` (or redirect to accounts.google.com if stale).
                 pendingCompletionFallbackTask = Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
                     guard let self, !Task.isCancelled, !self.didCompleteCapture else { return }
+                    let liveHost = self.webView.url?.host?.lowercased() ?? ""
+                    guard RemoteHostInstance.isAntigravityRelayHost(liveHost) else {
+                        self.pendingCompletionFallbackTask = nil
+                        return
+                    }
                     _ = await self.extractWebApiKeyFromWebView()
-                    let latestCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader() ?? cookieHeader
+                    let latestCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: liveHost) ?? cookieHeader
                     self.completeCapture(cookieHeader: latestCookie, currentURL: self.webView.url ?? currentURL)
                 }
             }

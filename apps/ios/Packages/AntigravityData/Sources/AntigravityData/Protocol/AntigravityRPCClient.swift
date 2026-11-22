@@ -162,6 +162,8 @@ public actor AntigravityRPCClient {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = requestTimeout
         config.timeoutIntervalForResource = resourceTimeout
+        config.httpShouldSetCookies = false
+        config.httpCookieStorage = nil
         let host = (endpointURL.host ?? "").lowercased()
         let isLocalOrPrivateHost =
             host == "localhost" ||

@@ -163,6 +163,7 @@ public struct AutomationsViewController: View {
                 : store.lastScannedRelayURL
             CloudRelaySignInSheet(
                 targetRelayURLString: targetURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : targetURL,
+                clearExistingSession: true,
                 onAuthenticated: { cookieHeader, finalURL, detectedAuthUser, detectedRelayApiKey in
                     isShowingGoogleSignIn = false
                     let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(

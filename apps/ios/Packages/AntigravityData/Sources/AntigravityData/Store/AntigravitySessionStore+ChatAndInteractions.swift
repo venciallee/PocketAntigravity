@@ -79,12 +79,6 @@ extension AntigravitySessionStore {
 
         if workflowPrefix.isEmpty {
             let lowerTrim = trimmed.lowercased()
-            if lowerTrim == "/btw" || lowerTrim.hasPrefix("/btw ") {
-                let sidePrompt = trimmed.count > 4 ? String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines) : ""
-                composerDraftText = ""
-                openSideQuestion(initialPrompt: sidePrompt.isEmpty ? nil : sidePrompt)
-                return
-            }
             if lowerTrim == "/model" {
                 composerDraftText = ""
                 presentedSheet = .modelAndMode
