@@ -17,6 +17,9 @@ class AntigravityApplication : Application() {
         val coordinator = AppGraph.coordinator(this)
         AppGraph.appScope.launch {
             runCatching { coordinator.hydrateOfflineCache() }
+            if (!coordinator.isVerificationMode) {
+                runCatching { coordinator.restoreSavedSession() }
+            }
         }
     }
 }

@@ -69,9 +69,9 @@ Every screen follows the normative ESDD specs ([`specs/`](../specs/) and [`specs
 | Capability | iOS | Android | KMP Shared Core | Details |
 | :--- | :---: | :---: | :---: | :--- |
 | **Official Cloud Relay Transport (`SAPISIDHASH` + Dynamic API Key Discovery & Rotation)** | ✅ | ✅ | ✅ | Zero hardcoded API keys; cookie-isolated `ApiService/ListInstances`, `ProxyCommand`, and `StreamProxyCommand` in `AntigravityKmpRpcClient` |
-| **Interactive Google Cloud Relay Sign-In Sheet** | ✅ | 🚧 | ✅ | iOS ships live `CloudRelaySignInSheet` (WKWebView + XHR API-key capture); Android ships `CloudRelayCookieBridge` + `WelcomeAndPairingScreen` entry point with in-app Android `WebView` OAuth modal next |
-| **Remote Control QR Code Pairing** | ✅ | 🚧 | ✅ | iOS ships live camera `RemoteControlQRScannerSheet`; Android ships deep-link (`agpocket://`) & pairing entry with CameraX / ML Kit live scanner next |
-| **Direct LAN / Tailscale Pairing + SHA-256 TLS Pinning / TOFU** | ✅ | ✅ | ✅ | Full support via `connectDirectLan` + Ktor Darwin/OkHttp pinners + strict HTTPS (`usesCleartextTraffic="false"`, loopback-only cleartext) |
+| **Interactive Google Cloud Relay Sign-In Sheet** | ✅ | ✅ | ✅ | iOS ships live `CloudRelaySignInSheet` (`WKWebView` + XHR API-key capture); Android ships `CloudRelaySignInScreen` (sanitized-UA `WebView` + `@JavascriptInterface` XHR/fetch API-key capture + `CloudRelayCookieBridge` + 3.5s fallback capture) |
+| **Remote Control QR Code Pairing** | ✅ | 🚧 | ✅ | iOS ships live camera `RemoteControlQRScannerSheet`; Android ships `RemoteControlLinkDialog` + system-camera `https://antigravity.google.com/r/` & `agpocket://` deep links with in-app CameraX / ML Kit viewfinder next |
+| **Direct LAN / Tailscale Pairing + SHA-256 TLS Pinning / TOFU** | ✅ | ✅ | ✅ | Full support via `connectDirectLan` + Ktor Darwin/OkHttp pinners (`CookieJar.NO_COOKIES`, 25s hard handshake timeout, `cancelPendingConnectionAttempt`) + strict HTTPS (`usesCleartextTraffic="false"`, loopback-only cleartext) |
 | **5-Byte Connect-RPC Streaming Envelope** | ✅ | ✅ | ✅ | `[1B flags (raw/gzip/end-trailer) \| 4B BE length \| payload]` for summaries, reactive cascade updates & project streams |
 | **Binary-First Protobuf + Adaptive JSON Fallback + Runtime Ceiling Learning** | ✅ | ✅ | ✅ | ~65% bandwidth savings over `application/proto`; zero hardcoded 600-step limits; targeted JSON probe for unknown future fields |
 | **Bidirectional Host Capability Registry & Forward Compatibility** | ✅ | ✅ | ✅ | 16 registered `HostCapability` entries, per-host negative caching (`404`/`501`/`UNIMPLEMENTED`), resilient fallback on all 35 enums, unknown future `CortexStep` / `RequestedInteraction` fallback UI cards |
@@ -89,7 +89,7 @@ Every screen follows the normative ESDD specs ([`specs/`](../specs/) and [`specs
 | **System Share Sheet Receiver** | ✅ `AGPocketShare` Extension (text, URLs, images, files) | ✅ Native `ACTION_SEND` & `ACTION_SEND_MULTIPLE` intent filters in `MainActivity` (no 30 MB extension cap) |
 | **Encrypted Secret Storage** | ✅ iOS Keychain | ✅ Android Keystore + Tink AEAD + DataStore (`AndroidSecretStore`) |
 | **Appearance & Themes** | ✅ System / Dark / Light · Obsidian, Nord, Everforest presets | ✅ System / Dark / Light · Obsidian, Nord, Everforest presets + **Android 12+ Material You Dynamic Color** opt-in (semantic status colors locked) |
-| **Startup Performance** | ✅ Frame-0 Conversations launch (`UILaunchScreen` + zero blocking Keychain I/O on main thread) | ✅ Edge-to-edge Compose launch with instant local projection & ESDD deep-link routing |
+| **Startup Performance** | ✅ Frame-0 Conversations launch (`UILaunchScreen` + zero blocking Keychain I/O on main thread) | ✅ Edge-to-edge Compose launch with instant local projection, background `restoreSavedSession()`, & deep-link routing |
 
 ---
 
@@ -118,9 +118,8 @@ All workflows use impact-scoped routing via [`verification/e2e_impact_planner.py
 
 ## 5. Known Gaps & Next Roadmap
 
-1. **Android On-Device Hardware Hooks** (UI & KMP transport already in place):
-   - **CameraX / ML Kit QR Scanner**: Live camera viewfinder for scanning Antigravity Desktop Remote Control QR codes directly on Android.
-   - **Android In-App WebView Cloud Relay Sign-In Modal**: Bind Android `WebView` + `CookieManager` + XHR API-key interceptor directly to `CloudRelayCookieBridge` for one-tap Google Cloud Relay sign-in matching iOS `CloudRelaySignInSheet`.
+1. **Android On-Device Hardware Hooks** (UI, WebView Cloud Relay Sign-In & KMP transport already in place):
+   - **CameraX / ML Kit QR Scanner**: In-app live camera viewfinder for scanning Antigravity Desktop Remote Control QR codes directly inside Android (system camera deep links + manual link dialog already work).
    - **Android Live Voice Capture**: Wire `android.speech.SpeechRecognizer` / `AudioRecord` into `VoiceModeSheet` for hands-free live dictation and Gemini Live turns.
 2. **Real Physical Device Field Testing**:
    - End-to-end validation of Android 16 promoted Live Updates chips on physical Pixel hardware, foldables/tablets, and background Wi-Fi ↔ 5G network handoffs across both iPhone and Android devices.

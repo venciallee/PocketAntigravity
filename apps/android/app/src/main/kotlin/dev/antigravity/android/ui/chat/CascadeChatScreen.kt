@@ -105,6 +105,9 @@ import dev.antigravity.shared.model.VoiceCallTranscriptSummary
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
+/** Deferred `/btw` side-question feature flag (kept in sync with iOS deferral). */
+private const val ENABLE_SIDE_QUESTION_BTW: Boolean = false
+
 /**
  * UE07_CHAT_AND_COMPOSER: Primary Cascade Chat screen featuring Material 3 TopAppBar with diff
  * pill & Overview trigger, trajectory `LazyColumn` (collapsible thinking, Markdown prose,
@@ -128,6 +131,7 @@ fun CascadeChatScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val connectionState by coordinator.connectionState.collectAsState()
     val chatState by coordinator.chatState.collectAsState()
     val syncState by coordinator.syncState.collectAsState()
     val workspaceState by coordinator.workspaceStore.state.collectAsState()
@@ -139,12 +143,16 @@ fun CascadeChatScreen(
         ?: syncState.summaries.firstOrNull()
 
     val headerTitle = activeSummary?.title ?: "Add rate limiter to /transfers"
+    val rawHostLabel = activeSummary?.originHostName
+        ?: connectionState.activeHost?.hostname
+        ?: "MacBook Pro"
+    val cleanHostLabel = rawHostLabel.removePrefix("Connecting · ").ifBlank { "Desktop" }
     val headerSubtitle = buildString {
         append(activeSummary?.projectSlug ?: "ledger-svc")
         append(" · ")
         append(activeSummary?.branchName ?: "main")
         append(" · ")
-        append(activeSummary?.originHostName ?: "MacBook Pro")
+        append(cleanHostLabel)
     }
     val totalAdditions = activeSummary?.totalAdditions ?: 128
     val totalDeletions = activeSummary?.totalDeletions ?: 14
@@ -158,11 +166,14 @@ fun CascadeChatScreen(
             activeTaskStep?.taskBoundary?.taskStatus ?: "Waiting for your approval · Step ${activeWaitingStep.stepIndex} of 7"
         chatState.activeSteps.any { it.status == CortexStepStatus.IN_PROGRESS } ->
             "Running · Step ${activeTaskStep?.taskBoundary?.completedCount ?: 4} of ${activeTaskStep?.taskBoundary?.totalCount ?: 7}"
+        !coordinator.isVerificationMode && connectionState.isConnecting ->
+            "Connecting to $cleanHostLabel..."
         else -> "Ready · All steps up to date"
     }
     val statusDotColor = when {
         activeWaitingStep != null -> colors.statusWaiting
         chatState.activeSteps.any { it.status == CortexStepStatus.IN_PROGRESS } -> colors.statusRunning
+        !coordinator.isVerificationMode && connectionState.isConnecting -> colors.statusRunning
         else -> colors.statusDone
     }
 
@@ -312,7 +323,10 @@ fun CascadeChatScreen(
                 val trimmedDraft = chatState.draftInputText.trim()
                 if (trimmedDraft.startsWith("/")) {
                     val slashMatches = SlashCommandItem.allCommands
-                        .filter { it.command.startsWith(trimmedDraft.lowercase()) }
+                        .filter { cmd ->
+                            (ENABLE_SIDE_QUESTION_BTW || cmd.command != "/btw") &&
+                                cmd.command.startsWith(trimmedDraft.lowercase())
+                        }
                         .take(4)
                     if (slashMatches.isNotEmpty()) {
                         Surface(
@@ -331,7 +345,7 @@ fun CascadeChatScreen(
                                             .clickable {
                                                 coordinator.chatStore.setDraftInputText("")
                                                 when (cmd.command) {
-                                                    "/btw" -> onOpenSideQuestion()
+                                                    "/btw" -> if (ENABLE_SIDE_QUESTION_BTW) onOpenSideQuestion()
                                                     "/swarm" -> onOpenSwarmBoard()
                                                     "/voice" -> onOpenVoiceMode()
                                                     else -> coordinator.chatStore.setDraftInputText("${cmd.command} ")
@@ -377,8 +391,12 @@ fun CascadeChatScreen(
                         val text = chatState.draftInputText.trim()
                         when (text.lowercase()) {
                             "/btw" -> {
-                                coordinator.chatStore.setDraftInputText("")
-                                onOpenSideQuestion()
+                                if (ENABLE_SIDE_QUESTION_BTW) {
+                                    coordinator.chatStore.setDraftInputText("")
+                                    onOpenSideQuestion()
+                                } else {
+                                    coordinator.chatStore.setDraftInputText("")
+                                }
                             }
                             "/swarm" -> {
                                 coordinator.chatStore.setDraftInputText("")
@@ -390,17 +408,24 @@ fun CascadeChatScreen(
                             }
                             else -> {
                                 val attachments = workspaceState.attachedComposerChips
+                                val isDraft = activeCascadeId.startsWith("cascade-new-")
                                 scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                                    coordinator.sendMessage(
-                                        cascadeId = activeCascadeId,
-                                        message = text,
-                                        workspaceUri = activeSummary?.workspaceUri.orEmpty(),
-                                        attachments = attachments,
-                                        modelId = settingsState.selectedModelId,
-                                        effort = settingsState.selectedEffort,
-                                        mode = settingsState.selectedMode,
-                                        agentPersona = settingsState.selectedAgentPersona,
-                                    )
+                                    runCatching {
+                                        coordinator.sendMessage(
+                                            cascadeId = activeCascadeId,
+                                            message = text,
+                                            workspaceUri = activeSummary?.workspaceUri.orEmpty(),
+                                            attachments = attachments,
+                                            modelId = settingsState.selectedModelId,
+                                            effort = settingsState.selectedEffort,
+                                            mode = settingsState.selectedMode,
+                                            agentPersona = settingsState.selectedAgentPersona,
+                                            isCloud = activeSummary?.isCloud == true,
+                                            cloudProjectId = activeSummary?.cloudProjectId,
+                                            instanceUuidOverride = activeSummary?.originInstanceUuid,
+                                            isOptimisticDraft = isDraft,
+                                        )
+                                    }
                                 }
                                 coordinator.workspaceStore.clearComposerChips()
                             }
@@ -411,6 +436,41 @@ fun CascadeChatScreen(
             }
         },
     ) { innerPadding ->
+        if (!coordinator.isVerificationMode && displayItems.isEmpty() && (connectionState.isConnecting || chatState.isLoadingSteps)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                AntigravitySurfaceCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(18.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "Loading conversation history...",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = colors.inkReading,
+                        )
+                        Text(
+                            text = if (!connectionState.isConnected && connectionState.isConnecting) {
+                                "Connecting to $cleanHostLabel..."
+                            } else {
+                                "Syncing trajectory steps from $cleanHostLabel"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkSecondary,
+                        )
+                    }
+                }
+            }
+        } else {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -492,6 +552,7 @@ fun CascadeChatScreen(
                     }
                 }
             }
+        }
         }
     }
 }

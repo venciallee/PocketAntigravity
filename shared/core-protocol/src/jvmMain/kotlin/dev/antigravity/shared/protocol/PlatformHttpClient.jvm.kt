@@ -2,6 +2,7 @@ package dev.antigravity.shared.protocol
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import okhttp3.CookieJar
 import okio.ByteString.Companion.toByteString
 import java.net.Proxy
 import java.security.KeyStore
@@ -27,9 +28,11 @@ internal actual fun createPlatformHttpClient(
         expectSuccess = false
         engine {
             config {
+                cookieJar(CookieJar.NO_COOKIES)
                 connectTimeout(config.connectTimeoutMs, TimeUnit.MILLISECONDS)
                 readTimeout(config.requestTimeoutMs, TimeUnit.MILLISECONDS)
                 writeTimeout(config.requestTimeoutMs, TimeUnit.MILLISECONDS)
+                callTimeout(maxOf(25_000L, config.requestTimeoutMs * 2), TimeUnit.MILLISECONDS)
                 if (config.bypassProxyForLocalHosts && isLocalHost) {
                     proxy(Proxy.NO_PROXY)
                 }

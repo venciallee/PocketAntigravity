@@ -24,6 +24,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import dev.antigravity.android.core.platform.CloudRelayCookieBridge
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.AntigravityTheme
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
@@ -50,6 +52,8 @@ import dev.antigravity.android.ui.home.ConversationContextSheetScreen
 import dev.antigravity.android.ui.home.DisplayOptionsOverlayScreen
 import dev.antigravity.android.ui.liveprogress.AndroidLiveUpdatesSpecGallery
 import dev.antigravity.android.ui.liveprogress.defaultLiveProgressSpecSnapshot
+import dev.antigravity.android.ui.pairing.CloudRelaySignInScreen
+import dev.antigravity.android.ui.pairing.RemoteControlLinkDialog
 import dev.antigravity.android.ui.pairing.SettingsAndCustomizationsScreen
 import dev.antigravity.android.ui.pairing.WelcomeAndPairingScreen
 import dev.antigravity.android.ui.projects.CreateProjectScreen
@@ -62,6 +66,8 @@ import dev.antigravity.shared.model.AppAppearanceMode
 import dev.antigravity.shared.model.AppThemePreset
 import dev.antigravity.shared.model.EsddVerifySceneCase
 import dev.antigravity.shared.model.PrimaryTab
+import dev.antigravity.shared.model.RemoteHostInstance
+import dev.antigravity.shared.protocol.SapisidHashGenerator
 import kotlinx.coroutines.launch
 
 private sealed interface AppRoute {
@@ -78,6 +84,7 @@ private sealed interface AppRoute {
     data object TurnDiffReview : AppRoute
     data object LiveUpdatesSpec : AppRoute
     data object Pairing : AppRoute
+    data class CloudRelaySignIn(val targetRelayUrl: String = SapisidHashGenerator.DEFAULT_ORIGIN) : AppRoute
 }
 
 private enum class ChatOverlaySheet {
@@ -137,11 +144,67 @@ fun AntigravityAppRoot(
     var currentRoute by remember(initialVerifyScene) { mutableStateOf(defaultStartRoute) }
     var previousRoute by remember(initialVerifyScene) { mutableStateOf<AppRoute>(AppRoute.RootTab(PrimaryTab.AGENTS)) }
     var activeChatOverlay by remember(initialVerifyScene) { mutableStateOf(ChatOverlaySheet.NONE) }
+    var showRemoteLinkDialog by remember { mutableStateOf(false) }
+    var userExplicitlyOpenedPairing by remember { mutableStateOf(false) }
+
+    // Automatically enter Agents Home once background cold-start cache hydration or saved-session
+    // restoration completes (matching iOS Frame-0 instant conversations launch).
+    LaunchedEffect(
+        initialVerifyScene,
+        connectionState.hasPairedBackend,
+        connectionState.isConnected,
+        syncState.summaries.isNotEmpty(),
+    ) {
+        if (initialVerifyScene == null &&
+            !userExplicitlyOpenedPairing &&
+            currentRoute == AppRoute.Pairing &&
+            (connectionState.isConnected || connectionState.hasPairedBackend || syncState.summaries.isNotEmpty())
+        ) {
+            currentRoute = AppRoute.RootTab(PrimaryTab.AGENTS)
+        }
+    }
 
     fun navigateTo(destination: AppRoute) {
         previousRoute = currentRoute
         activeChatOverlay = ChatOverlaySheet.NONE
+        if (destination == AppRoute.Pairing) {
+            userExplicitlyOpenedPairing = true
+        } else if (destination is AppRoute.RootTab) {
+            userExplicitlyOpenedPairing = false
+        }
         currentRoute = destination
+    }
+
+    fun openNewConversation(projectId: String = "") {
+        if (coordinator.isVerificationMode) {
+            coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+            navigateTo(AppRoute.CascadeChat("cas-rate-limiter"))
+            return
+        }
+        val draftId = coordinator.createLocalDraftConversation(projectSlug = projectId)
+        navigateTo(AppRoute.CascadeChat(draftId))
+    }
+
+    fun openConversation(cascadeId: String) {
+        coordinator.chatStore.setActiveCascade(cascadeId)
+        if (!coordinator.isVerificationMode && !cascadeId.startsWith("cascade-new-")) {
+            val summary = syncState.summaries.firstOrNull { it.cascadeId == cascadeId }
+            scope.launch {
+                runCatching {
+                    coordinator.syncSteps(
+                        cascadeId = cascadeId,
+                        knownStepCount = summary?.stepCount ?: 0,
+                        isCloud = summary?.isCloud == true,
+                        instanceUuidOverride = summary?.originInstanceUuid,
+                    )
+                }
+            }
+        }
+        if (coordinator.isVerificationMode && cascadeId == "cas-audit-log-admin") {
+            navigateTo(AppRoute.StructuredQuestion)
+        } else {
+            navigateTo(AppRoute.CascadeChat(cascadeId))
+        }
     }
 
     fun navigateBack() {
@@ -151,6 +214,7 @@ fun AntigravityAppRoot(
         }
         currentRoute = when (currentRoute) {
             is AppRoute.RootTab -> currentRoute
+            is AppRoute.CloudRelaySignIn -> AppRoute.Pairing
             is AppRoute.DisplayOptions,
             is AppRoute.ContextMenu,
             is AppRoute.ProjectDetail,
@@ -192,10 +256,7 @@ fun AntigravityAppRoot(
                     RootTabScaffold(
                         activeTab = route.tab,
                         onSelectTab = { nextTab -> currentRoute = AppRoute.RootTab(nextTab) },
-                        onTapAgentsComposeFab = {
-                            coordinator.chatStore.setActiveCascade("cas-rate-limiter")
-                            navigateTo(AppRoute.CascadeChat("cas-rate-limiter"))
-                        },
+                        onTapAgentsComposeFab = { openNewConversation() },
                         onTapAutomationsAddFab = {
                             scope.launch {
                                 val client = coordinator.connectionStore.activeClient()
@@ -216,20 +277,16 @@ fun AntigravityAppRoot(
                                         coordinator.workspaceStore.selectProject(projectId)
                                         navigateTo(AppRoute.ProjectDetail(projectId))
                                     },
-                                    onOpenConversation = { cascadeId ->
-                                        coordinator.chatStore.setActiveCascade(cascadeId)
-                                        if (cascadeId == "cas-audit-log-admin") {
-                                            navigateTo(AppRoute.StructuredQuestion)
-                                        } else {
-                                            navigateTo(AppRoute.CascadeChat(cascadeId))
-                                        }
-                                    },
+                                    onOpenConversation = { cascadeId -> openConversation(cascadeId) },
                                     onLongPressConversation = { cascadeId ->
                                         navigateTo(AppRoute.ContextMenu(cascadeId))
                                     },
-                                    onTapComposeFab = {
-                                        coordinator.chatStore.setActiveCascade("cas-rate-limiter")
-                                        navigateTo(AppRoute.CascadeChat("cas-rate-limiter"))
+                                    onTapComposeFab = { openNewConversation() },
+                                    onOpenReSignIn = {
+                                        val relayUrl = connectionState.activeHost?.endpointUrl
+                                            ?.takeIf { it.startsWith("https://") }
+                                            ?: SapisidHashGenerator.DEFAULT_ORIGIN
+                                        navigateTo(AppRoute.CloudRelaySignIn(relayUrl))
                                     },
                                     modifier = contentModifier,
                                 )
@@ -275,14 +332,8 @@ fun AntigravityAppRoot(
                         coordinator = coordinator,
                         projectId = route.projectId,
                         onBack = { navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS)) },
-                        onNewConversation = {
-                            coordinator.chatStore.setActiveCascade("cas-rate-limiter")
-                            navigateTo(AppRoute.CascadeChat("cas-rate-limiter"))
-                        },
-                        onOpenConversation = { cascadeId ->
-                            coordinator.chatStore.setActiveCascade(cascadeId)
-                            navigateTo(AppRoute.CascadeChat(cascadeId))
-                        },
+                        onNewConversation = { openNewConversation(projectId = route.projectId) },
+                        onOpenConversation = { cascadeId -> openConversation(cascadeId) },
                         onOpenAutomations = { navigateTo(AppRoute.RootTab(PrimaryTab.AUTOMATIONS)) },
                     )
                 }
@@ -417,6 +468,10 @@ fun AntigravityAppRoot(
 
                 AppRoute.Pairing -> {
                     WelcomeAndPairingScreen(
+                        onScanQr = { showRemoteLinkDialog = true },
+                        onCloudRelaySignIn = {
+                            navigateTo(AppRoute.CloudRelaySignIn(SapisidHashGenerator.DEFAULT_ORIGIN))
+                        },
                         onConnectDirectLan = { endpointUrl, csrf ->
                             scope.launch {
                                 runCatching {
@@ -432,6 +487,74 @@ fun AntigravityAppRoot(
                             EsddVerificationFixtures.seedCoordinator(coordinator)
                             navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
                         },
+                        isConnecting = connectionState.isConnecting,
+                        statusText = connectionState.statusText,
+                        errorText = connectionState.errorText,
+                        onCancelConnecting = { coordinator.cancelPendingConnectionAttempt() },
+                    )
+
+                    if (showRemoteLinkDialog) {
+                        RemoteControlLinkDialog(
+                            onSubmitLink = { rawLink ->
+                                showRemoteLinkDialog = false
+                                val trimmed = rawLink.trim()
+                                val relayTarget = RemoteHostInstance.parseRemoteControlTarget(trimmed)
+                                if (relayTarget != null) {
+                                    val existingCookie = CloudRelayCookieBridge.extractSessionCookieHeaderForHost(
+                                        relayTarget.relayOrigin.removePrefix("https://").removePrefix("http://"),
+                                    )
+                                    if (existingCookie.isNullOrBlank()) {
+                                        navigateTo(AppRoute.CloudRelaySignIn(relayTarget.canonicalRelayUrlString))
+                                    } else {
+                                        scope.launch {
+                                            val result = runCatching {
+                                                coordinator.connectCloudRelay(
+                                                    relayUrlString = relayTarget.canonicalRelayUrlString,
+                                                    sessionCookie = existingCookie,
+                                                    authUser = relayTarget.authUser,
+                                                )
+                                            }
+                                            if (result.isSuccess) {
+                                                navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                                            } else if (result.exceptionOrNull() is dev.antigravity.shared.protocol.AntigravityRpcError.Unauthorized) {
+                                                navigateTo(AppRoute.CloudRelaySignIn(relayTarget.canonicalRelayUrlString))
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    scope.launch {
+                                        runCatching {
+                                            coordinator.connectWithPairingUri(trimmed)
+                                            navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                                        }
+                                    }
+                                }
+                            },
+                            onDismiss = { showRemoteLinkDialog = false },
+                        )
+                    }
+                }
+
+                is AppRoute.CloudRelaySignIn -> {
+                    CloudRelaySignInScreen(
+                        targetRelayUrl = route.targetRelayUrl,
+                        onAuthenticated = { captured ->
+                            currentRoute = AppRoute.Pairing
+                            scope.launch {
+                                val result = runCatching {
+                                    coordinator.connectCloudRelay(
+                                        relayUrlString = route.targetRelayUrl,
+                                        sessionCookie = captured.cookieHeader,
+                                        authUser = captured.authUser,
+                                        relayApiKey = captured.relayApiKey,
+                                    )
+                                }
+                                if (result.isSuccess) {
+                                    navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                                }
+                            }
+                        },
+                        onCancel = { currentRoute = AppRoute.Pairing },
                     )
                 }
             }

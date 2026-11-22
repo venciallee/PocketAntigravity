@@ -19,12 +19,16 @@ import dev.antigravity.shared.protocol.RelayInstanceInfo
 import dev.antigravity.shared.protocol.SapisidHashGenerator
 import dev.antigravity.shared.protocol.TlsEngineConfig
 import dev.antigravity.shared.protocol.currentTimeMillis
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.Throws
 
 public data class ConnectionState(
@@ -82,6 +86,8 @@ public class ConnectionDomainStore(
     private var currentClient: AntigravityKmpRpcClient? = null
     private var reconnectAttempt: Int = 0
     private var isMonitoringNetwork: Boolean = false
+    private var connectGeneration: Long = 0L
+    private val handshakeHardTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
 
     private val _state = MutableStateFlow(ConnectionState())
     public val state: StateFlow<ConnectionState> = _state.asStateFlow()
@@ -172,6 +178,7 @@ public class ConnectionDomainStore(
             certificateFingerprintSha256 = certSha256 ?: "TOFU-LOCAL-TLS",
         )
 
+        val generation = ++connectGeneration
         _state.update {
             it.copy(
                 isConnecting = true,
@@ -189,7 +196,11 @@ public class ConnectionDomainStore(
         val candidate = clientFactory(hostInstance, csrfToken, null, null, null, null, tlsConfig)
 
         return try {
-            val handshake = candidate.verifyConnection(allowCrossHostFallback = true)
+            val handshake = awaitHandshakeWithHardTimeout(candidate, allowCrossHostFallback = true)
+            if (connectGeneration != generation) {
+                candidate.close()
+                throw CancellationException("Connection superseded or cancelled")
+            }
             val verifiedHost = hostInstance.copy(
                 hostname = handshake.resolvedHostname?.takeIf { it.isNotBlank() } ?: hostName,
                 version = handshake.serverVersion,
@@ -228,7 +239,9 @@ public class ConnectionDomainStore(
             handshake
         } catch (e: Throwable) {
             candidate.close()
-            handleConnectFailure(hostInstance, e, isRestoringSavedSession)
+            if (connectGeneration == generation) {
+                handleConnectFailure(hostInstance, e, isRestoringSavedSession)
+            }
             throw e
         }
     }
@@ -259,6 +272,7 @@ public class ConnectionDomainStore(
                 it.copy(
                     isConnected = false,
                     isConnecting = false,
+                    lifecyclePhase = if (it.hasPairedBackend) it.lifecyclePhase else ConnectionLifecyclePhase.Disconnected,
                     errorText = "Google Sign-In required to pair via Cloud Relay.",
                     statusText = "Sign in with Google to pair Remote Control",
                 )
@@ -276,6 +290,7 @@ public class ConnectionDomainStore(
             isOnline = true,
         )
 
+        val generation = ++connectGeneration
         _state.update {
             it.copy(
                 isConnecting = true,
@@ -299,7 +314,11 @@ public class ConnectionDomainStore(
         val candidate = clientFactory(hostInstance, null, trimmedCookie, effectiveAuth, resolvedInstanceUuid, effectiveApiKey, tlsConfig)
 
         return try {
-            val handshake = candidate.verifyConnection(allowCrossHostFallback = !strictTargetMatch)
+            val handshake = awaitHandshakeWithHardTimeout(candidate, allowCrossHostFallback = !strictTargetMatch)
+            if (connectGeneration != generation) {
+                candidate.close()
+                throw CancellationException("Connection superseded or cancelled")
+            }
             val finalHostName = handshake.resolvedHostname?.takeIf { it.isNotBlank() } ?: hostName
             val finalUuid = handshake.resolvedInstanceUuid?.takeIf { it.isNotBlank() } ?: hostInstance.instanceId
             val finalAuthUser = handshake.resolvedAuthUser ?: effectiveAuth ?: "0"
@@ -375,7 +394,9 @@ public class ConnectionDomainStore(
             handshake.copy(resolvedRelayApiKey = finalApiKey)
         } catch (e: Throwable) {
             candidate.close()
-            handleConnectFailure(hostInstance, e, isRestoringSavedSession)
+            if (connectGeneration == generation) {
+                handleConnectFailure(hostInstance, e, isRestoringSavedSession)
+            }
             throw e
         }
     }
@@ -517,8 +538,38 @@ public class ConnectionDomainStore(
         }
     }
 
+    public fun cancelPendingConnectionAttempt() {
+        connectGeneration += 1
+        _state.update { prev ->
+            if (!prev.isConnecting && prev.lifecyclePhase !is ConnectionLifecyclePhase.Connecting) {
+                prev
+            } else {
+                prev.copy(
+                    isConnecting = false,
+                    lifecyclePhase = if (prev.hasPairedBackend) {
+                        ConnectionLifecyclePhase.OfflineBackoff(
+                            attempt = reconnectAttempt,
+                            nextRetrySeconds = ConnectionPowerPolicy.offlineBackoffBaseDelaySeconds(
+                                reconnectAttempt,
+                                powerStateProvider.isLowPowerModeEnabled,
+                            ),
+                        )
+                    } else {
+                        ConnectionLifecyclePhase.Disconnected
+                    },
+                    statusText = if (prev.hasPairedBackend) {
+                        "Offline · ${prev.activeHost?.hostname ?: "Desktop"}"
+                    } else {
+                        "Connection cancelled"
+                    },
+                )
+            }
+        }
+    }
+
     @Throws(Throwable::class)
     public suspend fun disconnectAndClearCredentials() {
+        connectGeneration += 1
         stopNetworkMonitoring()
         replaceClient(null)
         reconnectAttempt = 0
@@ -530,8 +581,27 @@ public class ConnectionDomainStore(
 
     @Throws(Throwable::class)
     public suspend fun close() {
+        connectGeneration += 1
         stopNetworkMonitoring()
         replaceClient(null)
+    }
+
+    private suspend fun awaitHandshakeWithHardTimeout(
+        candidate: AntigravityKmpRpcClient,
+        allowCrossHostFallback: Boolean,
+    ): BackendHandshakeResult {
+        val result = try {
+            withTimeoutOrNull(handshakeHardTimeoutMs) {
+                candidate.verifyConnection(allowCrossHostFallback = allowCrossHostFallback)
+            }
+        } catch (e: CancellationException) {
+            if (!currentCoroutineContext().isActive) throw e
+            null
+        }
+        return result ?: throw AntigravityRpcError.HttpError(
+            504,
+            "Connection timed out after ${handshakeHardTimeoutMs / 1000}s. Verify your network and try again.",
+        )
     }
 
     private suspend fun replaceClient(next: AntigravityKmpRpcClient?) {
@@ -551,7 +621,7 @@ public class ConnectionDomainStore(
         val isAuthError = error is AntigravityRpcError.Unauthorized
         val errMsg = when (error) {
             is AntigravityRpcError.Unauthorized -> error.detail.ifBlank { "Authentication rejected (401/403). Please re-authenticate." }
-            is AntigravityRpcError.HttpError -> "Backend HTTP ${error.statusCode}: ${error.body}"
+            is AntigravityRpcError.HttpError -> "HTTP ${error.statusCode}: ${error.body}"
             else -> error.message ?: "Connection failed"
         }
         val nextDelay = ConnectionPowerPolicy.offlineBackoffBaseDelaySeconds(
@@ -561,13 +631,27 @@ public class ConnectionDomainStore(
         reconnectAttempt += 1
         _state.update { prev ->
             val keepPaired = isRestoringSavedSession || prev.hasPairedBackend
+            val resolvedHost = if (keepPaired) {
+                val prevHost = prev.activeHost
+                val incomingIsPlaceholder = host.hostname.isBlank() ||
+                    host.hostname == host.instanceId ||
+                    host.hostname == "Antigravity Desktop"
+                if (prevHost != null && incomingIsPlaceholder && prevHost.hostname.isNotBlank()) {
+                    prevHost.copy(isOnline = false)
+                } else {
+                    host.copy(isOnline = false)
+                }
+            } else {
+                prev.activeHost
+            }
+            val displayHostName = resolvedHost?.hostname?.takeIf { it.isNotBlank() } ?: host.hostname
             prev.copy(
                 hasPairedBackend = keepPaired,
                 isConnected = false,
                 isConnecting = false,
-                activeHost = if (keepPaired) host.copy(isOnline = false) else prev.activeHost,
+                activeHost = resolvedHost,
                 errorText = errMsg,
-                statusText = if (isAuthError) "Auth Expired · ${host.hostname}" else "Offline · ${host.hostname}",
+                statusText = if (isAuthError) "Auth Expired · $displayHostName" else "Offline · $displayHostName",
                 lifecyclePhase = if (keepPaired) {
                     ConnectionLifecyclePhase.OfflineBackoff(reconnectAttempt, nextDelay)
                 } else {
@@ -607,5 +691,6 @@ public class ConnectionDomainStore(
 
     private companion object {
         private const val KEY_SELECTED_HOST_SCOPE = "antigravity.kmp.selectedHostScope.v1"
+        private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 25_000L
     }
 }

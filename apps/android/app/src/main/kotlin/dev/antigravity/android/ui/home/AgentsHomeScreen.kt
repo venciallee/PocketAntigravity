@@ -39,6 +39,8 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -105,6 +107,7 @@ fun AgentsHomeScreen(
     onOpenConversation: (String) -> Unit,
     onLongPressConversation: (String) -> Unit,
     onTapComposeFab: () -> Unit = {},
+    onOpenReSignIn: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
@@ -407,6 +410,86 @@ fun AgentsHomeScreen(
                     testTag = "filter-pill-unread",
                     onClick = { selectedFilter = AgentsQuickFilter.UNREAD },
                 )
+            }
+        }
+
+        // 3b. Live Connecting / Auth-Expired Recovery Banner (suppressed in offline ESDD mode)
+        if (!coordinator.isVerificationMode && (connectionState.isConnecting || !connectionState.errorText.isNullOrBlank())) {
+            item(key = "home-live-connection-status") {
+                if (connectionState.isConnecting) {
+                    AntigravitySurfaceCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home-connecting-banner"),
+                        borderColor = colors.accentPeriwinkle.copy(alpha = 0.4f),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = colors.accentPeriwinkle,
+                            )
+                            Text(
+                                text = connectionState.statusText.ifBlank { "Connecting to $hostDisplayName..." },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.inkReading,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = { coordinator.cancelPendingConnectionAttempt() },
+                                modifier = Modifier.testTag("btn-home-cancel-connecting"),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text("Cancel", color = colors.accentPeriwinkle)
+                            }
+                        }
+                    }
+                } else {
+                    val err = connectionState.errorText.orEmpty()
+                    AntigravitySurfaceCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home-connection-error-banner"),
+                        containerColor = colors.surfaceAmberTint,
+                        borderColor = colors.statusWaiting.copy(alpha = 0.45f),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Warning,
+                                contentDescription = null,
+                                tint = colors.statusWaiting,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = err,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.inkReading,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = onOpenReSignIn,
+                                modifier = Modifier.testTag("btn-home-resign-in"),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text("Sign In", color = colors.statusWaiting)
+                            }
+                        }
+                    }
+                }
             }
         }
 

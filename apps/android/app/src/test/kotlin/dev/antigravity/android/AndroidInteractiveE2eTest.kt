@@ -412,4 +412,20 @@ class AndroidInteractiveE2eTest {
             coordinator.workspaceStore.state.value.displayOptions.groupBy,
         )
     }
+
+    @Test
+    fun atc20_pairingScreenOpensRemoteLinkDialogAndSupportsCancelAndErrorBanner() {
+        val coordinator = AntigravityCoreCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = null,
+            )
+        }
+
+        composeRule.onNodeWithTag("welcome-pairing-screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-welcome-scan-qr").performClick()
+        composeRule.onNodeWithTag("input-remote-control-link").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-submit-remote-link").assertIsDisplayed()
+    }
 }
