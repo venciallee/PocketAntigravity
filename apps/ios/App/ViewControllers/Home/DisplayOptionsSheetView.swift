@@ -7,19 +7,8 @@ public struct DisplayOptionsSheetView: View {
     @Bindable public var store: AntigravitySessionStore
     public var onDismiss: (() -> Void)?
 
-    public enum GroupByOption: String, CaseIterable {
-        case project = "Project"
-        case host = "Host"
-        case none = "None"
-    }
-
-    public enum ConversationSortField: String, CaseIterable, Identifiable {
-        case lastUpdated = "Last Updated"
-        case dateCreated = "Date Created"
-        case title = "Title"
-
-        public var id: String { rawValue }
-    }
+    public typealias GroupByOption = DisplayGroupBy
+    public typealias ConversationSortField = AntigravityData.ConversationSortField
 
     public enum SortOrderDirection: String, CaseIterable, Identifiable {
         case newestFirst = "Newest First"
@@ -28,21 +17,51 @@ public struct DisplayOptionsSheetView: View {
         public var id: String { rawValue }
     }
 
-    @State private var groupBy: GroupByOption = .project
-    @State private var sortField: ConversationSortField = .lastUpdated
-    @State private var sortDirection: SortOrderDirection = .newestFirst
-    @State private var sortProjectsLabel: String = "Custom Order"
-    @State private var autoPin: Bool = false
-    @State private var archivedOnly: Bool = false
-    @State private var unreadCount: Int = 3
-    @State private var isSortPopoverPresented: Bool = true
+    @State private var isSortPopoverPresented: Bool
 
     public init(
         store: AntigravitySessionStore,
+        initialSortPopoverPresented: Bool? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.store = store
         self.onDismiss = onDismiss
+        _isSortPopoverPresented = State(
+            initialValue: initialSortPopoverPresented ?? (store.isVerificationMode && store.isSortPopoverPresented)
+        )
+    }
+
+    private var currentSortDirection: SortOrderDirection {
+        store.displayOptions.newestFirst ? .newestFirst : .oldestFirst
+    }
+
+    private var autoPinBinding: Binding<Bool> {
+        Binding(
+            get: { store.displayOptions.autoPinOnMessage },
+            set: { newValue in
+                store.updateDisplayOptions { $0.autoPinOnMessage = newValue }
+            }
+        )
+    }
+
+    private var archivedOnlyBinding: Binding<Bool> {
+        Binding(
+            get: { store.displayOptions.archivedOnly },
+            set: { newValue in
+                store.updateDisplayOptions { $0.archivedOnly = newValue }
+            }
+        )
+    }
+
+    private func setSortPopoverPresented(_ presented: Bool) {
+        if store.isVerificationMode {
+            isSortPopoverPresented = presented
+        } else {
+            withAnimation(.easeOut(duration: 0.16)) {
+                isSortPopoverPresented = presented
+            }
+        }
+        store.isSortPopoverPresented = presented
     }
 
     public var body: some View {
@@ -64,6 +83,14 @@ public struct DisplayOptionsSheetView: View {
                 }
                 .ignoresSafeArea()
             )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if isSortPopoverPresented {
+                    setSortPopoverPresented(false)
+                } else {
+                    onDismiss?()
+                }
+            }
 
             // Bottom Sheet Surface
             ZStack(alignment: .topTrailing) {
@@ -107,17 +134,31 @@ public struct DisplayOptionsSheetView: View {
                     .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
 
-                // Floating iOS pull-down Sort Popover Menu anchored below "Sort Conversations"
+                // Transparent full-sheet dismiss scrim + floating Sort Popover Menu anchored below "Sort Conversations"
                 if isSortPopoverPresented {
+                    Color.black.opacity(0.001)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            setSortPopoverPresented(false)
+                        }
+                        .accessibilityIdentifier("sort-popover-dismiss-scrim")
+
                     sortPopoverMenu
                         .padding(.top, 180)
                         .padding(.trailing, 24)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
                 }
             }
             .padding(.top, 108)
             .ignoresSafeArea(edges: .bottom)
         }
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
+        .onDisappear {
+            if !store.isVerificationMode {
+                store.isSortPopoverPresented = false
+            }
+        }
     }
 
     // MARK: - Header Bar (Reset / Display Options / Done)
@@ -125,11 +166,8 @@ public struct DisplayOptionsSheetView: View {
     private var sheetHeaderBar: some View {
         HStack {
             Button {
-                groupBy = .project
-                sortField = .lastUpdated
-                sortDirection = .newestFirst
-                autoPin = false
-                archivedOnly = false
+                setSortPopoverPresented(false)
+                store.resetDisplayOptions()
             } label: {
                 Text("Reset")
                     .font(.system(size: 16.5, weight: .regular))
@@ -148,7 +186,7 @@ public struct DisplayOptionsSheetView: View {
             Spacer()
 
             Button {
-                isSortPopoverPresented = false
+                setSortPopoverPresented(false)
                 onDismiss?()
             } label: {
                 Text("Done")
@@ -168,8 +206,9 @@ public struct DisplayOptionsSheetView: View {
         VStack(spacing: 0) {
             Button {
                 let all = GroupByOption.allCases
-                if let idx = all.firstIndex(of: groupBy) {
-                    groupBy = all[(idx + 1) % all.count]
+                if let idx = all.firstIndex(of: store.displayOptions.groupBy) {
+                    let next = all[(idx + 1) % all.count]
+                    store.updateDisplayOptions { $0.groupBy = next }
                 }
             } label: {
                 HStack {
@@ -178,7 +217,7 @@ public struct DisplayOptionsSheetView: View {
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        Text(groupBy.rawValue)
+                        Text(store.displayOptions.groupBy.rawValue)
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
@@ -197,7 +236,7 @@ public struct DisplayOptionsSheetView: View {
                 .overlay(AntigravityTheme.subtleDivider)
 
             Button {
-                isSortPopoverPresented.toggle()
+                setSortPopoverPresented(!isSortPopoverPresented)
             } label: {
                 HStack {
                     Text("Sort Conversations")
@@ -205,7 +244,7 @@ public struct DisplayOptionsSheetView: View {
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        Text(sortField.rawValue)
+                        Text(store.displayOptions.sortBy.rawValue)
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
@@ -225,7 +264,8 @@ public struct DisplayOptionsSheetView: View {
                 .overlay(AntigravityTheme.subtleDivider)
 
             Button {
-                sortProjectsLabel = (sortProjectsLabel == "Custom Order") ? "Alphabetical" : "Custom Order"
+                let nextOrder = (store.displayOptions.sortProjectsOrder == "Custom Order") ? "Alphabetical" : "Custom Order"
+                store.updateDisplayOptions { $0.sortProjectsOrder = nextOrder }
             } label: {
                 HStack {
                     Text("Sort Projects")
@@ -233,7 +273,7 @@ public struct DisplayOptionsSheetView: View {
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        Text(sortProjectsLabel)
+                        Text(store.displayOptions.sortProjectsOrder)
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
@@ -246,6 +286,7 @@ public struct DisplayOptionsSheetView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("row-sort-projects")
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -257,42 +298,62 @@ public struct DisplayOptionsSheetView: View {
 
     private var filterAndDisplayCard: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Filter")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(AntigravityTheme.textPrimary)
-                Spacer()
-                HStack(spacing: 6) {
-                    Text("All conversations")
-                        .font(.system(size: 15.5, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.textSecondary)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.textMuted)
+            Button {
+                let nextFilter = (store.displayOptions.filterScopeLabel == "All conversations")
+                    ? "Active only"
+                    : "All conversations"
+                store.updateDisplayOptions { $0.filterScopeLabel = nextFilter }
+            } label: {
+                HStack {
+                    Text("Filter")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text(store.displayOptions.filterScopeLabel)
+                            .font(.system(size: 15.5, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.textMuted)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .frame(minHeight: 48)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 48)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("row-filter-scope")
 
             Divider()
                 .overlay(AntigravityTheme.subtleDivider)
 
-            HStack {
-                Text("Display")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(AntigravityTheme.textPrimary)
-                Spacer()
-                HStack(spacing: 6) {
-                    Text("Comfortable · Previews")
-                        .font(.system(size: 15.5, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.textSecondary)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.textMuted)
+            Button {
+                let nextDensity = store.displayOptions.densityLabel.hasPrefix("Comfortable")
+                    ? "Compact · Titles only"
+                    : "Comfortable · Previews"
+                store.updateDisplayOptions { $0.densityLabel = nextDensity }
+            } label: {
+                HStack {
+                    Text("Display")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text(store.displayOptions.densityLabel)
+                            .font(.system(size: 15.5, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.textMuted)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .frame(minHeight: 48)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 48)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("row-display-density")
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -306,7 +367,7 @@ public struct DisplayOptionsSheetView: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Button {
-                    autoPin.toggle()
+                    store.updateDisplayOptions { $0.autoPinOnMessage.toggle() }
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Auto Pin")
@@ -325,7 +386,7 @@ public struct DisplayOptionsSheetView: View {
 
                 Spacer()
 
-                Toggle("", isOn: $autoPin)
+                Toggle("", isOn: autoPinBinding)
                     .labelsHidden()
                     .tint(AntigravityTheme.accentPeriwinkle)
             }
@@ -336,24 +397,31 @@ public struct DisplayOptionsSheetView: View {
                 .overlay(AntigravityTheme.subtleDivider)
 
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Archived Only")
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.textPrimary)
-                    Text("Show only archived conversations")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.textSecondary)
+                Button {
+                    store.updateDisplayOptions { $0.archivedOnly.toggle() }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Archived Only")
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textPrimary)
+                        Text("Show only archived conversations")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("toggle-archived-only")
 
                 Spacer()
 
-                Toggle("", isOn: $archivedOnly)
+                Toggle("", isOn: archivedOnlyBinding)
                     .labelsHidden()
                     .tint(AntigravityTheme.accentPeriwinkle)
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 60)
-            .accessibilityIdentifier("toggle-archived-only")
         }
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -365,14 +433,14 @@ public struct DisplayOptionsSheetView: View {
 
     private var markAllAsReadCard: some View {
         Button {
-            unreadCount = 0
+            store.markAllConversationsAsRead()
         } label: {
             HStack {
                 Text("Mark All as Read")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 Spacer()
-                Text("\(unreadCount) unread")
+                Text("\(store.unreadCount) unread")
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textSecondary)
             }
@@ -394,12 +462,13 @@ public struct DisplayOptionsSheetView: View {
         VStack(spacing: 0) {
             ForEach(Array(ConversationSortField.allCases.enumerated()), id: \.element.id) { index, field in
                 Button {
-                    sortField = field
+                    store.updateDisplayOptions { $0.sortBy = field }
+                    setSortPopoverPresented(false)
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(sortField == field ? AntigravityTheme.textPrimary : Color.clear)
+                            .foregroundStyle(store.displayOptions.sortBy == field ? AntigravityTheme.textPrimary : Color.clear)
                             .frame(width: 16)
                         Text(field.rawValue)
                             .font(.system(size: 16, weight: .regular))
@@ -411,6 +480,7 @@ public struct DisplayOptionsSheetView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("sort-opt-\(field.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))")
 
                 if index < ConversationSortField.allCases.count - 1 {
                     Divider()
@@ -424,12 +494,13 @@ public struct DisplayOptionsSheetView: View {
 
             ForEach(Array(SortOrderDirection.allCases.enumerated()), id: \.element.id) { index, direction in
                 Button {
-                    sortDirection = direction
+                    store.updateDisplayOptions { $0.newestFirst = (direction == .newestFirst) }
+                    setSortPopoverPresented(false)
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(sortDirection == direction ? AntigravityTheme.textPrimary : Color.clear)
+                            .foregroundStyle(currentSortDirection == direction ? AntigravityTheme.textPrimary : Color.clear)
                             .frame(width: 16)
                         Text(direction.rawValue)
                             .font(.system(size: 16, weight: .regular))
@@ -441,6 +512,7 @@ public struct DisplayOptionsSheetView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(direction == .newestFirst ? "sort-dir-newest" : "sort-dir-oldest")
 
                 if index < SortOrderDirection.allCases.count - 1 {
                     Divider()
@@ -458,6 +530,7 @@ public struct DisplayOptionsSheetView: View {
                 .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
         )
         .shadow(color: AntigravityTheme.glassShadow, radius: 24, x: 0, y: 12)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sort-popover-menu")
     }
 }

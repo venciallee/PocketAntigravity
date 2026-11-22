@@ -27,6 +27,8 @@ extension AntigravitySessionStore {
         isVerificationMode = true
         isInitialSessionCheckComplete = true
         presentedSheet = nil
+        displayOptions = AgentDisplayOptions()
+        isSortPopoverPresented = false
         switch scene {
         case .agentsHome:
             selectedTab = .agents

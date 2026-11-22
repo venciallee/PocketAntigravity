@@ -369,4 +369,47 @@ class AndroidInteractiveE2eTest {
             coordinator.chatState.value.steps.first { it.stepIndex == 100 }.status,
         )
     }
+
+    @Test
+    fun atc19_displayOptionsSortMenuCollapsedByDefaultAndDismissesOnSelectionOrOutsideTap() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.AGENTS_HOME,
+            )
+        }
+
+        // 1. Open Display Options from Agents Home -> sort menu must be collapsed by default
+        composeRule.onNodeWithTag("btn-display-options").performClick()
+        composeRule.onNodeWithTag("row-sort-conversations").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithTag("sort-options-menu").fetchSemanticsNodes().size)
+
+        // 2. Expand sort menu -> selecting 'Title' updates displayOptions and collapses menu
+        composeRule.onNodeWithTag("row-sort-conversations").performClick()
+        composeRule.onNodeWithTag("sort-options-menu").assertIsDisplayed()
+        composeRule.onNodeWithText("Title").performClick()
+        assertEquals(
+            dev.antigravity.shared.model.ConversationSortField.TITLE,
+            coordinator.workspaceStore.state.value.displayOptions.sortBy,
+        )
+        assertEquals(0, composeRule.onAllNodesWithTag("sort-options-menu").fetchSemanticsNodes().size)
+
+        // 3. Re-expand -> tapping scrim dismisses sort menu while keeping Display Options sheet open
+        composeRule.onNodeWithTag("row-sort-conversations").performClick()
+        composeRule.onNodeWithTag("sort-options-menu").assertIsDisplayed()
+        composeRule.onNodeWithTag("display-options-scrim").performClick()
+        assertEquals(0, composeRule.onAllNodesWithTag("sort-options-menu").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("row-sort-conversations").assertIsDisplayed()
+
+        // 4. Re-expand -> tapping another row collapses sort menu while applying that row's change
+        composeRule.onNodeWithTag("row-sort-conversations").performClick()
+        composeRule.onNodeWithTag("sort-options-menu").assertIsDisplayed()
+        composeRule.onNodeWithTag("row-group-by").performClick()
+        assertEquals(0, composeRule.onAllNodesWithTag("sort-options-menu").fetchSemanticsNodes().size)
+        assertEquals(
+            dev.antigravity.shared.model.DisplayGroupBy.HOST,
+            coordinator.workspaceStore.state.value.displayOptions.groupBy,
+        )
+    }
 }

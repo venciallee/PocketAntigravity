@@ -134,8 +134,24 @@ extension AntigravitySessionStore {
         return nil
     }
 
+    public func updateDisplayOptions(_ transform: (inout AgentDisplayOptions) -> Void) {
+        var updated = displayOptions
+        transform(&updated)
+        guard updated != displayOptions else { return }
+        displayOptions = updated
+        hasModifiedDisplayOptionsInSession = true
+        guard !isVerificationMode else { return }
+        let opts = displayOptions
+        let storeRef = projectionStore
+        Task {
+            await storeRef.saveDisplayOptions(opts)
+        }
+    }
+
     public func resetDisplayOptions() {
         displayOptions = AgentDisplayOptions()
+        hasModifiedDisplayOptionsInSession = true
+        guard !isVerificationMode else { return }
         let opts = displayOptions
         let storeRef = projectionStore
         Task {
@@ -526,6 +542,10 @@ extension AntigravitySessionStore {
             for idx in projects.indices {
                 projects[idx].isExpandedInHome = !prefs.collapsedProjectIds.contains(projects[idx].id)
             }
+        }
+        if !isVerificationMode, !hasModifiedDisplayOptionsInSession,
+           let savedDisplayOptions = await projectionStore.loadDisplayOptions() {
+            displayOptions = savedDisplayOptions
         }
         if let quota = await projectionStore.loadUsageQuota() {
             usageQuota = quota

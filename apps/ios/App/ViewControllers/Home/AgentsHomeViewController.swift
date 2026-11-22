@@ -809,8 +809,14 @@ public struct AgentsHomeViewController: View {
         let isCollapsed = store.isVerificationMode
             ? collapsedProjects.contains(project.id)
             : store.isProjectCollapsed(project.id)
+        let isSyntheticGroup = project.id == "all-conversations" || project.id.hasPrefix("host-group:")
         let isNoProj = AntigravityCloudDetector.isNoProjectSlug(project.slug)
-        let headerIcon = project.isCloud ? "cloud" : (isNoProj ? "bubble.left.and.bubble.right" : "folder")
+        let headerIcon: String = {
+            if project.isCloud { return "cloud" }
+            if project.id.hasPrefix("host-group:") { return "laptopcomputer" }
+            if project.id == "all-conversations" || isNoProj { return "bubble.left.and.bubble.right" }
+            return "folder"
+        }()
         let a11ySuffix = (project.id != project.slug) ? project.id : project.slug
         let displayedSubtitle: String = {
             if !store.isVerificationMode && store.appearancePreferences.interfaceLayout == .knowledgeWork {
@@ -822,7 +828,9 @@ public struct AgentsHomeViewController: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Button {
-                    triggerOpenProjectDetail(project.id)
+                    if !isSyntheticGroup {
+                        triggerOpenProjectDetail(project.id)
+                    }
                 } label: {
                     HStack(spacing: 10) {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -855,17 +863,19 @@ public struct AgentsHomeViewController: View {
 
                 Spacer(minLength: 4)
 
-                Button {
-                    triggerOpenConversation("new-\(project.id)")
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(AntigravityTheme.textBody)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
-                        .contentShape(Rectangle())
+                if !isSyntheticGroup {
+                    Button {
+                        triggerOpenConversation("new-\(project.id)")
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.textBody)
+                            .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-add-conv-\(a11ySuffix)")
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("btn-add-conv-\(a11ySuffix)")
 
                 Button {
                     if store.isVerificationMode {
@@ -910,7 +920,7 @@ public struct AgentsHomeViewController: View {
                         .accessibilityIdentifier("empty-project-conv-\(a11ySuffix)")
                     } else {
                         ForEach(Array(project.conversations.enumerated()), id: \.element.id) { index, item in
-                            conversationRow(item: item, showProjectSlug: false)
+                            conversationRow(item: item, showProjectSlug: isSyntheticGroup)
                             if index < project.conversations.count - 1 {
                                 Divider()
                                     .overlay(AntigravityTheme.subtleDivider)
@@ -1007,7 +1017,8 @@ public struct AgentsHomeViewController: View {
     }
 
     private func conversationRow(item: AgentConversationItem, showProjectSlug: Bool) -> some View {
-        Button {
+        let isCompactDensity = usesLiveStoreData && store.displayOptions.densityLabel.hasPrefix("Compact")
+        return Button {
             triggerOpenConversation(item.id)
         } label: {
             HStack(alignment: .center, spacing: 11) {
@@ -1035,19 +1046,21 @@ public struct AgentsHomeViewController: View {
                             }
                         }
 
-                        HStack(spacing: 5) {
-                            Text(item.statusLine)
-                                .font(.system(size: 13.5, weight: .regular))
-                                .foregroundStyle(statusTextColor(for: item.statusHighlight))
-                                .lineLimit(1)
+                        if !isCompactDensity {
+                            HStack(spacing: 5) {
+                                Text(item.statusLine)
+                                    .font(.system(size: 13.5, weight: .regular))
+                                    .foregroundStyle(statusTextColor(for: item.statusHighlight))
+                                    .lineLimit(1)
 
-                            if let add = item.additions, let del = item.deletions {
-                                Text("+\(add)")
-                                    .font(.system(size: 13.5, weight: .medium))
-                                    .foregroundStyle(AntigravityTheme.statusDone)
-                                Text("−\(del)")
-                                    .font(.system(size: 13.5, weight: .medium))
-                                    .foregroundStyle(AntigravityTheme.statusError)
+                                if let add = item.additions, let del = item.deletions {
+                                    Text("+\(add)")
+                                        .font(.system(size: 13.5, weight: .medium))
+                                        .foregroundStyle(AntigravityTheme.statusDone)
+                                    Text("−\(del)")
+                                        .font(.system(size: 13.5, weight: .medium))
+                                        .foregroundStyle(AntigravityTheme.statusError)
+                                }
                             }
                         }
 
@@ -1070,8 +1083,8 @@ public struct AgentsHomeViewController: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(minHeight: 58)
+            .padding(.vertical, isCompactDensity ? 8 : 10)
+            .frame(minHeight: isCompactDensity ? 48 : 58)
         }
         .buttonStyle(AntigravityInteractiveRowButtonStyle())
         .contextMenu {
@@ -1374,12 +1387,31 @@ public struct AgentsHomeViewController: View {
         )
     }
 
+    private func sortedLiveSummaries(_ input: [CascadeSummary]) -> [CascadeSummary] {
+        let opts = store.displayOptions
+        return input.sorted { lhs, rhs in
+            switch opts.sortBy {
+            case .title:
+                let cmp = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+                if cmp != .orderedSame {
+                    return opts.newestFirst ? (cmp == .orderedAscending) : (cmp == .orderedDescending)
+                }
+                return lhs.updatedAt > rhs.updatedAt
+            case .lastUpdated, .dateCreated:
+                if lhs.updatedAt != rhs.updatedAt {
+                    return opts.newestFirst ? (lhs.updatedAt > rhs.updatedAt) : (lhs.updatedAt < rhs.updatedAt)
+                }
+                return lhs.cascadeId < rhs.cascadeId
+            }
+        }
+    }
+
     private var filteredPinnedItems: [AgentConversationItem] {
         let source: [AgentConversationItem]
         if usesLiveStoreData {
-            source = store.summaries
-                .filter { $0.isPinned && summaryMatchesHostFilter($0) }
-                .map(mapStoreSummary)
+            source = sortedLiveSummaries(
+                store.summaries.filter { $0.isPinned && summaryMatchesHostFilter($0) }
+            ).map(mapStoreSummary)
         } else {
             source = pinnedItems.filter { item in
                 switch selectedHost {
@@ -1395,67 +1427,142 @@ public struct AgentsHomeViewController: View {
     private var filteredProjectSections: [AgentProjectSection] {
         let sourceSections: [AgentProjectSection]
         if usesLiveStoreData {
-            var builtSections: [AgentProjectSection] = store.projects
-                .filter { projectMatchesHostFilter($0) }
-                .map { proj in
-                    let convs = store.summaries
-                        .filter { !$0.isPinned && $0.projectSlug == proj.id && summaryMatchesHostFilter($0) }
-                        .map(mapStoreSummary)
-                    var displayProj = proj
-                    if displayProj.runtime != .cloud {
-                        displayProj.hostName = store.resolvedHostName(
-                            forInstanceUuid: proj.originInstanceUuid,
-                            fallback: proj.hostName
+            let opts = store.displayOptions
+            let unpinnedMatchingHost = sortedLiveSummaries(
+                store.summaries.filter { !$0.isPinned && summaryMatchesHostFilter($0) }
+            )
+
+            switch opts.groupBy {
+            case .none:
+                let items = unpinnedMatchingHost.map(mapStoreSummary)
+                if items.isEmpty {
+                    sourceSections = []
+                } else {
+                    sourceSections = [
+                        AgentProjectSection(
+                            id: "all-conversations",
+                            slug: "Conversations",
+                            subtitle: opts.archivedOnly ? "Archived conversations" : "All conversations",
+                            isCloud: selectedHost == .antigravityCloud,
+                            conversations: items
                         )
-                    }
-                    return AgentProjectSection(
-                        id: proj.id,
-                        slug: proj.name,
-                        subtitle: displayProj.homeSubtitle(isHostOnline: isProjectHostOnline(displayProj)),
-                        isCloud: proj.runtime == .cloud,
-                        conversations: convs
-                    )
+                    ]
                 }
 
-            let coveredSummaryIds = Set(builtSections.flatMap { $0.conversations.map(\.id) })
-            let orphaned = store.summaries.filter {
-                !$0.isPinned
-                    && !$0.isArchived
-                    && summaryMatchesHostFilter($0)
-                    && !coveredSummaryIds.contains($0.cascadeId)
-            }
-            let orphanedLocalSummaries = orphaned.filter { !$0.isCloud }
-            if !orphanedLocalSummaries.isEmpty {
-                let firstOrphan = orphanedLocalSummaries[0]
-                let orphanHostName = store.resolvedHostName(
-                    forInstanceUuid: firstOrphan.originInstanceUuid,
-                    fallback: firstOrphan.originHostName ?? selectedHostDisplayName
-                )
-                let orphanOnline = !store.hasPairedBackend
-                    || store.isLocalHostOnline(instanceId: firstOrphan.originInstanceUuid, hostname: orphanHostName)
-                builtSections.append(
-                    AgentProjectSection(
-                        id: AntigravityCloudDetector.noProjectDisplayName,
-                        slug: AntigravityCloudDetector.noProjectDisplayName,
-                        subtitle: "\(orphanOnline ? "Local" : "Offline") · \(orphanHostName)",
-                        isCloud: false,
-                        conversations: orphanedLocalSummaries.map(mapStoreSummary)
+            case .host:
+                var hostOrder: [String] = []
+                var grouped: [String: (slug: String, isCloud: Bool, subtitle: String, items: [CascadeSummary])] = [:]
+                for summary in unpinnedMatchingHost {
+                    let key: String
+                    let slug: String
+                    let subtitle: String
+                    if summary.isCloud {
+                        key = "host-group:cloud"
+                        slug = "Antigravity Cloud"
+                        subtitle = "Remote Agents"
+                    } else {
+                        let resolved = store.resolvedHostName(
+                            forInstanceUuid: summary.originInstanceUuid,
+                            fallback: summary.originHostName ?? selectedHostDisplayName
+                        )
+                        let online = !store.hasPairedBackend
+                            || store.isLocalHostOnline(instanceId: summary.originInstanceUuid, hostname: resolved)
+                        key = "host-group:\(resolved)"
+                        slug = resolved
+                        subtitle = online ? "Local · Online" : "Local · Offline"
+                    }
+                    if grouped[key] == nil {
+                        hostOrder.append(key)
+                        grouped[key] = (slug, summary.isCloud, subtitle, [summary])
+                    } else {
+                        grouped[key]?.items.append(summary)
+                    }
+                }
+                var hostSections = hostOrder.compactMap { key -> AgentProjectSection? in
+                    guard let entry = grouped[key] else { return nil }
+                    return AgentProjectSection(
+                        id: key,
+                        slug: entry.slug,
+                        subtitle: entry.subtitle,
+                        isCloud: entry.isCloud,
+                        conversations: entry.items.map(mapStoreSummary)
                     )
+                }
+                if opts.sortProjectsOrder == "Alphabetical" {
+                    hostSections.sort { $0.slug.localizedCaseInsensitiveCompare($1.slug) == .orderedAscending }
+                }
+                sourceSections = hostSections
+
+            case .project:
+                var builtSections: [AgentProjectSection] = store.projects
+                    .filter { projectMatchesHostFilter($0) }
+                    .map { proj in
+                        let convs = sortedLiveSummaries(
+                            store.summaries.filter {
+                                !$0.isPinned && $0.projectSlug == proj.id && summaryMatchesHostFilter($0)
+                            }
+                        ).map(mapStoreSummary)
+                        var displayProj = proj
+                        if displayProj.runtime != .cloud {
+                            displayProj.hostName = store.resolvedHostName(
+                                forInstanceUuid: proj.originInstanceUuid,
+                                fallback: proj.hostName
+                            )
+                        }
+                        return AgentProjectSection(
+                            id: proj.id,
+                            slug: proj.name,
+                            subtitle: displayProj.homeSubtitle(isHostOnline: isProjectHostOnline(displayProj)),
+                            isCloud: proj.runtime == .cloud,
+                            conversations: convs
+                        )
+                    }
+
+                let coveredSummaryIds = Set(builtSections.flatMap { $0.conversations.map(\.id) })
+                let orphaned = sortedLiveSummaries(
+                    store.summaries.filter {
+                        !$0.isPinned
+                            && (opts.archivedOnly ? $0.isArchived : !$0.isArchived)
+                            && summaryMatchesHostFilter($0)
+                            && !coveredSummaryIds.contains($0.cascadeId)
+                    }
                 )
-            }
-            let orphanedCloud = orphaned.filter(\.isCloud).map(mapStoreSummary)
-            if !orphanedCloud.isEmpty {
-                builtSections.append(
-                    AgentProjectSection(
-                        id: "cloud:\(AntigravityCloudDetector.noProjectDisplayName)",
-                        slug: AntigravityCloudDetector.noProjectDisplayName,
-                        subtitle: "Antigravity Cloud",
-                        isCloud: true,
-                        conversations: orphanedCloud
+                let orphanedLocalSummaries = orphaned.filter { !$0.isCloud }
+                if !orphanedLocalSummaries.isEmpty {
+                    let firstOrphan = orphanedLocalSummaries[0]
+                    let orphanHostName = store.resolvedHostName(
+                        forInstanceUuid: firstOrphan.originInstanceUuid,
+                        fallback: firstOrphan.originHostName ?? selectedHostDisplayName
                     )
-                )
+                    let orphanOnline = !store.hasPairedBackend
+                        || store.isLocalHostOnline(instanceId: firstOrphan.originInstanceUuid, hostname: orphanHostName)
+                    builtSections.append(
+                        AgentProjectSection(
+                            id: AntigravityCloudDetector.noProjectDisplayName,
+                            slug: AntigravityCloudDetector.noProjectDisplayName,
+                            subtitle: "\(orphanOnline ? "Local" : "Offline") · \(orphanHostName)",
+                            isCloud: false,
+                            conversations: orphanedLocalSummaries.map(mapStoreSummary)
+                        )
+                    )
+                }
+                let orphanedCloud = orphaned.filter(\.isCloud).map(mapStoreSummary)
+                if !orphanedCloud.isEmpty {
+                    builtSections.append(
+                        AgentProjectSection(
+                            id: "cloud:\(AntigravityCloudDetector.noProjectDisplayName)",
+                            slug: AntigravityCloudDetector.noProjectDisplayName,
+                            subtitle: "Antigravity Cloud",
+                            isCloud: true,
+                            conversations: orphanedCloud
+                        )
+                    )
+                }
+                if opts.sortProjectsOrder == "Alphabetical" {
+                    builtSections.sort { $0.slug.localizedCaseInsensitiveCompare($1.slug) == .orderedAscending }
+                }
+                sourceSections = builtSections
             }
-            sourceSections = builtSections
         } else {
             sourceSections = projectSections.filter { sec in
                 switch selectedHost {
@@ -1466,9 +1573,16 @@ public struct AgentsHomeViewController: View {
             }
         }
 
+        let hideEmptySections = !searchText.isEmpty
+            || (usesLiveStoreData && (
+                selectedFilter != .all
+                || store.displayOptions.archivedOnly
+                || store.displayOptions.filterScopeLabel == "Active only"
+            ))
+
         return sourceSections.compactMap { section in
             let filteredConvs = section.conversations.filter { matchesFilters($0) }
-            if filteredConvs.isEmpty && (!searchText.isEmpty || (usesLiveStoreData && selectedFilter != .all)) {
+            if filteredConvs.isEmpty && hideEmptySections {
                 return nil
             }
             var copy = section
@@ -1478,7 +1592,15 @@ public struct AgentsHomeViewController: View {
     }
 
     private func matchesFilters(_ item: AgentConversationItem) -> Bool {
-        guard !item.isArchived else { return false }
+        if usesLiveStoreData && store.displayOptions.archivedOnly {
+            guard item.isArchived else { return false }
+        } else {
+            guard !item.isArchived else { return false }
+        }
+
+        if usesLiveStoreData && store.displayOptions.filterScopeLabel == "Active only" {
+            guard item.statusHighlight == .running || item.statusHighlight == .waiting else { return false }
+        }
 
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let query = searchText.lowercased()

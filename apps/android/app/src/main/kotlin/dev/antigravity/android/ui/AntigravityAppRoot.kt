@@ -66,7 +66,7 @@ import kotlinx.coroutines.launch
 
 private sealed interface AppRoute {
     data class RootTab(val tab: PrimaryTab) : AppRoute
-    data object DisplayOptions : AppRoute
+    data class DisplayOptions(val expandSortMenu: Boolean = false) : AppRoute
     data class ContextMenu(val cascadeId: String) : AppRoute
     data class ProjectDetail(val projectId: String) : AppRoute
     data object CreateProject : AppRoute
@@ -151,7 +151,7 @@ fun AntigravityAppRoot(
         }
         currentRoute = when (currentRoute) {
             is AppRoute.RootTab -> currentRoute
-            AppRoute.DisplayOptions,
+            is AppRoute.DisplayOptions,
             is AppRoute.ContextMenu,
             is AppRoute.ProjectDetail,
             AppRoute.CreateProject,
@@ -210,7 +210,7 @@ fun AntigravityAppRoot(
                             PrimaryTab.AGENTS -> {
                                 AgentsHomeScreen(
                                     coordinator = coordinator,
-                                    onOpenDisplayOptions = { navigateTo(AppRoute.DisplayOptions) },
+                                    onOpenDisplayOptions = { navigateTo(AppRoute.DisplayOptions(expandSortMenu = false)) },
                                     onOpenNewProject = { navigateTo(AppRoute.CreateProject) },
                                     onOpenProjectDetail = { projectId ->
                                         coordinator.workspaceStore.selectProject(projectId)
@@ -254,10 +254,11 @@ fun AntigravityAppRoot(
                     }
                 }
 
-                AppRoute.DisplayOptions -> {
+                is AppRoute.DisplayOptions -> {
                     DisplayOptionsOverlayScreen(
                         coordinator = coordinator,
                         onDismiss = { navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS)) },
+                        initialSortMenuExpanded = route.expandSortMenu,
                     )
                 }
 
@@ -568,7 +569,7 @@ private fun RootTabScaffold(
 
 private fun routeForVerifyScene(scene: EsddVerifySceneCase): AppRoute = when (scene) {
     EsddVerifySceneCase.AGENTS_HOME -> AppRoute.RootTab(PrimaryTab.AGENTS)
-    EsddVerifySceneCase.DISPLAY_OPTIONS -> AppRoute.DisplayOptions
+    EsddVerifySceneCase.DISPLAY_OPTIONS -> AppRoute.DisplayOptions(expandSortMenu = true)
     EsddVerifySceneCase.CONTEXT_MENU_PIN -> AppRoute.ContextMenu("cas-flaky-settlement")
     EsddVerifySceneCase.PROJECT_DETAIL -> AppRoute.ProjectDetail("ledger-svc")
     EsddVerifySceneCase.CREATE_PROJECT -> AppRoute.CreateProject
