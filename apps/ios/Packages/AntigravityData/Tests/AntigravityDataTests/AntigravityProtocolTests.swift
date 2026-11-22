@@ -4083,6 +4083,20 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertFalse(store.hasPairedBackend)
         XCTAssertEqual(store.connectionLifecyclePhase, .disconnected)
     }
+
+    func testAntigravityRPCErrorProvidesLocalizedDescriptions() {
+        let httpErr = AntigravityRPCError.httpError(statusCode: 503, body: "No active backend connection")
+        XCTAssertTrue(httpErr.localizedDescription.contains("HTTP 503"))
+        XCTAssertTrue(httpErr.localizedDescription.contains("No active backend connection"))
+        XCTAssertFalse(httpErr.localizedDescription.contains("The operation couldn't be completed"))
+
+        let authErr = AntigravityRPCError.unauthorized("HTTP 403 [ListInstances]")
+        XCTAssertTrue(authErr.localizedDescription.contains("HTTP 403"))
+        XCTAssertFalse(authErr.localizedDescription.contains("The operation couldn't be completed"))
+
+        let emptyHttpErr = AntigravityRPCError.httpError(statusCode: 502, body: "   ")
+        XCTAssertEqual(emptyHttpErr.localizedDescription, "HTTP 502")
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {

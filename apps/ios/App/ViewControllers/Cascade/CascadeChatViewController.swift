@@ -359,7 +359,7 @@ public struct CascadeChatViewController: View {
                         .foregroundStyle(AntigravityTheme.inkReading)
                     Text(
                         (!store.isLiveBackendConnected && store.isConnectingToBackend)
-                            ? "Connecting to \(effectiveHeaderHostLabel)..."
+                            ? "Connecting to \(effectiveHeaderHostLabel.replacingOccurrences(of: "Connecting · ", with: ""))..."
                             : "Syncing trajectory steps from \(effectiveHeaderHostLabel)"
                     )
                         .font(.system(size: 13))

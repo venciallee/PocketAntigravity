@@ -6,12 +6,30 @@ import Security
 import CryptoKit
 #endif
 
-public enum AntigravityRPCError: Error, Sendable, Equatable {
+public enum AntigravityRPCError: Error, LocalizedError, Sendable, Equatable {
     case invalidEndpoint
     case unauthorized(String)
     case httpError(statusCode: Int, body: String)
     case decodingError(String)
     case interactionRejected
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidEndpoint:
+            return "Invalid Antigravity endpoint URL."
+        case .unauthorized(let reason):
+            let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "Unauthorized (401/403)." : "Unauthorized: \(trimmed)"
+        case .httpError(let statusCode, let body):
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "HTTP \(statusCode)" : "HTTP \(statusCode): \(trimmed)"
+        case .decodingError(let reason):
+            let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "Response decoding failed." : "Decoding error: \(trimmed)"
+        case .interactionRejected:
+            return "Biometric verification cancelled or rejected."
+        }
+    }
 }
 
 /// Handshake telemetry returned by `AntigravityRPCClient.verifyConnection()`.
