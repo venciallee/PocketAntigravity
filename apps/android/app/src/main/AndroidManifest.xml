@@ -31,12 +31,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- ESDD & Deep Link Routing: antigravity://verify/<case>, antigravity://share/<id> -->
+            <!-- ESDD & Deep Link Routing: agpocket://verify/<case>, agpocket://cascade/<id>, agpocket://pair?... -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="antigravity" />
+                <data android:scheme="agpocket" />
             </intent-filter>
 
             <!-- Native Android Share Receiver (no 30MB iOS extension limit) -->

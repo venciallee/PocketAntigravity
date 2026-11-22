@@ -12,7 +12,7 @@ android {
     buildToolsVersion = "35.0.0"
 
     defaultConfig {
-        applicationId = "dev.antigravity.android"
+        applicationId = "com.thousandtimes.agpocket"
         minSdk = 29
         targetSdk = 36
         versionCode = 1

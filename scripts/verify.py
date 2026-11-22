@@ -162,7 +162,7 @@ SUITE_SPECS: dict[str, SuiteSpec] = {
     ),
     "sim": SuiteSpec(
         name="sim",
-        description="macOS XcodeGen + xcodebuild + real iOS Simulator AntigravityUITests + 13 native screenshots",
+        description="macOS XcodeGen + xcodebuild + real iOS Simulator AGPocketUITests + 13 native screenshots",
         in_fast=False,
         in_full=False,
         requires=("macos", "xcodebuild", "xcodegen"),

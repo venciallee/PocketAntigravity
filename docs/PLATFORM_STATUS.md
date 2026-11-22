@@ -70,7 +70,7 @@ Every screen follows the normative ESDD specs ([`specs/`](../specs/) and [`specs
 | :--- | :---: | :---: | :---: | :--- |
 | **Official Cloud Relay Transport (`SAPISIDHASH` + Dynamic API Key Discovery & Rotation)** | ✅ | ✅ | ✅ | Zero hardcoded API keys; cookie-isolated `ApiService/ListInstances`, `ProxyCommand`, and `StreamProxyCommand` in `AntigravityKmpRpcClient` |
 | **Interactive Google Cloud Relay Sign-In Sheet** | ✅ | 🚧 | ✅ | iOS ships live `CloudRelaySignInSheet` (WKWebView + XHR API-key capture); Android ships `CloudRelayCookieBridge` + `WelcomeAndPairingScreen` entry point with in-app Android `WebView` OAuth modal next |
-| **Remote Control QR Code Pairing** | ✅ | 🚧 | ✅ | iOS ships live camera `RemoteControlQRScannerSheet`; Android ships deep-link (`antigravity://`) & pairing entry with CameraX / ML Kit live scanner next |
+| **Remote Control QR Code Pairing** | ✅ | 🚧 | ✅ | iOS ships live camera `RemoteControlQRScannerSheet`; Android ships deep-link (`agpocket://`) & pairing entry with CameraX / ML Kit live scanner next |
 | **Direct LAN / Tailscale Pairing + SHA-256 TLS Pinning / TOFU** | ✅ | ✅ | ✅ | Full support via `connectDirectLan` + Ktor Darwin/OkHttp pinners + strict HTTPS (`usesCleartextTraffic="false"`, loopback-only cleartext) |
 | **5-Byte Connect-RPC Streaming Envelope** | ✅ | ✅ | ✅ | `[1B flags (raw/gzip/end-trailer) \| 4B BE length \| payload]` for summaries, reactive cascade updates & project streams |
 | **Binary-First Protobuf + Adaptive JSON Fallback + Runtime Ceiling Learning** | ✅ | ✅ | ✅ | ~65% bandwidth savings over `application/proto`; zero hardcoded 600-step limits; targeted JSON probe for unknown future fields |
@@ -86,7 +86,7 @@ Every screen follows the normative ESDD specs ([`specs/`](../specs/) and [`specs
 | **Biometric Approval Gate** | ✅ Face ID / Touch ID (`LocalAuthentication`) | ✅ `BiometricPrompt` + lock-screen `BiometricApprovalTrampolineActivity` |
 | **Live Background Progress** | ✅ Dynamic Island + Lock Screen Live Activity (`ActivityKit` / `WidgetKit`) | ✅ Android 16 Promoted Live Updates (`NotificationCompat.ProgressStyle` + status-bar chip) + Android 10–15 `AgentProgressForegroundService` fallback |
 | **Home Screen Widget** | ✅ `AntigravityLiveActivityWidget` (`WidgetKit`, <30 MB pure-Swift extension) | ✅ `AntigravityAgentsGlanceWidget` (`Jetpack Glance` multi-agent widget) |
-| **System Share Sheet Receiver** | ✅ `AntigravityShare` Extension (text, URLs, images, files) | ✅ Native `ACTION_SEND` & `ACTION_SEND_MULTIPLE` intent filters in `MainActivity` (no 30 MB extension cap) |
+| **System Share Sheet Receiver** | ✅ `AGPocketShare` Extension (text, URLs, images, files) | ✅ Native `ACTION_SEND` & `ACTION_SEND_MULTIPLE` intent filters in `MainActivity` (no 30 MB extension cap) |
 | **Encrypted Secret Storage** | ✅ iOS Keychain | ✅ Android Keystore + Tink AEAD + DataStore (`AndroidSecretStore`) |
 | **Appearance & Themes** | ✅ System / Dark / Light · Obsidian, Nord, Everforest presets | ✅ System / Dark / Light · Obsidian, Nord, Everforest presets + **Android 12+ Material You Dynamic Color** opt-in (semantic status colors locked) |
 | **Startup Performance** | ✅ Frame-0 Conversations launch (`UILaunchScreen` + zero blocking Keychain I/O on main thread) | ✅ Edge-to-edge Compose launch with instant local projection & ESDD deep-link routing |

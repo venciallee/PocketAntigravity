@@ -74,6 +74,11 @@ class CoreModelParityTest {
         assertEquals("lt74xt6l0m-golden-star", bare.instanceId)
 
         // Direct LAN pairing URI must not be parsed as Cloud Relay target
+        val agPocketLanUri = "agpocket://pair?url=http://192.168.1.5:8787&csrf=secret-token"
+        assertTrue(RemoteHostInstance.isDirectLanPairingUri(agPocketLanUri))
+        assertNull(RemoteHostInstance.parseRemoteControlTarget(agPocketLanUri))
+        assertNull(RemoteHostInstance.parseRemoteControlTarget("agpocket://verify/agents-home"))
+
         val lanUri = "antigravity://pair?url=http://192.168.1.5:8787&csrf=secret-token"
         assertTrue(RemoteHostInstance.isDirectLanPairingUri(lanUri))
         assertNull(RemoteHostInstance.parseRemoteControlTarget(lanUri))

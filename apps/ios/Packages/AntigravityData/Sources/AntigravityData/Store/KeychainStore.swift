@@ -88,7 +88,8 @@ public struct PairedHostLaunchHint: Codable, Sendable, Equatable {
 /// Credentials are never written to `UserDefaults` or App Group shared containers.
 public actor KeychainStore: SecretStore {
     public static let shared = KeychainStore()
-    public static let serviceIdentifier = "com.antigravity.ios.remotecontrol"
+    public static let serviceIdentifier = "com.thousandtimes.agpocket.remotecontrol"
+    public static let legacyServiceIdentifier = "com.antigravity.ios.remotecontrol"
     private static let activeCredentialsAccount = "active_backend_credentials_v2"
     private static let relayWebApiKeyPrefix = "relay_web_api_key_v1::"
 
@@ -115,19 +116,21 @@ public actor KeychainStore: SecretStore {
 
     public func readSecret(forKey key: String) -> String? {
         #if canImport(Security)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.serviceIdentifier,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecSuccess,
-           let data = result as? Data,
-           let decoded = String(data: data, encoding: .utf8) {
-            return decoded
+        for service in [Self.serviceIdentifier, Self.legacyServiceIdentifier] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess,
+               let data = result as? Data,
+               let decoded = String(data: data, encoding: .utf8) {
+                return decoded
+            }
         }
         #endif
         return memoryFallback[key]
@@ -136,12 +139,14 @@ public actor KeychainStore: SecretStore {
     public func removeSecret(forKey key: String) {
         memoryFallback.removeValue(forKey: key)
         #if canImport(Security)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.serviceIdentifier,
-            kSecAttrAccount as String: key
-        ]
-        SecItemDelete(query as CFDictionary)
+        for service in [Self.serviceIdentifier, Self.legacyServiceIdentifier] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key
+            ]
+            SecItemDelete(query as CFDictionary)
+        }
         #endif
     }
 
@@ -187,21 +192,23 @@ public actor KeychainStore: SecretStore {
     /// immediately on Frame 0 without exposing cookies, CSRF tokens, or API keys.
     public nonisolated static func peekSavedHostLaunchHintSync() -> PairedHostLaunchHint? {
         #if canImport(Security)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.serviceIdentifier,
-            kSecAttrAccount as String: Self.activeCredentialsAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let creds = try? JSONDecoder().decode(SavedBackendCredentials.self, from: data) else {
-            return nil
+        for service in [Self.serviceIdentifier, Self.legacyServiceIdentifier] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: Self.activeCredentialsAccount,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess,
+               let data = result as? Data,
+               let creds = try? JSONDecoder().decode(SavedBackendCredentials.self, from: data) {
+                return PairedHostLaunchHint(credentials: creds)
+            }
         }
-        return PairedHostLaunchHint(credentials: creds)
+        return nil
         #else
         return nil
         #endif

@@ -356,7 +356,7 @@ public struct AntigravityLiveActivityWidget: Widget {
                                 }
                                 .buttonStyle(.plain)
 
-                                Link(destination: URL(string: "antigravity://cascade/\(context.attributes.cascadeId)")!) {
+                                Link(destination: URL(string: "agpocket://cascade/\(context.attributes.cascadeId)")!) {
                                     Text("Open")
                                         .font(.system(size: 13, weight: .bold))
                                         .foregroundStyle(LiveActivityPalette.darkCTAInk)

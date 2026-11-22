@@ -171,13 +171,23 @@ public struct AntigravityApp: App {
                         activeVerifyCase = sceneCase
                         return
                     }
-                    if url.scheme?.lowercased() == "antigravity",
-                       url.host?.lowercased() == "share" {
-                        let shareId = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                        Task {
-                            _ = await store.consumePendingSharePayload(id: shareId.isEmpty ? nil : shareId)
+                    if let scheme = url.scheme?.lowercased(),
+                       (scheme == "agpocket" || scheme == "antigravity"),
+                       let host = url.host?.lowercased() {
+                        if host == "share" {
+                            let shareId = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                            Task {
+                                _ = await store.consumePendingSharePayload(id: shareId.isEmpty ? nil : shareId)
+                            }
+                            return
                         }
-                        return
+                        if host == "cascade" || host == "c" {
+                            let cascadeId = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                            if !cascadeId.isEmpty {
+                                store.selectCascade(cascadeId)
+                            }
+                            return
+                        }
                     }
                     let rawURL = url.absoluteString
                     if RemoteHostInstance.isDirectLANPairingURI(rawURL)

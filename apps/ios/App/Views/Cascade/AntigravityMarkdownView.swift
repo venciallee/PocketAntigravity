@@ -515,7 +515,7 @@ internal enum MarkdownLinkFormatting {
         let trimmed = rawDestination.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
-        if lower.hasPrefix("https://") || lower.hasPrefix("http://") || lower.hasPrefix("mailto:") || lower.hasPrefix("antigravity://") {
+        if lower.hasPrefix("https://") || lower.hasPrefix("http://") || lower.hasPrefix("mailto:") || lower.hasPrefix("agpocket://") || lower.hasPrefix("antigravity://") {
             if let direct = URL(string: trimmed) {
                 return direct
             }

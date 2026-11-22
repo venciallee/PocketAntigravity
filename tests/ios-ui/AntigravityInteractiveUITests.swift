@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 /// Embedded Connect-RPC HTTP server simulating a live Antigravity Desktop `language_server`
-/// inside the `XCUITest` runner process so `Antigravity.app` exercises real network + real UI touch events.
+/// inside the `XCUITest` runner process so `AGPocket.app` exercises real network + real UI touch events.
 private final class EmbeddedDesktopMockServer: @unchecked Sendable {
     let port: UInt16
     private let listenFD: Int32

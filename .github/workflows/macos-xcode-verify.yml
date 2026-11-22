@@ -218,7 +218,7 @@ jobs:
           set -euo pipefail
           xcodebuild build \
             -project PocketAntigravity.xcodeproj \
-            -scheme Antigravity \
+            -scheme AGPocket \
             -configuration Debug \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \

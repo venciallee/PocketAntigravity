@@ -195,10 +195,10 @@ mkdir -p verification/output/real-simulator
 
 if [[ "$LIVE_ONLY" -eq 1 ]]; then
   echo ""
-  echo "=== [4/5] Building Antigravity.app (--live-only fast mode) ==="
+  echo "=== [4/5] Building AGPocket.app (--live-only fast mode) ==="
   xcodebuild build \
     -project PocketAntigravity.xcodeproj \
-    -scheme Antigravity \
+    -scheme AGPocket \
     -sdk iphonesimulator \
     -destination "id=${SIM_UDID}" \
     -derivedDataPath "$DERIVED_DATA" \
@@ -206,19 +206,19 @@ if [[ "$LIVE_ONLY" -eq 1 ]]; then
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
     AD_HOC_CODE_SIGNING_ALLOWED=YES
-  echo "[PASS] Antigravity.app compiled for ${SIM_NAME}"
+  echo "[PASS] AGPocket.app compiled for ${SIM_NAME}"
 else
   echo ""
-  echo "=== [4/5] Compiling Antigravity.app & Running Automated XCUITest Suite (do not click Simulator during ~25s run) ==="
-  rm -rf verification/output/real-simulator/AntigravityUITests.xcresult
+  echo "=== [4/5] Compiling AGPocket.app & Running Automated XCUITest Suite (do not click Simulator during ~25s run) ==="
+  rm -rf verification/output/real-simulator/AGPocketUITests.xcresult
   xcodebuild test \
     -project PocketAntigravity.xcodeproj \
-    -scheme Antigravity \
+    -scheme AGPocket \
     -sdk iphonesimulator \
     -destination "id=${SIM_UDID}" \
     -derivedDataPath "$DERIVED_DATA" \
-    -only-testing:AntigravityUITests \
-    -resultBundlePath "verification/output/real-simulator/AntigravityUITests.xcresult" \
+    -only-testing:AGPocketUITests \
+    -resultBundlePath "verification/output/real-simulator/AGPocketUITests.xcresult" \
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
     AD_HOC_CODE_SIGNING_ALLOWED=YES
@@ -226,7 +226,7 @@ else
 fi
 
 echo ""
-echo "=== [5/5] Opening Simulator & Connecting Antigravity.app Live to Your Antigravity Desktop ==="
+echo "=== [5/5] Opening Simulator & Connecting AGPocket.app Live to Your Antigravity Desktop ==="
 DEV_DIR="$(xcode-select -p)"
 DEVICE_HUB_APP="$(dirname "$DEV_DIR")/Applications/DeviceHub.app"
 LEGACY_SIM_APP="$DEV_DIR/Applications/Simulator.app"
@@ -240,7 +240,7 @@ fi
 SIM_SETTINGS_FILE="$(mktemp "${TMPDIR:-/tmp}/agy-sim-buildsettings.XXXXXX")"
 xcodebuild \
   -project PocketAntigravity.xcodeproj \
-  -scheme Antigravity \
+  -scheme AGPocket \
   -configuration Debug \
   -sdk iphonesimulator \
   -derivedDataPath "$DERIVED_DATA" \
@@ -279,9 +279,9 @@ try:
         for entry in json.loads(raw[bracket_idx:]):
             bs = entry.get("buildSettings") or {}
             target = entry.get("target", "")
-            wrapper = bs.get("WRAPPER_NAME") or bs.get("FULL_PRODUCT_NAME") or "Antigravity.app"
+            wrapper = bs.get("WRAPPER_NAME") or bs.get("FULL_PRODUCT_NAME") or "AGPocket.app"
             product_type = bs.get("PRODUCT_TYPE", "")
-            if target == "Antigravity" or (product_type == "com.apple.product-type.application" and wrapper == "Antigravity.app"):
+            if target == "AGPocket" or (product_type == "com.apple.product-type.application" and wrapper == "AGPocket.app"):
                 for cand in (
                     bs.get("CODESIGNING_FOLDER_PATH"),
                     os.path.join(bs.get("TARGET_BUILD_DIR", ""), wrapper) if bs.get("TARGET_BUILD_DIR") else None,
@@ -320,7 +320,7 @@ seen = set()
 for root, filter_project_prefix in search_roots:
     if not os.path.isdir(root):
         continue
-    direct = os.path.join(root, "Debug-iphonesimulator", "Antigravity.app")
+    direct = os.path.join(root, "Debug-iphonesimulator", "AGPocket.app")
     if direct not in seen and is_sim_app(direct):
         seen.add(direct)
         found.append((os.path.getmtime(direct), direct))
@@ -337,9 +337,9 @@ for root, filter_project_prefix in search_roots:
                 and not d.endswith(".xctest")
                 and not d.endswith(".appex")
             ]
-        if "Antigravity.app" in dirnames:
-            cand = os.path.join(dirpath, "Antigravity.app")
-            dirnames.remove("Antigravity.app")
+        if "AGPocket.app" in dirnames:
+            cand = os.path.join(dirpath, "AGPocket.app")
+            dirnames.remove("AGPocket.app")
             if cand not in seen and is_sim_app(cand):
                 seen.add(cand)
                 found.append((os.path.getmtime(cand), cand))
@@ -352,23 +352,23 @@ PY
 rm -f "$SIM_SETTINGS_FILE"
 
 if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
-  echo "[!] Built Antigravity.app bundle not found after xcodebuild."
+  echo "[!] Built AGPocket.app bundle not found after xcodebuild."
   exit 1
 fi
 xcrun simctl install "$SIM_UDID" "$APP_PATH"
-xcrun simctl terminate "$SIM_UDID" dev.antigravity.ios.app >/dev/null 2>&1 || true
+xcrun simctl terminate "$SIM_UDID" com.thousandtimes.agpocket >/dev/null 2>&1 || true
 
 SIMCTL_CHILD_NO_PROXY="127.0.0.1,localhost,::1" \
 SIMCTL_CHILD_ANTIGRAVITY_BACKEND_URL="http://127.0.0.1:${BRIDGE_PORT}" \
 SIMCTL_CHILD_ANTIGRAVITY_CSRF_TOKEN="$BRIDGE_CSRF" \
 SIMCTL_CHILD_ANTIGRAVITY_HOST_NAME="$(scutil --get ComputerName 2>/dev/null || hostname)" \
-  xcrun simctl launch "$SIM_UDID" dev.antigravity.ios.app
+  xcrun simctl launch "$SIM_UDID" com.thousandtimes.agpocket
 
 sleep 2.5
 xcrun simctl io "$SIM_UDID" screenshot "verification/output/real-simulator/LIVE_CONNECTED_HOME.png"
 echo "[PASS] Real Simulator screenshot saved to verification/output/real-simulator/LIVE_CONNECTED_HOME.png"
 echo ""
-echo "Simulator (${SIM_NAME}) is now running Antigravity.app connected to http://127.0.0.1:${BRIDGE_PORT}."
+echo "Simulator (${SIM_NAME}) is now running AGPocket.app connected to http://127.0.0.1:${BRIDGE_PORT}."
 echo "Tap any conversation row or project group in the Simulator window to inspect live sessions!"
 echo "Press Ctrl+C when finished interacting to stop the background Companion Bridge."
 tail -n 6 -f /tmp/antigravity-bridge.log &

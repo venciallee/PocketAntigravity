@@ -10,6 +10,7 @@ import Security
 /// sharing the exact service & account namespace with `AntigravityData.KeychainStore`.
 final class KmpKeychainSecretStore: NSObject, AntigravityShared.SyncSecretStore, @unchecked Sendable {
     private static let serviceIdentifier = AntigravityData.KeychainStore.serviceIdentifier
+    private static let legacyServiceIdentifier = AntigravityData.KeychainStore.legacyServiceIdentifier
     private static let activeCredentialsAccount = "active_backend_credentials_v2"
     private let lock = NSLock()
     private var memoryFallback: [String: String] = [:]
@@ -36,19 +37,21 @@ final class KmpKeychainSecretStore: NSObject, AntigravityShared.SyncSecretStore,
 
     func readSecretSync(key: String) -> String? {
         #if canImport(Security)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.serviceIdentifier,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecSuccess,
-           let data = result as? Data,
-           let decoded = String(data: data, encoding: .utf8) {
-            return decoded
+        for service in [Self.serviceIdentifier, Self.legacyServiceIdentifier] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess,
+               let data = result as? Data,
+               let decoded = String(data: data, encoding: .utf8) {
+                return decoded
+            }
         }
         #endif
         lock.lock()
@@ -62,12 +65,14 @@ final class KmpKeychainSecretStore: NSObject, AntigravityShared.SyncSecretStore,
         lock.unlock()
 
         #if canImport(Security)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.serviceIdentifier,
-            kSecAttrAccount as String: key
-        ]
-        SecItemDelete(query as CFDictionary)
+        for service in [Self.serviceIdentifier, Self.legacyServiceIdentifier] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key
+            ]
+            SecItemDelete(query as CFDictionary)
+        }
         #endif
     }
 

@@ -90,7 +90,7 @@ class AgentProgressForegroundService : Service() {
     private fun buildContentPendingIntent(snapshot: LiveProgressSnapshot): PendingIntent {
         val intent = Intent(
             Intent.ACTION_VIEW,
-            Uri.parse("antigravity://cascade/${snapshot.cascadeId}"),
+            Uri.parse("agpocket://cascade/${snapshot.cascadeId}"),
             this,
             MainActivity::class.java,
         ).apply {
@@ -141,10 +141,10 @@ class AgentProgressForegroundService : Service() {
 
     companion object {
         const val NOTIFICATION_ID: Int = 4091
-        const val ACTION_START_OR_UPDATE: String = "dev.antigravity.android.action.START_OR_UPDATE_LIVE_PROGRESS"
-        const val ACTION_STOP_SERVICE: String = "dev.antigravity.android.action.STOP_LIVE_PROGRESS_SERVICE"
-        const val EXTRA_SNAPSHOT_JSON: String = "dev.antigravity.android.extra.SNAPSHOT_JSON"
-        const val EXTRA_COMMAND_PREVIEW: String = "dev.antigravity.android.extra.COMMAND_PREVIEW"
+        const val ACTION_START_OR_UPDATE: String = "com.thousandtimes.agpocket.action.START_OR_UPDATE_LIVE_PROGRESS"
+        const val ACTION_STOP_SERVICE: String = "com.thousandtimes.agpocket.action.STOP_LIVE_PROGRESS_SERVICE"
+        const val EXTRA_SNAPSHOT_JSON: String = "com.thousandtimes.agpocket.extra.SNAPSHOT_JSON"
+        const val EXTRA_COMMAND_PREVIEW: String = "com.thousandtimes.agpocket.extra.COMMAND_PREVIEW"
 
         private const val REQUEST_CODE_OPEN = 1001
         private const val REQUEST_CODE_APPROVE = 1002

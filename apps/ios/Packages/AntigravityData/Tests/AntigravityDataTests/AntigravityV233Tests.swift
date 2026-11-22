@@ -459,7 +459,7 @@ final class AntigravityV233Tests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let bridge = SharedAppGroupBridge(
-            suiteName: "group.dev.antigravity.ios.test.\(UUID().uuidString)",
+            suiteName: "group.com.thousandtimes.agpocket.test.\(UUID().uuidString)",
             storageDirectory: tempDir
         )
 

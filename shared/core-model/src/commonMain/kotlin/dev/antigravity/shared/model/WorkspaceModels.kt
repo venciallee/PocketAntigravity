@@ -440,7 +440,7 @@ public data class RemoteHostInstance(
         public fun isDirectLanPairingUri(rawInput: String): Boolean {
             val parsed = SimpleUriParts.parse(rawInput.trim()) ?: return false
             val scheme = parsed.scheme.lowercase()
-            if (scheme != "antigravity" && scheme != "agy" && scheme != "google-antigravity") return false
+            if (scheme != "agpocket" && scheme != "antigravity" && scheme != "agy" && scheme != "google-antigravity") return false
             val targetUrl = parsed.queryParams.firstOrNull { it.first == "url" }?.second
             if (targetUrl.isNullOrEmpty()) return false
             if (parsed.host.lowercase() == "pair") return true
@@ -518,10 +518,10 @@ public data class RemoteHostInstance(
             val uri = SimpleUriParts.parse(trimmed) ?: return null
             val scheme = uri.scheme.lowercase()
 
-            // 3. Custom Antigravity deep-link schemes
-            if (scheme == "antigravity" || scheme == "agy" || scheme == "google-antigravity") {
+            // 3. Custom AG Pocket / Antigravity deep-link schemes
+            if (scheme == "agpocket" || scheme == "antigravity" || scheme == "agy" || scheme == "google-antigravity") {
                 val hostLower = uri.host.lowercase()
-                if (scheme == "antigravity" && hostLower == "verify") return null
+                if ((scheme == "agpocket" || scheme == "antigravity") && (hostLower == "verify" || hostLower == "share")) return null
                 unwrapRedirectQueryParameter(uri, depth)?.let { return it }
                 val parts = uri.pathSegments
                 var meta = extractMetadata(parts, uri.queryParams, uri.fragment)

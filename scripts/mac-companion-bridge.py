@@ -1969,7 +1969,7 @@ def create_bridge_server(
                 endpoint = f"http://{host_hdr}"
                 hostname = socket.gethostname()
                 pair_uri = (
-                    f"antigravity://pair?"
+                    f"agpocket://pair?"
                     f"url={urllib.parse.quote(endpoint, safe='')}"
                     f"&csrf={urllib.parse.quote(bridge_csrf, safe='')}"
                     f"&name={urllib.parse.quote(hostname, safe='')}"
@@ -1981,7 +1981,7 @@ def create_bridge_server(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Pair Antigravity iOS · {html.escape(hostname)}</title>
+<title>Pair AG Pocket · {html.escape(hostname)}</title>
 <style>
   body {{
     margin: 0; padding: 28px 18px; background: #090A0D; color: #F5F7FA;
@@ -3264,7 +3264,7 @@ def main():
     endpoint = f"http://{lan_ip}:{args.port}"
     hostname = socket.gethostname()
     pair_uri = (
-        f"antigravity://pair?"
+        f"agpocket://pair?"
         f"url={urllib.parse.quote(endpoint, safe='')}"
         f"&csrf={urllib.parse.quote(bridge_csrf, safe='')}"
         f"&name={urllib.parse.quote(hostname, safe='')}"

@@ -180,7 +180,7 @@ public enum ConnectionPowerPolicy: Sendable {
 /// and Wi-Fi ↔ 5G interface handoffs.
 public final class NetworkPathObserver: NetworkReachabilityMonitoring, @unchecked Sendable {
     #if canImport(Network)
-    private let queue = DispatchQueue(label: "dev.antigravity.ios.network-path-observer", qos: .utility)
+    private let queue = DispatchQueue(label: "com.thousandtimes.agpocket.network-path-observer", qos: .utility)
     private var monitor: NWPathMonitor?
     private var lastStatus: NetworkReachabilityStatus?
     #endif

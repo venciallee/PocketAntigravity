@@ -8,8 +8,8 @@ import UniformTypeIdentifiers
 import UIKit
 #endif
 
-/// Credential-free Share Extension (`AntigravityShare`) that writes shared URLs, screenshots,
-/// or stack traces into `SharedAppGroupBridge` and wakes the main app via `antigravity://share/<id>`.
+/// Credential-free Share Extension (`AGPocketShare`) that writes shared URLs, screenshots,
+/// or stack traces into `SharedAppGroupBridge` and wakes the main app via `agpocket://share/<id>`.
 public struct AntigravityShareSheetView: View {
     public var sharedText: String
     public var sharedURLString: String?
@@ -62,7 +62,7 @@ public struct AntigravityShareSheetView: View {
                     .foregroundStyle(AntigravityTheme.inkLabel)
             }
 
-            Text(sharedText.isEmpty ? "Shared attachment ready for Antigravity composer." : sharedText)
+            Text(sharedText.isEmpty ? "Shared attachment ready for AG Pocket composer." : sharedText)
                 .font(AntigravityTheme.TypographyTier.reading.font)
                 .foregroundStyle(AntigravityTheme.inkLabel)
                 .padding(14)
@@ -180,7 +180,7 @@ public final class AntigravityShareExtensionViewController: UIViewController {
         Task { @MainActor [weak self] in
             await SharedAppGroupBridge.shared.saveSharePayload(payload)
             guard let self else { return }
-            if let url = URL(string: "antigravity://share/\(payload.id)") {
+            if let url = URL(string: "agpocket://share/\(payload.id)") {
                 _ = await self.extensionContext?.open(url)
             }
             self.extensionContext?.completeRequest(returningItems: nil)

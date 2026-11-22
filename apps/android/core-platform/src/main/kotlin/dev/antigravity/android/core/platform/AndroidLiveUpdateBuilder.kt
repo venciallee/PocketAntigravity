@@ -72,13 +72,13 @@ object AndroidLiveUpdateBuilder {
     const val CHANNEL_LIVE_PROGRESS: String = "antigravity_live_progress"
     const val CHANNEL_WAITING_ALERTS: String = "antigravity_waiting_alerts"
 
-    const val ACTION_APPROVE_BIOMETRIC: String = "dev.antigravity.android.action.APPROVE_BIOMETRIC"
-    const val ACTION_DENY: String = "dev.antigravity.android.action.DENY"
-    const val ACTION_STOP: String = "dev.antigravity.android.action.STOP"
-    const val ACTION_DISMISSED: String = "dev.antigravity.android.action.LIVE_UPDATE_DISMISSED"
+    const val ACTION_APPROVE_BIOMETRIC: String = "com.thousandtimes.agpocket.action.APPROVE_BIOMETRIC"
+    const val ACTION_DENY: String = "com.thousandtimes.agpocket.action.DENY"
+    const val ACTION_STOP: String = "com.thousandtimes.agpocket.action.STOP"
+    const val ACTION_DISMISSED: String = "com.thousandtimes.agpocket.action.LIVE_UPDATE_DISMISSED"
 
-    const val EXTRA_CASCADE_ID: String = "dev.antigravity.android.extra.CASCADE_ID"
-    const val EXTRA_STEP_INDEX: String = "dev.antigravity.android.extra.STEP_INDEX"
+    const val EXTRA_CASCADE_ID: String = "com.thousandtimes.agpocket.extra.CASCADE_ID"
+    const val EXTRA_STEP_INDEX: String = "com.thousandtimes.agpocket.extra.STEP_INDEX"
 
     private const val SEGMENT_UNIT: Int = 10
     private const val COLOR_RUNNING: Int = 0xFF7DA7FF.toInt()
