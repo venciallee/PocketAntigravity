@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Mock Antigravity LanguageServer (`exa.language_server_pb.LanguageServerService`).
 
-Supports the full Connect-RPC & Binary Protobuf E2E surface for iOSAntigravity v2.0:
+Supports the full Connect-RPC & Binary Protobuf E2E surface for PocketAntigravity v2.0:
 1. 5-byte Connect streaming envelope (`[flags:1B][length:4B BE][payload]`) for
    `JetboxSubscribeToSummaries` and `StreamCascadeReactiveUpdates`.
 2. Binary Protobuf (`Content-Type: application/proto`) for `GetCascadeTrajectorySteps`

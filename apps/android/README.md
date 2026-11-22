@@ -1,4 +1,4 @@
-# AG Orbit — Android Client (Planned · Phase 3)
+# AG Pocket — Android Client (Planned · Phase 3)
 
 This directory is reserved for the native **Android** application built with **Kotlin + Jetpack Compose + Material 3**.
 

@@ -561,7 +561,7 @@ public struct RemotePairingViewController: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
-                            Text("AG Orbit")
+                            Text("AG Pocket")
                                 .font(.system(size: 15.5, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
                             Text(appVersionLabel)
@@ -579,16 +579,16 @@ public struct RemotePairingViewController: View {
                     .frame(height: 1)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Original App Icon & Client Code © 2026 iOSAntigravity Contributors.")
+                    Text("Original App Icon & Client Code © 2026 PocketAntigravity Contributors.")
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
 
-                    Text("AG Orbit is an independent, unofficial third-party companion client and is not affiliated with, endorsed by, or sponsored by Google LLC. \"Google\" and \"Antigravity\" are trademarks of Google LLC, referenced solely to describe compatibility with user-hosted Antigravity Desktop and Cloud instances.")
+                    Text("AG Pocket is an independent, unofficial third-party companion client and is not affiliated with, endorsed by, or sponsored by Google LLC. \"Google\" and \"Antigravity\" are trademarks of Google LLC, referenced solely to describe compatibility with user-hosted Antigravity Desktop and Cloud instances.")
                         .font(.system(size: 12, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("原创 7 段轨道应用图标与客户端代码版权归 © 2026 iOSAntigravity Contributors 所有（不含任何第三方官方品牌图形资产）。“Google” 与 “Antigravity” 为 Google LLC 的商标，仅用于说明伴侣客户端兼容性，与 Google LLC 无隶属或官方背书关系。")
+                    Text("原创 7 段轨道应用图标与客户端代码版权归 © 2026 PocketAntigravity Contributors 所有（不含任何第三方官方品牌图形资产）。“Google” 与 “Antigravity” 为 Google LLC 的商标，仅用于说明伴侣客户端兼容性，与 Google LLC 无隶属或官方背书关系。")
                         .font(.system(size: 12, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)

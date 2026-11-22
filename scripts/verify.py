@@ -612,7 +612,7 @@ def run_self_test() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scripts/verify.py",
-        description="Unified Agent-First & Human-Friendly Verification CLI for iOSAntigravity.",
+        description="Unified Agent-First & Human-Friendly Verification CLI for PocketAntigravity.",
     )
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(

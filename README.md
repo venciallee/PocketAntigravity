@@ -1,6 +1,6 @@
 <div align="center">
 
-# AG Orbit (`iOSAntigravity`)
+# AG Pocket (`PocketAntigravity`)
 
 **Native iOS & Android Mobile Client for Google Antigravity Remote Control**
 
@@ -15,7 +15,7 @@
 
 ## 1. What Is This Project?
 
-**AG Orbit (`iOSAntigravity`)** is an open-source **native iOS and Android client** for **Google Antigravity**, enabling **one-tap pairing and real-time remote control** of your Antigravity PC / Desktop and Cloud agent sessions straight from your phone. Built with 100% native mobile UI (Swift 6 SwiftUI/UIKit on iOS and Kotlin Jetpack Compose on Android) backed by a Kotlin Multiplatform (KMP) protocol core, it speaks directly to Antigravity's `LanguageServerService` with zero web-bundle overhead.
+**AG Pocket (`PocketAntigravity`)** is an open-source **native iOS and Android client** for **Google Antigravity**, enabling **one-tap pairing and real-time remote control** of your Antigravity PC / Desktop and Cloud agent sessions straight from your phone. Built with 100% native mobile UI (Swift 6 SwiftUI/UIKit on iOS and Kotlin Jetpack Compose on Android) backed by a Kotlin Multiplatform (KMP) protocol core, it speaks directly to Antigravity's `LanguageServerService` with zero web-bundle overhead.
 
 ---
 
@@ -115,10 +115,10 @@ Contributions of all kinds are welcome — from Android Jetpack Compose screens 
 
 ### Building & Opening in Xcode (macOS)
 
-`iOSAntigravity.xcodeproj` and `AntigravityShared.xcframework` are generated locally and excluded from Git. After cloning or running `git pull`, always sync the Xcode project before building:
+`PocketAntigravity.xcodeproj` and `AntigravityShared.xcframework` are generated locally and excluded from Git. After cloning or running `git pull`, always sync the Xcode project before building:
 
 ```bash
-# 1. Build/refresh KMP XCFramework + regenerate iOSAntigravity.xcodeproj and open Xcode
+# 1. Build/refresh KMP XCFramework + regenerate PocketAntigravity.xcodeproj and open Xcode
 bash scripts/sync-xcode.sh --open
 
 # (Optional) Install git hooks so future `git pull` / branch switches auto-sync Xcode
@@ -182,11 +182,11 @@ This project is open-sourced under the **[MIT License](LICENSE)**. You are free 
 
 ### Original Creation & Copyright Declaration
 
-- **Copyright © 2026 iOSAntigravity Contributors.**
-- All client source code, multiplatform architecture, protocol implementations, companion scripts, diagrams, and the original 7-segment Orbital Terminal app icon (**`AG Orbit`**, [`scripts/assets/ag-orbit-original-icon.svg`](scripts/assets/ag-orbit-original-icon.svg)) are **100% original works** authored by the creator and contributors of this repository.
+- **Copyright © 2026 PocketAntigravity Contributors.**
+- All client source code, multiplatform architecture, protocol implementations, companion scripts, diagrams, and the original 7-segment Orbital Terminal app icon (**`AG Pocket`**, [`scripts/assets/ag-pocket-original-icon.svg`](scripts/assets/ag-pocket-original-icon.svg)) are **100% original works** authored by the creator and contributors of this repository.
 - This repository contains **zero** official Google graphic assets, icons, or proprietary brand files, designed for full compliance with Apple App Store Review Guidelines 5.2.2 and 4.1.
 
 ### Unofficial Companion & Trademark Disclaimer
 
-- **AG Orbit (`iOSAntigravity`)** is an independent, unofficial third-party companion client. It is **not** affiliated with, endorsed by, sponsored by, or officially connected to **Google LLC**.
+- **AG Pocket (`PocketAntigravity`)** is an independent, unofficial third-party companion client. It is **not** affiliated with, endorsed by, sponsored by, or officially connected to **Google LLC**.
 - *"Google"*, *"Gemini"*, *"Google Antigravity"*, and *"Antigravity"* are trademarks of **Google LLC**, referenced solely under nominative fair use to describe protocol interoperability with user-managed Antigravity environments (see [`NOTICE`](NOTICE)).

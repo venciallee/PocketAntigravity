@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Antigravity iOS — Mac Companion Bridge (`scripts/mac-companion-bridge.py`).
 
-Bridges `iOSAntigravity` (on iPhone / iPad / Xcode Simulator over LAN or Tailscale)
+Bridges `PocketAntigravity` (`AG Pocket`, on iPhone / iPad / Xcode Simulator over LAN or Tailscale)
 to all live running Antigravity Desktop `language_server` / `agy --hub` processes
 (`exa.language_server_pb.LanguageServerService`).
 
@@ -1043,7 +1043,7 @@ class CompanionState:
         self.lock = threading.Lock()
         self.workspace_root = workspace_root
         self.is_live_proxy = is_live_proxy
-        slug = Path(workspace_root).name or "iOSAntigravity"
+        slug = Path(workspace_root).name or "PocketAntigravity"
         uri = f"file://{workspace_root}"
         self.workspaces = [
             {
@@ -3282,7 +3282,7 @@ def main():
 
     total_upstreams = (1 if upstream_url else 0) + len(extra_backends)
     print("\n" + "=" * 74, flush=True)
-    print("  iOSAntigravity — Connect-RPC Backend Bridge Ready", flush=True)
+    print("  PocketAntigravity (AG Pocket) — Connect-RPC Backend Bridge Ready", flush=True)
     print("=" * 74, flush=True)
     print(
         f"  Mode          : {'LIVE DESKTOP PROXY (' + str(total_upstreams) + ' backend(s), primary -> ' + upstream_url + ')' if upstream_url else 'STATEFUL SANDBOX'}",

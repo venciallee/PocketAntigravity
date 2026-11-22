@@ -1,6 +1,6 @@
 {
   "specVersion": "2.0.0",
-  "project": "iOSAntigravity",
+  "project": "PocketAntigravity",
   "targetPlatform": {
     "os": "iOS 18.0+",
     "swiftVersion": "6.0",

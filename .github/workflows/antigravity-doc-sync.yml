@@ -173,7 +173,7 @@ jobs:
           fi
 
           git add -A
-          git commit -m "feat(sync): align iOSAntigravity with Google Antigravity ${NEW_VER}"
+          git commit -m "feat(sync): align PocketAntigravity with Google Antigravity ${NEW_VER}"
           git fetch origin "${BRANCH}" || true
           git push -u origin "${BRANCH}" --force-with-lease
 
