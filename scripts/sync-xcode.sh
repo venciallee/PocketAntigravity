@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# iOSAntigravity — Sync KMP AntigravityShared.xcframework & Xcode Project
+# PocketAntigravity — Sync KMP AntigravityShared.xcframework & Xcode Project
 # ==============================================================================
-# Keeps the gitignored local `iOSAntigravity.xcodeproj` and KMP
+# Keeps the gitignored local `PocketAntigravity.xcodeproj` and KMP
 # `AntigravityShared.xcframework` cleanly synchronized with `project.yml` after
 # `git pull` / branch switches / refactors.
 #
 # Usage (macOS):
 #   bash scripts/sync-xcode.sh                  # Build/refresh KMP XCF + regenerate .xcodeproj
-#   bash scripts/sync-xcode.sh --open           # Sync and open iOSAntigravity.xcodeproj in Xcode
+#   bash scripts/sync-xcode.sh --open           # Sync and open PocketAntigravity.xcodeproj in Xcode
 #   bash scripts/sync-xcode.sh --clean --open   # Wipe stale .xcodeproj & DerivedData, then sync & open
 #   bash scripts/sync-xcode.sh --swift-only     # Fast Xcode sync without JDK/Gradle (pure-Swift fallback)
 #   bash scripts/sync-xcode.sh --rebuild-kmp    # Force rebuild of KMP AntigravityShared.xcframework
@@ -22,7 +22,8 @@ cd "$ROOT_DIR"
 
 XCF_REL="shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework"
 XCF_PATH="$ROOT_DIR/$XCF_REL"
-XCODEPROJ_PATH="$ROOT_DIR/iOSAntigravity.xcodeproj"
+XCODEPROJ_PATH="$ROOT_DIR/PocketAntigravity.xcodeproj"
+LEGACY_XCODEPROJ_PATH="$ROOT_DIR/iOSAntigravity.xcodeproj"
 
 OPEN_XCODE=0
 REBUILD_KMP=0
@@ -37,8 +38,8 @@ usage() {
 Usage: bash scripts/sync-xcode.sh [options]
 
 Options:
-  --open           Open iOSAntigravity.xcodeproj in Xcode after syncing
-  --clean          Remove existing iOSAntigravity.xcodeproj and iOSAntigravity DerivedData before regenerating
+  --open           Open PocketAntigravity.xcodeproj in Xcode after syncing
+  --clean          Remove existing PocketAntigravity.xcodeproj and DerivedData before regenerating
   --rebuild-kmp    Force rebuild of shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
   --swift-only     Skip Gradle KMP XCFramework build and generate a pure-Swift Xcode project
   --require-kmp    Fail instead of falling back to --swift-only if JDK/Gradle cannot build the XCFramework
@@ -370,7 +371,7 @@ targets = []
 xcode_dd = Path.home() / "Library" / "Developer" / "Xcode" / "DerivedData"
 if xcode_dd.is_dir():
     for child in xcode_dd.iterdir():
-        if child.is_dir() and child.name.startswith("iOSAntigravity-"):
+        if child.is_dir() and child.name.startswith(("PocketAntigravity-", "iOSAntigravity-")):
             targets.append(child)
 
 local_build = repo_root / ".build"
@@ -503,7 +504,7 @@ if [[ "$INSTALL_HOOKS" -eq 1 ]]; then
   chmod +x "$ROOT_DIR/.githooks/post-merge" "$ROOT_DIR/.githooks/post-checkout" 2>/dev/null || true
   git config core.hooksPath .githooks
   echo "[+] Installed Git hooks (.githooks/post-merge & post-checkout)."
-  echo "    Future 'git pull' / branch switches will automatically keep iOSAntigravity.xcodeproj in sync."
+  echo "    Future 'git pull' / branch switches will automatically keep PocketAntigravity.xcodeproj in sync."
 fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -521,8 +522,13 @@ if [[ -n "$CASE_RENAME_OUT" ]]; then
   done <<< "$CASE_RENAME_OUT"
 fi
 
-# 1. Detect & wipe stale pre-monorepo Xcode project / DerivedData
+# 1. Detect & wipe legacy iOSAntigravity.xcodeproj or stale pre-monorepo Xcode project / DerivedData
 LEGACY_DETECTED=0
+if [[ -d "$LEGACY_XCODEPROJ_PATH" ]]; then
+  echo "[*] Migrating legacy iOSAntigravity.xcodeproj -> PocketAntigravity.xcodeproj..."
+  rm -rf "$LEGACY_XCODEPROJ_PATH"
+  LEGACY_DETECTED=1
+fi
 if [[ -f "$XCODEPROJ_PATH/project.pbxproj" ]]; then
   if detect_stale_pbxproj "$XCODEPROJ_PATH/project.pbxproj" >/dev/null 2>&1; then
     LEGACY_DETECTED=1
@@ -531,12 +537,12 @@ fi
 
 if [[ "$CLEAN_PROJECT" -eq 1 || "$LEGACY_DETECTED" -eq 1 || "$CASE_FIXED" -eq 1 ]]; then
   if [[ "$LEGACY_DETECTED" -eq 1 ]]; then
-    echo "[*] Detected stale pre-monorepo iOSAntigravity.xcodeproj (legacy Packages/ or iOS/ paths)."
+    echo "[*] Detected legacy or stale pre-monorepo Xcode project state."
   fi
   if [[ "$CASE_FIXED" -eq 1 ]]; then
     echo "[*] Directory casing changed on disk — wiping cached Xcode project & DerivedData to avoid stale VFS/XCFramework paths..."
   fi
-  echo "[*] Cleaning stale iOSAntigravity.xcodeproj and Xcode DerivedData caches..."
+  echo "[*] Cleaning stale PocketAntigravity.xcodeproj and Xcode DerivedData caches..."
   rm -rf "$XCODEPROJ_PATH"
   clean_xcode_derived_data
 fi
@@ -608,7 +614,7 @@ if ! command -v xcodegen >/dev/null 2>&1; then
   fi
 fi
 
-# 4. Generate fresh iOSAntigravity.xcodeproj from project.yml
+# 4. Generate fresh PocketAntigravity.xcodeproj from project.yml
 TMP_SPEC=""
 cleanup_tmp_spec() {
   if [[ -n "${TMP_SPEC:-}" && -f "$TMP_SPEC" ]]; then
@@ -618,24 +624,24 @@ cleanup_tmp_spec() {
 trap cleanup_tmp_spec EXIT
 
 if [[ "$USE_KMP_XCF" -eq 1 ]]; then
-  echo "[*] Generating iOSAntigravity.xcodeproj (with KMP AntigravityShared.xcframework)..."
+  echo "[*] Generating PocketAntigravity.xcodeproj (with KMP AntigravityShared.xcframework)..."
   xcodegen generate --spec "$ROOT_DIR/project.yml" --project "$ROOT_DIR"
 else
   TMP_SPEC="$ROOT_DIR/.project.swift-only.tmp.yml"
   write_swift_only_spec "$ROOT_DIR/project.yml" "$TMP_SPEC"
-  echo "[*] Generating iOSAntigravity.xcodeproj (pure-Swift mode, without AntigravityShared.xcframework)..."
+  echo "[*] Generating PocketAntigravity.xcodeproj (pure-Swift mode, without AntigravityShared.xcframework)..."
   xcodegen generate --spec "$TMP_SPEC" --project "$ROOT_DIR"
 fi
 
 # 5. Verify generated project points to the monorepo paths
 validate_generated_pbxproj "$XCODEPROJ_PATH/project.pbxproj"
-echo "[PASS] iOSAntigravity.xcodeproj is synced with the current monorepo layout (apps/ios/*, tests/ios-ui/*)."
+echo "[PASS] PocketAntigravity.xcodeproj is synced with the current monorepo layout (apps/ios/*, tests/ios-ui/*)."
 
 if [[ "$LEGACY_DETECTED" -eq 1 || "$CASE_FIXED" -eq 1 ]] && pgrep -x Xcode >/dev/null 2>&1; then
-  echo "[!] Note: Xcode is currently running — press Cmd+Q and reopen iOSAntigravity.xcodeproj (or Product -> Clean Build Folder) so Xcode drops any cached path or Package.swift state."
+  echo "[!] Note: Xcode is currently running — press Cmd+Q and reopen PocketAntigravity.xcodeproj (or Product -> Clean Build Folder) so Xcode drops any cached path or Package.swift state."
 fi
 
 if [[ "$OPEN_XCODE" -eq 1 ]]; then
-  echo "[*] Opening iOSAntigravity.xcodeproj in Xcode..."
+  echo "[*] Opening PocketAntigravity.xcodeproj in Xcode..."
   open "$XCODEPROJ_PATH"
 fi

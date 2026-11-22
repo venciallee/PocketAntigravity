@@ -37,7 +37,7 @@ public struct AntigravityWelcomeView: View {
                     .shadow(color: AntigravityTheme.accentPeriwinkle.opacity(0.18), radius: 24, x: 0, y: 8)
 
                 VStack(spacing: 8) {
-                    Text("AG Orbit")
+                    Text("AG Pocket")
                         .font(.system(size: 32, weight: .bold))
                         .tracking(-0.6)
                         .foregroundStyle(AntigravityTheme.inkReading)

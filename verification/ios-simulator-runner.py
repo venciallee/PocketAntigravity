@@ -113,7 +113,7 @@ def build_overview_sheet(out_dir: Path, state_ids: list[str], device_label: str,
     title_scope = "All 13 Native SwiftUI Captures" if is_full else f"Impact-Scoped Captures ({len(state_ids)} screen(s))"
     draw.text(
         (pad_x, 28),
-        f"iOSAntigravity — Real Xcode iOS Simulator {title_scope} ({device_label})",
+        f"PocketAntigravity — Real Xcode iOS Simulator {title_scope} ({device_label})",
         fill=(245, 247, 250),
     )
     draw.text(
@@ -177,7 +177,7 @@ def build_light_dark_comparison_sheet(out_dir: Path, device_label: str) -> Path 
     draw = ImageDraw.Draw(board)
     draw.text(
         (outer_pad, 26),
-        f"iOSAntigravity — Real Simulator Dark vs Light Mode Comparison ({device_label})",
+        f"PocketAntigravity — Real Simulator Dark vs Light Mode Comparison ({device_label})",
         fill=(245, 247, 250),
     )
     draw.text(
@@ -432,7 +432,7 @@ def main() -> None:
             "xcodebuild",
             "build",
             "-project",
-            "iOSAntigravity.xcodeproj",
+            "PocketAntigravity.xcodeproj",
             "-scheme",
             "Antigravity",
             "-sdk",
@@ -493,7 +493,7 @@ def main() -> None:
         "xcodebuild",
         xcode_action,
         "-project",
-        "iOSAntigravity.xcodeproj",
+        "PocketAntigravity.xcodeproj",
         "-scheme",
         "Antigravity",
         "-sdk",
@@ -556,7 +556,7 @@ def main() -> None:
             "xcodebuild",
             "test-without-building",
             "-project",
-            "iOSAntigravity.xcodeproj",
+            "PocketAntigravity.xcodeproj",
             "-scheme",
             "Antigravity",
             "-sdk",

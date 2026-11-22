@@ -40,7 +40,7 @@ public struct AntigravityShareSheetView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Send to AG Orbit")
+                Text("Send to AG Pocket")
                     .font(AntigravityTheme.TypographyTier.evidence.font)
                     .foregroundStyle(AntigravityTheme.inkReading)
                 Spacer()
@@ -77,7 +77,7 @@ public struct AntigravityShareSheetView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 14))
 
-                Button("Open in AG Orbit", action: onSend)
+                Button("Open in AG Pocket", action: onSend)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .frame(maxWidth: .infinity, minHeight: 44)

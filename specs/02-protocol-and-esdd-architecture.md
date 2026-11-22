@@ -4,7 +4,7 @@ Status: Approved (Normative ESDD Spec)
 
 ## 1. Pure Swift Connect-RPC Architecture (Path A)
 
-Unlike multi-agent wrappers that lose IDE session continuity, `iOSAntigravity` connects directly to the host's `language_server --standalone --subclient_type hub` process via `exa.language_server_pb.LanguageServerService`:
+Unlike multi-agent wrappers that lose IDE session continuity, `PocketAntigravity` connects directly to the host's `language_server --standalone --subclient_type hub` process via `exa.language_server_pb.LanguageServerService`:
 
 1. **Dual-Channel Transport (`AntigravityRPCClient.swift`)**:
    - **Channel A (Official Cloud Relay)**: Scans the QR code from Antigravity Desktop `Settings → Application → Remote Control` (`https://antigravity.google.com/r/<instance-id>`), authenticates via `ASWebAuthenticationSession`, and opens `/connect-websocket` directly—bypassing the 9MB desktop React web bundle.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# iOSAntigravity — Build, Sign & Install on Physical iPhone + Start Live Bridge
+# PocketAntigravity — Build, Sign & Install on Physical iPhone + Start Live Bridge
 # Usage on your Mac (with iPhone connected via USB or same Wi-Fi):
 #   bash scripts/install-on-iphone.sh
 # Optional overrides:
@@ -426,7 +426,7 @@ PY
 apply_xcodeproj_signing_defaults() {
   local target_team="$1"
   local target_prefix="$2"
-  python3 - "$ROOT_DIR/iOSAntigravity.xcodeproj/project.pbxproj" "$target_team" "$target_prefix" <<'PY'
+  python3 - "$ROOT_DIR/PocketAntigravity.xcodeproj/project.pbxproj" "$target_team" "$target_prefix" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -453,9 +453,9 @@ PY
 FIRST_PLAN="$(head -n 1 "$SIGN_PLAN_FILE" || true)"
 if [[ -z "$FIRST_PLAN" ]]; then
   echo "[!] 未检测到 Xcode 已登录的 Personal Team 或本地签名证书。"
-  echo "    正在打开 iOSAntigravity.xcodeproj —— 请按 Cmd + , 打开 Xcode Settings -> Accounts 登录你的 Apple ID，"
+  echo "    正在打开 PocketAntigravity.xcodeproj —— 请按 Cmd + , 打开 Xcode Settings -> Accounts 登录你的 Apple ID，"
   echo "    然后重新运行 'bash scripts/install-on-iphone.sh'（脚本将自动读取你的 Personal Team），或在 Xcode 顶部选你的 iPhone 按 Cmd + R。"
-  open iOSAntigravity.xcodeproj
+  open PocketAntigravity.xcodeproj
   if [[ "$WITH_BRIDGE" -eq 1 ]]; then
     exec python3 -u scripts/mac-companion-bridge.py
   fi
@@ -472,12 +472,12 @@ if [[ -z "$DEVICE_LINE" ]]; then
   if [[ "$DEVICE_REPORT" == UNAVAILABLE\|* ]]; then
     echo "    Seen offline/unpaired iOS hardware: ${DEVICE_REPORT#UNAVAILABLE|}"
   fi
-  xcodebuild -project iOSAntigravity.xcodeproj -scheme Antigravity -showdestinations >"$DEST_INFO_FILE" 2>&1 || true
+  xcodebuild -project PocketAntigravity.xcodeproj -scheme Antigravity -showdestinations >"$DEST_INFO_FILE" 2>&1 || true
   grep -E "platform:iOS[, }]" "$DEST_INFO_FILE" | grep -v "DVTiPhonePlaceholder" | sed 's/^/    Xcode destination: /' || true
   echo ""
   echo "    Please plug in & unlock your physical iPhone (trust this Mac + enable Settings > Privacy & Security > Developer Mode),"
   echo "    then re-run 'bash scripts/install-on-iphone.sh', or select your iPhone in Xcode (opening project now)..."
-  open iOSAntigravity.xcodeproj
+  open PocketAntigravity.xcodeproj
   if [[ "$WITH_BRIDGE" -eq 1 ]]; then
     exec python3 -u scripts/mac-companion-bridge.py
   fi
@@ -503,7 +503,7 @@ while IFS='|' read -r -u 3 CAND_TEAM CAND_PREFIX CAND_REASON; do
 
   : >"$ATTEMPT_LOG"
   if xcodebuild \
-    -project iOSAntigravity.xcodeproj \
+    -project PocketAntigravity.xcodeproj \
     -scheme Antigravity \
     -configuration Debug \
     -sdk iphoneos \
@@ -539,7 +539,7 @@ if [[ "$BUILD_SUCCEEDED" -ne 1 ]]; then
     echo "      1. 在即将弹出的 Xcode 中按 Cmd + , 打开 Settings -> Accounts"
     echo "      2. 选中 '${EXPIRED_ACCOUNT}'，点击 'Sign In Again' 重新输入 Apple ID 密码完成登录"
     echo "      3. 重新执行: bash scripts/install-on-iphone.sh （或直接在 Xcode 顶部选中 ${DEVICE_NAME} 按 Cmd + R）"
-    open iOSAntigravity.xcodeproj
+    open PocketAntigravity.xcodeproj
     exit 1
   fi
 
@@ -557,7 +557,7 @@ if [[ "$BUILD_SUCCEEDED" -ne 1 ]]; then
     echo "      1. 在即将弹出的 Xcode 中按 Cmd + , 打开 Settings -> Accounts -> 左下角 '+' -> Apple Account"
     echo "      2. 登录你的个人 Apple ID 后等待 Personal Team 出现"
     echo "      3. 回到终端重新执行: bash scripts/install-on-iphone.sh（脚本会自动读取并优先使用你的 Personal Team）"
-    open iOSAntigravity.xcodeproj
+    open PocketAntigravity.xcodeproj
     exit 1
   fi
 
@@ -571,7 +571,7 @@ fi
 # Resolve actual Antigravity.app output location (handles Xcode Custom/Legacy Build Locations & Xcode 27 layouts)
 SETTINGS_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/agy-buildsettings.XXXXXX")"
 if ! xcodebuild \
-  -project iOSAntigravity.xcodeproj \
+  -project PocketAntigravity.xcodeproj \
   -scheme Antigravity \
   -configuration Debug \
   -sdk iphoneos \
@@ -582,7 +582,7 @@ if ! xcodebuild \
   -showBuildSettings \
   -json >"$SETTINGS_JSON_FILE" 2>/dev/null; then
   xcodebuild \
-    -project iOSAntigravity.xcodeproj \
+    -project PocketAntigravity.xcodeproj \
     -scheme Antigravity \
     -configuration Debug \
     -sdk iphoneos \
@@ -678,7 +678,7 @@ for root, filter_project_prefix in search_roots:
         if filter_project_prefix and os.path.abspath(dirpath) == os.path.abspath(root):
             dirnames[:] = [
                 d for d in dirnames
-                if d.lower().startswith("iosantigravity") or d in ("Build", "Products", "Debug-iphoneos")
+                if d.lower().startswith("pocketantigravity") or d in ("Build", "Products", "Debug-iphoneos")
             ]
         else:
             dirnames[:] = [

@@ -358,7 +358,7 @@ def fetch_url(url: str, timeout: float = 20.0, _max_meta_redirects: int = 2) -> 
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "iOSAntigravity-DocSync/2.33 (+https://github.com/venciallee/iOSAntigravity)",
+            "User-Agent": "PocketAntigravity-DocSync/2.33 (+https://github.com/venciallee/PocketAntigravity)",
             "Accept": "text/html,application/xhtml+xml,text/markdown,application/atom+xml;q=0.9,*/*;q=0.8",
             "Cache-Control": "no-cache",
         },

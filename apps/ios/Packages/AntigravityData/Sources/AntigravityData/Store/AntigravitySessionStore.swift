@@ -59,7 +59,7 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
     }
 }
 
-/// Central `@Observable` state coordinator for `iOSAntigravity` (v2.0 UE Aligned).
+/// Central `@Observable` state coordinator for `PocketAntigravity` (v2.0 UE Aligned).
 /// Drives all 13 UE screens: Agents Home (`UE01`), Display Options (`UE02`), Long-Press & Pin (`UE03`),
 /// Project Detail (`UE04`), Create New Project (`UE05`), Automations (`UE06`), Chat & Composer (`UE07`),
 /// Add Context (`UE08`), Model & Mode (`UE09`), Structured Multi-Step Question (`UE10`),

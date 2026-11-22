@@ -197,7 +197,7 @@ def run_self_test(repo_root: Path) -> int:
     assert not errs, f"Config validation failed: {errs}"
     ctx = prepare_gemini_context(
         repo_root,
-        repo="venciallee/iOSAntigravity",
+        repo="venciallee/PocketAntigravity",
         pr_number="1",
         changed_files=[
             "apps/ios/Packages/AntigravityData/Sources/AntigravityData/Protocol/PinnedTLSURLSessionDelegate.swift",

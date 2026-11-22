@@ -214,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild build \
-            -project iOSAntigravity.xcodeproj \
+            -project PocketAntigravity.xcodeproj \
             -scheme Antigravity \
             -configuration Debug \
             -sdk iphoneos \
