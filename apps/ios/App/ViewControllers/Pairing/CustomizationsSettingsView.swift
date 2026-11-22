@@ -24,6 +24,5 @@ public struct CustomizationsSettingsView: View {
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(28)
         .presentationBackground(PermissionsSheetView.sheetSurfaceColor)
-        .accessibilityIdentifier("sheet_permissions_quick")
     }
 }
