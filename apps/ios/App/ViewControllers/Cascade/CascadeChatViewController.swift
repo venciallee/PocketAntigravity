@@ -648,7 +648,7 @@ public struct CascadeChatViewController: View {
                 Button {
                     store.presentedSheet = .customizationsSettings
                 } label: {
-                    Label("Permissions & Customizations", systemImage: "shield.lefthalf.filled")
+                    Label("Permissions", systemImage: "shield.lefthalf.filled")
                 }
                 Button("Refresh Trajectory Steps") {
                     store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)

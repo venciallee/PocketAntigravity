@@ -538,6 +538,13 @@ extension AntigravitySessionStore {
             } else {
                 preferencesStore.set(prefs.appearanceMode.rawValue, forKey: Self.appearanceModeDefaultsKey)
             }
+            if preferencesStore.string(forKey: Self.localPermissionDefaultsKey) != nil {
+                prefs.globalPermissionPreset = localPermissionPreset
+                prefs.terminalSandboxEnabled = localPermissionPreset.usesTerminalSandbox
+            } else if prefs.globalPermissionPreset != .inheritGlobal {
+                localPermissionPreset = prefs.globalPermissionPreset
+                preferencesStore.set(localPermissionPreset.rawValue, forKey: Self.localPermissionDefaultsKey)
+            }
             appearancePreferences = prefs
             for idx in projects.indices {
                 projects[idx].isExpandedInHome = !prefs.collapsedProjectIds.contains(projects[idx].id)

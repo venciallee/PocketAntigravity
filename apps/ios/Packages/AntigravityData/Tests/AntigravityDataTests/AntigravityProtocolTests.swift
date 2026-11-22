@@ -3833,12 +3833,15 @@ final class AntigravityProtocolTests: XCTestCase {
             preferencesStore: prefs
         )
 
-        // 1. Power state comes from injected PowerStateProviding
+        // 1. Power state comes from injected PowerStateProviding & live store starts without hardcoded sample rules
         XCTAssertTrue(store.isLowPowerModeEnabled)
+        XCTAssertTrue(store.permissionRules.isEmpty)
 
         // 2. Permission presets persist via injected KeyValuePreferencesStore (zero UserDefaults coupling)
         store.setActivePermissionPreset(.auto, isRemoteOverride: false)
         store.setActivePermissionPreset(.requestReview, isRemoteOverride: true)
+        XCTAssertEqual(store.appearancePreferences.globalPermissionPreset, .auto)
+        XCTAssertTrue(store.appearancePreferences.terminalSandboxEnabled)
         XCTAssertEqual(prefs.string(forKey: "antigravity.ios.permissionPreset.local"), AgentPermissionPreset.auto.rawValue)
         XCTAssertEqual(prefs.string(forKey: "antigravity.ios.permissionPreset.remote"), AgentPermissionPreset.requestReview.rawValue)
 
@@ -3849,7 +3852,10 @@ final class AntigravityProtocolTests: XCTestCase {
             preferencesStore: prefs
         )
         XCTAssertEqual(reloaded.localPermissionPreset, .auto)
+        XCTAssertEqual(reloaded.appearancePreferences.globalPermissionPreset, .auto)
+        XCTAssertTrue(reloaded.appearancePreferences.terminalSandboxEnabled)
         XCTAssertEqual(reloaded.remotePermissionPreset, .requestReview)
+        XCTAssertTrue(reloaded.permissionRules.isEmpty)
         XCTAssertFalse(reloaded.isLowPowerModeEnabled)
 
         // 3. Credentials & Relay API keys route via injected SecretStore (zero Keychain coupling)
