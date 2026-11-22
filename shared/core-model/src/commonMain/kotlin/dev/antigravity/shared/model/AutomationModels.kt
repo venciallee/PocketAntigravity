@@ -2,14 +2,24 @@ package dev.antigravity.shared.model
 
 import kotlinx.serialization.Serializable
 
-@Serializable
+@Serializable(with = AutomationSectionKindSerializer::class)
 public enum class AutomationSectionKind(public val displayTitle: String) {
     SCHEDULED("SCHEDULED"),
     ALWAYS_ON("ALWAYS ON"),
     PAUSED("PAUSED"),
 }
 
-@Serializable
+public object AutomationSectionKindSerializer : ResilientEnumSerializer<AutomationSectionKind>(
+    serialName = "dev.antigravity.shared.model.AutomationSectionKind",
+    entriesProvider = { AutomationSectionKind.entries },
+    fallbackProvider = { AutomationSectionKind.SCHEDULED },
+    extraMatcher = { raw ->
+        val norm = normalizeResilientEnumToken(raw)
+        AutomationSectionKind.entries.firstOrNull { normalizeResilientEnumToken(it.displayTitle) == norm }
+    },
+)
+
+@Serializable(with = SidecarManageActionSerializer::class)
 public enum class SidecarManageAction(public val wireValue: String) {
     UNSPECIFIED("SIDECAR_ACTION_UNSPECIFIED"),
     DISABLE("SIDECAR_ACTION_DISABLE"),
@@ -23,6 +33,15 @@ public enum class SidecarManageAction(public val wireValue: String) {
     UPDATE_ARGS("SIDECAR_ACTION_UPDATE_ARGS"),
     RUN_NOW("SIDECAR_ACTION_RUN_NOW"),
 }
+
+public object SidecarManageActionSerializer : ResilientEnumSerializer<SidecarManageAction>(
+    serialName = "dev.antigravity.shared.model.SidecarManageAction",
+    entriesProvider = { SidecarManageAction.entries },
+    fallbackProvider = { SidecarManageAction.UNSPECIFIED },
+    extraMatcher = { raw ->
+        SidecarManageAction.entries.firstOrNull { it.wireValue.equals(raw, ignoreCase = true) }
+    },
+)
 
 @Serializable
 public data class SidecarRunEvent(
@@ -55,3 +74,50 @@ public data class AutomationItem(
     public val isScheduleBuiltin: Boolean = section != AutomationSectionKind.ALWAYS_ON,
     public val originInstanceUuid: String? = null,
 )
+
+/**
+ * Category tiles at the top of the Add Context sheet (`UE08`).
+ */
+@Serializable(with = ContextCandidateCategorySerializer::class)
+public enum class ContextCandidateCategory(public val displayTitle: String) {
+    FILES("Files"),
+    FOLDER("Folder"),
+    MENTIONS("Mentions"),
+    ACTIONS("Actions"),
+    SKILLS("Skills"),
+}
+
+public object ContextCandidateCategorySerializer : ResilientEnumSerializer<ContextCandidateCategory>(
+    serialName = "dev.antigravity.shared.model.ContextCandidateCategory",
+    entriesProvider = { ContextCandidateCategory.entries },
+    fallbackProvider = { ContextCandidateCategory.FILES },
+    extraMatcher = { raw ->
+        val norm = normalizeResilientEnumToken(raw)
+        ContextCandidateCategory.entries.firstOrNull { normalizeResilientEnumToken(it.displayTitle) == norm }
+    },
+)
+
+/**
+ * Selectable file, folder, mention, action, or skill item in the Add Context sheet (`UE08`).
+ */
+@Serializable
+public data class ContextCandidateItem(
+    public val id: String,
+    public val category: ContextCandidateCategory,
+    public val title: String,
+    public val subtitle: String,
+    public val chipLabel: String,
+    public val isActionTrigger: Boolean = false,
+    public val isSelected: Boolean = false,
+) {
+    public val attachmentKind: ComposerAttachmentChip.Kind
+        get() = when (category) {
+            ContextCandidateCategory.FILES -> ComposerAttachmentChip.Kind.FILE_MENTION
+            ContextCandidateCategory.FOLDER -> ComposerAttachmentChip.Kind.FOLDER
+            ContextCandidateCategory.MENTIONS ->
+                if (title.lowercase().contains("terminal")) ComposerAttachmentChip.Kind.TERMINAL_LOG
+                else ComposerAttachmentChip.Kind.CONVERSATION_MENTION
+            ContextCandidateCategory.ACTIONS -> ComposerAttachmentChip.Kind.WORKFLOW
+            ContextCandidateCategory.SKILLS -> ComposerAttachmentChip.Kind.SKILL
+        }
+}

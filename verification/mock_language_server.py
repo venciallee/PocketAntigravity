@@ -1205,6 +1205,38 @@ class LiveMockServer:
                         )
                     return
 
+                if method == "GetWorkspaceInfos":
+                    outer_state.record(method, req)
+                    self._send_json(
+                        200,
+                        {
+                            "workspaceInfos": [
+                                {
+                                    "workspaceUri": "file:///Users/wl/code/ledger-svc",
+                                    "displayName": "ledger-svc",
+                                    "activeBranch": "main",
+                                },
+                                {
+                                    "workspaceUri": "cloud://acme/web-console",
+                                    "displayName": "web-console",
+                                    "activeBranch": "main",
+                                },
+                            ]
+                        },
+                    )
+                    return
+
+                if method.startswith("FutureUnimplemented"):
+                    outer_state.record(method, req)
+                    self._send_json(
+                        501,
+                        {
+                            "code": "unimplemented",
+                            "message": f"unknown method {method}",
+                        },
+                    )
+                    return
+
                 outer_state.record(method, req)
                 self._send_json(200, {"ok": True, "method": method})
 
@@ -1217,7 +1249,9 @@ class LiveMockServer:
                 self.end_headers()
                 self.wfile.write(raw)
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        bind_host = getattr(self, "_bind_host", "127.0.0.1")
+        bind_port = getattr(self, "_bind_port", 0)
+        self.server = ThreadingHTTPServer((bind_host, bind_port), Handler)
         self.port = self.server.server_port
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -1228,3 +1262,27 @@ class LiveMockServer:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.server.shutdown()
         self.server.server_close()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run PocketAntigravity Mock Language Server")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--csrf", default="")
+    args = parser.parse_args()
+
+    srv = LiveMockServer()
+    if args.port and srv.port != args.port:
+        srv.server.server_close()
+        srv.server = ThreadingHTTPServer((args.host, args.port), srv.server.RequestHandlerClass)
+        srv.port = srv.server.server_port
+        srv.thread = threading.Thread(target=srv.server.serve_forever, daemon=True)
+    print(f"MockLanguageServer listening on http://{args.host}:{srv.port}", flush=True)
+    try:
+        srv.server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server.server_close()

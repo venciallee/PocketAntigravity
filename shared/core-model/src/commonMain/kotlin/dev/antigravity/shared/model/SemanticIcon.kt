@@ -9,7 +9,7 @@ import kotlinx.serialization.Serializable
  * - iOS: SF Symbols (`Shared/DesignSystem/SemanticIcon+SFSymbol.swift`)
  * - Android: Material Symbols / Compose vector icons
  */
-@Serializable
+@Serializable(with = SemanticIconSerializer::class)
 public enum class SemanticIcon {
     // Markdown Alert Callouts
     ALERT_INFO,
@@ -53,3 +53,9 @@ public enum class SemanticIcon {
     COMMAND_VOICE,
     COMMAND_CUSTOM_SKILL,
 }
+
+public object SemanticIconSerializer : ResilientEnumSerializer<SemanticIcon>(
+    serialName = "dev.antigravity.shared.model.SemanticIcon",
+    entriesProvider = { SemanticIcon.entries },
+    fallbackProvider = { SemanticIcon.EMBED_ARTIFACT },
+)

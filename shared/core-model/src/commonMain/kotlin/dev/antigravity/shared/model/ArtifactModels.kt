@@ -2,7 +2,7 @@ package dev.antigravity.shared.model
 
 import kotlinx.serialization.Serializable
 
-@Serializable
+@Serializable(with = ArtifactKindSerializer::class)
 public enum class ArtifactKind {
     IMPLEMENTATION_PLAN,
     WALKTHROUGH,
@@ -13,7 +13,21 @@ public enum class ArtifactKind {
     JUPYTER_NOTEBOOK,
     IMAGE_ASSET,
     VIDEO_ASSET,
+    UNKNOWN,
 }
+
+public object ArtifactKindSerializer : ResilientEnumSerializer<ArtifactKind>(
+    serialName = "dev.antigravity.shared.model.ArtifactKind",
+    entriesProvider = { ArtifactKind.entries },
+    fallbackProvider = { ArtifactKind.UNKNOWN },
+    extraMatcher = { raw ->
+        val norm = normalizeResilientEnumToken(raw)
+        when (norm) {
+            "unsupportedasset", "unknown" -> ArtifactKind.UNKNOWN
+            else -> null
+        }
+    },
+)
 
 @Serializable
 public data class ArtifactSnapshot(
@@ -26,11 +40,12 @@ public data class ArtifactSnapshot(
     public val userFacing: Boolean = true,
     public val version: Int = 1,
     public val updatedAtEpochMs: Long = 0L,
+    public val rawKindName: String? = null,
 ) {
     public val id: String get() = artifactPath
 }
 
-@Serializable
+@Serializable(with = EmbedResourceSourceSerializer::class)
 public enum class EmbedResourceSource {
     TRAJECTORY_STEP,
     ARTIFACT_SNAPSHOT,
@@ -38,6 +53,12 @@ public enum class EmbedResourceSource {
     DIRECT_NETWORK,
     INLINE_DATA_URI,
 }
+
+public object EmbedResourceSourceSerializer : ResilientEnumSerializer<EmbedResourceSource>(
+    serialName = "dev.antigravity.shared.model.EmbedResourceSource",
+    entriesProvider = { EmbedResourceSource.entries },
+    fallbackProvider = { EmbedResourceSource.REMOTE_HOST },
+)
 
 @Serializable
 public data class ResolvedEmbedResource(
@@ -202,13 +223,19 @@ public data class DiffLine(
     public val wordHighlightRange: String? = null,
     public val emphasizedRanges: List<IntSpan> = emptyList(),
 ) {
-    @Serializable
+    @Serializable(with = DiffLineKindSerializer::class)
     public enum class Kind {
         CONTEXT,
         ADDITION,
         DELETION,
         HUNK_HEADER,
     }
+
+    public object DiffLineKindSerializer : ResilientEnumSerializer<Kind>(
+        serialName = "dev.antigravity.shared.model.DiffLine.Kind",
+        entriesProvider = { Kind.entries },
+        fallbackProvider = { Kind.CONTEXT },
+    )
 
     public val displayLineNumber: Int?
         get() = newLineNumber ?: oldLineNumber

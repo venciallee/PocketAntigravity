@@ -28,7 +28,7 @@ public data class RequestedInteraction(
     public val isUnrecognizedWireMember: Boolean
         get() = rawWireFieldNumber != null && rawMemberKey.isNullOrEmpty()
 
-    @Serializable
+    @Serializable(with = MemberKindSerializer::class)
     public enum class MemberKind(public val wireKey: String) {
         DEPLOY("deploy"),
         RUN_COMMAND("runCommand"),
@@ -58,9 +58,16 @@ public data class RequestedInteraction(
                 entries.firstOrNull { it.wireKey.equals(raw, ignoreCase = true) }
         }
     }
+
+    public object MemberKindSerializer : ResilientEnumSerializer<MemberKind>(
+        serialName = "dev.antigravity.shared.model.RequestedInteraction.MemberKind",
+        entriesProvider = { MemberKind.entries },
+        fallbackProvider = { MemberKind.APPROVAL_INTERACTION },
+        extraMatcher = { raw -> MemberKind.fromWireKey(raw) },
+    )
 }
 
-@Serializable
+@Serializable(with = PersistSuggestionTypeSerializer::class)
 public enum class PersistSuggestionType(public val rawValue: Int) {
     UNSPECIFIED(0),
     SUGGESTED(1),
@@ -71,6 +78,12 @@ public enum class PersistSuggestionType(public val rawValue: Int) {
             entries.firstOrNull { it.rawValue == raw } ?: SUGGESTED
     }
 }
+
+public object PersistSuggestionTypeSerializer : ResilientEnumSerializer<PersistSuggestionType>(
+    serialName = "dev.antigravity.shared.model.PersistSuggestionType",
+    entriesProvider = { PersistSuggestionType.entries },
+    fallbackProvider = { PersistSuggestionType.SUGGESTED },
+)
 
 @Serializable
 public data class PermissionInteractionSpec(

@@ -245,6 +245,91 @@ public class ConversationSyncStore(
         }
     }
 
+    public fun seedFixtureData(
+        workspaces: List<WorkspaceInfo>,
+        projects: List<ProjectWorkspace>,
+        summaries: List<CascadeSummary>,
+    ) {
+        _state.update {
+            it.copy(
+                workspaces = workspaces,
+                projects = projects,
+                summaries = summaries,
+                isRefreshing = false,
+                isStreamHealthy = true,
+                lastSyncedAtEpochMs = currentTimeMillis(),
+                errorText = null,
+            )
+        }
+    }
+
+    public fun markAllRead() {
+        val now = currentTimeMillis()
+        _state.update { prev ->
+            prev.copy(
+                summaries = prev.summaries.map { summary ->
+                    summary.copy(
+                        isUnread = false,
+                        lastUserViewTimeEpochMs = now,
+                    )
+                },
+            )
+        }
+    }
+
+    public fun togglePinned(cascadeId: String) {
+        _state.update { prev ->
+            prev.copy(
+                summaries = prev.summaries.map { summary ->
+                    if (summary.cascadeId == cascadeId) summary.copy(isPinned = !summary.isPinned) else summary
+                },
+            )
+        }
+    }
+
+    public fun toggleUnread(cascadeId: String) {
+        val now = currentTimeMillis()
+        _state.update { prev ->
+            prev.copy(
+                summaries = prev.summaries.map { summary ->
+                    if (summary.cascadeId == cascadeId) {
+                        val nextUnread = !summary.isUnread
+                        summary.copy(
+                            isUnread = nextUnread,
+                            lastUserViewTimeEpochMs = if (nextUnread) summary.lastUserViewTimeEpochMs else now,
+                        )
+                    } else {
+                        summary
+                    }
+                },
+            )
+        }
+    }
+
+    public fun archiveConversation(cascadeId: String) {
+        _state.update { prev ->
+            prev.copy(
+                summaries = prev.summaries.map { summary ->
+                    if (summary.cascadeId == cascadeId) {
+                        summary.copy(isArchived = true, isPinned = false)
+                    } else {
+                        summary
+                    }
+                },
+            )
+        }
+    }
+
+    public fun deleteConversation(cascadeId: String) {
+        removeSummary(cascadeId)
+    }
+
+    public fun updateSummaries(transform: (List<CascadeSummary>) -> List<CascadeSummary>) {
+        _state.update { prev ->
+            prev.copy(summaries = transform(prev.summaries))
+        }
+    }
+
     public fun filteredSummaries(
         hostScope: AgentsHostFilterScope = AgentsHostFilterScope.AllHosts,
         quickFilter: AgentsQuickFilter = AgentsQuickFilter.ALL,
