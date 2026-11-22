@@ -244,7 +244,6 @@ public object SapisidHashGenerator {
             lower.contains("x-goog-api-key") ||
             lower.contains("requests to this api") ||
             lower.contains("are blocked") ||
-            lower.contains("permission_denied") ||
             lower.contains("keyinvalid")
     }
 

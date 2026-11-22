@@ -175,7 +175,6 @@ public enum SAPISIDHashGenerator: Sendable {
             "unregistered callers",
             "requests to this api",
             "are blocked",
-            "permission_denied",
             "keyinvalid"
         ]
         return markers.contains { lower.contains($0) }
