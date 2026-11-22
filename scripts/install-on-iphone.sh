@@ -4,7 +4,7 @@
 # Usage on your Mac (with iPhone connected via USB or same Wi-Fi):
 #   bash scripts/install-on-iphone.sh
 # Optional overrides:
-#   TEAM_ID=ABCDE12345 BUNDLE_PREFIX=com.yourname.antigravity bash scripts/install-on-iphone.sh
+#   TEAM_ID=ABCDE12345 BUNDLE_PREFIX=com.thousandtimes.agpocket bash scripts/install-on-iphone.sh
 # ==============================================================================
 set -euo pipefail
 
@@ -155,7 +155,7 @@ if not hw_seed:
     hw_seed = f"{socket.gethostname()}:{os.path.expanduser('~')}"
 
 mac_hash = hashlib.sha256(hw_seed.encode("utf-8")).hexdigest()[:8]
-default_prefix = env_prefix or f"io.agy.dev{mac_hash}"
+default_prefix = env_prefix or f"com.thousandtimes.agpocket.dev{mac_hash}"
 
 if env_team and env_prefix:
     print(f"{env_team}|{env_prefix}|explicit TEAM_ID & BUNDLE_PREFIX")
@@ -323,7 +323,7 @@ if not all_teams:
     sys.exit(0)
 
 team_active_profile_count = {t: 0 for t in all_teams}
-exact_prefixes_by_team = {}  # (team, prefix) -> set of matched suffixes (.app, .app.LiveActivity, .app.Share)
+exact_prefixes_by_team = {}  # (team, prefix) -> set of matched suffixes ("", ".LiveActivity", ".Share")
 wildcard_plans_by_team = {}  # team -> list[(rank, cand_prefix, reason)]
 
 for tid, pl in parsed_profiles:
@@ -358,17 +358,23 @@ for tid, pl in parsed_profiles:
     elif pattern.endswith(".*"):
         ns = pattern[:-2]
         if not env_prefix:
-            cand_prefix = f"{ns}.agy{mac_hash[:6]}"
+            cand_prefix = f"{ns}.agpocket{mac_hash[:6]}"
             wildcard_plans_by_team.setdefault(tid, []).append((1, cand_prefix, f"cached '{ns}.*' wildcard profile"))
         elif env_prefix.startswith(ns + "."):
             wildcard_plans_by_team.setdefault(tid, []).append((1, env_prefix, f"cached '{ns}.*' wildcard profile"))
     else:
-        for suffix in (".app.LiveActivity", ".app.Share", ".app"):
+        matched_ext = False
+        for suffix in (".LiveActivity", ".Share"):
             if pattern.endswith(suffix):
                 base_p = pattern[: -len(suffix)]
                 if not env_prefix or env_prefix == base_p:
                     exact_prefixes_by_team.setdefault((tid, base_p), set()).add(suffix)
+                matched_ext = True
                 break
+        if not matched_ext:
+            base_p = pattern
+            if not env_prefix or env_prefix == base_p:
+                exact_prefixes_by_team.setdefault((tid, base_p), set()).add("")
 
 plans = []
 seen = set()
@@ -387,7 +393,7 @@ def describe_team(tid: str, fallback: str) -> str:
 def enqueue_team_plans(tid: str, tier_label: str):
     # Exact cached 3-target profiles for this team first
     for (t, base_p), suffixes in exact_prefixes_by_team.items():
-        if t == tid and {".app", ".app.LiveActivity", ".app.Share"}.issubset(suffixes):
+        if t == tid and {"", ".LiveActivity", ".Share"}.issubset(suffixes):
             add_plan(tid, base_p, describe_team(tid, f"{tier_label} · cached exact profiles"))
     # Wildcard profiles for this team
     for _, cand_p, reason in sorted(wildcard_plans_by_team.get(tid, []), key=lambda x: x[0]):
@@ -472,7 +478,7 @@ if [[ -z "$DEVICE_LINE" ]]; then
   if [[ "$DEVICE_REPORT" == UNAVAILABLE\|* ]]; then
     echo "    Seen offline/unpaired iOS hardware: ${DEVICE_REPORT#UNAVAILABLE|}"
   fi
-  xcodebuild -project PocketAntigravity.xcodeproj -scheme Antigravity -showdestinations >"$DEST_INFO_FILE" 2>&1 || true
+  xcodebuild -project PocketAntigravity.xcodeproj -scheme AGPocket -showdestinations >"$DEST_INFO_FILE" 2>&1 || true
   grep -E "platform:iOS[, }]" "$DEST_INFO_FILE" | grep -v "DVTiPhonePlaceholder" | sed 's/^/    Xcode destination: /' || true
   echo ""
   echo "    Please plug in & unlock your physical iPhone (trust this Mac + enable Settings > Privacy & Security > Developer Mode),"
@@ -499,12 +505,12 @@ while IFS='|' read -r -u 3 CAND_TEAM CAND_PREFIX CAND_REASON; do
   TEAM_ID="$CAND_TEAM"
   BUNDLE_PREFIX="$CAND_PREFIX"
   apply_xcodeproj_signing_defaults "$TEAM_ID" "$BUNDLE_PREFIX"
-  echo "[*] Trying Team ${TEAM_ID} · Bundle ${BUNDLE_PREFIX}.app (${CAND_REASON})..."
+  echo "[*] Trying Team ${TEAM_ID} · Bundle ${BUNDLE_PREFIX} (${CAND_REASON})..."
 
   : >"$ATTEMPT_LOG"
   if xcodebuild \
     -project PocketAntigravity.xcodeproj \
-    -scheme Antigravity \
+    -scheme AGPocket \
     -configuration Debug \
     -sdk iphoneos \
     -destination "platform=iOS,id=${DEVICE_UDID}" \
@@ -521,9 +527,9 @@ while IFS='|' read -r -u 3 CAND_TEAM CAND_PREFIX CAND_REASON; do
     cat "$ATTEMPT_LOG" >>"$BUILD_LOG"
     FIRST_ERR="$(grep -m 1 -E "error: " "$ATTEMPT_LOG" | sed 's/.*error: //' || true)"
     if [[ -n "$FIRST_ERR" ]]; then
-      echo "    [x] Team ${TEAM_ID} (${BUNDLE_PREFIX}.app) failed: ${FIRST_ERR}"
+      echo "    [x] Team ${TEAM_ID} (${BUNDLE_PREFIX}) failed: ${FIRST_ERR}"
     else
-      echo "    [x] Signing/build attempt with Team ${TEAM_ID} (${BUNDLE_PREFIX}.app) did not succeed."
+      echo "    [x] Signing/build attempt with Team ${TEAM_ID} (${BUNDLE_PREFIX}) did not succeed."
     fi
   fi
 done 3< "$SIGN_PLAN_FILE"
@@ -536,7 +542,7 @@ if [[ "$BUILD_SUCCEEDED" -ne 1 ]]; then
   EXPIRED_ACCOUNT="$(sed -n "s/.*Unable to log in with account '\([^']*\)'.*/\1/p" "$BUILD_LOG" | head -n 1 || true)"
   if [[ -n "$EXPIRED_ACCOUNT" ]]; then
     echo "[!] Xcode Apple ID 登录会话已过期 (${EXPIRED_ACCOUNT})，无法自动向 Apple 申请真机描述文件。"
-    echo "    工程已自动预填唯一 Bundle ID (${FIRST_BUNDLE_PREFIX}.app) 与 Team (${FIRST_TEAM_ID})，只需两步即可恢复："
+    echo "    工程已自动预填唯一 Bundle ID (${FIRST_BUNDLE_PREFIX}) 与 Team (${FIRST_TEAM_ID})，只需两步即可恢复："
     echo "      1. 在即将弹出的 Xcode 中按 Cmd + , 打开 Settings -> Accounts"
     echo "      2. 选中 '${EXPIRED_ACCOUNT}'，点击 'Sign In Again' 重新输入 Apple ID 密码完成登录"
     echo "      3. 重新执行: bash scripts/install-on-iphone.sh （或直接在 Xcode 顶部选中 ${DEVICE_NAME} 按 Cmd + R）"
@@ -547,7 +553,7 @@ if [[ "$BUILD_SUCCEEDED" -ne 1 ]]; then
   if grep -qE "maximum number of App IDs|App ID limit|cannot be registered to your development team" "$BUILD_LOG"; then
     echo "[!] 免费 Personal Team 的 7 天 App ID 配额受限或 Bundle ID 冲突。"
     echo "    请换一个未占用的自定义前缀重试，例如："
-    echo "      BUNDLE_PREFIX=io.agy.personal1 bash scripts/install-on-iphone.sh"
+    echo "      BUNDLE_PREFIX=com.thousandtimes.agpocket.personal1 bash scripts/install-on-iphone.sh"
     exit 1
   fi
 
@@ -569,11 +575,11 @@ if [[ "$BUILD_SUCCEEDED" -ne 1 ]]; then
   exit 1
 fi
 
-# Resolve actual Antigravity.app output location (handles Xcode Custom/Legacy Build Locations & Xcode 27 layouts)
+# Resolve actual AGPocket.app output location (handles Xcode Custom/Legacy Build Locations & Xcode 27 layouts)
 SETTINGS_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/agy-buildsettings.XXXXXX")"
 if ! xcodebuild \
   -project PocketAntigravity.xcodeproj \
-  -scheme Antigravity \
+  -scheme AGPocket \
   -configuration Debug \
   -sdk iphoneos \
   -destination "platform=iOS,id=${DEVICE_UDID}" \
@@ -584,7 +590,7 @@ if ! xcodebuild \
   -json >"$SETTINGS_JSON_FILE" 2>/dev/null; then
   xcodebuild \
     -project PocketAntigravity.xcodeproj \
-    -scheme Antigravity \
+    -scheme AGPocket \
     -configuration Debug \
     -sdk iphoneos \
     -destination "generic/platform=iOS" \
@@ -629,9 +635,9 @@ try:
         for entry in entries:
             bs = entry.get("buildSettings") or {}
             target = entry.get("target", "")
-            wrapper = bs.get("WRAPPER_NAME") or bs.get("FULL_PRODUCT_NAME") or "Antigravity.app"
+            wrapper = bs.get("WRAPPER_NAME") or bs.get("FULL_PRODUCT_NAME") or "AGPocket.app"
             product_type = bs.get("PRODUCT_TYPE", "")
-            if target == "Antigravity" or (product_type == "com.apple.product-type.application" and wrapper == "Antigravity.app"):
+            if target == "AGPocket" or (product_type == "com.apple.product-type.application" and wrapper == "AGPocket.app"):
                 for cand in (
                     bs.get("CODESIGNING_FOLDER_PATH"),
                     os.path.join(bs.get("TARGET_BUILD_DIR", ""), wrapper) if bs.get("TARGET_BUILD_DIR") else None,
@@ -671,7 +677,7 @@ seen = set()
 for root, filter_project_prefix in search_roots:
     if not os.path.isdir(root):
         continue
-    direct = os.path.join(root, "Debug-iphoneos", "Antigravity.app")
+    direct = os.path.join(root, "Debug-iphoneos", "AGPocket.app")
     if direct not in seen and is_iphoneos_app(direct):
         seen.add(direct)
         found.append((os.path.getmtime(direct), direct))
@@ -688,9 +694,9 @@ for root, filter_project_prefix in search_roots:
                 and not d.endswith(".xctest")
                 and not d.endswith(".appex")
             ]
-        if "Antigravity.app" in dirnames:
-            cand = os.path.join(dirpath, "Antigravity.app")
-            dirnames.remove("Antigravity.app")
+        if "AGPocket.app" in dirnames:
+            cand = os.path.join(dirpath, "AGPocket.app")
+            dirnames.remove("AGPocket.app")
             if cand not in seen and is_iphoneos_app(cand):
                 seen.add(cand)
                 found.append((os.path.getmtime(cand), cand))
@@ -701,7 +707,7 @@ if found:
 PY
 )"
 if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
-  echo "[!] Could not locate built iphoneos Antigravity.app bundle after xcodebuild succeeded."
+  echo "[!] Could not locate built iphoneos AGPocket.app bundle after xcodebuild succeeded."
   grep -E '"(CODESIGNING_FOLDER_PATH|TARGET_BUILD_DIR|EFFECTIVE_PLATFORM_NAME)"' "$SETTINGS_JSON_FILE" | head -n 12 || true
   if [[ -d "$DERIVED_DATA" ]]; then
     echo "    App bundles currently inside $DERIVED_DATA:"
@@ -713,17 +719,17 @@ if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
 fi
 rm -f "$SETTINGS_JSON_FILE"
 
-ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist" 2>/dev/null || echo "${BUNDLE_PREFIX}.app")"
+ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist" 2>/dev/null || echo "${BUNDLE_PREFIX}")"
 echo "[+] Built app bundle  : ${APP_PATH} (${ACTUAL_BUNDLE_ID})"
-echo "[*] Installing Antigravity.app onto ${DEVICE_NAME}..."
+echo "[*] Installing AGPocket.app onto ${DEVICE_NAME}..."
 xcrun devicectl device install app --device "$CORE_DEVICE_ID" "$APP_PATH"
 if ! xcrun devicectl device process launch --device "$CORE_DEVICE_ID" "$ACTUAL_BUNDLE_ID" >/dev/null 2>&1; then
   echo "[!] Installed on ${DEVICE_NAME}! If launch was blocked by iOS first-time signing trust:"
-  echo "    On iPhone, open Settings > General > VPN & Device Management -> trust your Apple ID certificate, then tap Antigravity."
+  echo "    On iPhone, open Settings > General > VPN & Device Management -> trust your Apple ID certificate, then tap AG Pocket."
 fi
 
 echo ""
-echo "[PASS] Antigravity.app installed on ${DEVICE_NAME}!"
+echo "[PASS] AGPocket.app installed on ${DEVICE_NAME}!"
 echo "       1. In Antigravity Desktop on your Mac/PC, click 'Remote Control' to open the QR code."
 echo "       2. On your iPhone -> Settings tab -> tap 'Scan Remote Control QR Code' and sign in with Google."
 echo "       (No bridge script or Tailscale needed — works over Wi-Fi and 5G cellular!)"

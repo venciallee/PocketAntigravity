@@ -132,7 +132,10 @@ class MainActivity : FragmentActivity() {
             return
         }
 
-        if (dataUri != null && dataUri.scheme.equals("antigravity", ignoreCase = true)) {
+        if (dataUri != null &&
+            (dataUri.scheme.equals("agpocket", ignoreCase = true) ||
+                dataUri.scheme.equals("antigravity", ignoreCase = true))
+        ) {
             val host = dataUri.host.orEmpty().lowercase()
             if (host == "cascade" || host == "c") {
                 val cascadeId = dataUri.lastPathSegment.orEmpty()
@@ -152,7 +155,11 @@ class MainActivity : FragmentActivity() {
     companion object {
         fun resolveVerifySceneFromUri(uri: Uri?): EsddVerifySceneCase? {
             if (uri == null) return null
-            if (!uri.scheme.equals("antigravity", ignoreCase = true)) return null
+            if (!uri.scheme.equals("agpocket", ignoreCase = true) &&
+                !uri.scheme.equals("antigravity", ignoreCase = true)
+            ) {
+                return null
+            }
             if (!uri.host.equals("verify", ignoreCase = true)) return null
             val rawSlug = uri.lastPathSegment?.trim().orEmpty()
             if (rawSlug.isEmpty()) return null

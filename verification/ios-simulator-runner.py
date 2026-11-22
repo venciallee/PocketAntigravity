@@ -8,8 +8,8 @@ Supports both:
     UE screenshots (`UE01`..`UE13`), skipping unaffected cases and avoiding Simulator boot
     entirely in `build-only` mode.
   - **Full / Release Mode (`--mode full|release`, or default when invoked without scope flags)**:
-    Assembles KMP `AntigravityShared.xcframework` if absent, compiles `Antigravity.app`
-    (+ extensions + `AntigravityUITests`), runs ALL modular XCUITests, verifies Live
+    Assembles KMP `AntigravityShared.xcframework` if absent, compiles `AGPocket.app`
+    (+ extensions + `AGPocketUITests`), runs ALL modular XCUITests, verifies Live
     Connect-RPC App Handshake, and captures ALL 13 native SwiftUI screens (`UE01`..`UE13`)
     + composite overview board + Light/Dark appearance comparison sheet.
 
@@ -43,7 +43,11 @@ PREFERRED_IPHONES = [
     "iPhone 15",
 ]
 
-UITEST_TARGET_CLASS = "AntigravityUITests/AntigravityInteractiveUITests"
+APP_SCHEME = "AGPocket"
+APP_BUNDLE_ID = "com.thousandtimes.agpocket"
+APP_WRAPPER = "AGPocket.app"
+UITEST_TARGET = "AGPocketUITests"
+UITEST_TARGET_CLASS = f"{UITEST_TARGET}/AntigravityInteractiveUITests"
 
 # Additional Light & Dark Mode visual verification captures run in full/release mode
 # Tuple format: (output_stem, --ui-verify argument, --ui-appearance argument)
@@ -420,12 +424,12 @@ def main() -> None:
 
     derived = repo_root / ".build" / "DerivedData"
 
-    # Fast path: build-only (compiles Antigravity.app + Extensions for iOS Simulator WITHOUT booting Simulator!)
+    # Fast path: build-only (compiles AGPocket.app + Extensions for iOS Simulator WITHOUT booting Simulator!)
     if cfg["simMode"] == "build-only":
         t_build = time.monotonic()
         host_arch = platform.machine() or "arm64"
         print(
-            f"=== [2/5] Build-Only Mode: Compiling Antigravity.app for generic iOS Simulator ({host_arch}) — skipping Simulator boot ===",
+            f"=== [2/5] Build-Only Mode: Compiling {APP_WRAPPER} for generic iOS Simulator ({host_arch}) — skipping Simulator boot ===",
             flush=True,
         )
         build_cmd = [
@@ -434,7 +438,7 @@ def main() -> None:
             "-project",
             "PocketAntigravity.xcodeproj",
             "-scheme",
-            "Antigravity",
+            APP_SCHEME,
             "-sdk",
             "iphonesimulator",
             "-destination",
@@ -495,7 +499,7 @@ def main() -> None:
         "-project",
         "PocketAntigravity.xcodeproj",
         "-scheme",
-        "Antigravity",
+        APP_SCHEME,
         "-sdk",
         "iphonesimulator",
         "-destination",
@@ -540,10 +544,10 @@ def main() -> None:
     # Step 3c: Run selected XCUITests (or skip if none impacted)
     if has_xcuitests:
         t_uitest = time.monotonic()
-        xcresult_path = out_dir / "AntigravityUITests.xcresult"
+        xcresult_path = out_dir / f"{UITEST_TARGET}.xcresult"
         shutil.rmtree(xcresult_path, ignore_errors=True)
         if cfg["allTestsSelected"]:
-            only_testing_flags = ["-only-testing:AntigravityUITests"]
+            only_testing_flags = [f"-only-testing:{UITEST_TARGET}"]
             test_desc = f"ALL {len(cfg['xcuitests'])}/{total_xcuitests} XCUITest cases"
         else:
             only_testing_flags = [
@@ -558,7 +562,7 @@ def main() -> None:
             "-project",
             "PocketAntigravity.xcodeproj",
             "-scheme",
-            "Antigravity",
+            APP_SCHEME,
             "-sdk",
             "iphonesimulator",
             "-destination",
@@ -584,7 +588,7 @@ def main() -> None:
     def ensure_app_installed() -> None:
         nonlocal app_installed
         if not app_installed:
-            app_path = next((derived / "Build" / "Products" / "Debug-iphonesimulator").glob("Antigravity.app"))
+            app_path = next((derived / "Build" / "Products" / "Debug-iphonesimulator").glob(APP_WRAPPER))
             subprocess.run(["xcrun", "simctl", "install", udid, str(app_path)], check=True)
             app_installed = True
 
@@ -618,14 +622,14 @@ def main() -> None:
         threading.Thread(target=bridge_srv.serve_forever, daemon=True).start()
 
         try:
-            subprocess.run(["xcrun", "simctl", "terminate", udid, "dev.antigravity.ios.app"], check=False)
+            subprocess.run(["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID], check=False)
             launch_env = os.environ.copy()
             launch_env["SIMCTL_CHILD_NO_PROXY"] = "127.0.0.1,localhost,::1"
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_BACKEND_URL"] = f"http://127.0.0.1:{bridge_port}"
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_CSRF_TOKEN"] = csrf_token
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_HOST_NAME"] = "Cloud Mac Runner"
             subprocess.run(
-                ["xcrun", "simctl", "launch", udid, "dev.antigravity.ios.app"],
+                ["xcrun", "simctl", "launch", udid, APP_BUNDLE_ID],
                 env=launch_env,
                 check=True,
             )
@@ -640,10 +644,10 @@ def main() -> None:
             (out_dir / "live_rpc_hits.json").write_text(json.dumps(rpc_hits, indent=2), encoding="utf-8")
             print(f"  [LIVE RPC] App-to-Backend Connect-RPC hits from Simulator: {rpc_hits}", flush=True)
             assert any("GetWorkspaceInfos" in p for p in rpc_hits), (
-                f"Expected compiled Antigravity.app to call GetWorkspaceInfos over Connect-RPC, got: {rpc_hits}"
+                f"Expected compiled {APP_WRAPPER} to call GetWorkspaceInfos over Connect-RPC, got: {rpc_hits}"
             )
             assert any("GetAllCascadeTrajectories" in p for p in rpc_hits), (
-                f"Expected compiled Antigravity.app to call GetAllCascadeTrajectories over Connect-RPC, got: {rpc_hits}"
+                f"Expected compiled {APP_WRAPPER} to call GetAllCascadeTrajectories over Connect-RPC, got: {rpc_hits}"
             )
         finally:
             bridge_srv.shutdown()
@@ -666,7 +670,7 @@ def main() -> None:
         for state_id in cfg["screens"]:
             captured_state_ids.append(state_id)
             subprocess.run(
-                ["xcrun", "simctl", "terminate", udid, "dev.antigravity.ios.app"],
+                ["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID],
                 check=False,
             )
             clean_env = {k: v for k, v in os.environ.items() if not k.startswith("SIMCTL_CHILD_ANTIGRAVITY_")}
@@ -676,7 +680,7 @@ def main() -> None:
                     "simctl",
                     "launch",
                     udid,
-                    "dev.antigravity.ios.app",
+                    APP_BUNDLE_ID,
                     "--ui-verify",
                     state_id,
                 ],
@@ -708,7 +712,7 @@ def main() -> None:
             for variant_id, verify_target, appearance_mode in APPEARANCE_VARIANT_CAPTURES:
                 captured_appearance_variants.append(variant_id)
                 subprocess.run(
-                    ["xcrun", "simctl", "terminate", udid, "dev.antigravity.ios.app"],
+                    ["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID],
                     check=False,
                 )
                 clean_env = {k: v for k, v in os.environ.items() if not k.startswith("SIMCTL_CHILD_ANTIGRAVITY_")}
@@ -718,7 +722,7 @@ def main() -> None:
                         "simctl",
                         "launch",
                         udid,
-                        "dev.antigravity.ios.app",
+                        APP_BUNDLE_ID,
                         "--ui-verify",
                         verify_target,
                         "--ui-appearance",

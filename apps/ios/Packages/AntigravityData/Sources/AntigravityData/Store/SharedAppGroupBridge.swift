@@ -30,7 +30,7 @@ public struct PendingLiveActivityAction: Codable, Sendable, Equatable, Identifia
     }
 }
 
-/// Payload persisted by `AntigravityShare` Extension and consumed by `AntigravityApp` via `antigravity://share/<id>`.
+/// Payload persisted by `AGPocketShare` Extension and consumed by `AntigravityApp` via `agpocket://share/<id>`.
 public struct PendingSharePayload: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var text: String
@@ -53,11 +53,11 @@ public struct PendingSharePayload: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// Credential-free shared queue bridging `AntigravityLiveActivity`, `AntigravityShare`, and the main app.
+/// Credential-free shared queue bridging `AGPocketLiveActivity`, `AGPocketShare`, and the main app.
 /// Uses the App Group suite when provisioned and gracefully falls back to a local file store in tests/simulator.
 public actor SharedAppGroupBridge {
     public static let shared = SharedAppGroupBridge()
-    public static let appGroupSuiteName = "group.dev.antigravity.ios.shared"
+    public static let appGroupSuiteName = "group.com.thousandtimes.agpocket.shared"
 
     private static let actionsKey = "antigravity.pending_live_activity_actions.v1"
     private static let sharesKey = "antigravity.pending_share_payloads.v1"

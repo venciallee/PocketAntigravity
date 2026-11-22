@@ -68,7 +68,7 @@ internal struct RichMarkdownInlineBlockView: View {
 
 #if canImport(UIKit)
 private extension NSAttributedString.Key {
-    static let agyInlinePillStyle = NSAttributedString.Key("dev.antigravity.inlinePillStyle")
+    static let agyInlinePillStyle = NSAttributedString.Key("com.thousandtimes.agpocket.inlinePillStyle")
 }
 
 internal final class InlinePillVisualStyle: NSObject, @unchecked Sendable {

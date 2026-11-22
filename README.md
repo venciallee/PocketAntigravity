@@ -113,7 +113,7 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 │   ├── core-domain/                #   7 StateFlow domain stores, DurableOutbox & shared ESDD verification fixtures
 │   └── umbrella/                   #   SKIE facade exporting AntigravityShared.xcframework & JVM/Android
 ├── tests/
-│   └── ios-ui/                     # Native iOS XCUITest interactive tap & flow suite (AntigravityUITests)
+│   └── ios-ui/                     # Native iOS XCUITest interactive tap & flow suite (AGPocketUITests)
 ├── project.yml                     # Root XcodeGen spec assembling apps/ios/*, tests/ios-ui & AntigravityShared.xcframework
 ├── docs/                           # Platform feature matrix (PLATFORM_STATUS.md), architecture SVGs & upstream snapshots
 ├── scripts/                        # Unified verify CLI, Xcode sync, icon renderer & upstream doc-sync automation

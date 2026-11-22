@@ -1,6 +1,6 @@
 name: PocketAntigravity
 options:
-  bundleIdPrefix: dev.antigravity.ios
+  bundleIdPrefix: com.thousandtimes.agpocket
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.1"
@@ -8,7 +8,7 @@ options:
 
 settings:
   base:
-    ANTIGRAVITY_BUNDLE_PREFIX: dev.antigravity.ios
+    ANTIGRAVITY_BUNDLE_PREFIX: com.thousandtimes.agpocket
     MARKETING_VERSION: "2.0.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
@@ -19,7 +19,7 @@ packages:
     path: apps/ios/Packages/AntigravityData
 
 targets:
-  Antigravity:
+  AGPocket:
     type: application
     platform: iOS
     sources:
@@ -36,13 +36,14 @@ targets:
       - package: AntigravityData
       - framework: shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
         embed: false
-      - target: AntigravityLiveActivity
+      - target: AGPocketLiveActivity
         embed: true
-      - target: AntigravityShare
+      - target: AGPocketShare
         embed: true
     info:
       path: apps/ios/App/Support/Info.plist
       properties:
+        CFBundleName: "AGPocket"
         CFBundleDisplayName: "AG Pocket"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
@@ -64,12 +65,13 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:
-          - CFBundleURLName: dev.antigravity.ios.deeplink
+          - CFBundleURLName: com.thousandtimes.agpocket.deeplink
             CFBundleURLSchemes:
-              - antigravity
+              - agpocket
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).app
+        PRODUCT_NAME: AGPocket
+        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX)
         INFOPLIST_KEY_CFBundleDisplayName: "AG Pocket"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_DEBUG_DYLIB: NO
@@ -78,7 +80,7 @@ targets:
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Automatic
 
-  AntigravityLiveActivity:
+  AGPocketLiveActivity:
     type: app-extension
     platform: iOS
     sources:
@@ -92,6 +94,7 @@ targets:
     info:
       path: apps/ios/Extensions/LiveActivity/Info.plist
       properties:
+        CFBundleName: "AGPocketLiveActivity"
         CFBundleDisplayName: "AG Pocket Live Activity"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
@@ -100,14 +103,15 @@ targets:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).app.LiveActivity
+        PRODUCT_NAME: AGPocketLiveActivity
+        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).LiveActivity
         INFOPLIST_KEY_CFBundleDisplayName: "AG Pocket Live Activity"
         MARKETING_VERSION: "2.0.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Automatic
 
-  AntigravityShare:
+  AGPocketShare:
     type: app-extension
     platform: iOS
     sources:
@@ -120,6 +124,7 @@ targets:
     info:
       path: apps/ios/Extensions/Share/Info.plist
       properties:
+        CFBundleName: "AGPocketShare"
         CFBundleDisplayName: "Send to AG Pocket"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
@@ -135,7 +140,8 @@ targets:
               NSExtensionActivationSupportsImageWithMaxCount: 5
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).app.Share
+        PRODUCT_NAME: AGPocketShare
+        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).Share
         INFOPLIST_KEY_CFBundleDisplayName: "Send to AG Pocket"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) ANTIGRAVITY_SHARE_EXTENSION"
         MARKETING_VERSION: "2.0.0"
@@ -143,30 +149,30 @@ targets:
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Automatic
 
-  AntigravityUITests:
+  AGPocketUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
       - path: tests/ios-ui
     dependencies:
-      - target: Antigravity
+      - target: AGPocket
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).app.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).uitests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Antigravity
+        TEST_TARGET_NAME: AGPocket
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Automatic
 
 schemes:
-  Antigravity:
+  AGPocket:
     build:
       targets:
-        Antigravity: all
-        AntigravityUITests: [test]
+        AGPocket: all
+        AGPocketUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - name: AntigravityUITests
+        - name: AGPocketUITests

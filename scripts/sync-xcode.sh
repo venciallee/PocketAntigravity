@@ -425,9 +425,9 @@ from pathlib import Path
 txt = Path(sys.argv[1]).read_text(encoding="utf-8")
 assert "AntigravityShared.xcframework" not in txt, "XCFramework reference was not stripped"
 assert "apps/ios/Packages/AntigravityData" in txt, "AntigravityData package was lost"
-assert "target: AntigravityLiveActivity" in txt, "AntigravityLiveActivity target was lost"
-assert "target: AntigravityShare" in txt, "AntigravityShare target was lost"
-assert "AntigravityUITests:" in txt, "AntigravityUITests target was lost"
+assert "target: AGPocketLiveActivity" in txt, "AGPocketLiveActivity target was lost"
+assert "target: AGPocketShare" in txt, "AGPocketShare target was lost"
+assert "AGPocketUITests:" in txt, "AGPocketUITests target was lost"
 PY
 
   # 4. KMP freshness detection: missing -> fresh -> stale

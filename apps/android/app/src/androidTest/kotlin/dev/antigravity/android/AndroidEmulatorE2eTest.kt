@@ -15,7 +15,7 @@ import org.junit.runner.RunWith
 
 /**
  * Real Android Emulator Instrumented E2E test suite executed on GitHub Actions `ubuntu-latest` KVM runners.
- * Routes via `antigravity://verify/<case>` deep links to validate live Activity startup, Compose rendering,
+ * Routes via `agpocket://verify/<case>` deep links to validate live Activity startup, Compose rendering,
  * and interactive journeys on a real Android 16 (API 36) runtime.
  */
 @RunWith(AndroidJUnit4::class)
@@ -27,7 +27,7 @@ class AndroidEmulatorE2eTest {
     private fun launchVerifyScene(sceneSlug: String): ActivityScenario<MainActivity> {
         val intent = Intent(
             Intent.ACTION_VIEW,
-            Uri.parse("antigravity://verify/$sceneSlug"),
+            Uri.parse("agpocket://verify/$sceneSlug"),
             ApplicationProvider.getApplicationContext(),
             MainActivity::class.java,
         )

@@ -210,6 +210,12 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
         errors.append("project.yml missing ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon")
     if 'CFBundleDisplayName: "AG Pocket"' not in project_yml:
         errors.append('project.yml missing App Store 5.2.2 companion CFBundleDisplayName: "AG Pocket"')
+    if 'PRODUCT_NAME: AGPocket' not in project_yml or 'CFBundleName: "AGPocket"' not in project_yml:
+        errors.append('project.yml missing explicit App Store 5.2.2 PRODUCT_NAME: AGPocket / CFBundleName: "AGPocket"')
+    if "dev.antigravity" in project_yml:
+        errors.append("project.yml must not use third-party reverse domain dev.antigravity in Bundle IDs")
+    if re.search(r"^\s*-\s*antigravity\s*$", project_yml, flags=re.MULTILINE):
+        errors.append("project.yml CFBundleURLSchemes must not squat bare 'antigravity' scheme (use 'agpocket')")
     if "NSHumanReadableCopyright" not in project_yml or "Google LLC" not in project_yml:
         errors.append("project.yml missing NSHumanReadableCopyright nominative trademark disclaimer")
     if not notice_file.exists() or "Google LLC" not in notice_file.read_text(encoding="utf-8", errors="ignore"):
@@ -217,9 +223,14 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
     if "card-about-copyright" not in combined_swift or "AG Pocket" not in combined_swift:
         errors.append("RemotePairingViewController missing in-app AG Pocket card-about-copyright disclaimer")
 
-    if not missing_icons and 'CFBundleDisplayName: "AG Pocket"' in project_yml:
+    if (
+        not missing_icons
+        and 'CFBundleDisplayName: "AG Pocket"' in project_yml
+        and 'PRODUCT_NAME: AGPocket' in project_yml
+        and "dev.antigravity" not in project_yml
+    ):
         checks.append(
-            "Original AG Pocket AppIcon.appiconset (1024x1024 opaque RGB) & App Store 5.2.2 trademark compliance verified"
+            "Original AG Pocket AppIcon.appiconset (1024x1024 opaque RGB), AGPocket target/bundle ID/agpocket:// scheme & App Store 5.2.2 trademark compliance verified"
         )
 
     # 7. Zero Hardcoded Google API Key Secret Hygiene

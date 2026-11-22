@@ -662,12 +662,12 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
         return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
     }
 
-    /// Returns `true` for Direct LAN / Companion Bridge pairing URIs (`antigravity://pair?url=https://192.168.x.x:8787&csrf=...`).
+    /// Returns `true` for Direct LAN / Companion Bridge pairing URIs (`agpocket://pair?url=...` or legacy `antigravity://pair?url=...`).
     public static func isDirectLANPairingURI(_ rawInput: String) -> Bool {
         let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let comps = URLComponents(string: trimmed),
               let scheme = comps.scheme?.lowercased(),
-              (scheme == "antigravity" || scheme == "agy" || scheme == "google-antigravity"),
+              (scheme == "agpocket" || scheme == "antigravity" || scheme == "agy" || scheme == "google-antigravity"),
               let targetURL = comps.queryItems?.first(where: { $0.name == "url" })?.value,
               !targetURL.isEmpty else {
             return false
@@ -715,7 +715,7 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
 
     /// Parses an official Antigravity Remote Control QR URL (`https://antigravity.google.com/r/<id>?p=c%2F<conv>`),
     /// `/u/<authuser>/r/<id>`, Google `AccountChooser`/`ServiceLogin` wrappers, Google shortlinks (`g.co`, `c.gle`),
-    /// scheme-less Antigravity links, custom `antigravity://` / `agy://` URIs, JSON payloads, or bare device slugs.
+    /// scheme-less Antigravity links, custom `agpocket://` / `antigravity://` / `agy://` URIs, JSON payloads, or bare device slugs.
     public static func parseRemoteControlTarget(_ rawInput: String) -> ParsedRemoteControlTarget? {
         parseRemoteControlTargetInternal(rawInput, depth: 0)
     }
@@ -824,10 +824,10 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
             return nil
         }
 
-        // 4. Custom Antigravity deep-link schemes (`antigravity://`, `agy://`, `google-antigravity://`)
-        if scheme == "antigravity" || scheme == "agy" || scheme == "google-antigravity" {
+        // 4. Custom AG Pocket / Antigravity deep-link schemes (`agpocket://`, `antigravity://`, `agy://`, `google-antigravity://`)
+        if scheme == "agpocket" || scheme == "antigravity" || scheme == "agy" || scheme == "google-antigravity" {
             let hostLower = comps.host?.lowercased() ?? ""
-            if scheme == "antigravity" && hostLower == "verify" {
+            if (scheme == "agpocket" || scheme == "antigravity") && (hostLower == "verify" || hostLower == "share") {
                 return nil
             }
             if let nested = unwrapRedirectQueryParameter(from: comps, depth: depth) {

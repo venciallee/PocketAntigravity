@@ -27,11 +27,13 @@ public extension ESDDVerifySceneCase {
     }
 }
 
-/// Resolves `antigravity://verify/<case>` deep links and `--ui-verify` CLI arguments
-/// into deterministic offline scenes without requiring external network credentials.
+/// Resolves `agpocket://verify/<case>` (and legacy `antigravity://verify/<case>`) deep links
+/// and `--ui-verify` CLI arguments into deterministic offline scenes without requiring external network credentials.
 public enum DebugSceneFactory {
     public static func resolveDeepLink(_ url: URL) -> ESDDVerifySceneCase? {
-        guard url.scheme == "antigravity", url.host == "verify" else {
+        guard let scheme = url.scheme?.lowercased(),
+              (scheme == "agpocket" || scheme == "antigravity"),
+              url.host?.lowercased() == "verify" else {
             return nil
         }
         let slug = url.lastPathComponent

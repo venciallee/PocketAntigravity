@@ -52,7 +52,7 @@
 ## 4. IPC, Deeplinks & External Input (`SEC-IPC-*`)
 
 ### `SEC-IPC-001` — Deeplink / URL Scheme Injection & Debug Exposure (`P0`)
-- Custom URL schemes (`antigravity://`) must strictly validate host, route, and query parameters; debug/verification routes (`antigravity://verify/...`) must NEVER perform privileged actions or bypass auth in Release builds.
+- Custom URL schemes (`agpocket://` / legacy `antigravity://`) must strictly validate host, route, and query parameters; debug/verification routes (`agpocket://verify/...`) must NEVER perform privileged actions or bypass auth in Release builds.
 
 ### `SEC-IPC-002` — Android Exported Components (`P0`)
 - Flag `android:exported="true"` (or components with `intent-filter`) missing explicit permission protection or vulnerable to Intent Redirection.

@@ -57,8 +57,8 @@ public struct KmpFederatedSyncResult: Sendable, Equatable {
 /// (`StartCascade`, `SendUserCascadeMessage`, `HandleCascadeUserInteraction`, `CancelCascadeInvocation`)
 /// to the Kotlin Multiplatform `AntigravityShared.xcframework` (`Ktor Darwin` + `SKIE` + `AntigravityCoreCoordinator`).
 ///
-/// Keeping this protocol in `AntigravityData` ensures `AntigravityLiveActivity` (WidgetKit 30MB limit)
-/// and `AntigravityShare` extensions never link the Kotlin/Native binary, while the main `Antigravity.app`
+/// Keeping this protocol in `AntigravityData` ensures `AGPocketLiveActivity` (WidgetKit 30MB limit)
+/// and `AGPocketShare` extensions never link the Kotlin/Native binary, while the main `AGPocket.app`
 /// injects `KmpCoreEngineAdapter` at launch.
 public protocol AntigravityKmpEnginePort: Sendable {
     var engineName: String { get }
