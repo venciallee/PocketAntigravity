@@ -123,6 +123,7 @@ public struct ModelAndModeSheetView: View {
         }
         .sensoryFeedback(.selection, trigger: store.selectedModelConfig.mode)
         .sensoryFeedback(.selection, trigger: store.selectedModelConfig.modelId)
+        .sensoryFeedback(.selection, trigger: store.selectedModelConfig.effort)
         .sensoryFeedback(.selection, trigger: store.activePermissionPreset)
         .task {
             if store.hasPairedBackend || store.isLiveBackendConnected {
@@ -469,28 +470,37 @@ public struct ModelAndModeSheetView: View {
             .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
             .background(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.08) : Color.clear)
         } else {
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    selectModelOption(activeOption)
+            let showsInlineEfforts = isLiveAntigravity2Mode
+                && activeOption.supportsEffortAdjustment
+                && activeOption.supportedEfforts.count >= 2
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        selectModelOption(activeOption)
+                    }
+                } label: {
+                    modelRowHeaderContent(
+                        title: group.familyName,
+                        subtitle: subtitle,
+                        tagBadge: tagBadge,
+                        effortBadge: group.singleEffortBadge,
+                        hasThinkingBadge: activeOption.hasThinkingBadge,
+                        isSelected: isSelected,
+                        unselectedTierCount: (!isSelected && showsInlineEfforts) ? activeOption.supportedEfforts.count : nil
+                    )
                 }
-            } label: {
-                modelRowHeaderContent(
-                    title: group.familyName,
-                    subtitle: subtitle,
-                    tagBadge: tagBadge,
-                    effortBadge: group.singleEffortBadge,
-                    hasThinkingBadge: activeOption.hasThinkingBadge,
-                    isSelected: isSelected,
-                    unselectedTierCount: nil
-                )
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-                .background(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.08) : Color.clear)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(Self.accessibilityId(for: activeOption, index: group.firstIndex))
+
+                if isSelected && showsInlineEfforts {
+                    effortLevelSegmentedBar(efforts: activeOption.supportedEfforts, modelId: activeOption.modelId)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier(Self.accessibilityId(for: activeOption, index: group.firstIndex))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+            .background(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.08) : Color.clear)
         }
     }
 
@@ -619,6 +629,56 @@ public struct ModelAndModeSheetView: View {
         )
     }
 
+    private func effortLevelSegmentedBar(efforts: [ThinkingEffortLevel], modelId: String) -> some View {
+        HStack(spacing: 4) {
+            ForEach(efforts) { tier in
+                let isTierSelected = store.selectedModelConfig.effort == tier
+                let tierLabel = (tier == .extra) ? "XHigh" : tier.rawValue
+                Button {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        store.selectedModelConfig.effort = tier
+                    }
+                    onSelectConfiguration?(
+                        store.selectedModelConfig.mode.rawValue,
+                        store.selectedModelConfig.displayName,
+                        store.selectedModelConfig.agentPersona
+                    )
+                } label: {
+                    Text(tierLabel)
+                        .font(.system(size: 12.5, weight: isTierSelected ? .semibold : .medium))
+                        .foregroundStyle(isTierSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                                .fill(isTierSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                                .strokeBorder(
+                                    isTierSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.45) : Color.clear,
+                                    lineWidth: 1
+                                )
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("model-effort-\(modelId)-\(tier.cliValue)")
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(AntigravityTheme.surfaceObsidian)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+        )
+    }
+
     // MARK: - AGENT Section
 
     private var agentSection: some View {
@@ -691,6 +751,13 @@ public struct ModelAndModeSheetView: View {
     // MARK: - Actions & Model Grouping Helpers
 
     private func selectModelOption(_ option: CascadeModelConfig) {
+        let isSameModel = store.selectedModelConfig.modelId == option.modelId
+        let resolvedEffort: ThinkingEffortLevel = {
+            if isSameModel, option.supportedEfforts.contains(store.selectedModelConfig.effort) {
+                return store.selectedModelConfig.effort
+            }
+            return option.effort
+        }()
         store.selectedModelConfig = CascadeModelConfig(
             modelId: option.modelId,
             displayName: option.displayName,
@@ -699,9 +766,14 @@ public struct ModelAndModeSheetView: View {
             requiresUpgradeNote: option.requiresUpgradeNote,
             mode: store.selectedModelConfig.mode,
             agentPersona: store.selectedModelConfig.agentPersona,
-            effort: option.effort,
+            effort: resolvedEffort,
             isModelAlias: option.isModelAlias,
-            badgeTitle: option.badgeTitle
+            badgeTitle: option.badgeTitle,
+            isOrchestrator: option.isOrchestrator,
+            plannerModelName: option.plannerModelName,
+            executorModelName: option.executorModelName,
+            supportedEfforts: option.supportedEfforts,
+            isNewBadge: option.isNewBadge
         )
         onSelectConfiguration?(
             store.selectedModelConfig.mode.rawValue,

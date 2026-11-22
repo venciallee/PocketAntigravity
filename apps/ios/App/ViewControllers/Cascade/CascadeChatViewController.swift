@@ -242,8 +242,9 @@ public struct CascadeChatViewController: View {
                     .padding(.top, 4)
                 }
 
-                // Above-Composer Status Strip
-                if isStaticESDDFixtureView || (activePendingDraft == nil && (store.isCascadeStreaming || store.pendingWaitingStep != nil || store.activeSummary?.status == .inProgress)) {
+                // Above-Composer Status Strip (shown in ESDD fixture or when an explicit approval/question gate awaits user action;
+                // ordinary streaming Stop is handled directly inside ChatComposerView's adaptive primary button)
+                if isStaticESDDFixtureView || (activePendingDraft == nil && store.pendingWaitingStep != nil) {
                     waitingStatusStrip(scrollProxy: scrollProxy)
                         .padding(.horizontal, 14)
                         .padding(.top, 4)
@@ -259,9 +260,9 @@ public struct CascadeChatViewController: View {
 
             // Pinned Composer Card
             ChatComposerView(store: store)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 12)
                 .padding(.top, 4)
-                .padding(.bottom, 6)
+                .padding(.bottom, 8)
         }
         .background(AntigravityTheme.canvasObsidian)
         .onChange(of: store.isCascadeStreaming) { _, streaming in
