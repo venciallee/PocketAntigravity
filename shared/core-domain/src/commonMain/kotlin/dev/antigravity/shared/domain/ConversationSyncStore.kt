@@ -15,6 +15,7 @@ import dev.antigravity.shared.protocol.BackendHandshakeResult
 import dev.antigravity.shared.protocol.FederatedWorkspaceSyncResult
 import dev.antigravity.shared.protocol.JsonStepAndSummaryDecoder
 import dev.antigravity.shared.protocol.currentTimeMillis
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.Throws
 
 public data class ConversationSyncState(
     public val workspaces: List<WorkspaceInfo> = emptyList(),
@@ -50,6 +52,7 @@ public class ConversationSyncStore(
 
     private var summaryStreamJob: Job? = null
 
+    @Throws(Throwable::class)
     public suspend fun hydrateFromCache() {
         val shards = projectionStorage.loadAllHostShards()
         if (shards.isEmpty()) return
@@ -63,6 +66,7 @@ public class ConversationSyncStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun applyHandshake(
         host: RemoteHostInstance,
         handshake: BackendHandshakeResult,
@@ -82,6 +86,7 @@ public class ConversationSyncStore(
         )
     }
 
+    @Throws(Throwable::class)
     public suspend fun refreshWorkspacesAndSummaries(
         client: AntigravityKmpRpcClient,
         host: RemoteHostInstance,
@@ -144,22 +149,28 @@ public class ConversationSyncStore(
     ) {
         stopSummarySubscriptionStream()
         summaryStreamJob = scope.launch {
-            client.subscribeEnvelopeStream("JetboxSubscribeToSummaries")
-                .catch {
-                    _state.update { prev -> prev.copy(isStreamHealthy = false) }
-                }
-                .collect { jsonObj ->
-                    val event = JsonStepAndSummaryDecoder.decodeJetboxSummariesEvent(
-                        obj = jsonObj,
-                        originInstanceUuid = host.instanceId,
-                        originHostName = host.hostname,
-                    )
-                    if (event.summaries.isNotEmpty() || event.removedCascadeIds.isNotEmpty()) {
-                        applyStreamEvent(event)
-                    } else {
-                        _state.update { prev -> prev.copy(isStreamHealthy = true) }
+            try {
+                client.subscribeEnvelopeStream("JetboxSubscribeToSummaries")
+                    .catch {
+                        _state.update { prev -> prev.copy(isStreamHealthy = false) }
                     }
-                }
+                    .collect { jsonObj ->
+                        val event = JsonStepAndSummaryDecoder.decodeJetboxSummariesEvent(
+                            obj = jsonObj,
+                            originInstanceUuid = host.instanceId,
+                            originHostName = host.hostname,
+                        )
+                        if (event.summaries.isNotEmpty() || event.removedCascadeIds.isNotEmpty()) {
+                            applyStreamEvent(event)
+                        } else {
+                            _state.update { prev -> prev.copy(isStreamHealthy = true) }
+                        }
+                    }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                _state.update { prev -> prev.copy(isStreamHealthy = false) }
+            }
         }
     }
 

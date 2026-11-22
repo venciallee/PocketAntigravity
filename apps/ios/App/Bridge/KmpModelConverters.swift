@@ -178,6 +178,7 @@ enum KmpModelConverters {
             resolvedHostname: kmp.resolvedHostname,
             resolvedInstanceUuid: kmp.resolvedInstanceUuid,
             resolvedAuthUser: kmp.resolvedAuthUser,
+            resolvedRelayApiKey: kmp.resolvedRelayApiKey,
             availableRelayInstances: kmp.availableRelayInstances.map(toSwiftRelayInstance),
             isSelectedHostOnline: kmp.isSelectedHostOnline
         )
