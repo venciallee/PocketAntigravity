@@ -97,7 +97,7 @@ public object SapisidHashGenerator {
     public const val RELAY_API_KEY_ENV_VAR_NAME: String = "ANTIGRAVITY_RELAY_API_KEY"
     public const val ANTIGRAVITY_TEST_HEADER_NAME: String = "x-antigravity-test-72e4dd1c-e8ae-4e97-873b-c3d3a01b735d"
     public const val MOBILE_REMOTE_USER_AGENT: String =
-        "Mozilla/5.0 (Mobile; Antigravity-KMP/2.0)"
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
     private val contextualApiKeyRegex = Regex(
         """(?:x-goog-api-key|WIu0Nc|QrtxK|P10xbc|apiKey|api_key|webApiKey)["']?\s*[:=]\s*["'](AIza[0-9A-Za-z_-]{35})["']""",
@@ -124,6 +124,14 @@ public object SapisidHashGenerator {
         """<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']""",
         RegexOption.IGNORE_CASE,
     )
+    private val modulePreloadHrefRegex = Regex(
+        """<link\b[^>]*\brel\s*=\s*["'](?:modulepreload|preload)["'][^>]*\bhref\s*=\s*["']([^"']+\.m?js(?:\?[^"']*)?)["']""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val modulePreloadHrefFirstRegex = Regex(
+        """<link\b[^>]*\bhref\s*=\s*["']([^"']+\.m?js(?:\?[^"']*)?)["'][^>]*\brel\s*=\s*["'](?:modulepreload|preload)["']""",
+        RegexOption.IGNORE_CASE,
+    )
 
     public fun isLoopbackOrigin(rawOrigin: String): Boolean {
         val normalized = normalizeOrigin(rawOrigin)
@@ -136,21 +144,30 @@ public object SapisidHashGenerator {
         return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
     }
 
-    public fun extractWebApiKey(sourceText: String): String? {
-        if (sourceText.isBlank()) return null
-        contextualApiKeyRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        googleWebApiKeyRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        metaNameFirstRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        metaContentFirstRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        explicitHeaderJsonRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        explicitConfigKeyRegex.find(sourceText)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        return null
+    public fun extractAllWebApiKeys(sourceText: String): List<String> {
+        if (sourceText.isBlank()) return emptyList()
+        val ordered = linkedSetOf<String>()
+        fun collect(regex: Regex) {
+            for (match in regex.findAll(sourceText)) {
+                match.groupValues.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { ordered.add(it) }
+            }
+        }
+        collect(contextualApiKeyRegex)
+        collect(googleWebApiKeyRegex)
+        collect(metaNameFirstRegex)
+        collect(metaContentFirstRegex)
+        collect(explicitHeaderJsonRegex)
+        collect(explicitConfigKeyRegex)
+        return ordered.toList()
     }
+
+    public fun extractWebApiKey(sourceText: String): String? =
+        extractAllWebApiKeys(sourceText).firstOrNull()
 
     public fun extractBootstrapScriptUrls(
         html: String,
         baseUrl: String,
-        limit: Int = 8,
+        limit: Int = 12,
     ): List<String> {
         if (html.isBlank() || limit <= 0) return emptyList()
         val normalizedBase = baseUrl.trim()
@@ -168,7 +185,13 @@ public object SapisidHashGenerator {
         val prioritized = mutableListOf<String>()
         val secondary = mutableListOf<String>()
 
-        for (match in scriptSrcRegex.findAll(html)) {
+        val allMatches = sequence {
+            yieldAll(scriptSrcRegex.findAll(html))
+            yieldAll(modulePreloadHrefRegex.findAll(html))
+            yieldAll(modulePreloadHrefFirstRegex.findAll(html))
+        }
+
+        for (match in allMatches) {
             val rawSrc = match.groupValues.getOrNull(1)?.trim()?.replace("&amp;", "&").orEmpty()
             if (rawSrc.isEmpty()) continue
             val resolved = when {
@@ -211,11 +234,43 @@ public object SapisidHashGenerator {
         if (statusCode != 400 && statusCode != 403) return false
         val lower = responseBody.lowercase()
         return lower.contains("api_key_invalid") ||
+            lower.contains("api_key_service_blocked") ||
+            lower.contains("api_key_http_referrer_blocked") ||
             lower.contains("api key not valid") ||
             lower.contains("api key expired") ||
             lower.contains("invalid api key") ||
+            lower.contains("missing a valid api key") ||
             lower.contains("unregistered callers") ||
-            lower.contains("x-goog-api-key")
+            lower.contains("x-goog-api-key") ||
+            lower.contains("requests to this api") ||
+            lower.contains("are blocked") ||
+            lower.contains("keyinvalid")
+    }
+
+    /**
+     * Safe, non-secret diagnostic summary of which Google auth cookie names are present (never exposes values).
+     */
+    public fun summarizeCookieNames(rawCookieHeader: String): String {
+        val trimmed = rawCookieHeader.trim()
+        if (trimmed.isEmpty()) return "none"
+        if (trimmed.lowercase().startsWith("bearer ") || trimmed.startsWith("ya29.")) return "bearer"
+        val cookies = parseCookies(trimmed)
+        val interesting = listOf(
+            "SAPISID",
+            "__Secure-1PAPISID",
+            "__Secure-3PAPISID",
+            "SID",
+            "__Secure-1PSID",
+            "__Secure-3PSID",
+            "OSID",
+            "__Secure-OSID",
+            "SIDCC",
+            "__Secure-1PSIDCC",
+            "__Secure-1PSIDTS",
+        )
+        val present = interesting.filter { cookies.containsKey(it) }
+            .map { it.removePrefix("__Secure-") }
+        return "n=${cookies.size}[${present.joinToString(",")}]"
     }
 
     public fun parseCookies(rawCookieHeader: String): Map<String, String> {

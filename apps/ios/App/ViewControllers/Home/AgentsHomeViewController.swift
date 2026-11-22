@@ -213,7 +213,10 @@ public struct AgentsHomeViewController: View {
                 VStack(alignment: .leading, spacing: 12) {
                     topHeaderToolbar
                     heroTitleAndSearchSection
-                    if usesLiveStoreData && store.activeHost.channel == .cloudRelay && store.connectionStatusText.contains("Expired") {
+                    if usesLiveStoreData
+                        && store.activeHost.channel == .cloudRelay
+                        && (store.connectionStatusText.contains("Expired")
+                            || (store.connectionErrorText?.lowercased().contains("unauthorized") ?? false)) {
                         googleSessionExpiredBanner
                     }
                     filterPillStrip
@@ -293,7 +296,8 @@ public struct AgentsHomeViewController: View {
                             relayURLString: effectiveURL,
                             sessionCookie: cookieHeader,
                             authUser: detectedAuthUser,
-                            relayApiKey: detectedRelayApiKey
+                            relayApiKey: detectedRelayApiKey,
+                            ignoreCachedRelayApiKey: true
                         )
                     }
                 },

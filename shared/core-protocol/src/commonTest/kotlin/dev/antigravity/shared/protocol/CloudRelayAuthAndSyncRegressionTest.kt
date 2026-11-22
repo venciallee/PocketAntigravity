@@ -189,4 +189,117 @@ class CloudRelayAuthAndSyncRegressionTest {
         assertEquals(RelayInstanceStatus.CONNECTED, decoded[0].status)
         assertTrue(decoded[0].supportsChunking)
     }
+
+    @Test
+    fun testRotatesPastBlockedOneGoogleApiKeyToModulePreloadApiServiceKey() = runTest {
+        withContext(Dispatchers.Default) {
+            val blockedOgsKey = "AI" + "zaSyOGSBLOCKED00000000000000000000000"
+            val validApiServiceKey = "AI" + "zaSyREALAPISERVICE1111111111111111111"
+            val attemptedKeys = mutableListOf<String?>()
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path == "/r/0f5819ac-9308-40d8-a308-98b55122c533-v2" -> {
+                        respond(
+                            content = """
+                                <html><head>
+                                <script>window.WIZ_global_data = {"ogsKey":"$blockedOgsKey"};</script>
+                                <link rel="modulepreload" href="/_/boq/antigravity_app.mjs">
+                                </head></html>
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "text/html"),
+                        )
+                    }
+                    path == "/_/boq/antigravity_app.mjs" -> {
+                        respond(
+                            content = """export const cfg = {"x-goog-api-key": "$validApiServiceKey"};""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/javascript"),
+                        )
+                    }
+                    path.endsWith("/ListInstances") -> {
+                        val sentKey = request.headers["X-Goog-Api-Key"]
+                        attemptedKeys.add(sentKey)
+                        if (sentKey == validApiServiceKey) {
+                            respond(
+                                content = """[[["0f5819ac-9308-40d8-a308-98b55122c533-v2",["Studio Mac","2.33.0",true],1,[1740000000,0]]],5]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            respond(
+                                content = """[7,"Requests to this API devtools_jetski_boq_api_proto.ApiService method ListInstances are blocked."]""",
+                                status = HttpStatusCode.Forbidden,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = "0f5819ac-9308-40d8-a308-98b55122c533-v2",
+                hostname = "Antigravity Desktop",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
+            )
+            // Start with no explicit key: HTML returns blockedOgsKey first, then modulepreload JS provides validApiServiceKey.
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = null,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val instances = client.listRelayInstances(authUserOverride = "0")
+            assertEquals(1, instances.size)
+            assertEquals("Studio Mac", instances[0].name)
+            assertEquals(validApiServiceKey, client.currentRelayApiKey())
+            assertTrue(attemptedKeys.contains(blockedOgsKey))
+            assertTrue(attemptedKeys.contains(validApiServiceKey))
+        }
+    }
+
+    @Test
+    fun testUnauthorizedDiagnosticIncludesHttpStatusAndSafeCookieSummaryWithoutLeakingSecretValues() = runTest {
+        withContext(Dispatchers.Default) {
+            val secretCookieVal = "SUPER_SECRET_COOKIE_VALUE_DO_NOT_LEAK"
+            val engine = MockEngine { request ->
+                if (request.url.encodedPath.endsWith("/ListInstances")) {
+                    respond(
+                        content = """{"error":{"code":401,"message":"UNAUTHENTICATED: SAPISIDHASH mismatch"}}""",
+                        status = HttpStatusCode.Unauthorized,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                } else {
+                    respond("<html></html>", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/html"))
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = "0f5819ac-9308-40d8-a308-98b55122c533-v2",
+                hostname = "Mac",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=$secretCookieVal; SID=sid_val; OSID=osid_val",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val err = assertFailsWith<AntigravityRpcError.Unauthorized> {
+                client.listRelayInstances(authUserOverride = "0")
+            }
+            assertTrue(err.detail.contains("HTTP 401"), "Expected HTTP 401 in diagnostic: ${err.detail}")
+            assertTrue(err.detail.contains("SAPISID"), "Expected cookie key name in diagnostic: ${err.detail}")
+            assertTrue(err.detail.contains("OSID"), "Expected OSID cookie key name in diagnostic: ${err.detail}")
+            assertTrue(err.detail.contains("SAPISIDHASH mismatch"), "Expected server error snippet: ${err.detail}")
+            assertTrue(!err.detail.contains(secretCookieVal), "Diagnostic must NEVER leak raw cookie values")
+        }
+    }
 }

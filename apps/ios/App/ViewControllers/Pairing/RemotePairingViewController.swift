@@ -30,6 +30,9 @@ public struct RemotePairingViewController: View {
         let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
         let isOnlineConnected = store.isDeviceNetworkReachable && store.isLiveBackendConnected && store.activeHost.isOnline
         let isOfflinePaired = store.hasPairedBackend && !isOnlineConnected
+        let isGoogleAuthExpired = store.activeHost.channel == .cloudRelay
+            && (store.connectionStatusText.contains("Expired")
+                || (store.connectionErrorText?.lowercased().contains("unauthorized") ?? false))
 
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
@@ -52,7 +55,9 @@ public struct RemotePairingViewController: View {
                             .strokeBorder(
                                 isOnlineConnected
                                     ? AntigravityTheme.statusDone.opacity(0.45)
-                                    : (isOfflinePaired ? AntigravityTheme.statusError.opacity(0.50) : AntigravityTheme.cardBorder),
+                                    : (isOfflinePaired
+                                        ? (isGoogleAuthExpired ? AntigravityTheme.statusWaiting.opacity(0.55) : AntigravityTheme.statusError.opacity(0.50))
+                                        : AntigravityTheme.cardBorder),
                                 lineWidth: 1
                             )
                     )
@@ -77,13 +82,17 @@ public struct RemotePairingViewController: View {
                                 Image(
                                     systemName: isOnlineConnected
                                         ? "checkmark.shield.fill"
-                                        : (isOfflinePaired ? "wifi.slash" : "qrcode.viewfinder")
+                                        : (isOfflinePaired
+                                            ? (isGoogleAuthExpired ? "person.crop.circle.badge.exclamationmark" : "wifi.slash")
+                                            : "qrcode.viewfinder")
                                 )
                                 .font(.system(size: 48, weight: .light))
                                 .foregroundStyle(
                                     isOnlineConnected
                                         ? AntigravityTheme.statusDone
-                                        : (isOfflinePaired ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle)
+                                        : (isOfflinePaired
+                                            ? (isGoogleAuthExpired ? AntigravityTheme.statusWaiting : AntigravityTheme.statusError)
+                                            : AntigravityTheme.accentPeriwinkle)
                                 )
 
                                 Text(
@@ -91,7 +100,9 @@ public struct RemotePairingViewController: View {
                                         ? "Connected: \(store.activeHost.hostname)"
                                         : (isNoInternet
                                             ? "No Internet Connection"
-                                            : (isOfflinePaired ? "Host Offline: \(store.activeHost.hostname)" : "Tap to Scan Remote Control QR"))
+                                            : (isOfflinePaired
+                                                ? (isGoogleAuthExpired ? "Google Sign-In Expired" : "Host Offline: \(store.activeHost.hostname)")
+                                                : "Tap to Scan Remote Control QR"))
                                 )
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
@@ -106,7 +117,9 @@ public struct RemotePairingViewController: View {
                                         : (isNoInternet
                                             ? "Paused while iPhone is offline · Auto-resumes when network returns"
                                             : (isOfflinePaired
-                                                ? "Power-saving backoff reconnect · Tap below to retry or scan QR"
+                                                ? (isGoogleAuthExpired
+                                                    ? "Sign in with Google again to restore Cloud Relay sync"
+                                                    : "Power-saving backoff reconnect · Tap below to retry or scan QR")
                                                 : "Open Antigravity on Mac/PC → Remote Control"))
                                 )
                                 .font(.system(size: 13, weight: .regular))
@@ -116,25 +129,48 @@ public struct RemotePairingViewController: View {
 
                                 if isOfflinePaired {
                                     HStack(spacing: 10) {
-                                        Button {
-                                            Task {
-                                                await store.reconnectNow(userInitiated: true)
+                                        if isGoogleAuthExpired {
+                                            Button {
+                                                let targetURL = store.lastScannedRelayURL.isEmpty
+                                                    ? store.activeHost.endpointURL.absoluteString
+                                                    : store.lastScannedRelayURL
+                                                pendingRelayURL = targetURL
+                                                isShowingGoogleSignIn = true
+                                            } label: {
+                                                HStack(spacing: 6) {
+                                                    Image(systemName: "person.crop.circle.badge.checkmark")
+                                                        .font(.system(size: 12.5, weight: .semibold))
+                                                    Text("Sign in with Google")
+                                                        .font(.system(size: 13, weight: .semibold))
+                                                }
+                                                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                                                .padding(.horizontal, 14)
+                                                .frame(minHeight: 36)
+                                                .background(Capsule().fill(AntigravityTheme.accentPeriwinkle))
                                             }
-                                        } label: {
-                                            HStack(spacing: 6) {
-                                                Image(systemName: "arrow.clockwise")
-                                                    .font(.system(size: 12.5, weight: .semibold))
-                                                Text("Reconnect Now")
-                                                    .font(.system(size: 13, weight: .semibold))
+                                            .buttonStyle(.plain)
+                                            .accessibilityIdentifier("btn-settings-google-reauth")
+                                        } else {
+                                            Button {
+                                                Task {
+                                                    await store.reconnectNow(userInitiated: true)
+                                                }
+                                            } label: {
+                                                HStack(spacing: 6) {
+                                                    Image(systemName: "arrow.clockwise")
+                                                        .font(.system(size: 12.5, weight: .semibold))
+                                                    Text("Reconnect Now")
+                                                        .font(.system(size: 13, weight: .semibold))
+                                                }
+                                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                                .padding(.horizontal, 14)
+                                                .frame(minHeight: 36)
+                                                .background(Capsule().fill(AntigravityTheme.surfacePill))
+                                                .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                                             }
-                                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                                            .padding(.horizontal, 14)
-                                            .frame(minHeight: 36)
-                                            .background(Capsule().fill(AntigravityTheme.surfacePill))
-                                            .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
+                                            .buttonStyle(.plain)
+                                            .accessibilityIdentifier("btn-retry-connection")
                                         }
-                                        .buttonStyle(.plain)
-                                        .accessibilityIdentifier("btn-retry-connection")
 
                                         Button {
                                             isShowingQRScanner = true
@@ -401,7 +437,7 @@ public struct RemotePairingViewController: View {
         .sheet(isPresented: $isShowingGoogleSignIn) {
             CloudRelaySignInSheet(
                 targetRelayURLString: pendingRelayURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : pendingRelayURL,
-                clearExistingSession: store.connectionStatusText.contains("Expired"),
+                clearExistingSession: isGoogleAuthExpired,
                 onAuthenticated: { cookieHeader, finalURL, detectedAuthUser, detectedRelayApiKey in
                     isShowingGoogleSignIn = false
                     let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(
@@ -413,7 +449,8 @@ public struct RemotePairingViewController: View {
                             relayURLString: effectiveURL,
                             sessionCookie: cookieHeader,
                             authUser: detectedAuthUser,
-                            relayApiKey: detectedRelayApiKey
+                            relayApiKey: detectedRelayApiKey,
+                            ignoreCachedRelayApiKey: true
                         )
                         if ok {
                             onConnected?()
@@ -658,28 +695,27 @@ public struct RemotePairingViewController: View {
         let target = targetInput.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveURL = target.isEmpty ? SAPISIDHashGenerator.defaultOrigin : target
 
-        // 1. Reuse existing Keychain or WKWebsiteDataStore Google session cookie if already signed in
-        var existingCookie: String? = nil
-        var savedAuthUser: String? = nil
-        if let cached = await store.loadSavedSessionCookie() {
-            existingCookie = cached.cookie
-            savedAuthUser = cached.authUser
-        } else if let webKitCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader() {
-            existingCookie = webKitCookie
+        let alreadyExpired = store.connectionStatusText.contains("Expired")
+            || (store.connectionErrorText?.lowercased().contains("unauthorized") ?? false)
+        if alreadyExpired {
+            isShowingGoogleSignIn = true
+            return
         }
 
-        if let existingCookie, !existingCookie.isEmpty {
+        // 1. Reuse existing saved Keychain Google session cookie if already signed in and not expired
+        if let cached = await store.loadSavedSessionCookie(), !cached.cookie.isEmpty {
             let ok = await store.connectCloudRelay(
                 relayURLString: effectiveURL,
-                sessionCookie: existingCookie,
-                authUser: savedAuthUser
+                sessionCookie: cached.cookie,
+                authUser: cached.authUser
             )
             if ok {
                 onConnected?()
                 return
             }
             // If cached Google session expired (401/403), automatically present Google Sign-In
-            if store.connectionStatusText.contains("Expired") {
+            if store.connectionStatusText.contains("Expired")
+                || (store.connectionErrorText?.lowercased().contains("unauthorized") ?? false) {
                 isShowingGoogleSignIn = true
             }
             return

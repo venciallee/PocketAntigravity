@@ -263,7 +263,7 @@ public class ConnectionDomainStore(
                     statusText = "Sign in with Google to pair Remote Control",
                 )
             }
-            throw AntigravityRpcError.Unauthorized
+            throw AntigravityRpcError.Unauthorized("Missing Google session cookie")
         }
 
         val effectiveAuth = authUser ?: parsed?.authUser
@@ -291,7 +291,11 @@ public class ConnectionDomainStore(
             bypassProxyForLocalHosts = true,
         )
         val effectiveApiKey = relayApiKey?.trim()?.takeIf { it.isNotEmpty() }
-            ?: secretStore.loadCredentials()?.relayApiKey?.trim()?.takeIf { it.isNotEmpty() }
+            ?: if (isRestoringSavedSession) {
+                secretStore.loadCredentials()?.relayApiKey?.trim()?.takeIf { it.isNotEmpty() }
+            } else {
+                null
+            }
         val candidate = clientFactory(hostInstance, null, trimmedCookie, effectiveAuth, resolvedInstanceUuid, effectiveApiKey, tlsConfig)
 
         return try {
@@ -526,7 +530,7 @@ public class ConnectionDomainStore(
     ) {
         val isAuthError = error is AntigravityRpcError.Unauthorized
         val errMsg = when (error) {
-            is AntigravityRpcError.Unauthorized -> "Authentication rejected (401/403). Please re-authenticate."
+            is AntigravityRpcError.Unauthorized -> error.detail.ifBlank { "Authentication rejected (401/403). Please re-authenticate." }
             is AntigravityRpcError.HttpError -> "Backend HTTP ${error.statusCode}: ${error.body}"
             else -> error.message ?: "Connection failed"
         }

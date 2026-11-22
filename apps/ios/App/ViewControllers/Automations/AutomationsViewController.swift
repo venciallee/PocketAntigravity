@@ -175,7 +175,8 @@ public struct AutomationsViewController: View {
                             relayURLString: effectiveURL,
                             sessionCookie: cookieHeader,
                             authUser: detectedAuthUser,
-                            relayApiKey: detectedRelayApiKey
+                            relayApiKey: detectedRelayApiKey,
+                            ignoreCachedRelayApiKey: true
                         )
                         if ok {
                             await store.refreshAutomations()

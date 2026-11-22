@@ -756,7 +756,8 @@ extension AntigravitySessionStore {
         deepLinkedConversationId: String? = nil,
         hostName: String = "Antigravity Desktop",
         isRestoringSavedSession: Bool = false,
-        strictTargetMatch: Bool = false
+        strictTargetMatch: Bool = false,
+        ignoreCachedRelayApiKey: Bool = false
     ) async -> Bool {
         let wasOptimisticInitial = isOptimisticInitialPairing && !isRestoringSavedSession
         let trimmedInput = relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -844,7 +845,7 @@ extension AntigravitySessionStore {
         let initialOriginPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
         let trimmedExplicitKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         var effectiveRelayApiKey: String? = (trimmedExplicitKey?.isEmpty == false ? trimmedExplicitKey : nil)
-        if effectiveRelayApiKey == nil && !SAPISIDHashGenerator.isLoopbackOrigin(initialOriginPrefix) {
+        if effectiveRelayApiKey == nil && !ignoreCachedRelayApiKey && !SAPISIDHashGenerator.isLoopbackOrigin(initialOriginPrefix) {
             if let originCachedKey = await secretStore.loadRelayWebApiKey(forOrigin: initialOriginPrefix) {
                 effectiveRelayApiKey = originCachedKey
             } else if let savedCredsKey = await secretStore.loadCredentials()?.relayApiKey?
@@ -1002,6 +1003,9 @@ extension AntigravitySessionStore {
             }
             return true
         } catch let AntigravityRPCError.unauthorized(reason) {
+            if !SAPISIDHashGenerator.isLoopbackOrigin(initialOriginPrefix) {
+                await secretStore.clearRelayWebApiKey(forOrigin: initialOriginPrefix)
+            }
             let errMsg = "Google session unauthorized: please sign in again. (\(reason))"
             if isRestoringSavedSession {
                 await applyOfflinePairedSession(
