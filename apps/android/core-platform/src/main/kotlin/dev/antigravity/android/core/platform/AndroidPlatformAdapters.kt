@@ -573,6 +573,7 @@ object CloudRelayCookieBridge {
         "https://google.com",
         "https://www.google.com",
         "https://accounts.google.com",
+        "https://antigravity.google",
         "https://antigravity.google.com",
     )
 
@@ -582,8 +583,18 @@ object CloudRelayCookieBridge {
         "__Secure-3PAPISID",
     )
 
+    fun urlsForHost(targetHost: String): List<String> {
+        val raw = targetHost.trim().lowercase().ifEmpty { "antigravity.google.com" }
+        val normalized = if (raw == "antigravity.google") "antigravity.google.com" else raw
+        val urls = LinkedHashSet<String>(DEFAULT_RELAY_URLS)
+        urls.add("https://$raw")
+        urls.add("https://$normalized")
+        return urls.toList()
+    }
+
     fun extractAuthCookies(urls: List<String> = DEFAULT_RELAY_URLS): Map<String, String> {
         val cookieManager = runCatching { CookieManager.getInstance() }.getOrNull() ?: return emptyMap()
+        runCatching { cookieManager.flush() }
         val merged = linkedMapOf<String, String>()
         for (url in urls) {
             val rawHeader = runCatching { cookieManager.getCookie(url) }.getOrNull() ?: continue
@@ -601,6 +612,9 @@ object CloudRelayCookieBridge {
         }
         return cookies.entries.joinToString("; ") { (k, v) -> "$k=$v" }
     }
+
+    fun extractSessionCookieHeaderForHost(targetHost: String): String? =
+        extractSessionCookieHeader(urlsForHost(targetHost))
 
     fun extractSapisidToken(urls: List<String> = DEFAULT_RELAY_URLS): String? {
         val cookies = extractAuthCookies(urls)

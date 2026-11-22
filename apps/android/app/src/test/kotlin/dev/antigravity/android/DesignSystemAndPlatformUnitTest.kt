@@ -164,4 +164,25 @@ class DesignSystemAndPlatformUnitTest {
         storage.delete("unit-test.json")
         assertNull(storage.readText("unit-test.json"))
     }
+
+    @Test
+    fun cloudRelayCookieBridgeNormalizesShortDomainAndSanitizesWebViewUserAgent() {
+        val urls = dev.antigravity.android.core.platform.CloudRelayCookieBridge.urlsForHost("antigravity.google")
+        assertTrue(urls.contains("https://antigravity.google"))
+        assertTrue(urls.contains("https://antigravity.google.com"))
+        assertTrue(urls.contains("https://google.com"))
+
+        val normalized = dev.antigravity.android.ui.pairing.normalizeRelayStartUrl("https://antigravity.google/r/test-id")
+        assertEquals("https://antigravity.google.com/r/test-id", normalized)
+        assertTrue(dev.antigravity.android.ui.pairing.isRelayHostUrl("https://antigravity.google.com/r/test-id"))
+        assertTrue(dev.antigravity.android.ui.pairing.isRelayHostUrl("https://antigravity.google/r/test-id"))
+        assertFalse(dev.antigravity.android.ui.pairing.isRelayHostUrl("https://accounts.google.com/signin"))
+
+        val sanitizedUa = dev.antigravity.android.ui.pairing.sanitizeGoogleOAuthUserAgent(
+            "Mozilla/5.0 (Linux; Android 15; Pixel 9; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Mobile Safari/537.36",
+        )
+        assertFalse("WebView `; wv)` marker must be stripped for Google OAuth", sanitizedUa.contains("; wv)"))
+        assertFalse(sanitizedUa.contains("Version/4.0"))
+        assertTrue(sanitizedUa.contains("Chrome/131.0.0.0"))
+    }
 }

@@ -149,6 +149,13 @@ class MainActivity : FragmentActivity() {
                     runCatching { coordinator.connectWithPairingUri(dataUri.toString()) }
                 }
             }
+        } else if (dataUri != null &&
+            dataUri.scheme.equals("https", ignoreCase = true) &&
+            RemoteHostInstance.parseRemoteControlTarget(dataUri.toString()) != null
+        ) {
+            lifecycleScope.launch {
+                runCatching { coordinator.connectWithPairingUri(dataUri.toString()) }
+            }
         }
     }
 

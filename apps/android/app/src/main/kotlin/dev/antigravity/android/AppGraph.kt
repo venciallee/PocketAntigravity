@@ -9,6 +9,7 @@ import dev.antigravity.android.core.platform.AndroidSecretStore
 import dev.antigravity.android.core.platform.BiometricApprovalController
 import dev.antigravity.android.core.platform.LiveUpdateDismissTracker
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,7 +21,11 @@ import kotlinx.coroutines.SupervisorJob
 object AppGraph {
     private val lock = Any()
 
-    val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val appExceptionHandler = CoroutineExceptionHandler { _, _ ->
+        // Prevent uncaught background coroutine failures from terminating the Android process.
+    }
+
+    val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + appExceptionHandler)
     val dismissTracker: LiveUpdateDismissTracker = LiveUpdateDismissTracker()
     val biometricController: BiometricApprovalController = BiometricApprovalController()
 

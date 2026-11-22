@@ -195,4 +195,21 @@ class CoreDomainStoreTest {
         assertTrue(coordinator.connectionState.value.isNetworkingSuspended)
         assertEquals(ConnectionLifecyclePhase.Disconnected, coordinator.connectionState.value.lifecyclePhase)
     }
+
+    @Test
+    fun testCancelPendingConnectionAttemptAndCreateLocalDraftConversation() {
+        val coordinator = AntigravityCoreCoordinator()
+        val draftId = coordinator.createLocalDraftConversation(
+            workspaceUri = "file:///Users/dev/ledger-svc",
+            projectSlug = "ledger-svc",
+            title = "Draft check",
+        )
+        assertTrue(draftId.startsWith("cascade-new-"))
+        assertEquals(draftId, coordinator.chatState.value.activeCascadeId)
+        assertTrue(coordinator.syncState.value.summaries.any { it.cascadeId == draftId })
+
+        coordinator.cancelPendingConnectionAttempt()
+        assertFalse(coordinator.connectionState.value.isConnecting)
+        assertEquals(ConnectionLifecyclePhase.Disconnected, coordinator.connectionState.value.lifecyclePhase)
+    }
 }

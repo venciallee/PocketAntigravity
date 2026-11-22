@@ -223,6 +223,48 @@ public class AntigravityCoreCoordinator(
         return handshake
     }
 
+    public fun cancelPendingConnectionAttempt() {
+        connectionStore.cancelPendingConnectionAttempt()
+    }
+
+    /**
+     * Creates an optimistic local conversation draft without prematurely firing `startConversation`
+     * while the initial backend handshake is still connecting. The first `sendMessage(..., isOptimisticDraft = true)`
+     * call lazily promotes the draft to a real backend cascade ID once connected.
+     */
+    public fun createLocalDraftConversation(
+        workspaceUri: String = "",
+        projectSlug: String = "",
+        title: String = "New Conversation",
+    ): String {
+        val draftId = "cascade-new-${dev.antigravity.shared.protocol.currentTimeMillis()}"
+        val activeHost = connectionStore.state.value.activeHost
+        val resolvedProject = projectSlug.ifBlank {
+            conversationSyncStore.state.value.projects.firstOrNull()?.id ?: "workspace"
+        }
+        val resolvedWorkspace = workspaceUri.ifBlank {
+            conversationSyncStore.state.value.projects.firstOrNull { it.id == resolvedProject }?.workspaceUri.orEmpty()
+        }
+        conversationSyncStore.upsertSummary(
+            CascadeSummary(
+                cascadeId = draftId,
+                title = title,
+                projectSlug = resolvedProject,
+                workspaceUri = resolvedWorkspace,
+                status = CortexStepStatus.UNSPECIFIED,
+                stepCount = 0,
+                currentStepIndex = 0,
+                totalSteps = 0,
+                statusSubtitle = "New conversation",
+                originInstanceUuid = activeHost?.instanceId,
+                originHostName = activeHost?.hostname,
+                updatedAtEpochMs = dev.antigravity.shared.protocol.currentTimeMillis(),
+            ),
+        )
+        chatStore.setActiveCascade(draftId)
+        return draftId
+    }
+
     @Throws(Throwable::class)
     public suspend fun probeHostReachability(allowCrossHostFallback: Boolean = true): HostReachabilityProbeResult =
         connectionStore.probeHostReachability(allowCrossHostFallback = allowCrossHostFallback)

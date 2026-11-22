@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -87,8 +88,9 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
 /**
- * Material 3 Onboarding & Pairing Screen supporting Remote Control QR scanning,
+ * Material 3 Onboarding & Pairing Screen supporting Remote Control QR/link pairing,
  * Google Cloud Relay WebView sign-in, Direct LAN / Tailscale manual pairing,
+ * live connecting progress with Cancel, clear auth/network error diagnostics,
  * and offline ESDD demo exploration.
  */
 @Composable
@@ -97,6 +99,10 @@ fun WelcomeAndPairingScreen(
     onCloudRelaySignIn: () -> Unit = {},
     onConnectDirectLan: (endpointUrl: String, csrfToken: String) -> Unit = { _, _ -> },
     onContinueDemo: () -> Unit = {},
+    isConnecting: Boolean = false,
+    statusText: String? = null,
+    errorText: String? = null,
+    onCancelConnecting: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
@@ -160,11 +166,93 @@ fun WelcomeAndPairingScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        if (isConnecting) {
+            AntigravitySurfaceCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("welcome-connecting-card"),
+                borderColor = colors.accentPeriwinkle.copy(alpha = 0.45f),
+                contentPadding = PaddingValues(14.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.5.dp,
+                        color = colors.accentPeriwinkle,
+                    )
+                    Text(
+                        text = statusText?.takeIf { it.isNotBlank() } ?: "Connecting to Antigravity host...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.inkReading,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = onCancelConnecting,
+                        modifier = Modifier.testTag("btn-welcome-cancel-connecting"),
+                    ) {
+                        Text("Cancel", color = colors.accentPeriwinkle)
+                    }
+                }
+            }
+        } else if (!errorText.isNullOrBlank()) {
+            AntigravitySurfaceCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("welcome-error-banner"),
+                containerColor = colors.surfaceAmberTint,
+                borderColor = colors.statusWaiting.copy(alpha = 0.45f),
+                contentPadding = PaddingValues(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Warning,
+                        contentDescription = null,
+                        tint = colors.statusWaiting,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .size(18.dp),
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = errorText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkReading,
+                        )
+                        if (errorText.contains("401") ||
+                            errorText.contains("403") ||
+                            errorText.contains("cookie", ignoreCase = true) ||
+                            errorText.contains("sign", ignoreCase = true) ||
+                            errorText.contains("auth", ignoreCase = true)
+                        ) {
+                            TextButton(
+                                onClick = onCloudRelaySignIn,
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+                            ) {
+                                Text("Sign in with Google again", color = colors.statusWaiting)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
 
         // Primary CTA: Scan Remote Control QR
         Button(
             onClick = onScanQr,
+            enabled = !isConnecting,
             modifier = Modifier
                 .fillMaxWidth()
                 .defaultMinSize(minHeight = 54.dp)
@@ -193,6 +281,7 @@ fun WelcomeAndPairingScreen(
         // Secondary CTA: Google Cloud Relay WebView Sign-In
         FilledTonalButton(
             onClick = onCloudRelaySignIn,
+            enabled = !isConnecting,
             modifier = Modifier
                 .fillMaxWidth()
                 .defaultMinSize(minHeight = 52.dp)

@@ -38,6 +38,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="agpocket" />
             </intent-filter>
+            <!-- Remote Control QR deep link handoff from system camera (`https://antigravity.google.com/r/<uuid>`) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="antigravity.google.com" android:pathPrefix="/r/" />
+                <data android:scheme="https" android:host="antigravity.google" android:pathPrefix="/r/" />
+            </intent-filter>
 
             <!-- Native Android Share Receiver (no 30MB iOS extension limit) -->
             <intent-filter>
