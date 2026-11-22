@@ -184,5 +184,31 @@ class DesignSystemAndPlatformUnitTest {
         assertFalse("WebView `; wv)` marker must be stripped for Google OAuth", sanitizedUa.contains("; wv)"))
         assertFalse(sanitizedUa.contains("Version/4.0"))
         assertTrue(sanitizedUa.contains("Chrome/131.0.0.0"))
+
+        // Android evaluateJavascript result decoding (JSON-quoted string vs null/empty/short)
+        val fakeKey = "AI" + "zaSyANDROIDWIZKEY00000000000000000000"
+        assertEquals(fakeKey, dev.antigravity.android.ui.pairing.parseEvaluateJsStringResult("\"$fakeKey\""))
+        assertNull(dev.antigravity.android.ui.pairing.parseEvaluateJsStringResult("null"))
+        assertNull(dev.antigravity.android.ui.pairing.parseEvaluateJsStringResult("\"\""))
+        assertNull(dev.antigravity.android.ui.pairing.parseEvaluateJsStringResult("\"short\""))
+
+        // DOM inspection script covers WIZ_global_data + inline scripts without hardcoding any secret literal
+        val inspectJs = dev.antigravity.android.ui.pairing.ANDROID_API_KEY_INSPECT_JS
+        assertTrue(inspectJs.contains("WIZ_global_data"))
+        assertTrue(inspectJs.contains("WIu0Nc"))
+        assertTrue(inspectJs.contains("antigravity-relay-api-key"))
+        assertFalse("Inspect script must split prefix instead of hardcoding AIza literal", inspectJs.contains("AI" + "za"))
+
+        // Effective relay target resolves WebView finalUrl and canonicalizes vanity host
+        val resolved = dev.antigravity.shared.model.RemoteHostInstance.resolveEffectiveRelayTarget(
+            scannedInput = "https://antigravity.google/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
+            webViewFinalUrl = "https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2?authuser=1",
+        )
+        assertEquals("https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2?authuser=1", resolved)
+        val resolvedNoFinal = dev.antigravity.shared.model.RemoteHostInstance.resolveEffectiveRelayTarget(
+            scannedInput = "https://antigravity.google/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
+            webViewFinalUrl = null,
+        )
+        assertEquals("https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2", resolvedNoFinal)
     }
 }

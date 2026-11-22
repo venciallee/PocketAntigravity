@@ -907,9 +907,19 @@ extension AntigravitySessionStore {
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: 25_000_000_000)
+                    let diag: String = {
+                        if let activeEngine {
+                            let kmpDiag = activeEngine.lastHandshakeDiagnostic
+                            if !kmpDiag.isEmpty {
+                                return kmpDiag
+                            }
+                            return "engine=\(activeEngine.engineName) trace=no-kmp-trace"
+                        }
+                        return candidateClient.currentHandshakeDiagnostic()
+                    }()
                     throw AntigravityRPCError.httpError(
                         statusCode: 504,
-                        body: "Cloud Relay handshake timed out after 25s. Check Google / VPN reachability or tap Sign in with Google."
+                        body: "Cloud Relay handshake timed out after 25s. Check Google / VPN reachability or tap Sign in with Google. [\(diag)]"
                     )
                 }
                 guard let first = try await group.next() else {
@@ -2251,9 +2261,16 @@ extension AntigravitySessionStore {
         }
 
         let keysToPersist = refreshedHostKeys
+        let needsDeferredInitialSync = hostOnline && handshake.summaries.isEmpty && handshake.workspaces.isEmpty
         Task { [weak self] in
             if !keysToPersist.isEmpty {
                 await self?.persistHostProjections(refreshedHostKeys: keysToPersist)
+            }
+            if needsDeferredInitialSync {
+                await self?.refreshWorkspacesAndSummaries(
+                    forceFullSync: true,
+                    includeAutomations: false
+                )
             }
             if hostOnline {
                 await self?.refreshModelCatalog()

@@ -4185,6 +4185,55 @@ final class AntigravityProtocolTests: XCTestCase {
         let emptyHttpErr = AntigravityRPCError.httpError(statusCode: 502, body: "   ")
         XCTAssertEqual(emptyHttpErr.localizedDescription, "HTTP 502")
     }
+
+    func testCloudRelayCanonicalizesVanityOriginSetsMobileUserAgentAndExposesZeroSecretDiagnostic() {
+        // 1. Vanity `antigravity.google` host canonicalizes to `antigravity.google.com`
+        XCTAssertEqual(RemoteHostInstance.canonicalRelayHost("antigravity.google"), "antigravity.google.com")
+        XCTAssertEqual(RemoteHostInstance.canonicalRelayHost("staging.antigravity.google"), "staging.antigravity.google.com")
+        let target = RemoteHostInstance.parseRemoteControlTarget("https://antigravity.google/r/0f5819ac-9308-40d8-a308-98b55122c533-v2")
+        XCTAssertEqual(target?.canonicalRelayURLString, "https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2")
+        XCTAssertEqual(
+            SAPISIDHashGenerator.normalizeOrigin("https://antigravity.google/r/0f5819ac-9308-40d8-a308-98b55122c533-v2"),
+            "https://antigravity.google.com"
+        )
+
+        // 2. Boq ApiService headers include explicit mobile Safari User-Agent and canonical Origin
+        let testKey = "AI" + "zaSySWIFTHEADER0000000000000000000000"
+        var req = URLRequest(url: URL(string: "https://antigravity.google.com/$rpc/devtools_jetski_boq_api_proto.ApiService/ListInstances")!)
+        SAPISIDHashGenerator.applyApiServiceHeaders(
+            to: &req,
+            cookieHeader: "SAPISID=secret_sapisid_val; SID=secret_sid_val",
+            origin: "https://antigravity.google/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
+            apiKey: testKey,
+            authUser: "0"
+        )
+        XCTAssertEqual(req.value(forHTTPHeaderField: "User-Agent"), SAPISIDHashGenerator.mobileRemoteUserAgent)
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Origin"), "https://antigravity.google.com")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Referer"), "https://antigravity.google.com/")
+
+        // 3. Cookie summary & RPC client handshake diagnostic never leak secrets
+        let cookieSummary = SAPISIDHashGenerator.summarizeCookieNames("SAPISID=secret_sapisid_val; SID=secret_sid_val")
+        XCTAssertTrue(cookieSummary.contains("SAPISID"))
+        XCTAssertFalse(cookieSummary.contains("secret_sapisid_val"))
+
+        let host = RemoteHostInstance(
+            instanceId: "0f5819ac-9308-40d8-a308-98b55122c533-v2",
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google/r/0f5819ac-9308-40d8-a308-98b55122c533-v2")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=secret_sapisid_val; SID=secret_sid_val",
+            relayApiKey: testKey
+        )
+        let diag = client.currentHandshakeDiagnostic()
+        XCTAssertTrue(diag.contains("engine=Swift-URLSession"))
+        XCTAssertTrue(diag.contains("origin=antigravity.google.com"))
+        XCTAssertFalse(diag.contains("secret_sapisid_val"))
+        XCTAssertFalse(diag.contains(testKey))
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {
