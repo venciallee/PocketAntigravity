@@ -901,18 +901,52 @@ final class AntigravityInteractiveUITests: XCTestCase {
         let backToSessionsButton = app.buttons["btn-back-sessions"]
         XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 5))
 
+        // 1. Verify cluttered legacy quick-control pills & duplicate shield button are removed in live mode
+        XCTAssertFalse(app.descendants(matching: .any)["composer-permission-preset"].firstMatch.exists, "Legacy permission pill strip must not appear")
+        XCTAssertFalse(app.descendants(matching: .any)["composer-btn-btw"].firstMatch.exists, "Legacy /btw pill must not appear above input")
+        XCTAssertFalse(app.descendants(matching: .any)["composer-btn-attach-file"].firstMatch.exists, "Legacy Attach pill must not appear above input")
+        XCTAssertFalse(app.descendants(matching: .any)["composer-btn-permissions"].firstMatch.exists, "Duplicate permissions shield button must not appear in toolbar")
+
+        // 2. Verify Claude-inspired 4-control idle state: `+`, Model+Effort pill, `mic`, and adaptive Voice Mode circle
+        XCTAssertTrue(app.descendants(matching: .any)["composer-btn-add-context"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["composer-pill-model"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["composer-btn-mic"].waitForExistence(timeout: 5))
+        let voiceModeButton = app.buttons["composer-btn-voice-mode"]
+        XCTAssertTrue(
+            voiceModeButton.waitForExistence(timeout: 5),
+            "Primary action circle must show Voice Mode when composer draft is empty"
+        )
+        XCTAssertFalse(
+            app.buttons["composer-btn-send"].exists,
+            "Send button must stay hidden until the user types or attaches context"
+        )
+        attachScreenshot(named: "04a_Live_Composer_Idle_Claude_Style")
+
+        // 3. Typing morphs primary action circle from Voice Mode -> Send
         let composerInput = app.descendants(matching: .any)["composer-text-input"].firstMatch
         XCTAssertTrue(composerInput.waitForExistence(timeout: 5))
         composerInput.tap()
         composerInput.typeText("Verify live Simulator tap and send")
 
         let sendButton = app.buttons["composer-btn-send"]
-        XCTAssertTrue(sendButton.exists)
+        XCTAssertTrue(
+            sendButton.waitForExistence(timeout: 5),
+            "Typing into the composer must morph the primary action circle into Send"
+        )
+        XCTAssertFalse(
+            voiceModeButton.exists,
+            "Voice Mode button must morph into Send while draft text is non-empty"
+        )
+        attachScreenshot(named: "04b_Live_Composer_Typing_Send_Morph")
         sendButton.tap()
 
         XCTAssertTrue(
             waitForTextContaining("收到来自 iOS 真模拟器的实时指令", in: app, timeout: 8),
             "Sending a message in Composer must dispatch StartCascade + SendUserCascadeMessage and render streamed reply"
+        )
+        XCTAssertTrue(
+            voiceModeButton.waitForExistence(timeout: 8),
+            "Clearing draft after send & reply completion must restore the Voice Mode primary circle"
         )
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
     }

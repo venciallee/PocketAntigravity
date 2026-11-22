@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.Throws
 
 public data class ConnectionState(
     public val hasPairedBackend: Boolean = false,
@@ -147,6 +148,7 @@ public class ConnectionDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun connectDirectLan(
         endpointUrlString: String,
         csrfToken: String,
@@ -231,6 +233,7 @@ public class ConnectionDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun connectCloudRelay(
         relayUrlString: String,
         sessionCookie: String,
@@ -296,7 +299,7 @@ public class ConnectionDomainStore(
             val finalHostName = handshake.resolvedHostname?.takeIf { it.isNotBlank() } ?: hostName
             val finalUuid = handshake.resolvedInstanceUuid?.takeIf { it.isNotBlank() } ?: hostInstance.instanceId
             val finalAuthUser = handshake.resolvedAuthUser ?: effectiveAuth ?: "0"
-            val finalApiKey = candidate.currentRelayApiKey() ?: effectiveApiKey
+            val finalApiKey = candidate.currentRelayApiKey() ?: handshake.resolvedRelayApiKey ?: effectiveApiKey
             val originPrefix = parsed?.relayOrigin ?: SapisidHashGenerator.DEFAULT_ORIGIN
             val finalRelayUrl = "${originPrefix.trimEnd('/')}/r/$finalUuid"
 
@@ -365,7 +368,7 @@ public class ConnectionDomainStore(
                     lastPingLatencyMs = handshake.latencyMs,
                 )
             }
-            handshake
+            handshake.copy(resolvedRelayApiKey = finalApiKey)
         } catch (e: Throwable) {
             candidate.close()
             handleConnectFailure(hostInstance, e, isRestoringSavedSession)
@@ -373,6 +376,7 @@ public class ConnectionDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun connectWithPairingUri(
         rawUri: String,
         fallbackCookie: String = "",
@@ -408,6 +412,7 @@ public class ConnectionDomainStore(
         return connectDirectLan(endpointUrlString = trimmed, csrfToken = fallbackCookie)
     }
 
+    @Throws(Throwable::class)
     public suspend fun restoreSavedSession(): BackendHandshakeResult? {
         val saved = secretStore.loadCredentials() ?: return null
         val cachedHosts = projectionStorage.loadKnownHosts()
@@ -434,6 +439,7 @@ public class ConnectionDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun probeHostReachability(allowCrossHostFallback: Boolean = true): HostReachabilityProbeResult {
         val client = activeClient()
             ?: throw AntigravityRpcError.HttpError(503, "No active backend client")
@@ -467,6 +473,7 @@ public class ConnectionDomainStore(
         preferencesStore.putString(KEY_SELECTED_HOST_SCOPE, encoded)
     }
 
+    @Throws(Throwable::class)
     public suspend fun switchToRelayInstance(instance: RelayInstanceInfo) {
         val client = activeClient() ?: return
         client.setTargetRelayInstance(instance.uuid, instance.name)
@@ -506,6 +513,7 @@ public class ConnectionDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun disconnectAndClearCredentials() {
         stopNetworkMonitoring()
         replaceClient(null)
@@ -516,6 +524,7 @@ public class ConnectionDomainStore(
         _state.value = ConnectionState()
     }
 
+    @Throws(Throwable::class)
     public suspend fun close() {
         stopNetworkMonitoring()
         replaceClient(null)

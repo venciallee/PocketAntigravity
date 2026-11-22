@@ -409,7 +409,7 @@ final class AntigravityV233Tests: XCTestCase {
             isRemoteAgent: false,
             customSkills: [SkillSummary(name: "antigravity-doc-sync", description: "Sync docs", scope: "Workspace")]
         )
-        XCTAssertTrue(localCmds.contains(where: { $0.command == "/btw" }))
+        XCTAssertFalse(localCmds.contains(where: { $0.command == "/btw" }))
         XCTAssertTrue(localCmds.contains(where: { $0.command == "/swarm" }))
         XCTAssertTrue(localCmds.contains(where: { $0.command == "/run-workflow" }))
         XCTAssertTrue(localCmds.contains(where: { $0.command == "/voice" }))

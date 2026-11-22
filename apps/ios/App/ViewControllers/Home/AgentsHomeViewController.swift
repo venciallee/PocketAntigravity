@@ -187,6 +187,8 @@ public struct AgentsHomeViewController: View {
         var id: String { rawValue }
     }
 
+    @State private var isShowingGoogleSignIn: Bool = false
+
     public init(
         store: AntigravitySessionStore,
         onSelectTab: ((ShellTab) -> Void)? = nil,
@@ -211,6 +213,9 @@ public struct AgentsHomeViewController: View {
                 VStack(alignment: .leading, spacing: 12) {
                     topHeaderToolbar
                     heroTitleAndSearchSection
+                    if usesLiveStoreData && store.activeHost.channel == .cloudRelay && store.connectionStatusText.contains("Expired") {
+                        googleSessionExpiredBanner
+                    }
                     filterPillStrip
                     if !filteredPinnedItems.isEmpty {
                         pinnedSectionView
@@ -270,6 +275,72 @@ public struct AgentsHomeViewController: View {
                 ConversationContextPreviewMenu(store: store, onDismiss: { standaloneSheet = nil })
             }
         }
+        .sheet(isPresented: $isShowingGoogleSignIn) {
+            let targetURL = store.lastScannedRelayURL.isEmpty
+                ? store.activeHost.endpointURL.absoluteString
+                : store.lastScannedRelayURL
+            CloudRelaySignInSheet(
+                targetRelayURLString: targetURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : targetURL,
+                clearExistingSession: true,
+                onAuthenticated: { cookieHeader, finalURL, detectedAuthUser, detectedRelayApiKey in
+                    isShowingGoogleSignIn = false
+                    let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(
+                        scannedInput: targetURL,
+                        webViewFinalURL: finalURL
+                    )
+                    Task {
+                        _ = await store.connectCloudRelay(
+                            relayURLString: effectiveURL,
+                            sessionCookie: cookieHeader,
+                            authUser: detectedAuthUser,
+                            relayApiKey: detectedRelayApiKey
+                        )
+                    }
+                },
+                onDismiss: {
+                    isShowingGoogleSignIn = false
+                }
+            )
+        }
+    }
+
+    private var googleSessionExpiredBanner: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
+                Text("Google 登录会话已过期，请点击下方重新登录。")
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button {
+                isShowingGoogleSignIn = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.crop.circle.badge.checkmark")
+                        .font(.system(size: 13.5, weight: .semibold))
+                    Text("重新登录 Google")
+                        .font(.system(size: 13.5, weight: .semibold))
+                }
+                .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 36)
+                .background(Capsule().fill(AntigravityTheme.accentPeriwinkle))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("btn-home-google-reauth")
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AntigravityTheme.statusWaiting.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(AntigravityTheme.statusWaiting.opacity(0.32), lineWidth: 1)
+        )
+        .accessibilityIdentifier("home-google-auth-expired-banner")
     }
 
     // MARK: - 1. Top Bar (Host Switcher + Display Options + New Project)

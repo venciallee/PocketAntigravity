@@ -32,6 +32,8 @@ import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.HostReachabilityProbeResult
 import dev.antigravity.shared.protocol.RelayInstanceInfo
 import dev.antigravity.shared.protocol.TlsEngineConfig
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,6 +42,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlin.Throws
 
 /**
  * Unified KMP Core Coordinator exported to both iOS (via SKIE `AsyncSequence` + `async throws`)
@@ -60,7 +63,11 @@ public class AntigravityCoreCoordinator(
     powerStateProvider: PowerStateProviding = StaticPowerStateProvider(),
     preferencesStore: KeyValuePreferencesStore = InMemoryPreferencesStore(),
     projectionStorage: ProjectionStoragePort = InMemoryProjectionStorage(),
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val scope: CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, _ ->
+            // Prevent uncaught background coroutine exceptions from aborting Kotlin/Native via propagateExceptionFinalResort.
+        }
+    ),
     clientFactory: (
         host: RemoteHostInstance,
         csrfToken: String?,
@@ -146,10 +153,12 @@ public class AntigravityCoreCoordinator(
         _capabilityErrorBanner.value = message
     }
 
+    @Throws(Throwable::class)
     public suspend fun hydrateOfflineCache() {
         conversationSyncStore.hydrateFromCache()
     }
 
+    @Throws(Throwable::class)
     public suspend fun connectDirectLan(
         endpointUrlString: String,
         csrfToken: String,
@@ -169,6 +178,7 @@ public class AntigravityCoreCoordinator(
         return handshake
     }
 
+    @Throws(Throwable::class)
     public suspend fun connectCloudRelay(
         relayUrlString: String,
         sessionCookie: String,
@@ -194,6 +204,7 @@ public class AntigravityCoreCoordinator(
         return handshake
     }
 
+    @Throws(Throwable::class)
     public suspend fun connectWithPairingUri(
         rawUri: String,
         fallbackCookie: String = "",
@@ -204,6 +215,7 @@ public class AntigravityCoreCoordinator(
         return handshake
     }
 
+    @Throws(Throwable::class)
     public suspend fun restoreSavedSession(startSummaryStream: Boolean = true): BackendHandshakeResult? {
         conversationSyncStore.hydrateFromCache()
         val handshake = connectionStore.restoreSavedSession() ?: return null
@@ -211,9 +223,11 @@ public class AntigravityCoreCoordinator(
         return handshake
     }
 
+    @Throws(Throwable::class)
     public suspend fun probeHostReachability(allowCrossHostFallback: Boolean = true): HostReachabilityProbeResult =
         connectionStore.probeHostReachability(allowCrossHostFallback = allowCrossHostFallback)
 
+    @Throws(Throwable::class)
     public suspend fun refreshWorkspacesAndSummaries(
         hostScope: AgentsHostFilterScope? = null,
         skipRelayListRefresh: Boolean = false,
@@ -231,6 +245,7 @@ public class AntigravityCoreCoordinator(
         )
     }
 
+    @Throws(Throwable::class)
     public suspend fun syncSteps(
         cascadeId: String,
         knownStepCount: Int = 0,
@@ -249,6 +264,7 @@ public class AntigravityCoreCoordinator(
         )
     }
 
+    @Throws(Throwable::class)
     public suspend fun startConversation(
         workspaceUri: String,
         initialPrompt: String = "",
@@ -270,6 +286,7 @@ public class AntigravityCoreCoordinator(
         )
     }
 
+    @Throws(Throwable::class)
     public suspend fun sendMessage(
         cascadeId: String,
         message: String,
@@ -311,6 +328,7 @@ public class AntigravityCoreCoordinator(
         return outcome
     }
 
+    @Throws(Throwable::class)
     public suspend fun resolveWaitingInteraction(
         cascadeId: String,
         stepIndex: Int,
@@ -331,6 +349,7 @@ public class AntigravityCoreCoordinator(
         )
     }
 
+    @Throws(Throwable::class)
     public suspend fun cancelActiveTurn(
         cascadeId: String,
         instanceUuidOverride: String? = null,
@@ -342,6 +361,7 @@ public class AntigravityCoreCoordinator(
         )
     }
 
+    @Throws(Throwable::class)
     public suspend fun replayPendingOutbox(
         modelId: String = "MODEL_PLACEHOLDER_M37",
         effort: ThinkingEffortLevel = ThinkingEffortLevel.HIGH,
@@ -351,6 +371,7 @@ public class AntigravityCoreCoordinator(
         return OutboxReplayResult(chatStore.replayPendingOutbox(client, modelId, effort, mode))
     }
 
+    @Throws(Throwable::class)
     public suspend fun switchToRelayInstance(instance: RelayInstanceInfo) {
         connectionStore.switchToRelayInstance(instance)
     }
@@ -369,18 +390,24 @@ public class AntigravityCoreCoordinator(
         if (!isVerificationMode && existing != null && connectionStore.state.value.isConnected) {
             val nextPinned = !existing.isPinned
             scope.launch {
-                val client = connectionStore.activeClient() ?: return@launch
-                performLiveCapabilityWrite(
-                    client = client,
-                    capability = HostCapability.CONVERSATION_ANNOTATIONS,
-                    onUnsupported = ::reportCapabilityError,
-                    rollback = { conversationSyncStore.togglePinned(cascadeId) },
-                ) { rpc ->
-                    rpc.pinCascade(
-                        cascadeId = cascadeId,
-                        isPinned = nextPinned,
-                        instanceUuidOverride = existing.originInstanceUuid,
-                    )
+                try {
+                    val client = connectionStore.activeClient() ?: return@launch
+                    performLiveCapabilityWrite(
+                        client = client,
+                        capability = HostCapability.CONVERSATION_ANNOTATIONS,
+                        onUnsupported = ::reportCapabilityError,
+                        rollback = { conversationSyncStore.togglePinned(cascadeId) },
+                    ) { rpc ->
+                        rpc.pinCascade(
+                            cascadeId = cascadeId,
+                            isPinned = nextPinned,
+                            instanceUuidOverride = existing.originInstanceUuid,
+                        )
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    reportCapabilityError(e.message ?: "Failed to update pin state")
                 }
             }
         }
@@ -395,18 +422,24 @@ public class AntigravityCoreCoordinator(
         conversationSyncStore.archiveConversation(cascadeId)
         if (!isVerificationMode && existing != null && connectionStore.state.value.isConnected) {
             scope.launch {
-                val client = connectionStore.activeClient() ?: return@launch
-                performLiveCapabilityWrite(
-                    client = client,
-                    capability = HostCapability.CONVERSATION_ANNOTATIONS,
-                    onUnsupported = ::reportCapabilityError,
-                    rollback = { conversationSyncStore.upsertSummary(existing) },
-                ) { rpc ->
-                    rpc.archiveCascade(
-                        cascadeId = cascadeId,
-                        isArchived = true,
-                        instanceUuidOverride = existing.originInstanceUuid,
-                    )
+                try {
+                    val client = connectionStore.activeClient() ?: return@launch
+                    performLiveCapabilityWrite(
+                        client = client,
+                        capability = HostCapability.CONVERSATION_ANNOTATIONS,
+                        onUnsupported = ::reportCapabilityError,
+                        rollback = { conversationSyncStore.upsertSummary(existing) },
+                    ) { rpc ->
+                        rpc.archiveCascade(
+                            cascadeId = cascadeId,
+                            isArchived = true,
+                            instanceUuidOverride = existing.originInstanceUuid,
+                        )
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    reportCapabilityError(e.message ?: "Failed to archive conversation")
                 }
             }
         }
@@ -417,17 +450,23 @@ public class AntigravityCoreCoordinator(
         conversationSyncStore.deleteConversation(cascadeId)
         if (!isVerificationMode && existing != null && connectionStore.state.value.isConnected) {
             scope.launch {
-                val client = connectionStore.activeClient() ?: return@launch
-                performLiveCapabilityWrite(
-                    client = client,
-                    capability = HostCapability.CONVERSATION_ANNOTATIONS,
-                    onUnsupported = ::reportCapabilityError,
-                    rollback = { conversationSyncStore.upsertSummary(existing) },
-                ) { rpc ->
-                    rpc.deleteCascade(
-                        cascadeId = cascadeId,
-                        instanceUuidOverride = existing.originInstanceUuid,
-                    )
+                try {
+                    val client = connectionStore.activeClient() ?: return@launch
+                    performLiveCapabilityWrite(
+                        client = client,
+                        capability = HostCapability.CONVERSATION_ANNOTATIONS,
+                        onUnsupported = ::reportCapabilityError,
+                        rollback = { conversationSyncStore.upsertSummary(existing) },
+                    ) { rpc ->
+                        rpc.deleteCascade(
+                            cascadeId = cascadeId,
+                            instanceUuidOverride = existing.originInstanceUuid,
+                        )
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    reportCapabilityError(e.message ?: "Failed to delete conversation")
                 }
             }
         }
@@ -525,6 +564,7 @@ public class AntigravityCoreCoordinator(
         connectionStore.onBackground()
     }
 
+    @Throws(Throwable::class)
     public suspend fun onForeground() {
         connectionStore.onForeground()
         val client = connectionStore.activeClient()
@@ -535,12 +575,14 @@ public class AntigravityCoreCoordinator(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun disconnectAndClearCredentials() {
         conversationSyncStore.clear()
         chatStore.clear()
         connectionStore.disconnectAndClearCredentials()
     }
 
+    @Throws(Throwable::class)
     public suspend fun close() {
         conversationSyncStore.stopSummarySubscriptionStream()
         connectionStore.close()
@@ -559,7 +601,13 @@ public class AntigravityCoreCoordinator(
                 conversationSyncStore.startSummarySubscriptionStream(client, host)
             }
             scope.launch {
-                runCatching { chatStore.replayPendingOutbox(client) }
+                try {
+                    chatStore.replayPendingOutbox(client)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    // Best-effort outbox replay after reconnect; never crash process.
+                }
             }
         }
     }

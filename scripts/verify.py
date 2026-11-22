@@ -67,6 +67,7 @@ PY_COMPILE_FILES = [
     "verification/verify-live-rpc-flow.py",
     "verification/verify-v233-capabilities.py",
     "verification/verify_compat_guardrails.py",
+    "verification/verify_advisory_hygiene.py",
     "verification/verify-compat-matrix.py",
     "verification/e2e_impact_planner.py",
     "verification/android_visual_compare.py",
@@ -332,15 +333,30 @@ def run_spec_gate(args: argparse.Namespace) -> GateResult:
                 tail_log=filter_noise_lines(planner_out)[-args.tail_lines :],
             )
 
+    advisory_warnings: list[str] = []
+    advisory_path = VERIFICATION_DIR / "verify_advisory_hygiene.py"
+    if advisory_path.exists():
+        adv_rc, adv_out = run_subprocess([sys.executable, str(advisory_path), "--json"])
+        if adv_rc == 0 and adv_out.strip():
+            try:
+                adv_payload = json.loads(adv_out)
+                for w in adv_payload.get("warnings", []):
+                    advisory_warnings.append(
+                        f"[WARN] [{w.get('check_id', 'advisory')}] {w.get('file', '?')}:{w.get('line', 1)} — {w.get('message', '')}"
+                    )
+            except Exception:
+                pass
+
     duration_ms = int((time.monotonic() - t0) * 1000)
+    adv_suffix = f", {len(advisory_warnings)} advisory warning(s)" if advisory_warnings else ", 0 advisory warnings"
     summary = (
         f"py_compile ({len(py_files)} files) + impact-planner + "
         f"{payload.get('stateCount', 0)} states, "
         f"{payload.get('claimCount', 0)} claims, "
         f"{payload.get('selectorCount', 0)} selectors, "
-        f"{payload.get('swiftFileCount', 0)} Swift files, 0 secret hits"
+        f"{payload.get('swiftFileCount', 0)} Swift files, 0 secret hits{adv_suffix}"
     )
-    tail = payload.get("checks", []) if args.verbose else []
+    tail = (payload.get("checks", []) if args.verbose else []) + advisory_warnings
     return GateResult(
         name="spec",
         status="passed",
@@ -830,6 +846,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             elif args.verbose and result.tail_log:
                 for line in result.tail_log:
                     print(f"         | {line}")
+            elif result.tail_log:
+                for line in result.tail_log:
+                    if line.startswith("[WARN]"):
+                        print(f"         | {line}")
 
         if result.status == "failed" and args.fail_fast:
             break

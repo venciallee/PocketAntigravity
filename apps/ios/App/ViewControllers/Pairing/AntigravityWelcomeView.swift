@@ -13,6 +13,7 @@ public struct AntigravityWelcomeView: View {
     @State private var pendingRelayURL: String = ""
     @State private var isShowingQRScanner: Bool = false
     @State private var isShowingGoogleSignIn: Bool = false
+    @State private var shouldClearGoogleCookiesOnSignIn: Bool = false
 
     public init(
         store: AntigravitySessionStore,
@@ -94,6 +95,7 @@ public struct AntigravityWelcomeView: View {
                     if store.connectionStatusText.contains("Expired"), !store.lastScannedRelayURL.isEmpty {
                         Button {
                             pendingRelayURL = store.lastScannedRelayURL
+                            shouldClearGoogleCookiesOnSignIn = true
                             isShowingGoogleSignIn = true
                         } label: {
                             HStack(spacing: 9) {
@@ -167,6 +169,16 @@ public struct AntigravityWelcomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
         .accessibilityIdentifier("welcome-screen")
+        .onChange(of: store.connectionStatusText) { _, newStatus in
+            if newStatus.contains("Expired"),
+               !store.hasPairedBackend,
+               !store.lastScannedRelayURL.isEmpty,
+               !isShowingGoogleSignIn {
+                pendingRelayURL = store.lastScannedRelayURL
+                shouldClearGoogleCookiesOnSignIn = true
+                isShowingGoogleSignIn = true
+            }
+        }
         .sheet(isPresented: $isShowingQRScanner) {
             RemoteControlQRScannerSheet(
                 onScannedQR: { scannedValue in
@@ -181,8 +193,10 @@ public struct AntigravityWelcomeView: View {
         .sheet(isPresented: $isShowingGoogleSignIn) {
             CloudRelaySignInSheet(
                 targetRelayURLString: pendingRelayURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : pendingRelayURL,
+                clearExistingSession: shouldClearGoogleCookiesOnSignIn,
                 onAuthenticated: { cookieHeader, finalURL, detectedAuthUser, detectedRelayApiKey in
                     isShowingGoogleSignIn = false
+                    shouldClearGoogleCookiesOnSignIn = false
                     let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(
                         scannedInput: pendingRelayURL,
                         webViewFinalURL: finalURL
@@ -213,6 +227,7 @@ public struct AntigravityWelcomeView: View {
                 },
                 onDismiss: {
                     isShowingGoogleSignIn = false
+                    shouldClearGoogleCookiesOnSignIn = false
                 }
             )
         }
@@ -312,6 +327,7 @@ public struct AntigravityWelcomeView: View {
             return
         }
 
+        shouldClearGoogleCookiesOnSignIn = false
         isShowingGoogleSignIn = true
     }
 }

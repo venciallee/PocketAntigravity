@@ -53,6 +53,7 @@ public struct AddContextSheetView: View {
 
     @Bindable public var store: AntigravitySessionStore
     public var onAddLabels: (([String]) -> Void)?
+    public var onPickDeviceFile: (() -> Void)?
     public var onDismiss: (() -> Void)?
 
     @State private var searchQuery: String = ""
@@ -196,10 +197,12 @@ public struct AddContextSheetView: View {
     public init(
         store: AntigravitySessionStore,
         onAddLabels: (([String]) -> Void)? = nil,
+        onPickDeviceFile: (() -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.store = store
         self.onAddLabels = onAddLabels
+        self.onPickDeviceFile = onPickDeviceFile
         self.onDismiss = onDismiss
         if store.isVerificationMode {
             self._selectedItemIds = State(initialValue: ["ratelimit.go", "idempotency-payouts", "go-testing"])
@@ -313,6 +316,41 @@ public struct AddContextSheetView: View {
                 // Grouped Sections ScrollView
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        if !store.isVerificationMode, let onPickDeviceFile {
+                            Button {
+                                onPickDeviceFile()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "paperclip")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                        .frame(width: 22)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Attach File or Media")
+                                            .font(.system(size: 15, weight: .medium))
+                                            .foregroundStyle(AntigravityTheme.inkReading)
+                                        Text("PDF, image, archive, or document from device")
+                                            .font(.system(size: 12.5))
+                                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                                }
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 54)
+                                .background(AntigravityTheme.surfaceSheetGroup)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("ctx-row-attach-device-file")
+                        }
+
                         ForEach(["FILES & FOLDERS", "MENTIONS", "ACTIONS & SKILLS"], id: \.self) { sectionTitle in
                             let rows = filteredRows(in: sectionTitle)
                             if !rows.isEmpty {

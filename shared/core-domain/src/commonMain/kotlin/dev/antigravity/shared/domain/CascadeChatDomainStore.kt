@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.Throws
 import kotlin.random.Random
 
 public data class CascadeChatState(
@@ -247,6 +248,7 @@ public class CascadeChatDomainStore(
         putSteps(targetCascadeId, updated)
     }
 
+    @Throws(Throwable::class)
     public suspend fun revertToStep(
         client: AntigravityKmpRpcClient?,
         cascadeId: String,
@@ -293,6 +295,7 @@ public class CascadeChatDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun loadCachedSteps(cascadeId: String): List<CascadeStep> {
         val cached = projectionStorage.loadSteps(cascadeId)
         if (cached.isNotEmpty()) {
@@ -301,6 +304,7 @@ public class CascadeChatDomainStore(
         return cached
     }
 
+    @Throws(Throwable::class)
     public suspend fun syncSteps(
         client: AntigravityKmpRpcClient,
         cascadeId: String,
@@ -336,6 +340,7 @@ public class CascadeChatDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun startConversation(
         client: AntigravityKmpRpcClient,
         workspaceUri: String,
@@ -362,6 +367,7 @@ public class CascadeChatDomainStore(
         return cascadeId
     }
 
+    @Throws(Throwable::class)
     public suspend fun sendMessage(
         client: AntigravityKmpRpcClient?,
         cascadeId: String,
@@ -482,6 +488,7 @@ public class CascadeChatDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun resolveWaitingInteraction(
         client: AntigravityKmpRpcClient?,
         cascadeId: String,
@@ -536,6 +543,7 @@ public class CascadeChatDomainStore(
         }
     }
 
+    @Throws(Throwable::class)
     public suspend fun cancelActiveTurn(
         client: AntigravityKmpRpcClient?,
         cascadeId: String,
@@ -558,6 +566,7 @@ public class CascadeChatDomainStore(
         client?.cancelCascadeInvocation(cascadeId, instanceUuidOverride = instanceUuidOverride)
     }
 
+    @Throws(Throwable::class)
     public suspend fun replayPendingOutbox(
         client: AntigravityKmpRpcClient,
         modelId: String = "MODEL_PLACEHOLDER_M37",

@@ -84,14 +84,26 @@ public actor LocalProjectionStore {
     private var outboxQueue: [OutboxEntry] = []
     private var hasLoadedOutboxFromDisk: Bool = false
 
+    private var didEnsureStorageDirectories: Bool = false
+
     public init(storageDirectory: URL? = nil) {
         let base = storageDirectory
             ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         self.storageDirectory = base.appendingPathComponent("AntigravityProjections", isDirectory: true)
         self.hostsDirectory = self.storageDirectory.appendingPathComponent("hosts", isDirectory: true)
-        try? FileManager.default.createDirectory(at: self.storageDirectory, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: self.hostsDirectory, withIntermediateDirectories: true)
+    }
+
+    private func ensureStorageDirectories() {
+        guard !didEnsureStorageDirectories else { return }
+        didEnsureStorageDirectories = true
+        try? FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: hostsDirectory, withIntermediateDirectories: true)
+    }
+
+    private func writeAtomically(_ data: Data, to file: URL) {
+        ensureStorageDirectories()
+        try? data.write(to: file, options: .atomic)
     }
 
     public static func sanitizedHostFileKey(for hostKey: String) -> String {
@@ -246,7 +258,7 @@ public actor LocalProjectionStore {
         cachedKnownHosts = hosts
         let file = storageDirectory.appendingPathComponent("hosts_projection.json")
         if let data = try? JSONEncoder().encode(hosts) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -265,7 +277,7 @@ public actor LocalProjectionStore {
         cachedSummaries = summaries
         let file = storageDirectory.appendingPathComponent("summaries_projection.json")
         if let data = try? JSONEncoder().encode(summaries) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -292,7 +304,7 @@ public actor LocalProjectionStore {
         let safeKey = Self.sanitizedFileKey(for: cascadeId)
         let file = storageDirectory.appendingPathComponent("steps_\(safeKey).json")
         if let data = try? JSONEncoder().encode(steps) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -311,7 +323,7 @@ public actor LocalProjectionStore {
         cachedDisplayOptions = options
         let file = storageDirectory.appendingPathComponent("display_options.json")
         if let data = try? JSONEncoder().encode(options) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -330,7 +342,7 @@ public actor LocalProjectionStore {
         cachedAppearancePreferences = preferences
         let file = storageDirectory.appendingPathComponent("appearance_prefs.json")
         if let data = try? JSONEncoder().encode(preferences) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -349,7 +361,7 @@ public actor LocalProjectionStore {
         cachedUsageQuota = quota
         let file = storageDirectory.appendingPathComponent("usage_quota.json")
         if let data = try? JSONEncoder().encode(quota) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -368,7 +380,7 @@ public actor LocalProjectionStore {
         cachedCustomizations = catalog
         let file = storageDirectory.appendingPathComponent("customizations_catalog.json")
         if let data = try? JSONEncoder().encode(catalog) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -387,7 +399,7 @@ public actor LocalProjectionStore {
         cachedProjects = projects
         let file = storageDirectory.appendingPathComponent("projects_projection.json")
         if let data = try? JSONEncoder().encode(projects) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -406,7 +418,7 @@ public actor LocalProjectionStore {
         cachedAutomations = automations
         let file = storageDirectory.appendingPathComponent("automations_projection.json")
         if let data = try? JSONEncoder().encode(automations) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 
@@ -426,7 +438,7 @@ public actor LocalProjectionStore {
         if outboxQueue.isEmpty {
             try? FileManager.default.removeItem(at: file)
         } else if let data = try? JSONEncoder().encode(outboxQueue) {
-            try? data.write(to: file, options: .atomic)
+            writeAtomically(data, to: file)
         }
     }
 

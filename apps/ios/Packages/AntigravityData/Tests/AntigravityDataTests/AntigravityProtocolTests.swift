@@ -3937,6 +3937,82 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertFalse(postDisconnectStore.hasPairedBackend)
         XCTAssertTrue(postDisconnectStore.isInitialSessionCheckComplete)
     }
+
+    func testCookieDomainFilteringExcludesSiblingSubdomainsAndDeduplicatesByName() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let future = now.addingTimeInterval(3600)
+        let past = now.addingTimeInterval(-60)
+
+        let descriptors: [SAPISIDHashGenerator.RelayCookieDescriptor] = [
+            // Valid parent `.google.com` auth cookies
+            .init(name: "SAPISID", value: "parent-sapisid", domain: ".google.com", path: "/", expiresDate: future),
+            .init(name: "SID", value: "parent-sid", domain: ".google.com", path: "/", expiresDate: future),
+            // Exact host cookie should override `.google.com` for the same name
+            .init(name: "SAPISID", value: "exact-sapisid", domain: "antigravity.google.com", path: "/", expiresDate: future),
+            // Sibling subdomain cookie MUST be excluded so it cannot corrupt SAPISID/SID
+            .init(name: "SAPISID", value: "accounts-wrong-sapisid", domain: "accounts.google.com", path: "/", expiresDate: future),
+            .init(name: "ACCOUNT_ONLY", value: "secret", domain: "accounts.google.com", path: "/", expiresDate: future),
+            // Expired cookie MUST be excluded
+            .init(name: "__Secure-1PAPISID", value: "expired-val", domain: ".google.com", path: "/", expiresDate: past)
+        ]
+
+        let header = SAPISIDHashGenerator.buildCookieHeader(
+            from: descriptors,
+            forHost: "antigravity.google.com",
+            now: now
+        )
+        XCTAssertNotNil(header)
+        let parsed = SAPISIDHashGenerator.parseCookies(header ?? "")
+        XCTAssertEqual(parsed["SAPISID"], "exact-sapisid")
+        XCTAssertEqual(parsed["SID"], "parent-sid")
+        XCTAssertNil(parsed["ACCOUNT_ONLY"], "Sibling subdomain cookies must never leak into antigravity.google.com Cookie header")
+        XCTAssertNil(parsed["__Secure-1PAPISID"], "Expired cookies must be dropped")
+        XCTAssertFalse(SAPISIDHashGenerator.cookieDomain("accounts.google.com", appliesToHost: "antigravity.google.com"))
+        XCTAssertTrue(SAPISIDHashGenerator.cookieDomain(".google.com", appliesToHost: "antigravity.google.com"))
+        XCTAssertTrue(SAPISIDHashGenerator.cookieDomain("antigravity.google.com", appliesToHost: "antigravity.google.com"))
+    }
+
+    func testSwiftResolveCloudRelayInstanceThrowsUnauthorizedInsteadOfFabricatingUuidHost() async {
+        let rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+        HostIsolationMockRelayURLProtocol.storage.setHandler { request in
+            let url = request.url ?? URL(string: "https://antigravity.google.com")!
+            let resp = HTTPURLResponse(
+                url: url,
+                statusCode: 401,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (resp, Data("{\"error\":{\"message\":\"Google session expired\"}}".utf8))
+        }
+        defer { HostIsolationMockRelayURLProtocol.storage.setHandler(nil) }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HostIsolationMockRelayURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let host = RemoteHostInstance(
+            instanceId: rawUuid,
+            hostname: rawUuid,
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(rawUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=expired-cookie; SID=expired-sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        do {
+            _ = try await client.resolveCloudRelayInstance(preferredIdentifier: rawUuid, allowCrossHostFallback: true)
+            XCTFail("resolveCloudRelayInstance must throw Unauthorized instead of fabricating a fake connected UUID host")
+        } catch let AntigravityRPCError.unauthorized(reason) {
+            XCTAssertFalse(reason.isEmpty)
+        } catch {
+            XCTFail("Expected AntigravityRPCError.unauthorized, got: \(error)")
+        }
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {
