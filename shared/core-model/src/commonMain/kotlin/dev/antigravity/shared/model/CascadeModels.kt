@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 /**
  * Maps to `exa.cortex_pb.CortexStepStatus` (binary field 4 on `gemini_coder.Step`).
  */
-@Serializable
+@Serializable(with = CortexStepStatusSerializer::class)
 public enum class CortexStepStatus(public val rawValue: Int) {
     UNSPECIFIED(0),
     PENDING(1),
@@ -79,10 +79,17 @@ public enum class CortexStepStatus(public val rawValue: Int) {
     }
 }
 
+public object CortexStepStatusSerializer : ResilientEnumSerializer<CortexStepStatus>(
+    serialName = "dev.antigravity.shared.model.CortexStepStatus",
+    entriesProvider = { CortexStepStatus.entries },
+    fallbackProvider = { CortexStepStatus.UNSPECIFIED },
+    extraMatcher = { raw -> CortexStepStatus.fromJsonName(raw) },
+)
+
 /**
  * Maps to `exa.cortex_pb.CortexStepType` (binary field 1 on `gemini_coder.Step`).
  */
-@Serializable
+@Serializable(with = CortexStepTypeSerializer::class)
 public enum class CortexStepType(public val rawValue: Int) {
     UNSPECIFIED(0),
     CODE_ACTION(5),
@@ -128,13 +135,28 @@ public enum class CortexStepType(public val rawValue: Int) {
     }
 }
 
-@Serializable
+public object CortexStepTypeSerializer : ResilientEnumSerializer<CortexStepType>(
+    serialName = "dev.antigravity.shared.model.CortexStepType",
+    entriesProvider = { CortexStepType.entries },
+    fallbackProvider = { CortexStepType.UNSPECIFIED },
+    extraMatcher = { raw ->
+        CortexStepType.entries.firstOrNull { it.jsonName.equals(raw, ignoreCase = true) }
+    },
+)
+
+@Serializable(with = TaskChecklistStatusSerializer::class)
 public enum class TaskChecklistStatus {
     DONE,
     IN_PROGRESS,
     WAITING,
     PENDING,
 }
+
+public object TaskChecklistStatusSerializer : ResilientEnumSerializer<TaskChecklistStatus>(
+    serialName = "dev.antigravity.shared.model.TaskChecklistStatus",
+    entriesProvider = { TaskChecklistStatus.entries },
+    fallbackProvider = { TaskChecklistStatus.PENDING },
+)
 
 @Serializable
 public data class TaskChecklistItem(

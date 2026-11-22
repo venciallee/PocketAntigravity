@@ -486,6 +486,26 @@ public class ConnectionDomainStore(
         }
     }
 
+    public fun seedVerificationConnection(
+        activeHost: RemoteHostInstance,
+        knownHosts: List<RemoteHostInstance>,
+        statusText: String = "Demo Sandbox · Offline ESDD Fixtures",
+    ) {
+        _state.update {
+            it.copy(
+                hasPairedBackend = true,
+                isConnected = true,
+                isConnecting = false,
+                lifecyclePhase = ConnectionLifecyclePhase.OnlineIdle,
+                statusText = statusText,
+                errorText = null,
+                activeHost = activeHost,
+                knownHosts = knownHosts,
+                lastPingLatencyMs = activeHost.latencyMs,
+            )
+        }
+    }
+
     public suspend fun disconnectAndClearCredentials() {
         stopNetworkMonitoring()
         replaceClient(null)

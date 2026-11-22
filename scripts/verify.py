@@ -12,10 +12,11 @@ Single stateless entrypoint that replaces juggling 5+ disparate scripts and `cd`
 Examples:
   ./scripts/verify.py                     # Fast default gates: spec + rpc + v233 + compat (~7s)
   ./scripts/verify.py --auto              # Impact-scoped ESDD + fast gates (skips unaffected browser TCs)
-  ./scripts/verify.py --full              # All available gates: fast + full esdd + kmp + swift
+  ./scripts/verify.py --full              # All available gates: fast + full esdd + kmp + swift + android
   ./scripts/verify.py --json              # Machine-readable JSON report for agents
   ./scripts/verify.py --suite rpc,compat  # Run specific suite(s) only
   ./scripts/verify.py --suite swift       # Run Swift 6 XCTest (stateless `--package-path`)
+  ./scripts/verify.py --suite android     # Run Android Roborazzi + JVM tests + iOS visual comparison
   ./scripts/verify.py --suite bridge      # Verify against a running Mac Companion Bridge
   ./scripts/verify.py --list              # Show suites & detected toolchains
 """
@@ -41,8 +42,8 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 FAST_SUITES = ["spec", "rpc", "v233", "compat"]
 AUTO_SUITES = ["spec", "rpc", "v233", "compat", "esdd"]
-FULL_SUITES = ["spec", "rpc", "v233", "compat", "esdd", "kmp", "swift"]
-ALL_SUITES = ["spec", "rpc", "v233", "compat", "esdd", "kmp", "swift", "bridge", "sim"]
+FULL_SUITES = ["spec", "rpc", "v233", "compat", "esdd", "kmp", "swift", "android"]
+ALL_SUITES = ["spec", "rpc", "v233", "compat", "esdd", "kmp", "swift", "android", "bridge", "sim"]
 
 KMP_JVM_TASKS = [
     ":shared:core-model:jvmTest",
@@ -50,6 +51,11 @@ KMP_JVM_TASKS = [
     ":shared:core-markdown:jvmTest",
     ":shared:core-domain:jvmTest",
     ":shared:umbrella:jvmTest",
+]
+
+ANDROID_GRADLE_TASKS = [
+    ":apps:android:app:recordRoborazziDebug",
+    ":apps:android:app:testDebugUnitTest",
 ]
 
 PY_COMPILE_FILES = [
@@ -63,6 +69,7 @@ PY_COMPILE_FILES = [
     "verification/verify_compat_guardrails.py",
     "verification/verify-compat-matrix.py",
     "verification/e2e_impact_planner.py",
+    "verification/android_visual_compare.py",
     "verification/esdd_inspector.py",
 ]
 
@@ -139,6 +146,13 @@ SUITE_SPECS: dict[str, SuiteSpec] = {
         in_full=True,
         requires=("swift",),
     ),
+    "android": SuiteSpec(
+        name="android",
+        description="Android Compose unit/E2E tests + Roborazzi 13-screen capture & iOS visual comparison",
+        in_fast=False,
+        in_full=True,
+        requires=("java", "android"),
+    ),
     "bridge": SuiteSpec(
         name="bridge",
         description="Verify live Connect-RPC against a running Mac Companion Bridge (uses env or --bridge-url/--bridge-csrf)",
@@ -165,6 +179,18 @@ def detect_toolchains() -> dict[str, bool]:
         and Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome").exists()
     )
     has_java = shutil.which("java") is not None and (REPO_ROOT / "gradlew").exists()
+    android_sdk_env = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or ""
+    has_android_sdk = bool(android_sdk_env) and Path(android_sdk_env).is_dir()
+    if not has_android_sdk:
+        local_props = REPO_ROOT / "local.properties"
+        if local_props.exists():
+            for raw_line in local_props.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw_line.strip()
+                if line.startswith("sdk.dir="):
+                    sdk_val = line.split("=", 1)[1].strip().replace("\\:", ":").replace("\\\\", "\\")
+                    if sdk_val and Path(sdk_val).is_dir():
+                        has_android_sdk = True
+                        break
     has_swift = shutil.which("swift") is not None
     has_xcodebuild = is_macos and shutil.which("xcodebuild") is not None
     has_xcodegen = is_macos and shutil.which("xcodegen") is not None
@@ -173,6 +199,7 @@ def detect_toolchains() -> dict[str, bool]:
         "python3": True,
         "chromium": has_chromium,
         "java": has_java,
+        "android": has_android_sdk,
         "swift": has_swift,
         "xcodebuild": has_xcodebuild,
         "xcodegen": has_xcodegen,
@@ -468,6 +495,61 @@ def run_suite(
         )
         return res, False
 
+    if suite == "android":
+        pre_dirty = git_status_verification_output()
+        gradlew = str(REPO_ROOT / "gradlew")
+        gradle_res = run_command_gate(
+            "android",
+            [gradlew, *ANDROID_GRADLE_TASKS, "--no-daemon", "--console=plain"],
+            args,
+            success_summary=lambda lines: "Android Roborazzi capture & JVM unit/Compose E2E tests passed",
+            timeout=1800,
+        )
+        if gradle_res.status != "passed":
+            return gradle_res, False
+
+        compare_res = run_command_gate(
+            "android",
+            [sys.executable, "verification/android_visual_compare.py"],
+            args,
+            success_summary=lambda lines: "Android Compose unit/E2E tests + Roborazzi 13-screen visual comparison passed",
+            timeout=300,
+        )
+        restored = False
+        if not args.keep_artifacts and pre_dirty == "":
+            post_dirty = git_status_verification_output()
+            if post_dirty:
+                restored = restore_verification_output()
+
+        combined_duration_ms = gradle_res.duration_ms + compare_res.duration_ms
+        combined_cmd = f"{gradle_res.command} && {compare_res.command}"
+        if compare_res.status != "passed":
+            return (
+                GateResult(
+                    name="android",
+                    status="failed",
+                    duration_ms=combined_duration_ms,
+                    command=combined_cmd,
+                    summary=f"Visual comparison failed ({compare_res.summary})",
+                    reason=compare_res.reason,
+                    tail_log=compare_res.tail_log,
+                ),
+                restored,
+            )
+
+        combined_tail = (gradle_res.tail_log + compare_res.tail_log) if args.verbose else []
+        return (
+            GateResult(
+                name="android",
+                status="passed",
+                duration_ms=combined_duration_ms,
+                command=combined_cmd,
+                summary=compare_res.summary,
+                tail_log=combined_tail,
+            ),
+            restored,
+        )
+
     if suite == "bridge":
         url = args.bridge_url or os.environ.get("ANTIGRAVITY_BACKEND_URL") or "http://127.0.0.1:8787"
         csrf = args.bridge_csrf or os.environ.get("ANTIGRAVITY_CSRF_TOKEN") or ""
@@ -589,6 +671,8 @@ def run_self_test() -> int:
     # Deterministic sanity checks for CI Gate 0
     toolchains = detect_toolchains()
     assert toolchains["python3"] is True
+    assert "android" in toolchains
+    assert "android" not in FAST_SUITES and "android" in ALL_SUITES and "android" in SUITE_SPECS
     noise = (
         '[Bridge] 127.0.0.1 - "POST /exa.language_server_pb.LanguageServerService/StartCascade HTTP/1.1" 200 -\n'
         "  [PASS] 1. Auth verified\n"
@@ -605,6 +689,8 @@ def run_self_test() -> int:
     assert resolve_suites(ns_full) == ("full", FULL_SUITES)
     ns_custom = parser.parse_args(["--suite", "rpc,spec", "--suite", "kmp"])
     assert resolve_suites(ns_custom) == ("custom", ["rpc", "spec", "kmp"])
+    ns_android = parser.parse_args(["--suite", "android"])
+    assert resolve_suites(ns_android) == ("custom", ["android"])
     print("verify.py --self-test PASSED")
     return 0
 

@@ -90,6 +90,8 @@ def _empty_impact(domain: str, reason: str) -> dict[str, Any]:
         "esdd_tcs": [],
         "esdd_screens": [],
         "esdd_full": False,
+        "android_unit_and_roborazzi": False,
+        "android_emulator_e2e": False,
     }
 
 
@@ -114,6 +116,13 @@ def classify_file(path: str) -> dict[str, Any]:
     ):
         return _empty_impact("docs-meta", "Documentation or repository metadata only")
 
+    # 3a. Android specs -> ESDD Stage 1 + Android JVM/Roborazzi only (zero macOS/iOS impact)
+    if norm.startswith("specs/android/"):
+        res = _empty_impact("android-specs", "Android ESDD / product specification changed (zero macOS/iOS impact)")
+        res["esdd_stages"] = [1]
+        res["android_unit_and_roborazzi"] = True
+        return res
+
     # 3. Specs -> ESDD Stage 1 Spec-DAG & selector parity only
     if norm.startswith("specs/"):
         res = _empty_impact("specs", "ESDD / product specification changed")
@@ -137,6 +146,15 @@ def classify_file(path: str) -> dict[str, Any]:
     }:
         res = _empty_impact("ci-planner-workflow", "CI impact planner or workflow orchestration changed (verified via Ubuntu fast gates & self-tests)")
         res["esdd_stages"] = [1]
+        return res
+
+    # 4b-android. Android CI workflow & Roborazzi visual comparison harness -> Android JVM/Roborazzi only (zero macOS/iOS impact)
+    if norm in {
+        ".github/workflows/android-verify.yml",
+        "verification/android_visual_compare.py",
+    }:
+        res = _empty_impact("android-ci-visual", "Android CI workflow or Roborazzi visual comparison harness changed (zero macOS/iOS impact)")
+        res["android_unit_and_roborazzi"] = True
         return res
 
     # 4c. Client + Security/Compliance CR Agent (run-gemini-cli) & CI workflow security audit
@@ -167,6 +185,8 @@ def classify_file(path: str) -> dict[str, Any]:
         res["gate2_v233"] = True
         res["esdd_stages"] = [1, 2, 3]
         res["esdd_tcs"] = ["TC-15"]
+        if norm in {"verification/mock_language_server.py", "verification/verify_compat_guardrails.py"}:
+            res["android_unit_and_roborazzi"] = True
         return res
 
     # 6. ESDD static Stage 1 inspector (Spec-DAG, secret hygiene, compat guardrails — zero Chrome / zero macOS)
@@ -204,11 +224,15 @@ def classify_file(path: str) -> dict[str, Any]:
     ):
         return _empty_impact("helper-scripts", "Developer/local helper script, git hook, or source SVG asset changed")
 
-    # 8. KMP shared modules & Gradle build (verified by kmp-verify.yml)
+    # 8. KMP shared modules & Gradle build (verified by kmp-verify.yml & Android JVM/Roborazzi)
     if norm.startswith("shared/umbrella/"):
-        res = _empty_impact("kmp-umbrella-facade", "KMP Swift-facing umbrella facade changed (build-only iOS compile check)")
+        res = _empty_impact("kmp-umbrella-facade", "KMP Swift-facing umbrella facade changed (build-only iOS compile + Android JVM/Roborazzi)")
         res["gate3_ios_build"] = True
+        res["android_unit_and_roborazzi"] = True
         return res
+
+    if norm == ".github/workflows/kmp-verify.yml":
+        return _empty_impact("kmp-shared", "KMP verification workflow changed (verified by kmp-verify.yml)")
 
     if (
         norm.startswith("shared/")
@@ -219,14 +243,18 @@ def classify_file(path: str) -> dict[str, Any]:
             "gradle.properties",
             "gradlew",
             "gradlew.bat",
-            ".github/workflows/kmp-verify.yml",
         }
     ):
-        return _empty_impact("kmp-shared", "KMP shared Kotlin/Gradle module (verified by kmp-verify.yml)")
+        res = _empty_impact("kmp-shared", "KMP shared Kotlin/Gradle module (verified by kmp-verify.yml & Android JVM/Roborazzi)")
+        res["android_unit_and_roborazzi"] = True
+        return res
 
     # 8b. Android app modules (non-iOS; never requires macOS Xcode Simulator)
     if norm.startswith("apps/android/"):
-        return _empty_impact("android-app", "Android client module changed (zero macOS/iOS impact)")
+        res = _empty_impact("android-app", "Android client module changed (zero macOS/iOS impact)")
+        res["android_unit_and_roborazzi"] = True
+        res["android_emulator_e2e"] = True
+        return res
 
     # 9. Swift unit tests only (App target does not compile SPM test target)
     if norm.startswith("apps/ios/Packages/AntigravityData/Tests/"):
@@ -774,6 +802,8 @@ def build_verification_plan(
     esdd_tcs: set[str] = set()
     esdd_screens: set[str] = set()
     esdd_full = False
+    android_unit_and_roborazzi = False
+    android_emulator_e2e = False
 
     def _impacts_compat_guardrails(norm_path: str) -> bool:
         data_prefixes = (
@@ -815,6 +845,8 @@ def build_verification_plan(
         esdd_tcs.update(imp["esdd_tcs"])
         esdd_screens.update(imp["esdd_screens"])
         esdd_full = esdd_full or imp["esdd_full"]
+        android_unit_and_roborazzi = android_unit_and_roborazzi or imp["android_unit_and_roborazzi"]
+        android_emulator_e2e = android_emulator_e2e or imp["android_emulator_e2e"]
 
     if mode in ("release", "full"):
         gate0_compat_guardrails = True
@@ -840,6 +872,10 @@ def build_verification_plan(
         if ordered_esdd_screens and 4 not in ordered_esdd_stages:
             ordered_esdd_stages = sorted(set(ordered_esdd_stages) | {4})
 
+    if is_release or fm == "full" or diff_unavailable:
+        android_unit_and_roborazzi = True
+        android_emulator_e2e = True
+
     if not gate3_ios_build:
         ios_simulator_mode = "skip"
     elif mode in ("release", "full"):
@@ -850,6 +886,7 @@ def build_verification_plan(
         ios_simulator_mode = "scoped"
 
     needs_macos = bool(gate1 or gate3_ios_build)
+    needs_android = bool(android_unit_and_roborazzi or android_emulator_e2e)
     skipped_xcuitests = [t for t in ALL_XCUITESTS if t not in ordered_xcuitests]
     skipped_sim_screens = [s for s in ALL_UE_STATES if s not in ordered_sim_screens]
 
@@ -870,6 +907,9 @@ def build_verification_plan(
             "iosSimulatorMode": ios_simulator_mode,
             "runLiveAppRPC": run_live_app_rpc,
             "needsMacOS": needs_macos,
+            "needsAndroid": needs_android,
+            "androidUnitAndRoborazzi": android_unit_and_roborazzi,
+            "androidEmulatorE2E": android_emulator_e2e,
             "runKmpFullRelease": is_release,
         },
         "xcuitests": ordered_xcuitests,
@@ -881,6 +921,11 @@ def build_verification_plan(
             "stages": ordered_esdd_stages,
             "testCases": ordered_esdd_tcs,
             "screens": ordered_esdd_screens,
+        },
+        "android": {
+            "needs_android": needs_android,
+            "android_unit_and_roborazzi": android_unit_and_roborazzi,
+            "android_emulator_e2e": android_emulator_e2e,
         },
     }
 
@@ -904,6 +949,7 @@ def render_markdown_summary(plan: dict[str, Any]) -> str:
         f"- **Changed Files**: `{len(plan['changedFiles'])}`",
         f"- **Impacted Domains**: `{', '.join(plan['impactedDomains']) or 'none'}`",
         f"- **macOS Runner Required**: `{'YES' if gates['needsMacOS'] else 'NO (fast Ubuntu-only verification)'}`",
+        f"- **Android Runner Required**: `{'YES' if gates['needsAndroid'] else 'NO (Android unaffected)'}`",
         f"- **iOS Simulator Mode**: `{gates['iosSimulatorMode']}`",
     ]
     if plan["escalationReasons"]:
@@ -926,6 +972,8 @@ def render_markdown_summary(plan: dict[str, Any]) -> str:
             f"| `[Gate 3b]` Real Simulator XCUITests | {'✅ RUN (' + str(len(plan['xcuitests'])) + '/' + str(len(ALL_XCUITESTS)) + ')' if plan['xcuitests'] else '⏭️ SKIP (0/' + str(len(ALL_XCUITESTS)) + ')'} | {', '.join(f'`{t}`' for t in plan['xcuitests']) or 'None impacted'} |",
             f"| `[Gate 4]` Live Simulator App Connect-RPC Handshake | {'✅ RUN' if gates['runLiveAppRPC'] else '⏭️ SKIP'} | {'Connection/RPC impacted or full' if gates['runLiveAppRPC'] else 'Unaffected'} |",
             f"| `[Gate 5]` Native Simulator UE Screenshots | {'✅ RUN (' + str(len(plan['simulatorScreens'])) + '/13)' if plan['simulatorScreens'] else '⏭️ SKIP (0/13)'} | {', '.join(f'`{s}`' for s in plan['simulatorScreens']) or 'None impacted'} |",
+            f"| `[Android A1]` Lint + JVM Unit/Compose E2E + Roborazzi 13-Screen Visual Compare | {'✅ RUN' if gates['androidUnitAndRoborazzi'] else '⏭️ SKIP'} | {'apps/android, specs/android, shared/KMP impacted or release' if gates['androidUnitAndRoborazzi'] else 'Android unaffected'} |",
+            f"| `[Android A2]` KVM Emulator Instrumented E2E (`connectedDebugAndroidTest`) | {'✅ RUN' if gates['androidEmulatorE2E'] else '⏭️ SKIP'} | {'apps/android/** impacted or release' if gates['androidEmulatorE2E'] else 'Skipped (no apps/android runtime change)'} |",
             f"| `[Release]` Full KMP JVM + XCFramework E2E | {'✅ RUN' if gates['runKmpFullRelease'] else '⏭️ SKIP'} | {'Enforced on release' if gates['runKmpFullRelease'] else 'Handled by kmp-verify.yml when shared/ changes'} |",
             "",
         ]
@@ -1062,6 +1110,9 @@ def write_github_outputs(github_output_path: Path, plan: dict[str, Any]) -> None
         "mode": plan["mode"],
         "is_release": "true" if plan["isRelease"] else "false",
         "needs_macos": "true" if gates["needsMacOS"] else "false",
+        "needs_android": "true" if gates["needsAndroid"] else "false",
+        "android_unit_and_roborazzi": "true" if gates["androidUnitAndRoborazzi"] else "false",
+        "android_emulator_e2e": "true" if gates["androidEmulatorE2E"] else "false",
         "run_gate0": "true" if gates["gate0DocSync"] else "false",
         "run_compat_guardrails": "true" if gates.get("gate0CompatGuardrails", False) else "false",
         "run_gate1": "true" if gates["gate1SwiftDataTests"] else "false",
@@ -1084,10 +1135,13 @@ def write_github_outputs(github_output_path: Path, plan: dict[str, Any]) -> None
 
 def run_self_tests() -> None:
     """Comprehensive deterministic self-test verifying scoped impact mapping and release enforcement."""
-    # 1. Docs-only -> fast Ubuntu only, zero macOS runner, compat guardrails skipped
+    # 1. Docs-only -> fast Ubuntu only, zero macOS runner, zero Android runner, compat guardrails skipped
     p1 = build_verification_plan(changed_files=["AGENTS.md", "README.md", "docs/images/architecture-dark.svg"])
     assert p1["mode"] == "scoped" and not p1["isRelease"]
     assert p1["gates"]["needsMacOS"] is False
+    assert p1["gates"]["needsAndroid"] is False
+    assert p1["gates"]["androidUnitAndRoborazzi"] is False
+    assert p1["gates"]["androidEmulatorE2E"] is False
     assert p1["gates"]["gate0CompatGuardrails"] is False
     assert p1["gates"]["gate1SwiftDataTests"] is False
     assert p1["gates"]["gate2LiveRPC"] is False
@@ -1097,6 +1151,7 @@ def run_self_tests() -> None:
     p2 = build_verification_plan(changed_files=["scripts/mac-companion-bridge.py"])
     assert p2["mode"] == "scoped"
     assert p2["gates"]["needsMacOS"] is False
+    assert p2["gates"]["needsAndroid"] is False
     assert p2["gates"]["gate0CompatGuardrails"] is True
     assert p2["gates"]["gate2LiveRPC"] is True and p2["gates"]["gate2V233Capabilities"] is True
     assert p2["gates"]["iosSimulatorMode"] == "skip"
@@ -1105,6 +1160,7 @@ def run_self_tests() -> None:
     p3 = build_verification_plan(changed_files=["apps/ios/Packages/AntigravityData/Tests/AntigravityDataTests/AntigravityProtocolTests.swift"])
     assert p3["mode"] == "scoped"
     assert p3["gates"]["needsMacOS"] is True
+    assert p3["gates"]["needsAndroid"] is False
     assert p3["gates"]["gate0CompatGuardrails"] is False
     assert p3["gates"]["gate1SwiftDataTests"] is True
     assert p3["gates"]["gate3IOSBuild"] is False
@@ -1157,18 +1213,58 @@ def run_self_tests() -> None:
     assert p8["mode"] == "scoped"
     assert p8["gates"]["iosSimulatorMode"] == "build-only"
 
-    # 9. KMP shared / Android only -> skipped by macOS workflow; umbrella facade -> build-only
+    # 9. KMP shared / Android only -> skipped by macOS workflow; triggers Android lane; umbrella facade -> build-only + Android
     p9 = build_verification_plan(changed_files=["shared/core-model/src/commonMain/kotlin/dev/antigravity/shared/model/CascadeModels.kt"])
     assert p9["mode"] == "scoped"
     assert p9["gates"]["needsMacOS"] is False
+    assert p9["gates"]["needsAndroid"] is True
+    assert p9["gates"]["androidUnitAndRoborazzi"] is True
+    assert p9["gates"]["androidEmulatorE2E"] is False
+    assert p9["android"]["needs_android"] is True
     assert p9["gates"]["gate0CompatGuardrails"] is False
+
     p9a = build_verification_plan(changed_files=["apps/android/app/src/main/kotlin/MainActivity.kt"])
     assert p9a["mode"] == "scoped"
     assert p9a["gates"]["needsMacOS"] is False
+    assert p9a["gates"]["needsAndroid"] is True
+    assert p9a["gates"]["androidUnitAndRoborazzi"] is True
+    assert p9a["gates"]["androidEmulatorE2E"] is True
+    assert p9a["android"] == {
+        "needs_android": True,
+        "android_unit_and_roborazzi": True,
+        "android_emulator_e2e": True,
+    }
     assert p9a["gates"]["gate0CompatGuardrails"] is False
+
     p9b = build_verification_plan(changed_files=["shared/umbrella/src/commonMain/kotlin/dev/antigravity/shared/AntigravitySharedFacade.kt"])
     assert p9b["mode"] == "scoped"
     assert p9b["gates"]["iosSimulatorMode"] == "build-only"
+    assert p9b["gates"]["needsAndroid"] is True
+    assert p9b["gates"]["androidUnitAndRoborazzi"] is True
+
+    p9c = build_verification_plan(changed_files=["specs/android/01-prd-and-ux-spec.md"])
+    assert p9c["mode"] == "scoped"
+    assert p9c["gates"]["needsMacOS"] is False
+    assert p9c["gates"]["needsAndroid"] is True
+    assert p9c["gates"]["androidUnitAndRoborazzi"] is True
+    assert p9c["gates"]["androidEmulatorE2E"] is False
+
+    p9d = build_verification_plan(changed_files=["apps/android/README.md"])
+    assert p9d["mode"] == "scoped"
+    assert p9d["gates"]["needsMacOS"] is False
+    assert p9d["gates"]["needsAndroid"] is False
+
+    p9e = build_verification_plan(
+        changed_files=[
+            ".github/workflows/android-verify.yml",
+            "verification/android_visual_compare.py",
+        ]
+    )
+    assert p9e["mode"] == "scoped"
+    assert p9e["gates"]["needsMacOS"] is False
+    assert p9e["gates"]["needsAndroid"] is True
+    assert p9e["gates"]["androidUnitAndRoborazzi"] is True
+    assert p9e["gates"]["androidEmulatorE2E"] is False
 
     # 10. Multi-file union (Automations + Project Detail)
     p10 = build_verification_plan(
@@ -1211,6 +1307,14 @@ def run_self_tests() -> None:
         pr = build_verification_plan(**kwargs)
         assert pr["mode"] == "release" and pr["isRelease"] is True, f"Release case #{idx} failed: {pr}"
         assert pr["gates"]["needsMacOS"] is True
+        assert pr["gates"]["needsAndroid"] is True
+        assert pr["gates"]["androidUnitAndRoborazzi"] is True
+        assert pr["gates"]["androidEmulatorE2E"] is True
+        assert pr["android"] == {
+            "needs_android": True,
+            "android_unit_and_roborazzi": True,
+            "android_emulator_e2e": True,
+        }
         assert pr["gates"]["gate0CompatGuardrails"] is True
         assert pr["gates"]["gate1SwiftDataTests"] is True
         assert pr["gates"]["gate2LiveRPC"] is True
@@ -1244,6 +1348,7 @@ def run_self_tests() -> None:
     )
     assert p15["mode"] == "scoped" and not p15["isRelease"]
     assert p15["gates"]["needsMacOS"] is False
+    assert p15["gates"]["needsAndroid"] is False
     assert p15["gates"]["iosSimulatorMode"] == "skip"
     assert p15["gates"]["gate0CompatGuardrails"] is True
     assert p15["esdd"]["full"] is False
@@ -1272,7 +1377,7 @@ def run_self_tests() -> None:
     assert p16b["mode"] == "scoped"
     assert "testAppearanceModeSwitchingLightAndDarkInSettingsAndChat" in p16b["xcuitests"]
 
-    print("✓ e2e_impact_planner self-test PASSED (16/16 scenarios + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
+    print("✓ e2e_impact_planner self-test PASSED (16/16 scenarios + Android scoping + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
 
 
 def main() -> int:

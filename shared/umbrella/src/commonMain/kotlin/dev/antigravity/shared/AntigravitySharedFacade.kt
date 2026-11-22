@@ -53,6 +53,9 @@ public object AntigravitySharedFacade {
         projectionStorage = InMemoryProjectionStorage(),
     )
 
+    public fun createEsddVerificationCoordinator(): AntigravityCoreCoordinator =
+        AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+
     public fun parseMarkdown(markdown: String): List<MarkdownBlock> =
         AntigravityMarkdownParser.parse(markdown)
 

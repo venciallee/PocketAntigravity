@@ -1,0 +1,162 @@
+{
+  "totalScreens": 13,
+  "overviewPng": "verification/output/android/ANDROID_13_SCREENS_OVERVIEW.png",
+  "comparisons": [
+    {
+      "stateId": "UE01_AGENTS_HOME",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE01.png"
+    },
+    {
+      "stateId": "UE02_DISPLAY_OPTIONS",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE02.png"
+    },
+    {
+      "stateId": "UE03_CONTEXT_MENU_PIN",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE03.png"
+    },
+    {
+      "stateId": "UE04_PROJECT_DETAIL",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE04.png"
+    },
+    {
+      "stateId": "UE05_CREATE_PROJECT",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE05.png"
+    },
+    {
+      "stateId": "UE06_AUTOMATIONS",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE06.png"
+    },
+    {
+      "stateId": "UE07_CHAT_AND_COMPOSER",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE07.png"
+    },
+    {
+      "stateId": "UE08_ADD_CONTEXT",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE08.png"
+    },
+    {
+      "stateId": "UE09_MODEL_AND_MODE",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE09.png"
+    },
+    {
+      "stateId": "UE10_STRUCTURED_QUESTION",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE10.png"
+    },
+    {
+      "stateId": "UE11_PLAN_REVIEW",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE11.png"
+    },
+    {
+      "stateId": "UE12_TURN_DIFF_REVIEW",
+      "iosSizePx": [
+        1179,
+        2556
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE12.png"
+    },
+    {
+      "stateId": "UE13_LIVE_ACTIVITY_SPEC",
+      "iosSizePx": [
+        2400,
+        1500
+      ],
+      "androidSizePx": [
+        2400,
+        1500
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE13.png"
+    }
+  ]
+}

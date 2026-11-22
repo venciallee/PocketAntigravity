@@ -2,21 +2,37 @@ package dev.antigravity.shared.protocol
 
 import dev.antigravity.shared.model.AgentPermissionPreset
 import dev.antigravity.shared.model.AntigravityCloudDetector
+import dev.antigravity.shared.model.ArtifactSnapshot
 import dev.antigravity.shared.model.AutomationItem
 import dev.antigravity.shared.model.AutomationSectionKind
 import dev.antigravity.shared.model.CascadeExecutionMode
+import dev.antigravity.shared.model.CascadeModelConfig
 import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.CascadeSummary
 import dev.antigravity.shared.model.CascadeUserInteractionPayload
 import dev.antigravity.shared.model.ComposerAttachmentChip
+import dev.antigravity.shared.model.ConversationOverviewSnapshot
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.CortexStepType
+import dev.antigravity.shared.model.CustomizationsCatalog
+import dev.antigravity.shared.model.DiffCompareMode
+import dev.antigravity.shared.model.DiffLineComment
+import dev.antigravity.shared.model.EmbedResourceSource
+import dev.antigravity.shared.model.FilePatchDiff
+import dev.antigravity.shared.model.GitCommitDraft
+import dev.antigravity.shared.model.GitCommitResult
+import dev.antigravity.shared.model.GitHubRepoItem
+import dev.antigravity.shared.model.LiveModelCatalogResult
+import dev.antigravity.shared.model.ModelUsageQuota
 import dev.antigravity.shared.model.NewProjectDraft
+import dev.antigravity.shared.model.PlanInlineComment
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
 import dev.antigravity.shared.model.RemoteConnectionChannel
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.model.RequestedInteraction
+import dev.antigravity.shared.model.ResolvedEmbedResource
+import dev.antigravity.shared.model.SidecarManageAction
 import dev.antigravity.shared.model.ThinkingEffortLevel
 import dev.antigravity.shared.model.WorkspaceInfo
 import io.ktor.client.HttpClient
@@ -124,10 +140,9 @@ public class AntigravityKmpRpcClient(
         public const val SERVICE_PREFIX: String = "/exa.language_server_pb.LanguageServerService"
 
         private val localDesktopOnlyMethods = setOf("OpenWorkspaceInFinder", "ReadArtifactFile")
-        private val unknownFieldRegex = Regex("""unknown field\s+"([^"]+)"""", RegexOption.IGNORE_CASE)
 
         public fun extractUnknownProtoFieldName(message: String): String? =
-            unknownFieldRegex.find(message)?.groupValues?.getOrNull(1)
+            ProtocolCompatibilityEngine.extractUnknownProtoFieldName(message)
 
         internal fun extractJsonTruncationCeiling(response: JsonObject, fallbackStepCount: Int): Int? {
             val truncatedPrim = response["truncatedAt"] as? JsonPrimitive
@@ -244,10 +259,12 @@ public class AntigravityKmpRpcClient(
     private var currentRelayApiKey: String? = relayApiKey?.trim()?.takeIf { it.isNotEmpty() }
     private var attemptedApiKeyDiscovery: Boolean = false
     private var cachedRelayInstances: List<RelayInstanceInfo> = emptyList()
+    private var preferredCloudInstanceUuid: String? = null
+    private val cachedCloudProjectsById = linkedMapOf<String, ProjectWorkspace>()
+    private var cachedValidUpstreamModels: Set<String>? = null
+    private var cachedDefaultUpstreamModel: String? = null
     private val wokenInstanceCascadeKeys = mutableSetOf<String>()
-    private val learnedJsonStepCeilingsByHost = mutableMapOf<String, Int>()
-    private val binaryProtobufUnsupportedHosts = mutableSetOf<String>()
-    private val hostVersionsByKey = mutableMapOf<String, String>()
+    private val capabilityProfilesByHost = linkedMapOf<String, HostCapabilityProfile>()
 
     private val httpClient: HttpClient = httpClientOverride ?: createPlatformHttpClient(
         endpointHost = endpointHost,
@@ -279,14 +296,51 @@ public class AntigravityKmpRpcClient(
             ?: host.instanceId.takeIf { it.isNotBlank() }
             ?: endpointBaseUrl
 
+    private fun getOrCreateProfileLocked(key: String): HostCapabilityProfile =
+        capabilityProfilesByHost.getOrPut(key) {
+            val defaultKey = hostCapabilityKey(null)
+            val initialVer = if (key == defaultKey) {
+                HostCapabilityProfile.normalizedVersionString(host.version)
+            } else {
+                null
+            }
+            HostCapabilityProfile(hostKey = key, reportedVersion = initialVer)
+        }
+
+    /**
+     * Returns the runtime-discovered [HostCapabilityProfile] for [hostKey] (or the active host when `null`).
+     */
+    public suspend fun capabilityProfile(hostKey: String? = null): HostCapabilityProfile =
+        stateMutex.withLock {
+            val key = hostKey?.takeIf { it.isNotBlank() } ?: hostCapabilityKey(null)
+            getOrCreateProfileLocked(key)
+        }
+
+    /**
+     * Returns all per-host [HostCapabilityProfile] snapshots observed during this client's lifetime.
+     */
+    public suspend fun allCapabilityProfiles(): Map<String, HostCapabilityProfile> =
+        stateMutex.withLock { capabilityProfilesByHost.toMap() }
+
+    private suspend fun mutateCapabilityProfile(
+        instanceUuidOverride: String? = null,
+        transform: (HostCapabilityProfile) -> HostCapabilityProfile,
+    ) {
+        stateMutex.withLock {
+            val key = hostCapabilityKey(instanceUuidOverride)
+            val current = getOrCreateProfileLocked(key)
+            capabilityProfilesByHost[key] = transform(current)
+        }
+    }
+
     public suspend fun learnedJsonStepCeiling(instanceUuidOverride: String? = null): Int? =
         stateMutex.withLock {
-            learnedJsonStepCeilingsByHost[hostCapabilityKey(instanceUuidOverride)]
+            getOrCreateProfileLocked(hostCapabilityKey(instanceUuidOverride)).learnedJsonStepCeiling
         }
 
     public suspend fun isBinaryProtobufStepsUnsupported(instanceUuidOverride: String? = null): Boolean =
         stateMutex.withLock {
-            hostCapabilityKey(instanceUuidOverride) in binaryProtobufUnsupportedHosts
+            getOrCreateProfileLocked(hostCapabilityKey(instanceUuidOverride)).binaryProtobufStepsUnsupported
         }
 
     public suspend fun updateReportedHostVersion(version: String, instanceUuidOverride: String? = null) {
@@ -300,35 +354,108 @@ public class AntigravityKmpRpcClient(
     private fun updateReportedHostVersionLocked(key: String, version: String) {
         val trimmed = version.trim()
         if (trimmed.isEmpty()) return
-        val previous = hostVersionsByKey[key]
-        if (previous != trimmed) {
-            learnedJsonStepCeilingsByHost.remove(key)
-            binaryProtobufUnsupportedHosts.remove(key)
-        }
-        hostVersionsByKey[key] = trimmed
+        val current = getOrCreateProfileLocked(key)
+        capabilityProfilesByHost[key] = current.updateReportedVersion(trimmed)
     }
 
     private fun recordRelayInstanceVersionsLocked(instances: List<RelayInstanceInfo>) {
         for (inst in instances) {
-            if (inst.uuid.isNotBlank() && inst.version.isNotBlank()) {
-                updateReportedHostVersionLocked(inst.uuid, inst.version)
+            if (inst.uuid.isNotBlank()) {
+                var profile = getOrCreateProfileLocked(inst.uuid)
+                if (inst.version.isNotBlank()) {
+                    profile = profile.updateReportedVersion(inst.version)
+                }
+                profile = profile.recordPassiveSignal(
+                    HostCapability.STREAM_CHUNKING,
+                    if (inst.supportsChunking) CapabilitySupportState.SUPPORTED else CapabilitySupportState.UNSUPPORTED,
+                )
+                capabilityProfilesByHost[inst.uuid] = profile
             }
         }
     }
 
     private suspend fun recordLearnedJsonStepCeiling(ceiling: Int, instanceUuidOverride: String?) {
         if (ceiling <= 0) return
-        stateMutex.withLock {
-            val key = hostCapabilityKey(instanceUuidOverride)
-            val existing = learnedJsonStepCeilingsByHost[key]
-            learnedJsonStepCeilingsByHost[key] = if (existing != null) minOf(existing, ceiling) else ceiling
-        }
+        mutateCapabilityProfile(instanceUuidOverride) { it.recordJsonStepCeiling(ceiling) }
     }
 
     private suspend fun recordBinaryProtobufStepsUnsupported(instanceUuidOverride: String?) {
-        stateMutex.withLock {
-            binaryProtobufUnsupportedHosts.add(hostCapabilityKey(instanceUuidOverride))
+        mutateCapabilityProfile(instanceUuidOverride) { it.recordBinaryProtobufStepsUnsupported() }
+    }
+
+    private suspend fun observeResponseMetadata(
+        headers: Map<String, String>,
+        body: JsonObject?,
+        method: String,
+        instanceUuidOverride: String?,
+    ) {
+        val bridgeCaps = ProtocolCompatibilityEngine.extractBridgeCapabilities(headers)
+        val detectedVersion = ProtocolCompatibilityEngine.extractVersionFromHeadersOrBody(headers, body)
+        mutateCapabilityProfile(instanceUuidOverride) { profile ->
+            var updated = profile.recordMethodSupported(method)
+            if (bridgeCaps.isNotEmpty()) {
+                updated = updated.recordBridgeCapabilities(bridgeCaps)
+            }
+            if (detectedVersion != null) {
+                updated = updated.updateReportedVersion(detectedVersion)
+            }
+            updated
         }
+    }
+
+    /**
+     * Applies one self-healing compatibility mutation (`unknown field` recursive strip with rich item
+     * folding, or `invalid enum` downgrade / holding-key strip) when a Desktop host returns HTTP 400
+     * or `invalid_argument`, caching the learned rule per host + method for future round-trips.
+     */
+    private suspend fun attemptSelfHealingDowngrade(
+        errorMessage: String,
+        method: String,
+        body: JsonObject,
+        instanceUuidOverride: String?,
+    ): JsonObject? {
+        val unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(errorMessage)
+        if (unknownField != null) {
+            val (updated, removed) = ProtocolCompatibilityEngine.recursivelyRemoveField(unknownField, body)
+            if (removed) {
+                mutateCapabilityProfile(instanceUuidOverride) { p ->
+                    p.recordStrippedField(unknownField, forMethod = method)
+                }
+                return updated
+            }
+        }
+        val invalidEnum = ProtocolCompatibilityEngine.extractInvalidEnumValue(errorMessage)
+        if (invalidEnum != null) {
+            val replacement = ProtocolCompatibilityEngine.downgradedEnumReplacement(invalidEnum)
+            if (replacement != null) {
+                val (updated, replaced) = ProtocolCompatibilityEngine.recursivelyReplaceEnumValue(
+                    invalidValue = invalidEnum,
+                    replacement = replacement,
+                    body = body,
+                )
+                if (replaced) {
+                    mutateCapabilityProfile(instanceUuidOverride) { p ->
+                        p.recordDowngradedEnum(from = invalidEnum, to = replacement, forMethod = method)
+                    }
+                    return updated
+                }
+            }
+            val (strippedBody, removedKeys) = ProtocolCompatibilityEngine.recursivelyRemoveKeysWithValue(
+                targetValue = invalidEnum,
+                body = body,
+            )
+            if (removedKeys.isNotEmpty()) {
+                mutateCapabilityProfile(instanceUuidOverride) { p ->
+                    var next = p
+                    for (key in removedKeys) {
+                        next = next.recordStrippedField(key, forMethod = method)
+                    }
+                    next
+                }
+                return strippedBody
+            }
+        }
+        return null
     }
 
     private suspend fun ensureRelayWebApiKey(forceRefresh: Boolean = false): String? {
@@ -600,7 +727,17 @@ public class AntigravityKmpRpcClient(
         body: JsonObject = JsonObject(emptyMap()),
         instanceUuidOverride: String? = null,
         allowCrossHostFailover: Boolean = false,
+        respectNegativeCache: Boolean = true,
     ): JsonObject {
+        // Inverse-allowlist negative cache: fast-fail any non-core RPC previously rejected as
+        // unimplemented by this host (including future optional RPCs not yet assigned a HostCapability).
+        if (respectNegativeCache && HostCapability.shouldNegativeCacheOnUnimplemented(method)) {
+            val cachedProfile = capabilityProfile(hostKey = stateMutex.withLock { hostCapabilityKey(instanceUuidOverride) })
+            if (cachedProfile.isMethodKnownUnsupported(method)) {
+                throw AntigravityRpcError.HttpError(501, "unimplemented (cached): $method")
+            }
+        }
+
         if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
             return callCloudRelayUnaryJson(
                 method = method,
@@ -611,25 +748,62 @@ public class AntigravityKmpRpcClient(
         }
 
         val url = "$endpointBaseUrl$SERVICE_PREFIX/$method"
-        val bodyBytes = body.toString().encodeToByteArray()
-        val response = httpClient.post(url) {
-            header("Connect-Protocol-Version", "1")
-            csrfToken?.takeIf { it.isNotEmpty() }?.let { header("x-codeium-csrf-token", it) }
-            sessionCookie?.takeIf { it.isNotEmpty() }?.let { header("Cookie", it) }
-            setBody(ByteArrayContent(bodyBytes, ContentType.Application.Json))
+        val currentProfile = capabilityProfile(hostKey = stateMutex.withLock { hostCapabilityKey(instanceUuidOverride) })
+        var workingBody = ProtocolCompatibilityEngine.applyKnownDowngrades(body, method, currentProfile)
+
+        for (attempt in 1..4) {
+            val bodyBytes = workingBody.toString().encodeToByteArray()
+            val response = httpClient.post(url) {
+                header("Connect-Protocol-Version", "1")
+                csrfToken?.takeIf { it.isNotEmpty() }?.let { header("x-codeium-csrf-token", it) }
+                sessionCookie?.takeIf { it.isNotEmpty() }?.let { header("Cookie", it) }
+                setBody(ByteArrayContent(bodyBytes, ContentType.Application.Json))
+            }
+            val rawBytes = response.bodyAsBytes()
+            val statusCode = response.status.value
+            val respHeaders = response.flattenHeaders()
+
+            // Capture Bridge capability & version headers even on non-2xx responses
+            val bridgeCaps = ProtocolCompatibilityEngine.extractBridgeCapabilities(respHeaders)
+            val headerVer = ProtocolCompatibilityEngine.extractVersionFromHeadersOrBody(respHeaders, null)
+            if (bridgeCaps.isNotEmpty() || headerVer != null) {
+                mutateCapabilityProfile(instanceUuidOverride) { p ->
+                    var next = p
+                    if (bridgeCaps.isNotEmpty()) next = next.recordBridgeCapabilities(bridgeCaps)
+                    if (headerVer != null) next = next.updateReportedVersion(headerVer)
+                    next
+                }
+            }
+
+            if (statusCode == 401 || statusCode == 403) {
+                throw AntigravityRpcError.Unauthorized
+            }
+            if (statusCode !in 200..299) {
+                val errText = rawBytes.decodeToString()
+                if (statusCode == 400 && attempt < 4) {
+                    val healed = attemptSelfHealingDowngrade(errText, method, workingBody, instanceUuidOverride)
+                    if (healed != null) {
+                        workingBody = healed
+                        continue
+                    }
+                }
+                if (ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode, errText) &&
+                    HostCapability.shouldNegativeCacheOnUnimplemented(method)
+                ) {
+                    mutateCapabilityProfile(instanceUuidOverride) { it.recordMethodUnsupported(method) }
+                }
+                throw AntigravityRpcError.HttpError(statusCode, errText)
+            }
+            if (rawBytes.isEmpty()) {
+                observeResponseMetadata(respHeaders, null, method, instanceUuidOverride)
+                return JsonObject(emptyMap())
+            }
+            val parsed = runCatching { json.parseToJsonElement(rawBytes.decodeToString()) as? JsonObject }.getOrNull()
+                ?: throw AntigravityRpcError.DecodingError("Expected JSON object from $method")
+            observeResponseMetadata(respHeaders, parsed, method, instanceUuidOverride)
+            return parsed
         }
-        val rawBytes = response.bodyAsBytes()
-        val statusCode = response.status.value
-        if (statusCode == 401 || statusCode == 403) {
-            throw AntigravityRpcError.Unauthorized
-        }
-        if (statusCode !in 200..299) {
-            throw AntigravityRpcError.HttpError(statusCode, rawBytes.decodeToString())
-        }
-        if (rawBytes.isEmpty()) return JsonObject(emptyMap())
-        val parsed = runCatching { json.parseToJsonElement(rawBytes.decodeToString()) }.getOrNull()
-        return parsed as? JsonObject
-            ?: throw AntigravityRpcError.DecodingError("Expected JSON object from $method")
+        return JsonObject(emptyMap())
     }
 
     private suspend fun callCloudRelayUnaryJson(
@@ -637,26 +811,43 @@ public class AntigravityKmpRpcClient(
         body: JsonObject,
         instanceUuidOverride: String? = null,
         allowCrossHostFailover: Boolean = false,
+        allowStripUnknownFields: Boolean = true,
     ): JsonObject {
         if (method in localDesktopOnlyMethods) {
+            mutateCapabilityProfile(instanceUuidOverride) { it.recordMethodUnsupported(method) }
             throw AntigravityRpcError.HttpError(501, "$method is only available on direct local desktop hosts.")
         }
         val isCloudBackend = (body["backend"] as? JsonPrimitive)?.contentOrNull == "BACKEND_TYPE_REMOTE_AICODE" ||
             (body["backendType"] as? JsonPrimitive)?.contentOrNull == "BACKEND_TYPE_REMOTE_AICODE"
         val effectiveFailover = allowCrossHostFailover || isCloudBackend
 
-        var workingBody = sanitizeCloudRelayPayload(method, body)
+        val sanitized = sanitizeCloudRelayPayload(method, body)
+        val currentProfile = capabilityProfile(hostKey = stateMutex.withLock { hostCapabilityKey(instanceUuidOverride) })
+        var workingBody = ProtocolCompatibilityEngine.applyKnownDowngrades(sanitized, method, currentProfile)
+
         for (attempt in 1..4) {
             val encodedPayload = workingBody.toString().encodeToByteArray()
-            val (rawRespBytes, _) = callCloudRelayProxyCommand(
-                method = method,
-                payload = encodedPayload,
-                contentType = "application/json",
-                instanceUuidOverride = instanceUuidOverride,
-                allowCrossHostFailover = effectiveFailover,
-            )
+            val (rawRespBytes, respHeaders) = try {
+                callCloudRelayProxyCommand(
+                    method = method,
+                    payload = encodedPayload,
+                    contentType = "application/json",
+                    instanceUuidOverride = instanceUuidOverride,
+                    allowCrossHostFailover = effectiveFailover,
+                )
+            } catch (err: Throwable) {
+                if (ProtocolCompatibilityEngine.isMethodUnimplementedError(err) &&
+                    HostCapability.shouldNegativeCacheOnUnimplemented(method)
+                ) {
+                    mutateCapabilityProfile(instanceUuidOverride) { it.recordMethodUnsupported(method) }
+                }
+                throw err
+            }
             val respData = unwrapConnectFramedPayloadIfNeeded(rawRespBytes)
-            if (respData.isEmpty()) return JsonObject(emptyMap())
+            if (respData.isEmpty()) {
+                observeResponseMetadata(respHeaders, null, method, instanceUuidOverride)
+                return JsonObject(emptyMap())
+            }
 
             val respText = respData.decodeToString()
             val decoded = runCatching { json.parseToJsonElement(respText) as? JsonObject }.getOrNull()
@@ -664,25 +855,35 @@ public class AntigravityKmpRpcClient(
                 val code = (decoded["code"] as? JsonPrimitive)?.contentOrNull
                 val message = (decoded["message"] as? JsonPrimitive)?.contentOrNull
                 if (code != null && message != null && decoded.size <= 3) {
-                    val unknownField = if (attempt < 4) extractUnknownProtoFieldName(message) else null
-                    if (unknownField != null) {
-                        val stripped = stripFieldFromJsonObject(workingBody, unknownField)
-                        if (stripped != null) {
-                            workingBody = stripped
+                    val combinedError = "$code: $message"
+                    if (allowStripUnknownFields && attempt < 4) {
+                        val healed = attemptSelfHealingDowngrade(combinedError, method, workingBody, instanceUuidOverride)
+                        if (healed != null) {
+                            workingBody = healed
                             continue
                         }
                     }
-                    throw AntigravityRpcError.HttpError(400, "$code: $message")
+                    val statusCode = if (ProtocolCompatibilityEngine.isMethodUnimplementedResponse(400, combinedError)) 501 else 400
+                    if (statusCode == 501 && HostCapability.shouldNegativeCacheOnUnimplemented(method)) {
+                        mutateCapabilityProfile(instanceUuidOverride) { it.recordMethodUnsupported(method) }
+                    }
+                    throw AntigravityRpcError.HttpError(statusCode, combinedError)
                 }
+                observeResponseMetadata(respHeaders, decoded, method, instanceUuidOverride)
                 return decoded
             }
-            val unknownField = if (attempt < 4) extractUnknownProtoFieldName(respText) else null
-            if (unknownField != null) {
-                val stripped = stripFieldFromJsonObject(workingBody, unknownField)
-                if (stripped != null) {
-                    workingBody = stripped
+            if (allowStripUnknownFields && attempt < 4) {
+                val healed = attemptSelfHealingDowngrade(respText, method, workingBody, instanceUuidOverride)
+                if (healed != null) {
+                    workingBody = healed
                     continue
                 }
+            }
+            if (ProtocolCompatibilityEngine.isMethodUnimplementedResponse(400, respText)) {
+                if (HostCapability.shouldNegativeCacheOnUnimplemented(method)) {
+                    mutateCapabilityProfile(instanceUuidOverride) { it.recordMethodUnsupported(method) }
+                }
+                throw AntigravityRpcError.HttpError(501, respText)
             }
             throw AntigravityRpcError.DecodingError("Expected JSON object from Cloud Relay $method")
         }
@@ -853,7 +1054,40 @@ public class AntigravityKmpRpcClient(
                 }
                 put("items", rawItems)
                 put("metadata", desktopMetadata)
-                body["cascadeConfig"]?.let { put("cascadeConfig", it) }
+                val cascadeCfg = body["cascadeConfig"] as? JsonObject
+                val plannerCfg = cascadeCfg?.get("plannerConfig") as? JsonObject
+                if (cascadeCfg != null && plannerCfg != null) {
+                    val plannerMap = plannerCfg.toMutableMap()
+                    val convObj = plannerMap["conversational"] as? JsonObject
+                    if (convObj != null) {
+                        val rawMode = (convObj["plannerMode"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                        if (rawMode != "CONVERSATIONAL_PLANNER_MODE_DEFAULT" && rawMode != "CONVERSATIONAL_PLANNER_MODE_READ_ONLY") {
+                            plannerMap["conversational"] = JsonObject(
+                                convObj.toMutableMap().apply {
+                                    put("plannerMode", JsonPrimitive("CONVERSATIONAL_PLANNER_MODE_DEFAULT"))
+                                }
+                            )
+                        }
+                    }
+                    val modelCfgObj = body["modelConfig"] as? JsonObject
+                    if (modelCfgObj != null) {
+                        (modelCfgObj["thinkingEffort"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                            plannerMap.putIfAbsentCompat("thinkingEffort", JsonPrimitive(it))
+                        }
+                        (modelCfgObj["agentPersona"] as? JsonPrimitive)?.contentOrNull
+                            ?.takeIf { it.isNotEmpty() && it != "Default" }
+                            ?.let { plannerMap.putIfAbsentCompat("agentPersona", JsonPrimitive(it)) }
+                        (modelCfgObj["permissionPreset"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                            plannerMap.putIfAbsentCompat("permissionPreset", JsonPrimitive(it))
+                        }
+                    }
+                    val nextCascade = JsonObject(cascadeCfg.toMutableMap().apply {
+                        put("plannerConfig", JsonObject(plannerMap))
+                    })
+                    put("cascadeConfig", nextCascade)
+                } else {
+                    body["cascadeConfig"]?.let { put("cascadeConfig", it) }
+                }
             }
             "HandleCascadeUserInteraction" -> {
                 val interaction = body["interaction"] as? JsonObject ?: return body
@@ -875,16 +1109,8 @@ public class AntigravityKmpRpcClient(
         }
     }
 
-    private fun stripFieldFromJsonObject(obj: JsonObject, fieldName: String): JsonObject? {
-        if (obj.containsKey(fieldName)) {
-            return JsonObject(obj.filterKeys { it != fieldName })
-        }
-        val cascadeCfg = obj["cascadeConfig"] as? JsonObject ?: return null
-        val plannerCfg = cascadeCfg["plannerConfig"] as? JsonObject ?: return null
-        if (!plannerCfg.containsKey(fieldName)) return null
-        val nextPlanner = JsonObject(plannerCfg.filterKeys { it != fieldName })
-        val nextCascade = JsonObject(cascadeCfg.toMutableMap().apply { put("plannerConfig", nextPlanner) })
-        return JsonObject(obj.toMutableMap().apply { put("cascadeConfig", nextCascade) })
+    private fun MutableMap<String, JsonElement>.putIfAbsentCompat(key: String, value: JsonElement) {
+        if (!containsKey(key)) put(key, value)
     }
 
     // MARK: - Workspaces & Conversation Summaries
@@ -2009,17 +2235,16 @@ public class AntigravityKmpRpcClient(
     }
 
     public suspend fun pinCascade(cascadeId: String, isPinned: Boolean, instanceUuidOverride: String? = null) {
+        val annotationsBody = buildJsonObject {
+            put("cascadeId", cascadeId)
+            put("annotations", buildJsonObject { put("pinned", isPinned) })
+            put("mergeAnnotations", true)
+        }
         if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
-            callUnaryJson(
-                method = "UpdateConversationAnnotations",
-                body = buildJsonObject {
-                    put("cascadeId", cascadeId)
-                    put("annotations", buildJsonObject { put("pinned", isPinned) })
-                    put("mergeAnnotations", true)
-                },
-                instanceUuidOverride = instanceUuidOverride,
-            )
-        } else {
+            callUnaryJson("UpdateConversationAnnotations", annotationsBody, instanceUuidOverride = instanceUuidOverride)
+            return
+        }
+        try {
             callUnaryJson(
                 method = "PinCascade",
                 body = buildJsonObject {
@@ -2028,21 +2253,26 @@ public class AntigravityKmpRpcClient(
                 },
                 instanceUuidOverride = instanceUuidOverride,
             )
+        } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                callUnaryJson("UpdateConversationAnnotations", annotationsBody, instanceUuidOverride = instanceUuidOverride)
+            } else {
+                throw e
+            }
         }
     }
 
     public suspend fun renameCascade(cascadeId: String, newTitle: String, instanceUuidOverride: String? = null) {
+        val annotationsBody = buildJsonObject {
+            put("cascadeId", cascadeId)
+            put("annotations", buildJsonObject { put("title", newTitle) })
+            put("mergeAnnotations", true)
+        }
         if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
-            callUnaryJson(
-                method = "UpdateConversationAnnotations",
-                body = buildJsonObject {
-                    put("cascadeId", cascadeId)
-                    put("annotations", buildJsonObject { put("title", newTitle) })
-                    put("mergeAnnotations", true)
-                },
-                instanceUuidOverride = instanceUuidOverride,
-            )
-        } else {
+            callUnaryJson("UpdateConversationAnnotations", annotationsBody, instanceUuidOverride = instanceUuidOverride)
+            return
+        }
+        try {
             callUnaryJson(
                 method = "RenameCascade",
                 body = buildJsonObject {
@@ -2051,21 +2281,41 @@ public class AntigravityKmpRpcClient(
                 },
                 instanceUuidOverride = instanceUuidOverride,
             )
+        } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                callUnaryJson("UpdateConversationAnnotations", annotationsBody, instanceUuidOverride = instanceUuidOverride)
+            } else {
+                throw e
+            }
         }
     }
 
+    public suspend fun moveCascadeToWorkspace(
+        cascadeId: String,
+        workspaceUri: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "MoveCascadeToWorkspace",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("workspaceUri", workspaceUri)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
     public suspend fun archiveCascade(cascadeId: String, isArchived: Boolean = true, instanceUuidOverride: String? = null) {
+        val annotationsBody = buildJsonObject {
+            put("cascadeId", cascadeId)
+            put("annotations", buildJsonObject { put("archived", isArchived) })
+            put("mergeAnnotations", true)
+        }
         if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
-            callUnaryJson(
-                method = "UpdateConversationAnnotations",
-                body = buildJsonObject {
-                    put("cascadeId", cascadeId)
-                    put("annotations", buildJsonObject { put("archived", isArchived) })
-                    put("mergeAnnotations", true)
-                },
-                instanceUuidOverride = instanceUuidOverride,
-            )
-        } else {
+            callUnaryJson("UpdateConversationAnnotations", annotationsBody, instanceUuidOverride = instanceUuidOverride)
+            return
+        }
+        try {
             callUnaryJson(
                 method = "ArchiveCascade",
                 body = buildJsonObject {
@@ -2074,20 +2324,690 @@ public class AntigravityKmpRpcClient(
                 },
                 instanceUuidOverride = instanceUuidOverride,
             )
+        } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                callUnaryJson("UpdateConversationAnnotations", annotationsBody, instanceUuidOverride = instanceUuidOverride)
+            } else {
+                throw e
+            }
         }
     }
 
     public suspend fun deleteCascade(cascadeId: String, instanceUuidOverride: String? = null) {
-        val method = if (channel == RemoteConnectionChannel.CLOUD_RELAY) "DeleteCascadeTrajectory" else "DeleteCascade"
-        callUnaryJson(
-            method = method,
+        val body = buildJsonObject { put("cascadeId", cascadeId) }
+        if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            callUnaryJson("DeleteCascadeTrajectory", body, instanceUuidOverride = instanceUuidOverride)
+            return
+        }
+        try {
+            callUnaryJson("DeleteCascade", body, instanceUuidOverride = instanceUuidOverride)
+        } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                callUnaryJson("DeleteCascadeTrajectory", body, instanceUuidOverride = instanceUuidOverride)
+            } else {
+                throw e
+            }
+        }
+    }
+
+    // MARK: - Models, Quota & Custom Agents (`GetCascadeModelConfigs` / `GetAvailableModels`)
+
+    public suspend fun fetchModelCatalog(forceRefresh: Boolean = false): LiveModelCatalogResult {
+        if (forceRefresh) {
+            stateMutex.withLock {
+                cachedValidUpstreamModels = null
+                cachedDefaultUpstreamModel = null
+            }
+        }
+
+        val parsedModels = mutableListOf<CascadeModelConfig>()
+        val validIds = linkedSetOf<String>()
+        var defaultModelId: String? = null
+        var parsedQuota: ModelUsageQuota? = null
+        val agents = mutableListOf("Default")
+
+        val metaReq = buildJsonObject {
+            put("forceRefresh", forceRefresh)
+            put(
+                "metadata",
+                buildJsonObject {
+                    put("ideName", "antigravity")
+                    put("extensionName", "antigravity")
+                    put("locale", "en")
+                },
+            )
+        }
+
+        for (method in listOf("GetCascadeModelConfigs", "GetCascadeModelConfigData")) {
+            val obj = runCatching { callUnaryJson(method = method, body = metaReq) }.getOrNull() ?: continue
+            val slice = V233RpcPayloadCodec.parseClientModelConfigsResponse(obj) ?: continue
+            if (slice.models.isNotEmpty()) {
+                parsedModels.addAll(slice.models)
+                validIds.addAll(slice.validIds)
+                if (defaultModelId == null) defaultModelId = slice.defaultModelId
+                if (parsedQuota == null) parsedQuota = slice.quota
+                for (name in slice.inlineAgents) {
+                    if (name !in agents) agents.add(name)
+                }
+                break
+            }
+        }
+
+        if (parsedModels.isEmpty()) {
+            val availWrapper = runCatching {
+                callUnaryJson(
+                    method = "GetAvailableModels",
+                    body = buildJsonObject { put("forceRefresh", forceRefresh) },
+                )
+            }.getOrNull()
+            if (availWrapper != null) {
+                val slice = V233RpcPayloadCodec.parseAvailableModelsResponse(availWrapper)
+                parsedModels.addAll(slice.models)
+                validIds.addAll(slice.validIds)
+                if (defaultModelId == null) defaultModelId = slice.defaultModelId
+                if (parsedQuota == null) parsedQuota = slice.quota
+            }
+        }
+
+        stateMutex.withLock {
+            if (validIds.isNotEmpty()) {
+                cachedValidUpstreamModels = validIds
+                cachedDefaultUpstreamModel = defaultModelId ?: parsedModels.firstOrNull()?.modelId
+            } else {
+                cachedValidUpstreamModels = emptySet()
+                cachedDefaultUpstreamModel = null
+            }
+        }
+
+        runCatching { callUnaryJson(method = "GetAllCustomAgentConfigs") }.getOrNull()?.let { agentResp ->
+            for (name in V233RpcPayloadCodec.parseCustomAgentNames(agentResp)) {
+                if (name !in agents) agents.add(name)
+            }
+        }
+
+        if (parsedModels.isNotEmpty()) {
+            val hasOrchestrator = parsedModels.any { it.isOrchestrator }
+            val hasExtraEffort = parsedModels.any { ThinkingEffortLevel.EXTRA in it.supportedEfforts }
+            val hasQuota = (parsedQuota != null)
+            mutateCapabilityProfile(null) { profile ->
+                profile
+                    .recordPassiveSignal(
+                        HostCapability.ORCHESTRATOR_MODELS,
+                        if (hasOrchestrator) CapabilitySupportState.SUPPORTED else CapabilitySupportState.UNSUPPORTED,
+                    )
+                    .recordPassiveSignal(
+                        HostCapability.THINKING_EFFORT_EXTRA,
+                        if (hasExtraEffort) CapabilitySupportState.SUPPORTED else CapabilitySupportState.UNSUPPORTED,
+                    )
+                    .recordPassiveSignal(
+                        HostCapability.USAGE_QUOTA,
+                        if (hasQuota) CapabilitySupportState.SUPPORTED else CapabilitySupportState.UNSUPPORTED,
+                    )
+            }
+        }
+
+        val finalModels = parsedModels.ifEmpty { CascadeModelConfig.liveDefaultCatalog }
+        return LiveModelCatalogResult(
+            models = finalModels,
+            quota = parsedQuota,
+            customAgents = agents,
+            defaultModelId = defaultModelId ?: finalModels.firstOrNull()?.modelId,
+        )
+    }
+
+    // MARK: - Artifacts, Plan Review, Turn Diff Review & Git VCS (`UE11`, `UE12`)
+
+    public suspend fun getArtifactSnapshots(
+        cascadeId: String,
+        instanceUuidOverride: String? = null,
+    ): List<ArtifactSnapshot> {
+        val res = callUnaryJson(
+            method = "GetArtifactSnapshots",
             body = buildJsonObject { put("cascadeId", cascadeId) },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return V233RpcPayloadCodec.parseArtifactSnapshots(res)
+    }
+
+    public suspend fun fetchRemoteArtifactResource(
+        uri: String,
+        cascadeId: String,
+        instanceUuidOverride: String? = null,
+    ): ResolvedEmbedResource? {
+        val normalizedTarget = ResolvedEmbedResource.normalizePath(uri)
+        if (normalizedTarget.isEmpty()) return null
+        val targetBaseName = normalizedTarget.trimEnd('/').substringAfterLast('/').lowercase()
+
+        // 1. Companion Bridge / Direct LAN `ReadArtifactFile`
+        if (channel == RemoteConnectionChannel.DIRECT_HOST) {
+            val res = runCatching {
+                callUnaryJson(
+                    method = "ReadArtifactFile",
+                    body = buildJsonObject {
+                        put("uri", uri)
+                        put("path", normalizedTarget)
+                        put("cascadeId", cascadeId)
+                    },
+                    instanceUuidOverride = instanceUuidOverride,
+                )
+            }.getOrNull()
+            if (res != null) {
+                V233RpcPayloadCodec.parseReadArtifactFileResponse(uri, normalizedTarget, res)?.let { return it }
+            }
+        }
+
+        // 2. Upstream `GetArtifactSnapshots`
+        if (cascadeId.isNotEmpty()) {
+            val snapshots = runCatching { getArtifactSnapshots(cascadeId, instanceUuidOverride) }.getOrNull().orEmpty()
+            val matched = snapshots.firstOrNull { snap ->
+                val snapNorm = ResolvedEmbedResource.normalizePath(snap.artifactPath)
+                snapNorm == normalizedTarget ||
+                    (targetBaseName.isNotEmpty() && snapNorm.trimEnd('/').substringAfterLast('/').lowercase() == targetBaseName)
+            }
+            if (matched != null && matched.content.isNotEmpty()) {
+                return ResolvedEmbedResource(
+                    uri = uri,
+                    normalizedPath = normalizedTarget,
+                    mimeType = ResolvedEmbedResource.inferredMimeType(uri),
+                    textContent = matched.content,
+                    binaryData = matched.content.encodeToByteArray(),
+                    source = EmbedResourceSource.ARTIFACT_SNAPSHOT,
+                )
+            }
+        }
+
+        // 3. Upstream `GetRevisionArtifact` fallback
+        if (cascadeId.isNotEmpty()) {
+            val revBodies = listOf(
+                buildJsonObject {
+                    put("cascadeId", cascadeId)
+                    put("artifactPath", normalizedTarget)
+                },
+                buildJsonObject {
+                    put("trajectoryId", cascadeId)
+                    put("fileUri", uri)
+                },
+            )
+            for (reqBody in revBodies) {
+                val res = runCatching {
+                    callUnaryJson(
+                        method = "GetRevisionArtifact",
+                        body = reqBody,
+                        instanceUuidOverride = instanceUuidOverride,
+                    )
+                }.getOrNull() ?: continue
+                val content = (res["content"] as? JsonPrimitive)?.contentOrNull
+                    ?: ((res["artifact"] as? JsonObject)?.get("content") as? JsonPrimitive)?.contentOrNull
+                    ?: (res["text"] as? JsonPrimitive)?.contentOrNull
+                if (!content.isNullOrEmpty()) {
+                    return ResolvedEmbedResource(
+                        uri = uri,
+                        normalizedPath = normalizedTarget,
+                        mimeType = ResolvedEmbedResource.inferredMimeType(uri),
+                        textContent = content,
+                        binaryData = content.encodeToByteArray(),
+                        source = EmbedResourceSource.ARTIFACT_SNAPSHOT,
+                    )
+                }
+            }
+        }
+        return null
+    }
+
+    public suspend fun sendPlanReviewComments(
+        cascadeId: String,
+        comments: List<PlanInlineComment>,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "SendPlanReviewComments",
+            body = V233RpcPayloadCodec.encodePlanReviewCommentsBody(cascadeId, comments),
             instanceUuidOverride = instanceUuidOverride,
         )
     }
 
+    public suspend fun getTurnDiff(
+        cascadeId: String,
+        turnNumber: Int? = null,
+        mode: DiffCompareMode = DiffCompareMode.TURN,
+        instanceUuidOverride: String? = null,
+    ): List<FilePatchDiff> {
+        val body = buildJsonObject {
+            put("cascadeId", cascadeId)
+            put("compareMode", mode.displayTitle)
+            if (turnNumber != null) put("turnNumber", turnNumber)
+        }
+        val res = callUnaryJson(
+            method = "GetTurnDiff",
+            body = body,
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return V233RpcPayloadCodec.parseFilePatchDiffs(res, defaultTurn = turnNumber ?: 1, defaultScope = mode)
+    }
+
+    public suspend fun revertDiffHunk(
+        cascadeId: String,
+        filePath: String,
+        hunkHeader: String? = null,
+        instanceUuidOverride: String? = null,
+    ) {
+        val body = buildJsonObject {
+            put("cascadeId", cascadeId)
+            put("filePath", filePath)
+            if (hunkHeader != null) put("hunkHeader", hunkHeader)
+        }
+        callUnaryJson("RevertDiffHunk", body, instanceUuidOverride = instanceUuidOverride)
+    }
+
+    public suspend fun sendDiffReviewComments(
+        cascadeId: String,
+        comments: List<DiffLineComment>,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "SendDiffReviewComments",
+            body = V233RpcPayloadCodec.encodeDiffReviewCommentsBody(cascadeId, comments),
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun gitStageFile(
+        cascadeId: String,
+        filePath: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "GitStageFile",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("filePath", filePath)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun gitUnstageFile(
+        cascadeId: String,
+        filePath: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "GitUnstageFile",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("filePath", filePath)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun gitDiscardFile(
+        cascadeId: String,
+        filePath: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "GitDiscardFile",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("filePath", filePath)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun gitCommitChanges(
+        cascadeId: String,
+        draft: GitCommitDraft,
+        instanceUuidOverride: String? = null,
+    ): GitCommitResult {
+        val res = callUnaryJson(
+            method = "GitCommit",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("message", draft.message)
+                put("includeUnstaged", draft.includeUnstaged)
+                put("amend", draft.amendLastCommit)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return V233RpcPayloadCodec.parseGitCommitResult(res, draft)
+    }
+
+    public suspend fun gitPushBranch(
+        cascadeId: String,
+        branchName: String,
+        instanceUuidOverride: String? = null,
+    ): Boolean {
+        val res = callUnaryJson(
+            method = "GitPush",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("branchName", branchName)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return (res["pushed"] as? JsonPrimitive)?.booleanOrNull
+            ?: (res["ok"] as? JsonPrimitive)?.booleanOrNull
+            ?: true
+    }
+
+    // MARK: - v2.33 Orchestration, Side Questions, Permissions, Customizations & Search
+
+    public suspend fun fetchConversationOverview(
+        cascadeId: String,
+        instanceUuidOverride: String? = null,
+    ): ConversationOverviewSnapshot {
+        val res = callUnaryJson(
+            method = "GetConversationOverview",
+            body = buildJsonObject { put("cascadeId", cascadeId) },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return V233RpcPayloadCodec.parseConversationOverview(res)
+    }
+
+    public suspend fun cancelBackgroundTask(
+        cascadeId: String,
+        taskId: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "CancelBackgroundTask",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("taskId", taskId)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun stopSubagent(
+        cascadeId: String,
+        subagentId: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "StopSubagent",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("subagentId", subagentId)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun sendSideQuestion(
+        cascadeId: String,
+        question: String,
+        threadId: String = "btw-${randomUuidV4().take(8)}",
+        instanceUuidOverride: String? = null,
+    ): String {
+        val res = callUnaryJson(
+            method = "SendSideQuestion",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("threadId", threadId)
+                put("question", question)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return (res["answer"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+            ?: (res["response"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+            ?: "Read-only side answer for: $question"
+    }
+
+    public suspend fun revertConversationToStep(
+        cascadeId: String,
+        stepIndex: Int,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "RevertConversationToStep",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("stepIndex", stepIndex)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun setConversationPermissionPreset(
+        cascadeId: String,
+        preset: AgentPermissionPreset,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "SetPermissionPreset",
+            body = buildJsonObject {
+                put("cascadeId", cascadeId)
+                put("preset", preset.wireValue)
+                put("label", preset.rawValue)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun fetchCustomizationsCatalog(
+        instanceUuidOverride: String? = null,
+    ): CustomizationsCatalog {
+        val res = callUnaryJson(
+            method = "GetCustomizationsCatalog",
+            body = JsonObject(emptyMap()),
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return V233RpcPayloadCodec.parseCustomizationsCatalog(res)
+    }
+
+    public suspend fun restartMcpServer(
+        serverName: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "RestartMcpServer",
+            body = buildJsonObject { put("serverName", serverName) },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun togglePlugin(
+        pluginId: String,
+        isEnabled: Boolean,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "TogglePlugin",
+            body = buildJsonObject {
+                put("pluginId", pluginId)
+                put("isEnabled", isEnabled)
+            },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun installMarketplacePlugin(
+        pluginId: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        callUnaryJson(
+            method = "InstallPlugin",
+            body = buildJsonObject { put("pluginId", pluginId) },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+    }
+
+    public suspend fun searchAllConversations(
+        query: String,
+        instanceUuidOverride: String? = null,
+    ): List<CascadeSummary> {
+        val res = callUnaryJson(
+            method = "SearchAllConversations",
+            body = buildJsonObject { put("query", query) },
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return V233RpcPayloadCodec.parseSearchConversations(
+            res = res,
+            nowEpochMs = currentTimeMillis(),
+            originInstanceUuid = instanceUuidOverride ?: currentResolvedInstanceUuid(),
+            originHostName = host.hostname,
+        )
+    }
+
+    // MARK: - Cloud Projects, Repositories & Automations (`UE04`, `UE05`, `UE06`)
+
+    public suspend fun fetchCloudProjects(
+        candidateInstances: List<RelayInstanceInfo> = emptyList(),
+    ): List<ProjectWorkspace> {
+        val pref = stateMutex.withLock { preferredCloudInstanceUuid }
+        val targetUuids: List<String?> = if (channel == RemoteConnectionChannel.CLOUD_RELAY && candidateInstances.isNotEmpty()) {
+            if (pref != null && candidateInstances.any { it.uuid == pref }) {
+                listOf(pref) + candidateInstances.filter { it.uuid != pref }.map { it.uuid }
+            } else {
+                candidateInstances.map { it.uuid }
+            }
+        } else {
+            listOf(null)
+        }
+
+        for (targetUuid in targetUuids) {
+            val listResp = runCatching {
+                callUnaryJson(
+                    method = "ListProjects",
+                    body = buildJsonObject { put("backend", "BACKEND_TYPE_REMOTE_AICODE") },
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = true,
+                )
+            }.getOrNull() ?: continue
+
+            val ids = ((listResp["projectIds"] ?: listResp["project_ids"]) as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf { s -> s.isNotEmpty() } }
+                ?: emptyList()
+            if (ids.isEmpty()) continue
+
+            val loaded = coroutineScope {
+                ids.map { pid ->
+                    async {
+                        val readResp = runCatching {
+                            callUnaryJson(
+                                method = "ReadProject",
+                                body = buildJsonObject { put("id", pid) },
+                                instanceUuidOverride = targetUuid,
+                                allowCrossHostFailover = true,
+                            )
+                        }.getOrNull() ?: return@async null
+                        val projObj = readResp["project"] as? JsonObject ?: return@async null
+                        V233RpcPayloadCodec.decodeCloudProjectObject(projObj, fallbackId = pid, originInstanceUuid = targetUuid)
+                    }
+                }.awaitAll().filterNotNull()
+            }
+
+            if (loaded.isNotEmpty()) {
+                stateMutex.withLock {
+                    for (proj in loaded) cachedCloudProjectsById[proj.id] = proj
+                    val effectiveUuid = targetUuid ?: resolvedInstanceUuidState
+                    if (!effectiveUuid.isNullOrEmpty()) preferredCloudInstanceUuid = effectiveUuid
+                }
+                return loaded
+            }
+        }
+        return emptyList()
+    }
+
+    public suspend fun fetchCloudGitHubRepos(instanceUuidOverride: String? = null): List<GitHubRepoItem> =
+        listAvailableResources(resourceType = "github", instanceUuidOverride = instanceUuidOverride)
+
+    public suspend fun listAvailableResources(
+        resourceType: String = "github",
+        instanceUuidOverride: String? = null,
+    ): List<GitHubRepoItem> {
+        val resp = runCatching {
+            callUnaryJson(
+                method = "ListAvailableResources",
+                body = buildJsonObject {
+                    put("backend", "BACKEND_TYPE_REMOTE_AICODE")
+                    put("type", resourceType)
+                },
+                instanceUuidOverride = instanceUuidOverride,
+                allowCrossHostFailover = true,
+            )
+        }.getOrNull() ?: return emptyList()
+        return V233RpcPayloadCodec.parseCloudGitHubRepos(resp)
+    }
+
     public suspend fun createProjectWorkspace(draft: NewProjectDraft): ProjectWorkspace {
         val repoName = draft.selectedRepo?.fullName ?: draft.projectName
+        if (channel == RemoteConnectionChannel.CLOUD_RELAY && draft.runsOn == ProjectRuntimeTarget.CLOUD) {
+            val newProjectId = randomUuidV4()
+            val resourceEntries = buildJsonArray {
+                draft.selectedRepo?.let { repo ->
+                    add(
+                        buildJsonObject {
+                            put(
+                                "remoteResource",
+                                buildJsonObject {
+                                    put("type", "github")
+                                    put("name", repo.fullName)
+                                    put("displayName", repo.fullName)
+                                },
+                            )
+                        }
+                    )
+                }
+                for (link in draft.driveResourceLinks) {
+                    val trimmed = link.trim()
+                    if (trimmed.isNotEmpty()) {
+                        add(
+                            buildJsonObject {
+                                put(
+                                    "remoteResource",
+                                    buildJsonObject {
+                                        put("type", "google_drive")
+                                        put("name", trimmed)
+                                        put("displayName", trimmed)
+                                    },
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+            val projectObj = buildJsonObject {
+                put("id", newProjectId)
+                put("name", draft.projectName)
+                put("backendType", "BACKEND_TYPE_REMOTE_AICODE")
+                if (resourceEntries.isNotEmpty()) {
+                    put("projectResources", buildJsonObject { put("resources", resourceEntries) })
+                }
+                if (draft.envSetupScript.isNotBlank()) {
+                    put("envSetupScript", draft.envSetupScript)
+                }
+            }
+            val res = callUnaryJson(
+                method = "CreateProject",
+                body = buildJsonObject {
+                    put("backend", "BACKEND_TYPE_REMOTE_AICODE")
+                    put("project", projectObj)
+                },
+                allowCrossHostFailover = true,
+            )
+            val returnedProj = res["project"] as? JsonObject
+            val finalId = (returnedProj?.get("id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: newProjectId
+            val finalName = (returnedProj?.get("name") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: draft.projectName
+            val cloudUri = "cloud://$repoName"
+            val created = ProjectWorkspace(
+                id = finalId,
+                name = finalName,
+                pathDisplay = cloudUri,
+                workspaceUri = cloudUri,
+                runtime = ProjectRuntimeTarget.CLOUD,
+                hostName = "Antigravity",
+                activeBranch = draft.selectedRepo?.defaultBranch ?: "main",
+                cloudProjectId = finalId,
+                originInstanceUuid = currentResolvedInstanceUuid(),
+            )
+            stateMutex.withLock { cachedCloudProjectsById[finalId] = created }
+            return created
+        }
+
         val body = buildJsonObject {
             put("name", draft.projectName)
             put("runtime", if (draft.runsOn == ProjectRuntimeTarget.CLOUD) "cloud" else "macbook_pro")
@@ -2096,6 +3016,9 @@ public class AntigravityKmpRpcClient(
             put("branchWorktree", draft.branchWorktree)
             if (draft.driveResourceLinks.isNotEmpty()) {
                 put("googleDriveLinks", buildJsonArray { draft.driveResourceLinks.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (draft.uploadedFilePaths.isNotEmpty()) {
+                put("uploadedFilePaths", buildJsonArray { draft.uploadedFilePaths.forEach { add(JsonPrimitive(it)) } })
             }
             if (draft.envSetupScript.isNotBlank()) {
                 put("envSetupScript", draft.envSetupScript)
@@ -2141,11 +3064,182 @@ public class AntigravityKmpRpcClient(
         }
     }
 
-    public suspend fun triggerAutomationNow(automationId: String) {
-        callUnaryJson("TriggerAutomationNow", buildJsonObject { put("automationId", automationId) })
+    public suspend fun createAutomation(
+        prompt: String,
+        projectSlug: String = "ledger-svc",
+        instanceUuidOverride: String? = null,
+    ): AutomationItem {
+        val trimmedTitle = prompt.trim().take(64).ifEmpty { "Scheduled Automation" }
+        val sidecarId = V233RpcPayloadCodec.makeSidecarId(trimmedTitle)
+        val (cronExpr, humanSchedule) = V233RpcPayloadCodec.inferCronAndScheduleLabel(prompt)
+        val sidecarBody = buildJsonObject {
+            put("sidecarId", sidecarId)
+            put("action", SidecarManageAction.CREATE.wireValue)
+            put(
+                "config",
+                buildJsonObject {
+                    put("builtin", "schedule")
+                    put("restartPolicy", "always")
+                    put("displayName", trimmedTitle)
+                    put("description", "$humanSchedule: $prompt")
+                    put(
+                        "args",
+                        buildJsonArray {
+                            add(JsonPrimitive(cronExpr))
+                            add(JsonPrimitive("agentapi"))
+                            add(JsonPrimitive("new-conversation"))
+                            add(JsonPrimitive("--"))
+                            add(JsonPrimitive(prompt.trim()))
+                        },
+                    )
+                },
+            )
+            if (projectSlug.isBlank() || projectSlug.equals("All projects", ignoreCase = true)) {
+                put("allProjects", true)
+            }
+        }
+
+        if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            val createResp = callUnaryJson("ManageSidecar", sidecarBody, instanceUuidOverride = instanceUuidOverride)
+            val createdId = (createResp["sidecarId"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: (createResp["sidecar_id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: sidecarId
+            runCatching {
+                callUnaryJson(
+                    method = "ManageSidecar",
+                    body = buildJsonObject {
+                        put("sidecarId", createdId)
+                        put("action", SidecarManageAction.ENABLE.wireValue)
+                    },
+                    instanceUuidOverride = instanceUuidOverride,
+                )
+            }
+            return V233RpcPayloadCodec.parseCreatedAutomation(
+                res = createResp,
+                prompt = prompt,
+                projectSlug = projectSlug,
+                fallbackId = createdId,
+                originInstanceUuid = instanceUuidOverride ?: currentResolvedInstanceUuid(),
+            )
+        }
+
+        return try {
+            val res = callUnaryJson(
+                method = "CreateAutomation",
+                body = buildJsonObject {
+                    put("prompt", prompt)
+                    put("project", projectSlug)
+                    put("projectSlug", projectSlug)
+                    put("schedule", humanSchedule)
+                },
+                instanceUuidOverride = instanceUuidOverride,
+            )
+            V233RpcPayloadCodec.parseCreatedAutomation(
+                res = res,
+                prompt = prompt,
+                projectSlug = projectSlug,
+                fallbackId = sidecarId,
+                originInstanceUuid = instanceUuidOverride ?: currentResolvedInstanceUuid(),
+            )
+        } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                val createResp = callUnaryJson("ManageSidecar", sidecarBody, instanceUuidOverride = instanceUuidOverride)
+                V233RpcPayloadCodec.parseCreatedAutomation(
+                    res = createResp,
+                    prompt = prompt,
+                    projectSlug = projectSlug,
+                    fallbackId = sidecarId,
+                    originInstanceUuid = instanceUuidOverride ?: currentResolvedInstanceUuid(),
+                )
+            } else {
+                throw e
+            }
+        }
     }
 
-    // MARK: - 5-Byte Connect-RPC Server Streaming (`JetboxSubscribeToSummaries`, etc.)
+    public suspend fun setAutomationPaused(
+        automationId: String,
+        paused: Boolean,
+        instanceUuidOverride: String? = null,
+    ) {
+        val action = if (paused) SidecarManageAction.DISABLE else SidecarManageAction.ENABLE
+        val sidecarBody = buildJsonObject {
+            put("sidecarId", automationId)
+            put("action", action.wireValue)
+        }
+        if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            callUnaryJson("ManageSidecar", sidecarBody, instanceUuidOverride = instanceUuidOverride)
+            return
+        }
+        try {
+            callUnaryJson(
+                method = "SetAutomationPaused",
+                body = buildJsonObject {
+                    put("automationId", automationId)
+                    put("isPaused", paused)
+                    put("paused", paused)
+                },
+                instanceUuidOverride = instanceUuidOverride,
+            )
+        } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                callUnaryJson("ManageSidecar", sidecarBody, instanceUuidOverride = instanceUuidOverride)
+            } else {
+                throw e
+            }
+        }
+    }
+
+    public suspend fun triggerAutomationNow(
+        automationId: String,
+        instanceUuidOverride: String? = null,
+    ) {
+        if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            callUnaryJson(
+                method = "ManageSidecar",
+                body = buildJsonObject {
+                    put("sidecarId", automationId)
+                    put("action", SidecarManageAction.RUN_NOW.wireValue)
+                },
+                instanceUuidOverride = instanceUuidOverride,
+            )
+            return
+        }
+        try {
+            callUnaryJson(
+                method = "TriggerAutomationNow",
+                body = buildJsonObject { put("automationId", automationId) },
+                instanceUuidOverride = instanceUuidOverride,
+            )
+        } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                callUnaryJson(
+                    method = "ManageSidecar",
+                    body = buildJsonObject {
+                        put("sidecarId", automationId)
+                        put("action", SidecarManageAction.RUN_NOW.wireValue)
+                    },
+                    instanceUuidOverride = instanceUuidOverride,
+                )
+            } else {
+                throw e
+            }
+        }
+    }
+
+    // MARK: - 5-Byte Connect-RPC Server Streaming (`JetboxSubscribeToSummaries`, `StreamCascadeReactiveUpdates`)
+
+    public fun subscribeCascadeReactiveUpdates(
+        cascadeId: String,
+        instanceUuidOverride: String? = null,
+    ): Flow<JsonObject> = subscribeEnvelopeStream(
+        method = "StreamCascadeReactiveUpdates",
+        body = buildJsonObject {
+            put("cascadeId", cascadeId)
+            put("protocolVersion", 1)
+        },
+        instanceUuidOverride = instanceUuidOverride,
+    )
 
     public fun subscribeEnvelopeStream(
         method: String,

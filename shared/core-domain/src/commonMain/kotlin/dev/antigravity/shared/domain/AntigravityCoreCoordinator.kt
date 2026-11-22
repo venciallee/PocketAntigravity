@@ -9,7 +9,11 @@ import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.CascadeSummary
 import dev.antigravity.shared.model.CascadeUserInteractionPayload
 import dev.antigravity.shared.model.ComposerAttachmentChip
+import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.InteractionDecision
+import dev.antigravity.shared.model.LiveProgressAgentSummary
+import dev.antigravity.shared.model.LiveProgressPhase
+import dev.antigravity.shared.model.LiveProgressSnapshot
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.model.ThinkingEffortLevel
 import dev.antigravity.shared.platform.InMemoryPreferencesStore
@@ -24,6 +28,7 @@ import dev.antigravity.shared.protocol.AntigravityKmpRpcClient
 import dev.antigravity.shared.protocol.AntigravityRpcError
 import dev.antigravity.shared.protocol.BackendHandshakeResult
 import dev.antigravity.shared.protocol.FederatedWorkspaceSyncResult
+import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.HostReachabilityProbeResult
 import dev.antigravity.shared.protocol.RelayInstanceInfo
 import dev.antigravity.shared.protocol.TlsEngineConfig
@@ -31,17 +36,23 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
  * Unified KMP Core Coordinator exported to both iOS (via SKIE `AsyncSequence` + `async throws`)
  * and Android (via Jetpack Compose `collectAsStateWithLifecycle`).
  *
- * Composes:
+ * Composes 7 cohesive `StateFlow`-backed stores:
  * - [ConnectionDomainStore]: Direct LAN / Cloud Relay / Pairing URI / Keychain / Reachability
  * - [ConversationSyncStore]: Federated sync + per-host sharded offline cache + Jetbox stream
  * - [CascadeChatDomainStore]: Binary-first Protobuf + adaptive JSON ceiling trajectory sync + Durable Outbox + PC interactions
+ * - [WorkspaceAndAutomationStore]: Projects, Display Options, Sidecar Automations, Add Context chips
+ * - [ReviewAndVcsStore]: Artifacts, Plan Review comments, Turn Diffs, Git VCS stage/commit/push
+ * - [OrchestrationAndSideChannelStore]: Overview, `/btw` Side Questions, Swarm Board, Queued Messages, Voice Mode
+ * - [SettingsAndCustomizationStore]: Model/Mode/Effort/Agent catalog, Quota, Permissions, Customizations, Appearance
  */
 public class AntigravityCoreCoordinator(
     secretStore: SecretStore = InMemorySecretStore(),
@@ -70,6 +81,9 @@ public class AntigravityCoreCoordinator(
         )
     },
 ) {
+    private val _capabilityErrorBanner = MutableStateFlow<String?>(null)
+    public val capabilityErrorBanner: StateFlow<String?> = _capabilityErrorBanner.asStateFlow()
+
     public val connectionStore: ConnectionDomainStore = ConnectionDomainStore(
         secretStore = secretStore,
         networkMonitor = networkMonitor,
@@ -86,7 +100,30 @@ public class AntigravityCoreCoordinator(
 
     public val chatStore: CascadeChatDomainStore = CascadeChatDomainStore(
         projectionStorage = projectionStorage,
+        onCapabilityError = ::reportCapabilityError,
     )
+
+    public val workspaceStore: WorkspaceAndAutomationStore = WorkspaceAndAutomationStore(
+        onCapabilityError = ::reportCapabilityError,
+    )
+
+    public val reviewStore: ReviewAndVcsStore = ReviewAndVcsStore(
+        onCapabilityError = ::reportCapabilityError,
+    )
+
+    public val orchestrationStore: OrchestrationAndSideChannelStore = OrchestrationAndSideChannelStore(
+        onCapabilityError = ::reportCapabilityError,
+    )
+
+    public val settingsStore: SettingsAndCustomizationStore = SettingsAndCustomizationStore(
+        onCapabilityError = ::reportCapabilityError,
+    )
+
+    public var isVerificationMode: Boolean = false
+        set(value) {
+            field = value
+            chatStore.isVerificationMode = value
+        }
 
     public val connectionState: StateFlow<ConnectionState>
         get() = connectionStore.state
@@ -96,6 +133,18 @@ public class AntigravityCoreCoordinator(
 
     public val chatState: StateFlow<CascadeChatState>
         get() = chatStore.state
+
+    public fun dismissCapabilityError() {
+        _capabilityErrorBanner.value = null
+        workspaceStore.clearCapabilityError()
+        reviewStore.clearCapabilityError()
+        orchestrationStore.clearCapabilityError()
+        settingsStore.clearCapabilityError()
+    }
+
+    private fun reportCapabilityError(message: String) {
+        _capabilityErrorBanner.value = message
+    }
 
     public suspend fun hydrateOfflineCache() {
         conversationSyncStore.hydrateFromCache()
@@ -254,6 +303,7 @@ public class AntigravityCoreCoordinator(
             instanceUuidOverride = instanceUuidOverride,
             isDeviceNetworkReachable = isReachable,
             isOptimisticDraft = isOptimisticDraft,
+            isVerificationMode = isVerificationMode,
         )
         if (outcome.resolvedCascadeId != cascadeId) {
             conversationSyncStore.replaceCascadeId(cascadeId, outcome.resolvedCascadeId)
@@ -307,6 +357,153 @@ public class AntigravityCoreCoordinator(
 
     public fun selectHostScope(scope: AgentsHostFilterScope) {
         connectionStore.selectHostScope(scope)
+    }
+
+    public fun markAllConversationsRead() {
+        conversationSyncStore.markAllRead()
+    }
+
+    public fun toggleConversationPinned(cascadeId: String) {
+        val existing = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+        conversationSyncStore.togglePinned(cascadeId)
+        if (!isVerificationMode && existing != null && connectionStore.state.value.isConnected) {
+            val nextPinned = !existing.isPinned
+            scope.launch {
+                val client = connectionStore.activeClient() ?: return@launch
+                performLiveCapabilityWrite(
+                    client = client,
+                    capability = HostCapability.CONVERSATION_ANNOTATIONS,
+                    onUnsupported = ::reportCapabilityError,
+                    rollback = { conversationSyncStore.togglePinned(cascadeId) },
+                ) { rpc ->
+                    rpc.pinCascade(
+                        cascadeId = cascadeId,
+                        isPinned = nextPinned,
+                        instanceUuidOverride = existing.originInstanceUuid,
+                    )
+                }
+            }
+        }
+    }
+
+    public fun toggleConversationUnread(cascadeId: String) {
+        conversationSyncStore.toggleUnread(cascadeId)
+    }
+
+    public fun archiveConversation(cascadeId: String) {
+        val existing = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+        conversationSyncStore.archiveConversation(cascadeId)
+        if (!isVerificationMode && existing != null && connectionStore.state.value.isConnected) {
+            scope.launch {
+                val client = connectionStore.activeClient() ?: return@launch
+                performLiveCapabilityWrite(
+                    client = client,
+                    capability = HostCapability.CONVERSATION_ANNOTATIONS,
+                    onUnsupported = ::reportCapabilityError,
+                    rollback = { conversationSyncStore.upsertSummary(existing) },
+                ) { rpc ->
+                    rpc.archiveCascade(
+                        cascadeId = cascadeId,
+                        isArchived = true,
+                        instanceUuidOverride = existing.originInstanceUuid,
+                    )
+                }
+            }
+        }
+    }
+
+    public fun deleteConversation(cascadeId: String) {
+        val existing = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+        conversationSyncStore.deleteConversation(cascadeId)
+        if (!isVerificationMode && existing != null && connectionStore.state.value.isConnected) {
+            scope.launch {
+                val client = connectionStore.activeClient() ?: return@launch
+                performLiveCapabilityWrite(
+                    client = client,
+                    capability = HostCapability.CONVERSATION_ANNOTATIONS,
+                    onUnsupported = ::reportCapabilityError,
+                    rollback = { conversationSyncStore.upsertSummary(existing) },
+                ) { rpc ->
+                    rpc.deleteCascade(
+                        cascadeId = cascadeId,
+                        instanceUuidOverride = existing.originInstanceUuid,
+                    )
+                }
+            }
+        }
+    }
+
+    public fun liveProgressSnapshot(): LiveProgressSnapshot? {
+        val summaries = conversationSyncStore.state.value.summaries
+        if (summaries.isEmpty()) return null
+
+        val activeId = chatStore.state.value.activeCascadeId
+        val target = summaries.firstOrNull { it.cascadeId == activeId && !it.isArchived }
+            ?: summaries.firstOrNull { !it.isArchived && (it.status == CortexStepStatus.WAITING || it.status == CortexStepStatus.IN_PROGRESS) }
+            ?: summaries.firstOrNull { !it.isArchived }
+            ?: summaries.first()
+
+        val steps = chatStore.state.value.stepsByCascadeId[target.cascadeId].orEmpty()
+        val waitingStep = steps.lastOrNull { it.status == CortexStepStatus.WAITING }
+        val taskBoundary = steps.lastOrNull { it.taskBoundary != null }?.taskBoundary
+
+        val phase = when {
+            waitingStep != null || target.status == CortexStepStatus.WAITING || target.status == CortexStepStatus.BLOCKED ->
+                LiveProgressPhase.WAITING_APPROVAL
+            target.status == CortexStepStatus.DONE ->
+                LiveProgressPhase.COMPLETED
+            else ->
+                LiveProgressPhase.RUNNING
+        }
+
+        val pendingCommand = waitingStep?.runCommand?.proposedCommandLine
+            ?: waitingStep?.runCommand?.commandLine
+            ?: waitingStep?.requestedInteraction?.runCommand?.proposedCommandLine
+            ?: target.pendingInteractionTitle
+
+        val totalSteps = (taskBoundary?.totalCount ?: target.totalSteps).coerceAtLeast(1)
+        val currentStep = (taskBoundary?.completedCount ?: target.currentStepIndex).coerceIn(0, totalSteps)
+        val elapsedSeconds = parseElapsedSeconds(taskBoundary?.elapsedLabel)
+
+        val multiAgentItems = summaries
+            .filter { !it.isArchived }
+            .take(4)
+            .map { summary ->
+                val itemPhase = when (summary.status) {
+                    CortexStepStatus.WAITING, CortexStepStatus.BLOCKED -> LiveProgressPhase.WAITING_APPROVAL
+                    CortexStepStatus.DONE -> LiveProgressPhase.COMPLETED
+                    else -> LiveProgressPhase.RUNNING
+                }
+                val trailing = when (itemPhase) {
+                    LiveProgressPhase.WAITING_APPROVAL -> "Approve"
+                    LiveProgressPhase.COMPLETED -> "+${summary.totalAdditions} -${summary.totalDeletions}"
+                    LiveProgressPhase.RUNNING -> "${summary.currentStepIndex}/${summary.totalSteps.coerceAtLeast(1)}"
+                }
+                LiveProgressAgentSummary(
+                    id = summary.cascadeId,
+                    title = summary.title,
+                    subtitle = "${summary.projectSlug} · ${summary.originHostName ?: "MacBook Pro"}",
+                    phase = itemPhase,
+                    trailingLabel = trailing,
+                )
+            }
+
+        return LiveProgressSnapshot(
+            cascadeId = target.cascadeId,
+            cascadeTitle = target.title,
+            hostName = target.originHostName ?: connectionStore.state.value.activeHost?.hostname ?: "MacBook Pro",
+            workspaceName = target.projectSlug.ifBlank { "workspace" },
+            branchName = target.branchName.ifBlank { "main" },
+            phase = phase,
+            currentStepIndex = currentStep,
+            totalSteps = totalSteps,
+            activeToolAction = target.statusSubtitle.ifBlank { taskBoundary?.taskStatus ?: target.status.displayBadgeText },
+            pendingApprovalCommand = pendingCommand,
+            elapsedSeconds = elapsedSeconds,
+            additions = target.totalAdditions,
+            deletions = target.totalDeletions,
+            multiAgentItems = multiAgentItems,
+        )
     }
 
     public fun filteredSummaries(
@@ -365,5 +562,23 @@ public class AntigravityCoreCoordinator(
                 runCatching { chatStore.replayPendingOutbox(client) }
             }
         }
+    }
+
+    private fun parseElapsedSeconds(rawLabel: String?): Int {
+        if (rawLabel.isNullOrBlank()) return 0
+        var total = 0
+        for (token in rawLabel.trim().split(' ')) {
+            when {
+                token.endsWith("h") -> total += (token.dropLast(1).toIntOrNull() ?: 0) * 3600
+                token.endsWith("m") -> total += (token.dropLast(1).toIntOrNull() ?: 0) * 60
+                token.endsWith("s") -> total += token.dropLast(1).toIntOrNull() ?: 0
+            }
+        }
+        return total
+    }
+
+    public companion object {
+        public fun createEsddVerificationCoordinator(): AntigravityCoreCoordinator =
+            EsddVerificationFixtures.createVerificationCoordinator()
     }
 }

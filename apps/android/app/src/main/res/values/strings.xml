@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AG Pocket</string>
+    <string name="widget_agents_description">Track active Antigravity agents, live progress, and approval gates.</string>
+</resources>

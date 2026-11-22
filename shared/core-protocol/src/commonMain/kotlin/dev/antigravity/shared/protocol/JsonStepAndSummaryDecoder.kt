@@ -408,6 +408,18 @@ public object JsonStepAndSummaryDecoder {
         return JetboxDecodedEvent(summaries = summaries, removedCascadeIds = removedIds)
     }
 
+    public fun decodeSingleStepJson(
+        raw: JsonObject,
+        cascadeId: String,
+        stepIndex: Int,
+        nowEpochMs: Long = currentTimeMillis(),
+    ): CascadeStep? = decodeJsonStep(
+        element = raw,
+        cascadeId = cascadeId,
+        fallbackIndex = stepIndex,
+        nowEpochMs = nowEpochMs,
+    )
+
     public fun decodeJsonStep(
         element: JsonElement,
         cascadeId: String,

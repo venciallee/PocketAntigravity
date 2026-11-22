@@ -2,14 +2,20 @@ package dev.antigravity.shared.model
 
 import kotlinx.serialization.Serializable
 
-@Serializable
+@Serializable(with = PrimaryTabSerializer::class)
 public enum class PrimaryTab(public val displayTitle: String) {
     AGENTS("Agents"),
     AUTOMATIONS("Automations"),
     SETTINGS("Settings"),
 }
 
-@Serializable
+public object PrimaryTabSerializer : ResilientEnumSerializer<PrimaryTab>(
+    serialName = "dev.antigravity.shared.model.PrimaryTab",
+    entriesProvider = { PrimaryTab.entries },
+    fallbackProvider = { PrimaryTab.AGENTS },
+)
+
+@Serializable(with = EsddVerifySceneCaseSerializer::class)
 public enum class EsddVerifySceneCase(public val rawValue: String) {
     AGENTS_HOME("UE01_AGENTS_HOME"),
     DISPLAY_OPTIONS("UE02_DISPLAY_OPTIONS"),
@@ -26,7 +32,14 @@ public enum class EsddVerifySceneCase(public val rawValue: String) {
     LIVE_ACTIVITY_SPEC("UE13_LIVE_ACTIVITY_SPEC"),
 }
 
-@Serializable
+public object EsddVerifySceneCaseSerializer : ResilientEnumSerializer<EsddVerifySceneCase>(
+    serialName = "dev.antigravity.shared.model.EsddVerifySceneCase",
+    entriesProvider = { EsddVerifySceneCase.entries },
+    fallbackProvider = { EsddVerifySceneCase.AGENTS_HOME },
+    extraMatcher = { raw -> EsddVerifySceneCase.entries.firstOrNull { it.rawValue.equals(raw, ignoreCase = true) } },
+)
+
+@Serializable(with = AgentsQuickFilterSerializer::class)
 public enum class AgentsQuickFilter(public val displayTitle: String) {
     ALL("All"),
     RUNNING("Running"),
@@ -34,19 +47,37 @@ public enum class AgentsQuickFilter(public val displayTitle: String) {
     UNREAD("Unread"),
 }
 
-@Serializable
+public object AgentsQuickFilterSerializer : ResilientEnumSerializer<AgentsQuickFilter>(
+    serialName = "dev.antigravity.shared.model.AgentsQuickFilter",
+    entriesProvider = { AgentsQuickFilter.entries },
+    fallbackProvider = { AgentsQuickFilter.ALL },
+)
+
+@Serializable(with = DisplayGroupBySerializer::class)
 public enum class DisplayGroupBy(public val displayTitle: String) {
     PROJECT("Project"),
     HOST("Host"),
     NONE("None"),
 }
 
-@Serializable
+public object DisplayGroupBySerializer : ResilientEnumSerializer<DisplayGroupBy>(
+    serialName = "dev.antigravity.shared.model.DisplayGroupBy",
+    entriesProvider = { DisplayGroupBy.entries },
+    fallbackProvider = { DisplayGroupBy.PROJECT },
+)
+
+@Serializable(with = ConversationSortFieldSerializer::class)
 public enum class ConversationSortField(public val displayTitle: String) {
     LAST_UPDATED("Last Updated"),
     DATE_CREATED("Date Created"),
     TITLE("Title"),
 }
+
+public object ConversationSortFieldSerializer : ResilientEnumSerializer<ConversationSortField>(
+    serialName = "dev.antigravity.shared.model.ConversationSortField",
+    entriesProvider = { ConversationSortField.entries },
+    fallbackProvider = { ConversationSortField.LAST_UPDATED },
+)
 
 @Serializable
 public data class AgentDisplayOptions(
@@ -60,7 +91,7 @@ public data class AgentDisplayOptions(
     public val archivedOnly: Boolean = false,
 )
 
-@Serializable
+@Serializable(with = ProjectRuntimeTargetSerializer::class)
 public enum class ProjectRuntimeTarget(public val displayTitle: String) {
     MAC_BOOK_PRO("MacBook Pro"),
     CLOUD("Cloud");
@@ -72,18 +103,36 @@ public enum class ProjectRuntimeTarget(public val displayTitle: String) {
         }
 }
 
-@Serializable
+public object ProjectRuntimeTargetSerializer : ResilientEnumSerializer<ProjectRuntimeTarget>(
+    serialName = "dev.antigravity.shared.model.ProjectRuntimeTarget",
+    entriesProvider = { ProjectRuntimeTarget.entries },
+    fallbackProvider = { ProjectRuntimeTarget.CLOUD },
+)
+
+@Serializable(with = ProjectSourceKindSerializer::class)
 public enum class ProjectSourceKind(public val displayTitle: String) {
     GITHUB_REPO("GitHub repository"),
     DRIVE_FOLDER("Drive folder"),
 }
 
-@Serializable
+public object ProjectSourceKindSerializer : ResilientEnumSerializer<ProjectSourceKind>(
+    serialName = "dev.antigravity.shared.model.ProjectSourceKind",
+    entriesProvider = { ProjectSourceKind.entries },
+    fallbackProvider = { ProjectSourceKind.GITHUB_REPO },
+)
+
+@Serializable(with = ProjectDetailTabSerializer::class)
 public enum class ProjectDetailTab(public val displayTitle: String) {
     ACTIVE("Active"),
     ARCHIVED("Archived"),
     AUTOMATIONS("Automations"),
 }
+
+public object ProjectDetailTabSerializer : ResilientEnumSerializer<ProjectDetailTab>(
+    serialName = "dev.antigravity.shared.model.ProjectDetailTab",
+    entriesProvider = { ProjectDetailTab.entries },
+    fallbackProvider = { ProjectDetailTab.ACTIVE },
+)
 
 @Serializable
 public data class GitHubRepoItem(
@@ -313,11 +362,17 @@ public data class ProjectWorkspace(
     }
 }
 
-@Serializable
+@Serializable(with = RemoteConnectionChannelSerializer::class)
 public enum class RemoteConnectionChannel(public val displayName: String) {
     CLOUD_RELAY("Google Cloud Relay"),
     DIRECT_HOST("Direct LAN / Tailscale"),
 }
+
+public object RemoteConnectionChannelSerializer : ResilientEnumSerializer<RemoteConnectionChannel>(
+    serialName = "dev.antigravity.shared.model.RemoteConnectionChannel",
+    entriesProvider = { RemoteConnectionChannel.entries },
+    fallbackProvider = { RemoteConnectionChannel.CLOUD_RELAY },
+)
 
 @Serializable
 public data class RemoteHostInstance(
@@ -748,7 +803,7 @@ public data class WorkspaceInfo(
     public val id: String get() = workspaceUri
 }
 
-@Serializable
+@Serializable(with = ThinkingEffortLevelSerializer::class)
 public enum class ThinkingEffortLevel(
     public val displayTitle: String,
     public val cliValue: String,
@@ -760,7 +815,21 @@ public enum class ThinkingEffortLevel(
     EXTRA("Extra", "xhigh", "XHIGH"),
 }
 
-@Serializable
+public object ThinkingEffortLevelSerializer : ResilientEnumSerializer<ThinkingEffortLevel>(
+    serialName = "dev.antigravity.shared.model.ThinkingEffortLevel",
+    entriesProvider = { ThinkingEffortLevel.entries },
+    fallbackProvider = { ThinkingEffortLevel.HIGH },
+    extraMatcher = { raw ->
+        val norm = normalizeResilientEnumToken(raw)
+        ThinkingEffortLevel.entries.firstOrNull {
+            normalizeResilientEnumToken(it.cliValue) == norm ||
+                normalizeResilientEnumToken(it.protoWireValue) == norm ||
+                normalizeResilientEnumToken(it.displayTitle) == norm
+        }
+    },
+)
+
+@Serializable(with = CascadeExecutionModeSerializer::class)
 public enum class CascadeExecutionMode(
     public val displayTitle: String,
     public val summaryDescription: String,
@@ -769,7 +838,13 @@ public enum class CascadeExecutionMode(
     FAST("Fast", "Acts directly — best for small, local edits"),
 }
 
-@Serializable
+public object CascadeExecutionModeSerializer : ResilientEnumSerializer<CascadeExecutionMode>(
+    serialName = "dev.antigravity.shared.model.CascadeExecutionMode",
+    entriesProvider = { CascadeExecutionMode.entries },
+    fallbackProvider = { CascadeExecutionMode.PLANNING },
+)
+
+@Serializable(with = AgentPermissionPresetSerializer::class)
 public enum class AgentPermissionPreset(
     public val rawValue: String,
     public val displayTitle: String,
@@ -786,8 +861,16 @@ public enum class AgentPermissionPreset(
         get() = this == DEFAULT_POLICY || this == AUTO
 
     public companion object {
+        /** Alias for [DEFAULT_POLICY] matching desktop & v2.33 sandboxed default terminology. */
+        public val DEFAULT_SANDBOXED: AgentPermissionPreset
+            get() = DEFAULT_POLICY
+
         public fun fromRaw(raw: String): AgentPermissionPreset? =
-            entries.firstOrNull { it.rawValue == raw }
+            entries.firstOrNull {
+                it.rawValue.equals(raw, ignoreCase = true) ||
+                    it.wireValue.equals(raw, ignoreCase = true) ||
+                    it.name.equals(raw, ignoreCase = true)
+            }
 
         public fun availablePresets(isRemote: Boolean): List<AgentPermissionPreset> =
             if (isRemote) listOf(REQUEST_REVIEW, TURBO)
@@ -797,6 +880,13 @@ public enum class AgentPermissionPreset(
             if (isRemote) TURBO else DEFAULT_POLICY
     }
 }
+
+public object AgentPermissionPresetSerializer : ResilientEnumSerializer<AgentPermissionPreset>(
+    serialName = "dev.antigravity.shared.model.AgentPermissionPreset",
+    entriesProvider = { AgentPermissionPreset.entries },
+    fallbackProvider = { AgentPermissionPreset.DEFAULT_POLICY },
+    extraMatcher = { raw -> AgentPermissionPreset.fromRaw(raw) },
+)
 
 @Serializable
 public data class CascadeModelConfig(
@@ -810,17 +900,269 @@ public data class CascadeModelConfig(
     public val badgeTag: String? = null,
     public val agentPersona: String = "Default",
     public val isDefault: Boolean = false,
+    public val isOrchestrator: Boolean = false,
+    public val plannerModelName: String? = null,
+    public val executorModelName: String? = null,
+    public val supportedEfforts: List<ThinkingEffortLevel> =
+        if (isOrchestrator) emptyList() else listOf(ThinkingEffortLevel.LOW, ThinkingEffortLevel.MEDIUM, ThinkingEffortLevel.HIGH),
+    public val isNewBadge: Boolean = false,
+    public val requiresUpgradeNote: String? = null,
+    public val isModelAlias: Boolean = false,
 ) {
     public val id: String get() = modelId
+
+    public val hasThinkingBadge: Boolean get() = supportsThinking
+
+    public val supportsEffortAdjustment: Boolean
+        get() = !isOrchestrator && supportedEfforts.isNotEmpty()
+
+    public companion object {
+        public val availableAgents: List<String> = listOf(
+            "Default",
+            "go-reviewer",
+            "release-captain",
+        )
+
+        public fun isGenericBadgeLabel(text: String): Boolean {
+            return when (text.trim().lowercase()) {
+                "new", "beta", "preview", "alpha", "experimental", "recommended", "legacy" -> true
+                else -> false
+            }
+        }
+
+        public fun descriptiveSubtitle(modelLabel: String): String {
+            val lower = modelLabel.lowercase()
+            return when {
+                lower.contains("flash") -> "Fastest responses and lightweight edits"
+                lower.contains("opus") -> "Frontier Anthropic reasoning for complex architecture"
+                lower.contains("sonnet") -> "Balanced Anthropic coding & reasoning"
+                lower.contains("(xhigh)") || lower.contains("(x-high)") ||
+                    lower.contains("(extra high)") || lower.contains("(max)") ->
+                    "Maximum reasoning depth for the hardest tasks"
+                lower.contains("(high)") -> "Deep reasoning for complex, multi-step tasks"
+                lower.contains("(medium)") || lower.contains("(med)") ->
+                    "Balanced speed and reasoning for daily work"
+                lower.contains("(low)") || lower.contains("(minimal)") ->
+                    "Faster responses for quick, everyday edits"
+                lower.contains("gpt") || lower.contains("o3") || lower.contains("o4") ->
+                    "OpenAI coding & reasoning model"
+                else -> "Deep reasoning for long, multi-step tasks"
+            }
+        }
+
+        /**
+         * Live Antigravity 2.33+ default model catalog (Gemini 4 Neon default, Carbon, Argon,
+         * Hydrogen, Orchestrator dual-model presets, Gemini 3.8 Flash, Claude 5.5, and Gemini 3.1/3).
+         */
+        public val liveDefaultCatalog: List<CascadeModelConfig> = listOf(
+            CascadeModelConfig(
+                modelId = "MODEL_GOOGLE_GEMINI_4_NEON",
+                displayName = "Gemini 4 Neon",
+                subtitle = "Default frontier reasoning · 512K context · 4 thinking levels",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                isDefault = true,
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                    ThinkingEffortLevel.EXTRA,
+                ),
+                isNewBadge = true,
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_ORCHESTRATOR_NEON",
+                displayName = "Orchestrator (Neon)",
+                subtitle = "Plans with Gemini 4 Neon · implements with Gemini 4 Hydrogen",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                isOrchestrator = true,
+                plannerModelName = "Gemini 4 Neon",
+                executorModelName = "Gemini 4 Hydrogen",
+                supportedEfforts = emptyList(),
+                isNewBadge = true,
+                isModelAlias = true,
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_ORCHESTRATOR_CARBON",
+                displayName = "Orchestrator (Carbon)",
+                subtitle = "Plans with Gemini 4 Carbon · implements with Gemini 4 Hydrogen",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                isOrchestrator = true,
+                plannerModelName = "Gemini 4 Carbon",
+                executorModelName = "Gemini 4 Hydrogen",
+                supportedEfforts = emptyList(),
+                isNewBadge = true,
+                requiresUpgradeNote = "Google AI Ultra",
+                isModelAlias = true,
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_ORCHESTRATOR_ARGON",
+                displayName = "Orchestrator (Argon)",
+                subtitle = "Plans with Gemini 4 Argon · implements with Gemini 4 Hydrogen",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                isOrchestrator = true,
+                plannerModelName = "Gemini 4 Argon",
+                executorModelName = "Gemini 4 Hydrogen",
+                supportedEfforts = emptyList(),
+                isNewBadge = true,
+                isModelAlias = true,
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_GOOGLE_GEMINI_4_CARBON",
+                displayName = "Gemini 4 Carbon",
+                subtitle = "Strongest long-horizon SWE, scientific & security reasoning",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                ),
+                isNewBadge = true,
+                requiresUpgradeNote = "Google AI Ultra",
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_GOOGLE_GEMINI_4_ARGON",
+                displayName = "Gemini 4 Argon",
+                subtitle = "High-depth architecture & multi-file debugging",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                ),
+                isNewBadge = true,
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_GOOGLE_GEMINI_4_HYDROGEN",
+                displayName = "Gemini 4 Hydrogen",
+                subtitle = "Fast, dependable coding & agentic execution · 4 thinking levels",
+                mode = CascadeExecutionMode.FAST,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                    ThinkingEffortLevel.EXTRA,
+                ),
+                isNewBadge = true,
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_GOOGLE_GEMINI_3_8_FLASH",
+                displayName = "Gemini 3.8 Flash",
+                subtitle = "Fastest responses across all plans",
+                mode = CascadeExecutionMode.FAST,
+                supportsThinking = false,
+                isThinkingEnabled = false,
+                thinkingEffort = ThinkingEffortLevel.MEDIUM,
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                ),
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_CLAUDE_5_5_OPUS_THINKING",
+                displayName = "Claude Opus 5.5 (Thinking)",
+                subtitle = "Frontier Anthropic reasoning for complex architecture",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                ),
+                isNewBadge = true,
+                requiresUpgradeNote = "Google AI Pro or Ultra",
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_CLAUDE_5_5_SONNET_THINKING",
+                displayName = "Claude Sonnet 5.5 (Thinking)",
+                subtitle = "Balanced Anthropic coding & extended thinking",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                badgeTag = "New",
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                ),
+                isNewBadge = true,
+                requiresUpgradeNote = "Google AI Pro or Ultra",
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_PLACEHOLDER_M37",
+                displayName = "Gemini 3.1 Pro",
+                subtitle = "Deep reasoning for long, multi-step tasks",
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = true,
+                thinkingEffort = ThinkingEffortLevel.HIGH,
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                ),
+            ),
+            CascadeModelConfig(
+                modelId = "MODEL_PLACEHOLDER_M18",
+                displayName = "Gemini 3 Flash",
+                subtitle = "Legacy Gemini 3 fast execution model",
+                mode = CascadeExecutionMode.FAST,
+                supportsThinking = false,
+                isThinkingEnabled = false,
+                thinkingEffort = ThinkingEffortLevel.MEDIUM,
+                supportedEfforts = listOf(
+                    ThinkingEffortLevel.LOW,
+                    ThinkingEffortLevel.MEDIUM,
+                    ThinkingEffortLevel.HIGH,
+                ),
+            ),
+        )
+    }
 }
 
 @Serializable
+public data class LiveModelCatalogResult(
+    public val models: List<CascadeModelConfig>,
+    public val quota: ModelUsageQuota? = null,
+    public val customAgents: List<String> = emptyList(),
+    public val defaultModelId: String? = models.firstOrNull()?.modelId,
+)
+
+@Serializable(with = SlashCommandCategorySerializer::class)
 public enum class SlashCommandCategory {
     FEATURED,
     APP_AND_CLI,
     APP_ONLY,
     CUSTOM_SKILL,
 }
+
+public object SlashCommandCategorySerializer : ResilientEnumSerializer<SlashCommandCategory>(
+    serialName = "dev.antigravity.shared.model.SlashCommandCategory",
+    entriesProvider = { SlashCommandCategory.entries },
+    fallbackProvider = { SlashCommandCategory.APP_AND_CLI },
+)
 
 @Serializable
 public data class SlashCommandItem(
@@ -885,7 +1227,7 @@ public data class ComposerAttachmentChip(
     public val mimeType: String? = null,
     public val inlinePayload: String? = null,
 ) {
-    @Serializable
+    @Serializable(with = KindSerializer::class)
     public enum class Kind {
         FILE_MENTION,
         FOLDER,
@@ -899,6 +1241,12 @@ public data class ComposerAttachmentChip(
         VIDEO_CLIP,
         DIFF_QUOTE,
     }
+
+    public object KindSerializer : ResilientEnumSerializer<Kind>(
+        serialName = "dev.antigravity.shared.model.ComposerAttachmentChip.Kind",
+        entriesProvider = { Kind.entries },
+        fallbackProvider = { Kind.FILE_MENTION },
+    )
 }
 
 @Serializable
