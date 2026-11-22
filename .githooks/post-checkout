@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Auto-sync gitignored iOSAntigravity.xcodeproj on macOS after branch switches
+# Auto-sync gitignored PocketAntigravity.xcodeproj on macOS after branch switches
 # Install once with: bash scripts/sync-xcode.sh --install-hooks
 set -euo pipefail
 
@@ -9,7 +9,7 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$ROOT_DIR" && -f "$ROOT_DIR/scripts/sync-xcode.sh" ]] || exit 0
-[[ -d "$ROOT_DIR/iOSAntigravity.xcodeproj" ]] || exit 0
+[[ -d "$ROOT_DIR/PocketAntigravity.xcodeproj" || -d "$ROOT_DIR/iOSAntigravity.xcodeproj" ]] || exit 0
 
 PREV_HEAD="${1:-}"
 NEW_HEAD="${2:-}"
@@ -17,7 +17,7 @@ NEW_HEAD="${2:-}"
 
 CHANGED="$(git diff --name-only "$PREV_HEAD" "$NEW_HEAD" 2>/dev/null || true)"
 if printf '%s\n' "$CHANGED" | grep -Eq '^(project\.yml|apps/ios/|tests/ios-ui/|shared/|gradle/|build\.gradle\.kts|settings\.gradle\.kts|gradle\.properties)'; then
-  echo "[post-checkout] iOS/KMP project files changed — syncing iOSAntigravity.xcodeproj..."
+  echo "[post-checkout] iOS/KMP project files changed — syncing PocketAntigravity.xcodeproj..."
   bash "$ROOT_DIR/scripts/sync-xcode.sh" || echo "[post-checkout] Warning: sync-xcode.sh failed; run 'bash scripts/sync-xcode.sh --clean --open' manually."
 fi
 exit 0

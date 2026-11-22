@@ -57,7 +57,7 @@ def build_agent_prompt(delta_report: dict, delta_summary_md: str, max_tier: str)
     except ValueError:
         target_rel = f"specs/deltas/{version}"
     skill_text = SKILL_PATH.read_text(encoding="utf-8") if SKILL_PATH.exists() else ""
-    return f"""You are running in automated pure-cloud GitHub Actions Doc-Sync mode for `venciallee/iOSAntigravity`.
+    return f"""You are running in automated pure-cloud GitHub Actions Doc-Sync mode for `venciallee/PocketAntigravity`.
 
 Follow EVERY rule in `.agents/skills/antigravity-doc-sync/SKILL.md` and `AGENTS.md`:
 
@@ -160,7 +160,7 @@ async def run_with_python_sdk(prompt: str) -> int:
     cfg = LocalAgentConfig(
         vertex=use_vertex,
         api_key=api_key,
-        system_instructions="You are an expert Swift 6 iOS & Connect-RPC engineer maintaining iOSAntigravity.",
+        system_instructions="You are an expert Swift 6 iOS, KMP & Connect-RPC engineer maintaining PocketAntigravity.",
     )
     async with Agent(cfg) as agent:
         response = await agent.chat(prompt)

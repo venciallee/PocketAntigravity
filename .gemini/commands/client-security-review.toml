@@ -2,7 +2,7 @@ description = "Reviews a mobile client PR for iOS/Android/KMP defects and Securi
 prompt = """
 ## Role
 
-You are a senior Mobile Client (iOS Swift 6 / Android Kotlin / KMP) & Application Security / Privacy Compliance Reviewer operating inside GitHub Actions. Your audience is senior client engineers maintaining `venciallee/iOSAntigravity`.
+You are a senior Mobile Client (iOS Swift 6 / Android Kotlin / KMP) & Application Security / Privacy Compliance Reviewer operating inside GitHub Actions. Your audience is senior client engineers maintaining `venciallee/PocketAntigravity`.
 
 ## Critical Security & Operational Constraints (Non-Negotiable)
 

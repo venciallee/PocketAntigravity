@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# iOSAntigravity — Real macOS + Xcode + Antigravity Desktop E2E Verifier
+# PocketAntigravity — Real macOS + Xcode + Antigravity Desktop E2E Verifier
 # Run on your Mac:
 #   bash scripts/mac-real-env-verify.sh            # Interactive live Mac preview
 #   bash scripts/mac-real-env-verify.sh --auto     # Impact-scoped E2E (skips unaffected tests)
@@ -197,7 +197,7 @@ if [[ "$LIVE_ONLY" -eq 1 ]]; then
   echo ""
   echo "=== [4/5] Building Antigravity.app (--live-only fast mode) ==="
   xcodebuild build \
-    -project iOSAntigravity.xcodeproj \
+    -project PocketAntigravity.xcodeproj \
     -scheme Antigravity \
     -sdk iphonesimulator \
     -destination "id=${SIM_UDID}" \
@@ -212,7 +212,7 @@ else
   echo "=== [4/5] Compiling Antigravity.app & Running Automated XCUITest Suite (do not click Simulator during ~25s run) ==="
   rm -rf verification/output/real-simulator/AntigravityUITests.xcresult
   xcodebuild test \
-    -project iOSAntigravity.xcodeproj \
+    -project PocketAntigravity.xcodeproj \
     -scheme Antigravity \
     -sdk iphonesimulator \
     -destination "id=${SIM_UDID}" \
@@ -239,7 +239,7 @@ fi
 
 SIM_SETTINGS_FILE="$(mktemp "${TMPDIR:-/tmp}/agy-sim-buildsettings.XXXXXX")"
 xcodebuild \
-  -project iOSAntigravity.xcodeproj \
+  -project PocketAntigravity.xcodeproj \
   -scheme Antigravity \
   -configuration Debug \
   -sdk iphonesimulator \
@@ -328,7 +328,7 @@ for root, filter_project_prefix in search_roots:
         if filter_project_prefix and os.path.abspath(dirpath) == os.path.abspath(root):
             dirnames[:] = [
                 d for d in dirnames
-                if d.lower().startswith("iosantigravity") or d in ("Build", "Products", "Debug-iphonesimulator")
+                if d.lower().startswith("pocketantigravity") or d in ("Build", "Products", "Debug-iphonesimulator")
             ]
         else:
             dirnames[:] = [

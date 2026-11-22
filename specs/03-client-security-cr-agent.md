@@ -2,7 +2,7 @@
 
 ## 1. Overview & Design Principles
 
-This specification defines the **Client (`apps/ios` Swift 6 / `apps/android` Kotlin / `shared/` KMP) + Security & Compliance Code Review Agent** for `venciallee/iOSAntigravity`, streamlined for a **personal GitHub repository** using mature off-the-shelf tools:
+This specification defines the **Client (`apps/ios` Swift 6 / `apps/android` Kotlin / `shared/` KMP) + Security & Compliance Code Review Agent** for `venciallee/PocketAntigravity`, streamlined for a **personal GitHub repository** using mature off-the-shelf tools:
 
 - **Layer 1 (Deterministic Hard Gate — 100% free on public repos, non-exemptable by LLM)**:
   - `gitleaks/gitleaks-action` — secret scanning

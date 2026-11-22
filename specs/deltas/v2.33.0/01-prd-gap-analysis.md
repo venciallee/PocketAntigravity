@@ -1,7 +1,7 @@
 # PRD & Capability Gap Specification — Google Antigravity 2.0 (`v2.21+ / v2.29+ → v2.33.0`)
 
 - **Baseline Version**: `v2.33.0` (App) / `v1.5.11` (CLI) / Gemini 4 Neon & Orchestrator (`2026-11-18`)
-- **Target Project**: `iOSAntigravity` (`AG Orbit` — Native Swift 6 iOS 18+ Companion)
+- **Target Project**: `PocketAntigravity` (`AG Pocket` — Native Swift 6 iOS 18+ Companion)
 - **Scope**: Complete **P0** (Live Wire & Mock Remediation), **P1** (v2.29–v2.33 Core Protocol & Multi-Agent Orchestration), and **P2** (VCS, Multimodal Viewers, Voice Mode, Customizations, UX Parity)
 
 ---

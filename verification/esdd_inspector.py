@@ -208,18 +208,18 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
     notice_file = repo_root / "NOTICE"
     if "ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon" not in project_yml:
         errors.append("project.yml missing ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon")
-    if 'CFBundleDisplayName: "AG Orbit"' not in project_yml:
-        errors.append('project.yml missing App Store 5.2.2 companion CFBundleDisplayName: "AG Orbit"')
+    if 'CFBundleDisplayName: "AG Pocket"' not in project_yml:
+        errors.append('project.yml missing App Store 5.2.2 companion CFBundleDisplayName: "AG Pocket"')
     if "NSHumanReadableCopyright" not in project_yml or "Google LLC" not in project_yml:
         errors.append("project.yml missing NSHumanReadableCopyright nominative trademark disclaimer")
     if not notice_file.exists() or "Google LLC" not in notice_file.read_text(encoding="utf-8", errors="ignore"):
         errors.append("Repository NOTICE file missing nominative trademark disclaimer")
-    if "card-about-copyright" not in combined_swift or "AG Orbit" not in combined_swift:
-        errors.append("RemotePairingViewController missing in-app AG Orbit card-about-copyright disclaimer")
+    if "card-about-copyright" not in combined_swift or "AG Pocket" not in combined_swift:
+        errors.append("RemotePairingViewController missing in-app AG Pocket card-about-copyright disclaimer")
 
-    if not missing_icons and 'CFBundleDisplayName: "AG Orbit"' in project_yml:
+    if not missing_icons and 'CFBundleDisplayName: "AG Pocket"' in project_yml:
         checks.append(
-            "Original AG Orbit AppIcon.appiconset (1024x1024 opaque RGB) & App Store 5.2.2 trademark compliance verified"
+            "Original AG Pocket AppIcon.appiconset (1024x1024 opaque RGB) & App Store 5.2.2 trademark compliance verified"
         )
 
     # 7. Zero Hardcoded Google API Key Secret Hygiene

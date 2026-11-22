@@ -1056,7 +1056,7 @@ def build_13_screen_master_overview(screenshot_entries: list, output_path: Path)
     draw = ImageDraw.Draw(grid)
     draw.text(
         (pad, 26),
-        "iOSAntigravity v2.0 — 13-Screen @3x ESDD Visual Verification Gallery (UE01..UE13)",
+        "PocketAntigravity v2.0 — 13-Screen @3x ESDD Visual Verification Gallery (UE01..UE13)",
         fill=(245, 247, 250),
         font=font_hdr,
     )
@@ -1407,7 +1407,7 @@ def main():
     (out_dir / "results.json").write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
 
     report_lines = [
-        "# iOSAntigravity v2.0 — ESDD End-to-End & 13-Screen `@3x` Visual Parity Report",
+        "# PocketAntigravity v2.0 — ESDD End-to-End & 13-Screen `@3x` Visual Parity Report",
         "",
         "- **Overall Status**: ✅ **ALL 4 GATES PASSED** (`13/13` Claims, `16/16` Interactive E2E Tests, `13/13` `@3x` Side-by-Side Comparisons)",
         "- **Mobile Viewport (`UE01`..`UE12`)**: iPhone 16 Pro `393×852pt @3x` → `1179×2556px` (`0px` horizontal overflow)",

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Render 100% original AG Orbit iOS 18 AppIcon (Light, Dark, Tinted 1024x1024 opaque sRGB)
+"""Render 100% original AG Pocket iOS 18 AppIcon (Light, Dark, Tinted 1024x1024 opaque sRGB)
 and in-app About/Copyright icon preview assets.
 
-Copyright (c) 2026 iOSAntigravity Contributors. All rights reserved.
+Copyright (c) 2026 PocketAntigravity Contributors. All rights reserved.
 Contains 100% original geometric vector artwork aligned with the Matte Obsidian (#090A0D),
 Periwinkle (#8EB4FF), and Warm Amber (#EBB365) UE design tokens — zero third-party or
 Google LLC trademarked graphic assets.
@@ -242,7 +242,7 @@ TINTED_HTML = """<!DOCTYPE html>
 
 def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
-    master_svg = (repo_root / "scripts" / "assets" / "ag-orbit-original-icon.svg").read_text(encoding="utf-8")
+    master_svg = (repo_root / "scripts" / "assets" / "ag-pocket-original-icon.svg").read_text(encoding="utf-8")
 
     appicon_dir = repo_root / "apps" / "ios" / "App" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
     preview_dir = repo_root / "apps" / "ios" / "App" / "Resources" / "Assets.xcassets" / "AntigravityAppIconPreview.imageset"
