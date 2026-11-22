@@ -284,7 +284,7 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
       }
       function extractQueryKey(rawUrl) {
         if (!rawUrl || typeof rawUrl !== 'string') { return ''; }
-        var m = rawUrl.match(/[?&]key=([A-Za-z0-9_.\-]{16,128})/i);
+        var m = rawUrl.match(/[?&]key=([A-Za-z0-9_.-]{16,128})/i);
         return m && m[1] ? m[1] : '';
       }
       function isUnrelatedTelemetryUrl(rawUrl) {
