@@ -20,6 +20,7 @@ import platform.Foundation.NSURLSessionAuthChallengePerformDefaultHandling
 import platform.Foundation.NSURLSessionAuthChallengeUseCredential
 import platform.Foundation.credentialForTrust
 import platform.Foundation.serverTrust
+import platform.Foundation.setHTTPShouldHandleCookies
 import platform.Foundation.timeIntervalSince1970
 import platform.Security.SecCertificateCopyData
 import platform.Security.SecCertificateRef
@@ -40,12 +41,15 @@ internal actual fun createPlatformHttpClient(
         engine {
             configureSession {
                 timeoutIntervalForRequest = config.requestTimeoutMs / 1000.0
-                timeoutIntervalForResource = maxOf(60.0, (config.requestTimeoutMs * 4) / 1000.0)
+                timeoutIntervalForResource = maxOf(25.0, (config.requestTimeoutMs * 2) / 1000.0)
                 HTTPShouldSetCookies = false
                 HTTPCookieStorage = null
                 if (config.bypassProxyForLocalHosts && isLocalHost) {
                     connectionProxyDictionary = emptyMap<Any?, Any>()
                 }
+            }
+            configureRequest {
+                setHTTPShouldHandleCookies(false)
             }
             handleChallenge { _, _, challenge, completionHandler ->
                 val space = challenge.protectionSpace

@@ -13,6 +13,7 @@ public struct RemotePairingViewController: View {
     public var onConnected: (() -> Void)?
 
     @State private var pendingRelayURL: String = ""
+    @State private var pendingScannedQRCode: String? = nil
     @State private var isShowingQRScanner: Bool = false
     @State private var isShowingGoogleSignIn: Bool = false
 
@@ -78,6 +79,21 @@ public struct RemotePairingViewController: View {
                                     .foregroundStyle(AntigravityTheme.textSecondary)
                                     .multilineTextAlignment(.center)
                                     .lineLimit(2)
+
+                                Button {
+                                    store.cancelPendingConnectionAttempt()
+                                } label: {
+                                    Text("Cancel")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(AntigravityTheme.textSecondary)
+                                        .padding(.horizontal, 16)
+                                        .frame(minHeight: 34)
+                                        .background(Capsule().fill(AntigravityTheme.surfacePill))
+                                        .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.top, 2)
+                                .accessibilityIdentifier("btn-cancel-connecting")
                             } else {
                                 Image(
                                     systemName: isOnlineConnected
@@ -423,13 +439,22 @@ public struct RemotePairingViewController: View {
                 externalScannerTrigger?.wrappedValue = false
             }
         }
-        .sheet(isPresented: $isShowingQRScanner) {
+        .sheet(
+            isPresented: $isShowingQRScanner,
+            onDismiss: {
+                if let scanned = pendingScannedQRCode {
+                    pendingScannedQRCode = nil
+                    handleScannedQRValue(scanned)
+                }
+            }
+        ) {
             RemoteControlQRScannerSheet(
                 onScannedQR: { scannedValue in
+                    pendingScannedQRCode = scannedValue
                     isShowingQRScanner = false
-                    handleScannedQRValue(scannedValue)
                 },
                 onDismiss: {
+                    pendingScannedQRCode = nil
                     isShowingQRScanner = false
                 }
             )

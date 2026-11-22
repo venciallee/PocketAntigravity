@@ -808,9 +808,20 @@ extension AntigravitySessionStore {
         isConnectingToBackend = true
         connectionErrorText = nil
         defer {
-            isConnectingToBackend = false
             if self.hostSwitchGeneration == generation {
+                self.isConnectingToBackend = false
                 self.isSwitchingHost = false
+                if !self.isLiveBackendConnected && self.connectionLifecyclePhase == .connecting {
+                    self.connectionLifecyclePhase = self.hasPairedBackend
+                        ? .offlineBackoff(
+                            attempt: 0,
+                            nextRetrySeconds: ConnectionPowerPolicy.offlineBackoffBaseDelay(
+                                attempt: 0,
+                                isLowPowerMode: self.isLowPowerModeEnabled
+                            )
+                        )
+                        : .disconnected
+                }
             }
         }
 
@@ -870,23 +881,42 @@ extension AntigravitySessionStore {
             relayApiKey: effectiveRelayApiKey
         )
 
+        let handshakeURLString = canonicalURLString
+        let handshakeApiKey = effectiveRelayApiKey
+        let activeEngine = kmpEngine
+
         do {
-            let handshake: BackendHandshakeResult
-            if let kmpEngine {
-                handshake = try await kmpEngine.connectCloudRelay(
-                    relayURLString: canonicalURLString,
-                    sessionCookie: trimmedCookie,
-                    authUser: effectiveAuthUser,
-                    resolvedInstanceUuid: resolvedInstanceUuid,
-                    relayApiKey: effectiveRelayApiKey,
-                    hostName: hostName,
-                    isRestoringSavedSession: isRestoringSavedSession,
-                    strictTargetMatch: strictTargetMatch
-                )
-            } else {
-                handshake = try await candidateClient.verifyConnection(
-                    allowCrossHostFallback: !strictTargetMatch
-                )
+            let handshake: BackendHandshakeResult = try await withThrowingTaskGroup(of: BackendHandshakeResult.self) { group in
+                group.addTask {
+                    if let activeEngine {
+                        return try await activeEngine.connectCloudRelay(
+                            relayURLString: handshakeURLString,
+                            sessionCookie: trimmedCookie,
+                            authUser: effectiveAuthUser,
+                            resolvedInstanceUuid: resolvedInstanceUuid,
+                            relayApiKey: handshakeApiKey,
+                            hostName: hostName,
+                            isRestoringSavedSession: isRestoringSavedSession,
+                            strictTargetMatch: strictTargetMatch
+                        )
+                    } else {
+                        return try await candidateClient.verifyConnection(
+                            allowCrossHostFallback: !strictTargetMatch
+                        )
+                    }
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 25_000_000_000)
+                    throw AntigravityRPCError.httpError(
+                        statusCode: 504,
+                        body: "Cloud Relay handshake timed out after 25s. Check Google / VPN reachability or tap Sign in with Google."
+                    )
+                }
+                guard let first = try await group.next() else {
+                    throw AntigravityRPCError.httpError(statusCode: 504, body: "Cloud Relay handshake cancelled")
+                }
+                group.cancelAll()
+                return first
             }
             guard self.hostSwitchGeneration == generation else { return false }
 
@@ -1003,6 +1033,7 @@ extension AntigravitySessionStore {
             }
             return true
         } catch let AntigravityRPCError.unauthorized(reason) {
+            guard self.hostSwitchGeneration == generation else { return false }
             if !SAPISIDHashGenerator.isLoopbackOrigin(initialOriginPrefix) {
                 await secretStore.clearRelayWebApiKey(forOrigin: initialOriginPrefix)
             }
@@ -1018,14 +1049,15 @@ extension AntigravitySessionStore {
                 if wasOptimisticInitial {
                     isOptimisticInitialPairing = false
                     hasPairedBackend = false
-                    connectionLifecyclePhase = .disconnected
                 }
                 isLiveBackendConnected = false
+                connectionLifecyclePhase = .disconnected
                 connectionErrorText = errMsg
                 connectionStatusText = "Google Sign-In Expired"
             }
             return false
         } catch let AntigravityRPCError.httpError(code, body) {
+            guard self.hostSwitchGeneration == generation else { return false }
             let errMsg = "Cloud Relay error (\(code)): \(body)"
             if (isRestoringSavedSession || (hasPairedBackend && !wasOptimisticInitial)) && (code == 502 || code == 503 || code == 504) {
                 await applyOfflinePairedSession(
@@ -1038,14 +1070,15 @@ extension AntigravitySessionStore {
                 if wasOptimisticInitial {
                     isOptimisticInitialPairing = false
                     hasPairedBackend = false
-                    connectionLifecyclePhase = .disconnected
                 }
                 isLiveBackendConnected = false
+                connectionLifecyclePhase = .disconnected
                 connectionErrorText = errMsg
                 connectionStatusText = "Cloud Relay Handshake Failed"
             }
             return false
         } catch {
+            guard self.hostSwitchGeneration == generation else { return false }
             let errMsg = "Cloud Relay handshake failed: \(error.localizedDescription)"
             if isRestoringSavedSession || (hasPairedBackend && !wasOptimisticInitial) {
                 await applyOfflinePairedSession(
@@ -1058,13 +1091,32 @@ extension AntigravitySessionStore {
                 if wasOptimisticInitial {
                     isOptimisticInitialPairing = false
                     hasPairedBackend = false
-                    connectionLifecyclePhase = .disconnected
                 }
                 isLiveBackendConnected = false
+                connectionLifecyclePhase = .disconnected
                 connectionErrorText = errMsg
                 connectionStatusText = "Cloud Relay Disconnected"
             }
             return false
+        }
+    }
+
+    /// Immediately aborts any in-flight pairing/reconnect UI spinner so the user can retry or sign in again.
+    public func cancelPendingConnectionAttempt() {
+        hostSwitchGeneration &+= 1
+        hostSwitchTask?.cancel()
+        hostSwitchTask = nil
+        isConnectingToBackend = false
+        isSwitchingHost = false
+        if isOptimisticInitialPairing && !isLiveBackendConnected {
+            isOptimisticInitialPairing = false
+            hasPairedBackend = false
+        }
+        if !isLiveBackendConnected && connectionLifecyclePhase == .connecting {
+            connectionLifecyclePhase = .disconnected
+        }
+        if connectionStatusText.hasPrefix("Pairing") || connectionStatusText.hasPrefix("Connecting") || connectionStatusText.hasPrefix("Resolving") {
+            connectionStatusText = hasPairedBackend ? "Offline · \(activeHost.hostname)" : "Not Connected"
         }
     }
 

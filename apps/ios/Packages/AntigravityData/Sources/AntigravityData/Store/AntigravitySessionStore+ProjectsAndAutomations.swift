@@ -205,7 +205,7 @@ extension AntigravitySessionStore {
         let clientRef = rpcClient
         let engineRef = kmpEngine
         let modelId = selectedModelConfig.modelId
-        let shouldCallLiveBackend = (hasPairedBackend || isLiveBackendConnected)
+        let shouldCallLiveBackend = isLiveBackendConnected || (hasPairedBackend && !isConnectingToBackend)
         let isLive = isLiveBackendActive
 
         Task { [weak self] in
