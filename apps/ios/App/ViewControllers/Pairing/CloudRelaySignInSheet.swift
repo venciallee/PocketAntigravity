@@ -22,9 +22,16 @@ public enum CloudRelayCookieExtractor {
                 expiresDate: cookie.expiresDate
             )
         }
+        let normalizedTargetHost: String = {
+            let clean = targetHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if clean == "antigravity.google" || clean.hasSuffix(".antigravity.google") {
+                return "antigravity.google.com"
+            }
+            return clean.isEmpty ? "antigravity.google.com" : clean
+        }()
         return SAPISIDHashGenerator.buildCookieHeader(
             from: descriptors,
-            forHost: targetHost
+            forHost: normalizedTargetHost
         )
         #else
         return nil
@@ -270,9 +277,15 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         if (!rawUrl || typeof rawUrl !== 'string') { return false; }
         var lower = rawUrl.toLowerCase();
         return lower.indexOf('/$rpc/') !== -1
+          || lower.indexOf('/%24rpc/') !== -1
           || lower.indexOf('devtools_jetski_boq_api_proto') !== -1
           || lower.indexOf('apiservice/listinstances') !== -1
           || lower.indexOf('apiservice/proxycommand') !== -1;
+      }
+      function extractQueryKey(rawUrl) {
+        if (!rawUrl || typeof rawUrl !== 'string') { return ''; }
+        var m = rawUrl.match(/[?&]key=([A-Za-z0-9_.\-]{16,128})/i);
+        return m && m[1] ? m[1] : '';
       }
       function isUnrelatedTelemetryUrl(rawUrl) {
         if (!rawUrl || typeof rawUrl !== 'string') { return false; }
@@ -372,13 +385,15 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
             var reqUrl = this.__agReqUrl || '';
             if (isApiServiceUrl(reqUrl)) {
               var hdrs = this.__agReqHeaders || {};
-              if (hdrs['x-goog-api-key']) {
-                postSignal('apiServiceKey', hdrs['x-goog-api-key'], hdrs['x-goog-authuser'] || '');
+              var xhrKey = hdrs['x-goog-api-key'] || extractQueryKey(reqUrl);
+              if (xhrKey) {
+                postSignal('apiServiceKey', xhrKey, hdrs['x-goog-authuser'] || '');
               }
               this.addEventListener('load', function() {
                 if (this.status >= 200 && this.status < 300) {
                   var h = this.__agReqHeaders || {};
-                  postSignal('apiServiceVerified', h['x-goog-api-key'] || window.__agApiServiceKey || '', h['x-goog-authuser'] || window.__agApiServiceAuthUser || '');
+                  var verifiedKey = h['x-goog-api-key'] || extractQueryKey(this.__agReqUrl || '') || window.__agApiServiceKey || '';
+                  postSignal('apiServiceVerified', verifiedKey, h['x-goog-authuser'] || window.__agApiServiceAuthUser || '');
                 }
               });
             }
@@ -401,6 +416,9 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
             if (!apiKey && input && typeof input === 'object' && input.headers) {
               apiKey = extractHeader(input.headers, 'x-goog-api-key');
               if (!authUser) { authUser = extractHeader(input.headers, 'x-goog-authuser'); }
+            }
+            if (!apiKey && isApiServiceUrl(reqUrl)) {
+              apiKey = extractQueryKey(reqUrl);
             }
             if (apiKey) {
               if (isApiServiceUrl(reqUrl)) {
@@ -555,6 +573,18 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         }
     }
 
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        Task { @MainActor [weak self] in
+            await self?.evaluateSessionReadiness(autoFinishIfOnRelayHost: true)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        Task { @MainActor [weak self] in
+            await self?.evaluateSessionReadiness(autoFinishIfOnRelayHost: true)
+        }
+    }
+
     func recordInterceptedRelaySignal(kind: String, apiKey: String?, authUser: String?) {
         if let authUser {
             let cleanUser = authUser.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -576,7 +606,7 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         if kind == "apiServiceVerified" {
             didObserveApiServiceSuccess = true
         }
-        if kind == "apiServiceVerified" || (kind == "apiServiceKey" && !webView.isLoading) {
+        if kind == "apiServiceVerified" || kind == "apiServiceKey" {
             pendingCompletionFallbackTask?.cancel()
             pendingCompletionFallbackTask = nil
             Task { @MainActor [weak self] in
@@ -637,22 +667,19 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
 
         // Fast verified path: antigravity.google.com itself issued an ApiService RPC carrying X-Goog-Api-Key
         // (and completed Google's OSID redirect bounce).
-        if didObserveApiServiceSuccess || (verifiedApiServiceKey != nil && !webView.isLoading) {
+        if didObserveApiServiceSuccess || verifiedApiServiceKey != nil {
             completeCapture(cookieHeader: cookieHeader, currentURL: currentURL)
             return
         }
 
-        // Never auto-dismiss while WKWebView is still navigating/redirecting (e.g. Google's passive `osid=1` bounce).
-        guard !webView.isLoading else { return }
-
         if pendingCompletionFallbackTask == nil {
-            // Wait up to 6s after the relay page finishes loading so the Antigravity SPA can boot and fire its
-            // first ApiService/ListInstances call (captured instantaneously via XHR/fetch hooks above).
+            // Wait up to 3.5s on the relay host so Google's passive `osid=1` redirect or SPA ApiService/ListInstances
+            // XHR can fire, without hanging indefinitely if a third-party analytics/font subresource keeps isLoading=true.
             pendingCompletionFallbackTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
                 guard let self, !Task.isCancelled, !self.didCompleteCapture else { return }
                 let liveHost = self.webView.url?.host?.lowercased() ?? ""
-                guard !self.webView.isLoading, RemoteHostInstance.isAntigravityRelayHost(liveHost) else {
+                guard RemoteHostInstance.isAntigravityRelayHost(liveHost) else {
                     self.pendingCompletionFallbackTask = nil
                     return
                 }

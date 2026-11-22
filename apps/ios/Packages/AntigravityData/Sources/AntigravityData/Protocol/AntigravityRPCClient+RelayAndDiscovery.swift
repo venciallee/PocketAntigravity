@@ -46,14 +46,23 @@ extension AntigravityRPCClient {
             let text = String(data: unwrapped, encoding: .utf8)
                 ?? String(data: data, encoding: .utf8)
                 ?? ""
+            let isExplicitKeyError = SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: text)
             let shouldRotate = (activeApiKey?.isEmpty != false)
-                || SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: http.statusCode, responseBody: text)
+                || isExplicitKeyError
                 || http.statusCode == 403
             if shouldRotate {
                 let originStr = SAPISIDHashGenerator.normalizeOrigin(relayOriginURL.absoluteString)
-                let candidates = await discoverRelayWebApiKeysFromOrigin(originStr: originStr)
-                for candidateKey in candidates.prefix(6) {
+                var candidates = await discoverRelayWebApiKeysFromOrigin(originStr: originStr, forceRefresh: false)
+                let hasUntried = candidates.contains { !$0.isEmpty && !triedKeys.contains($0) }
+                if !hasUntried && isExplicitKeyError && !didForceRefreshInvalidApiKey {
+                    didForceRefreshInvalidApiKey = true
+                    candidates = await discoverRelayWebApiKeysFromOrigin(originStr: originStr, forceRefresh: true)
+                }
+                var rotationAttempts = 0
+                for candidateKey in candidates {
+                    if rotationAttempts >= 3 { break }
                     guard !candidateKey.isEmpty, triedKeys.insert(candidateKey).inserted else { continue }
+                    rotationAttempts += 1
                     let retry = try await performRequest(apiKey: candidateKey)
                     data = retry.0
                     http = retry.1

@@ -302,4 +302,129 @@ class CloudRelayAuthAndSyncRegressionTest {
             assertTrue(!err.detail.contains(secretCookieVal), "Diagnostic must NEVER leak raw cookie values")
         }
     }
+
+    @Test
+    fun testOriginApiKeyDiscoveryRunsAtMostOnceAcrossAuthUsers() = runTest {
+        withContext(Dispatchers.Default) {
+            val badKey1 = "AI" + "zaSyBADKEYONE000000000000000000000000"
+            val badKey2 = "AI" + "zaSyBADKEYTWO000000000000000000000000"
+            var htmlFetchCount = 0
+            var jsFetchCount = 0
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path == "/r/0f5819ac-9308-40d8-a308-98b55122c533-v2" || path == "/" -> {
+                        htmlFetchCount += 1
+                        respond(
+                            content = """<html><script>window.__k="$badKey1";</script><script src="/_/boq/app.js"></script></html>""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "text/html"),
+                        )
+                    }
+                    path == "/_/boq/app.js" -> {
+                        jsFetchCount += 1
+                        respond(
+                            content = """const k = "$badKey2";""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/javascript"),
+                        )
+                    }
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """{"error":{"code":403,"message":"API_KEY_SERVICE_BLOCKED: Requests to this API are blocked"}}""",
+                            status = HttpStatusCode.Forbidden,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = "0f5819ac-9308-40d8-a308-98b55122c533-v2",
+                hostname = "Mac",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = null,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            assertFailsWith<AntigravityRpcError.Unauthorized> {
+                client.resolveCloudRelayInstance(preferredIdentifier = host.instanceId, allowCrossHostFallback = true)
+            }
+            assertEquals(1, htmlFetchCount, "Origin HTML must be crawled at most once per client even across 5 authUsers")
+            assertEquals(1, jsFetchCount, "Origin bootstrap JS must be crawled at most once per client")
+        }
+    }
+
+    @Test
+    fun testVerifyConnectionSkipsJetboxStreamAndUsesUnencodedRpcPath() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyHANDSHAKEKEY000000000000000000000"
+            val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            var streamCalls = 0
+            val observedUrls = mutableListOf<String>()
+            val engine = MockEngine { request ->
+                val fullUrl = request.url.toString()
+                observedUrls.add(fullUrl)
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/StreamProxyCommand") -> {
+                        streamCalls += 1
+                        respond("", HttpStatusCode.OK)
+                    }
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$rawUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val b64Json = okio.ByteString.Companion.run {
+                            """{"workspaces":[],"trajectorySummaries":{}}""".encodeToByteArray().let { bytes ->
+                                okio.ByteString.of(*bytes).base64()
+                            }
+                        }
+                        respond(
+                            content = """["$b64Json",[["content-type","application/json"]]]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = rawUuid,
+                hostname = "Antigravity Desktop",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$rawUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val handshake = client.verifyConnection(allowCrossHostFallback = true)
+            assertEquals("MacBook Pro", handshake.resolvedHostname)
+            assertEquals(rawUuid, handshake.resolvedInstanceUuid)
+            assertEquals(0, streamCalls, "verifyConnection must not open/cancel StreamProxyCommand during handshake")
+            assertTrue(
+                observedUrls.any { it.contains("/\$rpc/devtools_jetski_boq_api_proto.ApiService/ListInstances") },
+                "ListInstances must preserve unencoded /\$rpc/ path; saw $observedUrls",
+            )
+            assertTrue(
+                observedUrls.any { it.contains("/\$rpc/devtools_jetski_boq_api_proto.ApiService/ProxyCommand?\$unique=") },
+                "ProxyCommand must preserve unencoded /\$rpc/ and ?\$unique= query; saw $observedUrls",
+            )
+        }
+    }
 }

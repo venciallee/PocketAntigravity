@@ -11,6 +11,7 @@ public struct AntigravityWelcomeView: View {
     public var onConnected: (() -> Void)?
 
     @State private var pendingRelayURL: String = ""
+    @State private var pendingScannedQRCode: String? = nil
     @State private var isShowingQRScanner: Bool = false
     @State private var isShowingGoogleSignIn: Bool = false
     @State private var shouldClearGoogleCookiesOnSignIn: Bool = false
@@ -74,6 +75,22 @@ public struct AntigravityWelcomeView: View {
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
+
+                        if store.isConnectingToBackend {
+                            Button {
+                                store.cancelPendingConnectionAttempt()
+                            } label: {
+                                Text("Cancel")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(AntigravityTheme.textSecondary)
+                                    .padding(.horizontal, 16)
+                                    .frame(minHeight: 34)
+                                    .background(Capsule().fill(AntigravityTheme.surfacePill))
+                                    .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("btn-welcome-cancel-connecting")
+                        }
                     }
                     .frame(maxWidth: .infinity, minHeight: 64)
                 } else {
@@ -179,13 +196,22 @@ public struct AntigravityWelcomeView: View {
                 isShowingGoogleSignIn = true
             }
         }
-        .sheet(isPresented: $isShowingQRScanner) {
+        .sheet(
+            isPresented: $isShowingQRScanner,
+            onDismiss: {
+                if let scanned = pendingScannedQRCode {
+                    pendingScannedQRCode = nil
+                    handleScannedQRValue(scanned)
+                }
+            }
+        ) {
             RemoteControlQRScannerSheet(
                 onScannedQR: { scannedValue in
+                    pendingScannedQRCode = scannedValue
                     isShowingQRScanner = false
-                    handleScannedQRValue(scannedValue)
                 },
                 onDismiss: {
+                    pendingScannedQRCode = nil
                     isShowingQRScanner = false
                 }
             )

@@ -19,7 +19,10 @@ public actor AntigravityRPCClient {
     internal var targetInstanceIdentifier: String
     internal var resolvedInstanceUuid: String?
     internal var relayApiKey: String?
+    internal var discoveredRelayApiKeyCandidates: [String] = []
     internal var hasAttemptedApiKeyDiscovery: Bool = false
+    internal var didRunOriginApiKeyDiscovery: Bool = false
+    internal var didForceRefreshInvalidApiKey: Bool = false
     internal var preferredCloudInstanceUuid: String? = nil
     internal var cachedRelayInstances: [RelayInstanceInfo] = []
     internal var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
@@ -284,7 +287,13 @@ public actor AntigravityRPCClient {
         await discoverRelayWebApiKeysFromOrigin(originStr: originStr).first
     }
 
-    internal func discoverRelayWebApiKeysFromOrigin(originStr: String) async -> [String] {
+    internal func discoverRelayWebApiKeysFromOrigin(
+        originStr: String,
+        forceRefresh: Bool = false
+    ) async -> [String] {
+        if !forceRefresh && didRunOriginApiKeyDiscovery {
+            return discoveredRelayApiKeyCandidates
+        }
         let originHost = relayOriginURL.host?.lowercased()
         var candidatePages: [URL] = []
         if endpointURL.host?.lowercased() == originHost {
@@ -307,12 +316,16 @@ public actor AntigravityRPCClient {
             }
         }
 
-        for pageURL in candidatePages {
-            let pageReq = makeBootstrapGetRequest(
+        for (pageIdx, pageURL) in candidatePages.enumerated() {
+            if pageIdx > 0 && (!collectedKeys.isEmpty || !scriptURLsToInspect.isEmpty) {
+                break
+            }
+            var pageReq = makeBootstrapGetRequest(
                 for: pageURL,
                 originStr: originStr,
                 includeSessionCookie: pageURL.host?.lowercased() == originHost
             )
+            pageReq.timeoutInterval = pageIdx == 0 ? 4.5 : 3.5
             guard let (data, response) = try? await urlSession.data(for: pageReq),
                   let http = response as? HTTPURLResponse,
                   (200..<400).contains(http.statusCode) else {
@@ -341,7 +354,7 @@ public actor AntigravityRPCClient {
             for scriptURL in SAPISIDHashGenerator.extractBootstrapScriptURLs(
                 fromHTML: html,
                 baseURL: effectiveBaseURL,
-                limit: 12
+                limit: 8
             ) {
                 if seenScripts.insert(scriptURL.absoluteString).inserted {
                     scriptURLsToInspect.append(scriptURL)
@@ -352,23 +365,38 @@ public actor AntigravityRPCClient {
             }
         }
 
-        if collectedKeys.count < 3 {
-            for scriptURL in scriptURLsToInspect.prefix(12) {
+        if collectedKeys.count < 3 && !scriptURLsToInspect.isEmpty {
+            let session = urlSession
+            let indexedRequests: [(Int, URLRequest)] = scriptURLsToInspect.prefix(6).enumerated().map { idx, scriptURL in
                 var scriptReq = makeBootstrapGetRequest(
                     for: scriptURL,
                     originStr: originStr,
                     includeSessionCookie: scriptURL.host?.lowercased() == originHost
                 )
-                scriptReq.timeoutInterval = 12
-                guard let (scriptData, scriptResp) = try? await urlSession.data(for: scriptReq),
-                      let scriptHTTP = scriptResp as? HTTPURLResponse,
-                      (200..<300).contains(scriptHTTP.statusCode) else {
-                    continue
+                scriptReq.timeoutInterval = 4.5
+                return (idx, scriptReq)
+            }
+            var orderedResults: [(Int, [String])] = []
+            await withTaskGroup(of: (Int, [String]).self) { group in
+                for (idx, req) in indexedRequests {
+                    group.addTask {
+                        guard let (scriptData, scriptResp) = try? await session.data(for: req),
+                              let scriptHTTP = scriptResp as? HTTPURLResponse,
+                              (200..<300).contains(scriptHTTP.statusCode) else {
+                            return (idx, [])
+                        }
+                        let scriptText = String(data: scriptData, encoding: .utf8)
+                            ?? String(data: scriptData, encoding: .isoLatin1)
+                            ?? ""
+                        return (idx, SAPISIDHashGenerator.extractAllWebApiKeys(from: scriptText))
+                    }
                 }
-                let scriptText = String(data: scriptData, encoding: .utf8)
-                    ?? String(data: scriptData, encoding: .isoLatin1)
-                    ?? ""
-                for key in SAPISIDHashGenerator.extractAllWebApiKeys(from: scriptText) {
+                for await pair in group {
+                    orderedResults.append(pair)
+                }
+            }
+            for (_, keys) in orderedResults.sorted(by: { $0.0 < $1.0 }) {
+                for key in keys {
                     appendKey(key)
                 }
                 if collectedKeys.count >= 6 {
@@ -377,6 +405,10 @@ public actor AntigravityRPCClient {
             }
         }
 
+        didRunOriginApiKeyDiscovery = true
+        if !collectedKeys.isEmpty {
+            discoveredRelayApiKeyCandidates = collectedKeys
+        }
         return collectedKeys
     }
 

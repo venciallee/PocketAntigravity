@@ -4065,6 +4065,24 @@ final class AntigravityProtocolTests: XCTestCase {
             )
         )
     }
+
+    @MainActor
+    func testCancelPendingConnectionAttemptClearsConnectingPhase() {
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.beginOptimisticConnectingSession(
+            hostName: "Studio Mac",
+            channel: .cloudRelay,
+            endpointURLString: "https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
+            instanceId: "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+        )
+        XCTAssertTrue(store.isConnectingToBackend)
+        XCTAssertEqual(store.connectionLifecyclePhase, .connecting)
+
+        store.cancelPendingConnectionAttempt()
+        XCTAssertFalse(store.isConnectingToBackend)
+        XCTAssertFalse(store.hasPairedBackend)
+        XCTAssertEqual(store.connectionLifecyclePhase, .disconnected)
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {
