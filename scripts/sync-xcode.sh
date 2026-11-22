@@ -103,6 +103,71 @@ sys.exit(1)
 PY
 }
 
+normalize_repo_directory_casing() {
+  local repo_root="$1"
+  python3 - "$repo_root" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+# Canonical relative directory paths whose actual on-disk casing MUST match project.yml / Gradle / Xcode 26.4+.
+# On case-insensitive macOS APFS, checkouts created before PR #23 can retain uppercase `Shared/`
+# even though Git now tracks `shared/`, causing Xcode 26.4+ to reject `AntigravityShared.xcframework`.
+canonical_dirs = [
+    "shared",
+    "shared/umbrella",
+    "shared/umbrella/build",
+    "shared/umbrella/build/XCFrameworks",
+    "shared/umbrella/build/XCFrameworks/debug",
+    "shared/core-model",
+    "shared/core-protocol",
+    "shared/core-markdown",
+    "shared/core-domain",
+    "apps",
+    "apps/ios",
+    "apps/ios/App",
+    "apps/ios/SharedUI",
+    "apps/ios/Extensions",
+    "apps/ios/Packages",
+    "apps/ios/Packages/AntigravityData",
+    "tests",
+    "tests/ios-ui",
+]
+
+renamed = []
+for rel in canonical_dirs:
+    parts = rel.split("/")
+    parent = repo
+    for part in parts[:-1]:
+        parent = parent / part
+    target_name = parts[-1]
+    if not parent.is_dir():
+        continue
+    try:
+        entries = os.listdir(parent)
+    except OSError:
+        continue
+    if target_name in entries:
+        continue
+    matches = [e for e in entries if e.lower() == target_name.lower() and e != target_name]
+    if not matches:
+        continue
+    actual_name = matches[0]
+    src = parent / actual_name
+    dst = parent / target_name
+    tmp = parent / f".{target_name}-case-fix-{os.getpid()}"
+    os.rename(src, tmp)
+    os.rename(tmp, dst)
+    prefix = "/".join(parts[:-1])
+    old_rel = f"{prefix}/{actual_name}" if prefix else actual_name
+    renamed.append((old_rel, rel))
+
+for old_rel, new_rel in renamed:
+    print(f"RENAMED:{old_rel}->{new_rel}")
+PY
+}
+
 check_kmp_xcframework_freshness() {
   local repo_root="$1"
   local xcf_dir="$2"
@@ -408,6 +473,25 @@ PY
     exit 1
   }
 
+  # 5. Directory casing normalization (fixes legacy APFS Shared/ -> shared/ mismatch for Xcode 26.4+)
+  local case_repo="$tmp_dir/case-repo"
+  mkdir -p "$case_repo/Shared/Umbrella/build/XCFrameworks/Debug"
+  local rename_out
+  rename_out="$(normalize_repo_directory_casing "$case_repo")"
+  python3 - "$case_repo" "$rename_out" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+out = sys.argv[2]
+assert "RENAMED:Shared->shared" in out, f"Expected Shared->shared rename in output: {out!r}"
+assert "shared" in os.listdir(repo), f"Expected lowercase 'shared' in {os.listdir(repo)}"
+assert "Shared" not in os.listdir(repo), f"Unexpected uppercase 'Shared' still in {os.listdir(repo)}"
+assert "umbrella" in os.listdir(repo / "shared"), f"Expected lowercase 'umbrella' in {os.listdir(repo / 'shared')}"
+assert "debug" in os.listdir(repo / "shared" / "umbrella" / "build" / "XCFrameworks"), "Expected lowercase 'debug'"
+PY
+
   echo "[PASS] sync-xcode.sh self-tests passed!"
 }
 
@@ -428,6 +512,16 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 0
 fi
 
+# 0. Normalize on-disk directory capitalization (fixes legacy APFS `Shared/` -> `shared/` for Xcode 26.4+)
+CASE_FIXED=0
+CASE_RENAME_OUT="$(normalize_repo_directory_casing "$ROOT_DIR" || true)"
+if [[ -n "$CASE_RENAME_OUT" ]]; then
+  CASE_FIXED=1
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && echo "[*] Normalized on-disk directory casing (${line#RENAMED:}) for Xcode 26.4+ compatibility."
+  done <<< "$CASE_RENAME_OUT"
+fi
+
 # 1. Detect & wipe legacy iOSAntigravity.xcodeproj or stale pre-monorepo Xcode project / DerivedData
 LEGACY_DETECTED=0
 if [[ -d "$LEGACY_XCODEPROJ_PATH" ]]; then
@@ -441,9 +535,12 @@ if [[ -f "$XCODEPROJ_PATH/project.pbxproj" ]]; then
   fi
 fi
 
-if [[ "$CLEAN_PROJECT" -eq 1 || "$LEGACY_DETECTED" -eq 1 ]]; then
+if [[ "$CLEAN_PROJECT" -eq 1 || "$LEGACY_DETECTED" -eq 1 || "$CASE_FIXED" -eq 1 ]]; then
   if [[ "$LEGACY_DETECTED" -eq 1 ]]; then
     echo "[*] Detected legacy or stale pre-monorepo Xcode project state."
+  fi
+  if [[ "$CASE_FIXED" -eq 1 ]]; then
+    echo "[*] Directory casing changed on disk — wiping cached Xcode project & DerivedData to avoid stale VFS/XCFramework paths..."
   fi
   echo "[*] Cleaning stale PocketAntigravity.xcodeproj and Xcode DerivedData caches..."
   rm -rf "$XCODEPROJ_PATH"
@@ -540,8 +637,8 @@ fi
 validate_generated_pbxproj "$XCODEPROJ_PATH/project.pbxproj"
 echo "[PASS] PocketAntigravity.xcodeproj is synced with the current monorepo layout (apps/ios/*, tests/ios-ui/*)."
 
-if [[ "$LEGACY_DETECTED" -eq 1 ]] && pgrep -x Xcode >/dev/null 2>&1; then
-  echo "[!] Note: Xcode is currently running — press Cmd+Q and reopen PocketAntigravity.xcodeproj (or Product -> Clean Build Folder) so Xcode drops any cached legacy Package.swift state."
+if [[ "$LEGACY_DETECTED" -eq 1 || "$CASE_FIXED" -eq 1 ]] && pgrep -x Xcode >/dev/null 2>&1; then
+  echo "[!] Note: Xcode is currently running — press Cmd+Q and reopen PocketAntigravity.xcodeproj (or Product -> Clean Build Folder) so Xcode drops any cached path or Package.swift state."
 fi
 
 if [[ "$OPEN_XCODE" -eq 1 ]]; then

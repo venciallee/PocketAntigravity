@@ -179,15 +179,11 @@ public final class AntigravityShareExtensionViewController: UIViewController {
         )
         Task { @MainActor [weak self] in
             await SharedAppGroupBridge.shared.saveSharePayload(payload)
+            guard let self else { return }
             if let url = URL(string: "antigravity://share/\(payload.id)") {
-                self?.extensionContext?.open(url) { _ in
-                    Task { @MainActor [weak self] in
-                        self?.extensionContext?.completeRequest(returningItems: nil)
-                    }
-                }
-            } else {
-                self?.extensionContext?.completeRequest(returningItems: nil)
+                _ = await self.extensionContext?.open(url)
             }
+            self.extensionContext?.completeRequest(returningItems: nil)
         }
     }
 }
