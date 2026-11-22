@@ -52,36 +52,28 @@ public final class LiveActivityCoordinator {
             deletions: summary.totalDeletions
         )
 
-        let existing = Activity<AntigravityActivityAttributes>.activities.first {
-            $0.attributes.cascadeId == summary.cascadeId
-        }
+        let cascadeId = summary.cascadeId
+        let existingActivityId = Activity<AntigravityActivityAttributes>.activities.first {
+            $0.attributes.cascadeId == cascadeId
+        }?.id
 
-        if let existing {
-            if !isRunningOrWaiting && summary.status == .cancelled {
-                Task {
-                    await existing.end(
-                        ActivityContent(state: contentState, staleDate: nil),
-                        dismissalPolicy: .immediate
-                    )
-                }
-            } else {
-                Task {
-                    await existing.update(
-                        ActivityContent(
-                            state: contentState,
-                            staleDate: Date().addingTimeInterval(300)
-                        )
-                    )
-                }
+        if let existingActivityId {
+            let shouldEndImmediately = !isRunningOrWaiting && summary.status == .cancelled
+            Task.detached(priority: .utility) {
+                await Self.updateOrEndActivity(
+                    activityId: existingActivityId,
+                    contentState: contentState,
+                    shouldEndImmediately: shouldEndImmediately
+                )
             }
-            activeCascadeId = summary.cascadeId
+            activeCascadeId = cascadeId
             return
         }
 
         guard isRunningOrWaiting else { return }
 
         let attributes = AntigravityActivityAttributes(
-            cascadeId: summary.cascadeId,
+            cascadeId: cascadeId,
             cascadeTitle: summary.title,
             hostName: store.activeHost.hostname,
             workspaceName: summary.projectSlug,
@@ -96,7 +88,7 @@ public final class LiveActivityCoordinator {
                 ),
                 pushType: nil
             )
-            activeCascadeId = summary.cascadeId
+            activeCascadeId = cascadeId
         } catch {
             // Live Activity request may be denied when backgrounded or unsupported on simulator without entitlement
         }
@@ -107,13 +99,47 @@ public final class LiveActivityCoordinator {
 
     public func endAllActivities() {
         #if canImport(ActivityKit) && os(iOS)
-        let activities = Activity<AntigravityActivityAttributes>.activities
-        for activity in activities {
-            Task {
-                await activity.end(nil, dismissalPolicy: .immediate)
+        let activityIds = Activity<AntigravityActivityAttributes>.activities.map(\.id)
+        if !activityIds.isEmpty {
+            Task.detached(priority: .utility) {
+                await Self.endActivities(ids: activityIds)
             }
         }
         #endif
         activeCascadeId = nil
     }
+
+    #if canImport(ActivityKit) && os(iOS)
+    private nonisolated static func updateOrEndActivity(
+        activityId: String,
+        contentState: AntigravityActivityAttributes.ContentState,
+        shouldEndImmediately: Bool
+    ) async {
+        guard let existing = Activity<AntigravityActivityAttributes>.activities.first(where: { $0.id == activityId }) else {
+            return
+        }
+        if shouldEndImmediately {
+            await existing.end(
+                ActivityContent(state: contentState, staleDate: nil),
+                dismissalPolicy: .immediate
+            )
+        } else {
+            await existing.update(
+                ActivityContent(
+                    state: contentState,
+                    staleDate: Date().addingTimeInterval(300)
+                )
+            )
+        }
+    }
+
+    private nonisolated static func endActivities(ids: [String]) async {
+        for activityId in ids {
+            guard let activity = Activity<AntigravityActivityAttributes>.activities.first(where: { $0.id == activityId }) else {
+                continue
+            }
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+    }
+    #endif
 }

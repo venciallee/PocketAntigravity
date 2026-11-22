@@ -128,7 +128,7 @@ jobs:
     name: Swift 6 XCTest + Real Simulator XCUITest & Native Screens
     needs: plan-and-fast-gates
     if: needs.plan-and-fast-gates.outputs.needs_macos == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 40
 
     steps:
@@ -141,14 +141,19 @@ jobs:
           name: e2e-verification-plan
           path: verification/output
 
-      - name: Select latest Xcode 16+ on runner
+      - name: Select latest stable Xcode 26.4+ on runner
         run: |
           ls -d /Applications/Xcode*.app
-          LATEST_XCODE="$(ls -d /Applications/Xcode_16*.app /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1)"
-          echo "Using Xcode: $LATEST_XCODE"
-          sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          DEFAULT_VER="$(xcodebuild -version 2>/dev/null | head -n 1 || true)"
+          echo "Runner default: $DEFAULT_VER"
+          if ! echo "$DEFAULT_VER" | grep -qE '^Xcode 26\.([4-9]|[1-9][0-9])'; then
+            LATEST_XCODE="$(ls -d /Applications/Xcode_26*.app /Applications/Xcode_16*.app /Applications/Xcode*.app 2>/dev/null | grep -viE 'beta|rc' | sort -V | tail -n 1)"
+            echo "Switching to Xcode: $LATEST_XCODE"
+            sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          fi
           xcodebuild -version
           swift --version
+          xcrun simctl list runtimes | head -n 20
 
       - name: "[Gate 1] Swift 6 Package Compilation & XCTest Suite (AntigravityData)"
         if: needs.plan-and-fast-gates.outputs.run_gate1 == 'true'
@@ -163,7 +168,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
-          key: kmp-xcframework-${{ runner.os }}-${{ hashFiles('shared/**', 'gradle/**', 'settings.gradle.kts', 'build.gradle.kts', 'gradle.properties') }}
+          key: kmp-xcframework-macos-26-${{ runner.os }}-${{ hashFiles('shared/**', 'gradle/**', 'settings.gradle.kts', 'build.gradle.kts', 'gradle.properties') }}
 
       - name: Set up JDK 21 for KMP Shared Core
         if: needs.plan-and-fast-gates.outputs.run_gate3_ios_build == 'true' && (steps.kmp-xcf-cache.outputs.cache-hit != 'true' || needs.plan-and-fast-gates.outputs.is_release == 'true')
@@ -204,6 +209,22 @@ jobs:
           PYTHONUNBUFFERED=1 python3 verification/ios-simulator-runner.py \
             --plan verification/output/e2e-plan.json 2>&1 | tee verification/output/real-simulator/simulator-runner.log
 
+      - name: "[Gate 3b] Verify iOS Device (iphoneos arm64) Compile & Link (CODE_SIGNING_ALLOWED=NO)"
+        if: needs.plan-and-fast-gates.outputs.run_gate3_ios_build == 'true'
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project iOSAntigravity.xcodeproj \
+            -scheme Antigravity \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath .build/DerivedDataDeviceCI \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee verification/output/real-simulator/xcodebuild-iphoneos.log
+
       - name: Upload Real iOS Simulator Screenshots & Verification Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -216,7 +237,7 @@ jobs:
     name: "[Release Mandatory] Full KMP JVM + iOS Simulator XCFramework E2E"
     needs: plan-and-fast-gates
     if: needs.plan-and-fast-gates.outputs.is_release == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 25
 
     steps:
