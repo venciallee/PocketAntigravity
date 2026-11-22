@@ -898,8 +898,9 @@ extension AntigravitySessionStore {
             let kmpSavedApiKey: String? = (kmpEngine != nil && (handshakeApiKey?.isEmpty != false))
                 ? await secretStore.loadCredentials()?.relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
                 : nil
+            let candidateApiKey = await candidateClient.currentRelayApiKey()
             let finalRelayApiKey = (handshakeApiKey?.isEmpty == false ? handshakeApiKey : nil)
-                ?? await candidateClient.currentRelayApiKey()
+                ?? candidateApiKey
                 ?? effectiveRelayApiKey
                 ?? (kmpSavedApiKey?.isEmpty == false ? kmpSavedApiKey : nil)
 
