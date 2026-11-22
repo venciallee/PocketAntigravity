@@ -169,9 +169,9 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_tcs"] = ["TC-15"]
         return res
 
-    # 6. ESDD static Stage 1 inspector (Spec-DAG, secret hygiene, compat guardrails — zero Chrome / zero macOS)
-    if norm == "verification/esdd_inspector.py":
-        res = _empty_impact("esdd-stage1-inspector", "ESDD Stage 1 static contract inspector changed")
+    # 6. ESDD static Stage 1 inspector & advisory hygiene (Spec-DAG, secret hygiene, advisory checks — zero Chrome / zero macOS)
+    if norm in {"verification/esdd_inspector.py", "verification/verify_advisory_hygiene.py"}:
+        res = _empty_impact("esdd-stage1-inspector", "ESDD Stage 1 static contract or advisory hygiene script changed")
         res["esdd_stages"] = [1]
         return res
 
