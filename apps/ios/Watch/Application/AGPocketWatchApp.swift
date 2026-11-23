@@ -85,6 +85,7 @@ public struct WatchRootContainerView: View {
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .accessibilityIdentifier("watch.toast.banner")
             }
         }
         .background(WatchTheme.canvas.ignoresSafeArea())

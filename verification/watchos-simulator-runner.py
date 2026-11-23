@@ -16,6 +16,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import select
 import shutil
 import subprocess
 import sys
@@ -33,6 +35,7 @@ PREFERRED_WATCHES = [
     "Apple Watch Ultra 3 (49mm)",
     "Apple Watch Ultra 2 (49mm)",
     "Apple Watch Series 10 (42mm)",
+    "Apple Watch Series 11 (42mm)",
     "Apple Watch Series 9 (45mm)",
 ]
 
@@ -48,7 +51,15 @@ WATCH_SCENES: list[tuple[str, str]] = [
 ]
 
 
-def _stream_command(cmd: list[str], cwd: Path, log_path: Path) -> None:
+def _stream_command(
+    cmd: list[str],
+    cwd: Path,
+    log_path: Path,
+    *,
+    timeout_sec: int = 600,
+    finish_grace_sec: int = 25,
+    watch_test_markers: bool = False,
+) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as log_fp:
         proc = subprocess.Popen(
@@ -60,47 +71,248 @@ def _stream_command(cmd: list[str], cwd: Path, log_path: Path) -> None:
             bufsize=1,
         )
         assert proc.stdout is not None
+        fd = proc.stdout.fileno()
         tail: list[str] = []
-        for line in proc.stdout:
-            log_fp.write(line)
-            tail.append(line)
-            if len(tail) > 80:
-                tail.pop(0)
-            if any(tok in line for tok in ("error:", "** BUILD", "warning: ", "Compiling ", "Linking ")):
-                sys.stdout.write(line)
-                sys.stdout.flush()
+        started_at = time.monotonic()
+        marker_result: str | None = None
+        marker_seen_at: float | None = None
+
+        while True:
+            now = time.monotonic()
+            if now - started_at > timeout_sec:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                sys.stderr.write(f"\n[FAIL] Command timed out after {timeout_sec}s: {' '.join(cmd)}\n")
+                sys.stderr.write("".join(tail))
+                raise subprocess.TimeoutExpired(cmd, timeout_sec)
+
+            if marker_seen_at is not None and (now - marker_seen_at) >= finish_grace_sec:
+                # Xcode 26.6 watchOS `test-without-building` can occasionally linger after
+                # printing `** TEST SUCCEEDED **` under CI load; exit cleanly once grace elapses.
+                print(
+                    f"  [INFO] xcodebuild lingered {finish_grace_sec}s after {marker_result}; terminating cleanly.",
+                    flush=True,
+                )
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                if marker_result == "SUCCEEDED":
+                    return
+                raise subprocess.CalledProcessError(65, cmd)
+
+            ready, _, _ = select.select([fd], [], [], 1.0)
+            if ready:
+                line = proc.stdout.readline()
+                if line == "":
+                    break
+                log_fp.write(line)
+                log_fp.flush()
+                tail.append(line)
+                if len(tail) > 80:
+                    tail.pop(0)
+                if any(
+                    tok in line
+                    for tok in (
+                        "error:",
+                        "** BUILD",
+                        "** TEST",
+                        "Test Case ",
+                        "warning: ",
+                        "Compiling ",
+                        "Linking ",
+                    )
+                ):
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                if watch_test_markers and marker_result is None:
+                    if "** TEST SUCCEEDED **" in line:
+                        marker_result = "SUCCEEDED"
+                        marker_seen_at = time.monotonic()
+                    elif "** TEST FAILED **" in line:
+                        marker_result = "FAILED"
+                        marker_seen_at = time.monotonic()
+            elif proc.poll() is not None:
+                # Drain any remaining buffered lines.
+                for line in proc.stdout:
+                    log_fp.write(line)
+                    tail.append(line)
+                    if len(tail) > 80:
+                        tail.pop(0)
+                break
+
         rc = proc.wait()
         if rc != 0:
+            if watch_test_markers and marker_result == "SUCCEEDED":
+                return
             sys.stderr.write(f"\n[FAIL] Command exited with code {rc}: {' '.join(cmd)}\n")
             sys.stderr.write("".join(tail))
             raise subprocess.CalledProcessError(rc, cmd)
 
 
-def select_watch_simulator() -> tuple[str, str, str]:
-    raw = subprocess.check_output(
+def _runtime_version_key(runtime_id: str) -> str:
+    """Extract numeric version suffix like '26-5' from a CoreSimulator runtime ID."""
+    m = re.search(r"(\d+-\d+(?:-\d+)?)$", runtime_id)
+    return m.group(1) if m else ""
+
+
+def _list_simulators_and_pairs() -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+    dev_raw = subprocess.check_output(
         ["xcrun", "simctl", "list", "devices", "available", "-j"], text=True
     )
-    devices = json.loads(raw)["devices"]
-    runtimes = [r for r in sorted(devices.keys(), reverse=True) if "watchOS" in r]
+    devices = json.loads(dev_raw).get("devices", {})
+    pair_raw = subprocess.check_output(
+        ["xcrun", "simctl", "list", "pairs", "-j"], text=True
+    )
+    pairs = json.loads(pair_raw).get("pairs", {})
+    return devices, pairs
 
-    for preferred in PREFERRED_WATCHES:
-        for runtime in runtimes:
-            for dev in devices[runtime]:
-                if dev.get("isAvailable") and dev.get("name") == preferred:
-                    return dev["udid"], dev["name"], runtime
 
-    for runtime in runtimes:
-        for dev in devices[runtime]:
-            name = dev.get("name", "")
-            if dev.get("isAvailable") and "Watch" in name and ("46mm" in name or "45mm" in name or "49mm" in name):
-                return dev["udid"], name, runtime
+def select_and_pair_watch_simulator(
+    preferred_phone_udid: str | None = None,
+) -> tuple[str, str, str, str | None, str | None]:
+    """Select the best available Apple Watch Simulator and ensure it is paired with an iPhone Simulator.
 
-    for runtime in runtimes:
+    Companion watchOS apps that declare `WKCompanionAppBundleIdentifier` require a paired
+    Apple Watch + iPhone simulator pair for `xcodebuild` to expose concrete watchOS Simulator
+    destinations on fresh CI runners (which often ship without pre-configured pairs).
+    """
+    devices, pairs = _list_simulators_and_pairs()
+
+    watch_runtimes = [r for r in sorted(devices.keys(), reverse=True) if "watchOS" in r]
+    ios_runtimes = [r for r in sorted(devices.keys(), reverse=True) if "SimRuntime.iOS" in r]
+
+    watch_by_udid: dict[str, tuple[str, str, str]] = {}
+    ordered_watches: list[tuple[str, str, str]] = []
+    for runtime in watch_runtimes:
         for dev in devices[runtime]:
             if dev.get("isAvailable") and "Watch" in dev.get("name", ""):
-                return dev["udid"], dev["name"], runtime
+                entry = (dev["udid"], dev["name"], runtime)
+                watch_by_udid[dev["udid"]] = entry
+                ordered_watches.append(entry)
 
-    raise RuntimeError("No available Apple Watch Simulator found in Xcode.")
+    if not ordered_watches:
+        raise RuntimeError("No available Apple Watch Simulator found in Xcode.")
+
+    phone_by_udid: dict[str, tuple[str, str, str, str]] = {}
+    ordered_phones: list[tuple[str, str, str, str]] = []
+    for runtime in ios_runtimes:
+        for dev in devices[runtime]:
+            if dev.get("isAvailable") and "iPhone" in dev.get("name", ""):
+                entry = (dev["udid"], dev["name"], runtime, dev.get("state", "Shutdown"))
+                phone_by_udid[dev["udid"]] = entry
+                ordered_phones.append(entry)
+
+    # Map existing valid pairs (watch_udid -> (pair_id, phone_udid))
+    watch_to_phone: dict[str, tuple[str, str]] = {}
+    paired_phone_udids: set[str] = set()
+    for pair_id, pinfo in pairs.items():
+        w_udid = (pinfo.get("watch") or {}).get("udid")
+        p_udid = (pinfo.get("phone") or {}).get("udid")
+        if w_udid in watch_by_udid and p_udid in phone_by_udid:
+            watch_to_phone[w_udid] = (pair_id, p_udid)
+            paired_phone_udids.add(p_udid)
+
+    def watch_rank(entry: tuple[str, str, str]) -> tuple[int, int, int]:
+        udid, name, runtime = entry
+        is_paired = 0 if udid in watch_to_phone else 1
+        rt_idx = watch_runtimes.index(runtime) if runtime in watch_runtimes else 99
+        if name in PREFERRED_WATCHES:
+            model_idx = PREFERRED_WATCHES.index(name)
+        elif any(sz in name for sz in ("46mm", "45mm", "49mm")):
+            model_idx = len(PREFERRED_WATCHES) + 1
+        else:
+            model_idx = len(PREFERRED_WATCHES) + 2
+        return (rt_idx, is_paired, model_idx)
+
+    # Prefer newest watchOS runtime, already-paired preferred large-face watch first.
+    best_watch = sorted(ordered_watches, key=watch_rank)[0]
+    w_udid, w_name, w_runtime = best_watch
+
+    if w_udid in watch_to_phone:
+        pair_id, p_udid = watch_to_phone[w_udid]
+        p_name = phone_by_udid[p_udid][1]
+        print(
+            f"  [PAIR] Reusing existing Watch+iPhone pair {pair_id}: {w_name} ({w_udid}) <-> {p_name} ({p_udid})",
+            flush=True,
+        )
+        return w_udid, w_name, w_runtime, p_udid, p_name
+
+    # Pick an available iPhone simulator to pair with this Watch before booting.
+    w_ver = _runtime_version_key(w_runtime)
+
+    def phone_rank(entry: tuple[str, str, str, str]) -> tuple[int, int, int, int]:
+        p_udid, p_name, p_runtime, p_state = entry
+        ver_match = 0 if (w_ver and _runtime_version_key(p_runtime) == w_ver) else 1
+        unpaired = 0 if p_udid not in paired_phone_udids else 1
+        preferred = 0 if (preferred_phone_udid and p_udid == preferred_phone_udid) else 1
+        is_shutdown = 0 if p_state == "Shutdown" else 1
+        return (ver_match, unpaired, preferred, is_shutdown)
+
+    if ordered_phones:
+        p_udid, p_name, p_runtime, p_state = sorted(ordered_phones, key=phone_rank)[0]
+        if p_state != "Shutdown":
+            subprocess.run(["xcrun", "simctl", "shutdown", p_udid], check=False)
+        print(
+            f"  [PAIR] Pairing {w_name} ({w_udid}) with {p_name} ({p_udid}, {p_runtime})...",
+            flush=True,
+        )
+        pair_proc = subprocess.run(
+            ["xcrun", "simctl", "pair", w_udid, p_udid],
+            capture_output=True,
+            text=True,
+        )
+        if pair_proc.returncode == 0:
+            pair_id = pair_proc.stdout.strip()
+            print(f"  [PAIR] Created active Watch+iPhone pair: {pair_id}", flush=True)
+            return w_udid, w_name, w_runtime, p_udid, p_name
+        else:
+            print(
+                f"  [WARN] simctl pair failed ({pair_proc.returncode}): {pair_proc.stderr.strip()}",
+                flush=True,
+            )
+
+    return w_udid, w_name, w_runtime, None, None
+
+
+def discover_xcode_watch_destinations(repo_root: Path) -> list[dict[str, str]]:
+    """Query `xcodebuild -showdestinations` for concrete watchOS Simulator destinations."""
+    proc = subprocess.run(
+        [
+            "xcodebuild",
+            "-showdestinations",
+            "-project",
+            "PocketAntigravity.xcodeproj",
+            "-scheme",
+            WATCH_SCHEME,
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    concrete: list[dict[str, str]] = []
+    for line in output.splitlines():
+        if "watchOS" in line:
+            print(f"  [DEST] {line.strip()}", flush=True)
+        if "platform:watchOS Simulator" in line and "placeholder" not in line:
+            m_id = re.search(r"id:([^,}\s]+)", line)
+            m_name = re.search(r"name:([^}]+)", line)
+            m_os = re.search(r"OS:([^,\s}]+)", line)
+            if m_id:
+                concrete.append(
+                    {
+                        "id": m_id.group(1).strip(),
+                        "name": (m_name.group(1).strip() if m_name else "Apple Watch"),
+                        "os": (m_os.group(1).strip() if m_os else ""),
+                    }
+                )
+    return concrete
 
 
 def build_watch_overview_sheet(out_dir: Path, device_label: str) -> Path | None:
@@ -225,6 +437,11 @@ def main() -> int:
         help="Directory to write Watch screenshots, logs, and comparison boards",
     )
     parser.add_argument(
+        "--preferred-phone-udid",
+        default=None,
+        help="Optional iPhone Simulator UDID to pair with the Apple Watch Simulator when unpaired",
+    )
+    parser.add_argument(
         "--skip-device-build",
         action="store_true",
         help="Skip generic/platform=watchOS device build check",
@@ -241,19 +458,79 @@ def main() -> int:
     timings: dict[str, Any] = {}
 
     if not (repo_root / "PocketAntigravity.xcodeproj").exists():
-        print("=== [W0/4] Generating PocketAntigravity.xcodeproj via xcodegen ===", flush=True)
+        print("=== [W0/5] Generating PocketAntigravity.xcodeproj via xcodegen ===", flush=True)
         subprocess.run(["xcodegen", "generate"], cwd=repo_root, check=True)
 
-    udid, sim_name, sim_runtime = select_watch_simulator()
-    print(f"=== [W1/4] Booting Apple Watch Simulator ({sim_name} · {sim_runtime}, UDID={udid}) ===", flush=True)
-    boot_proc = subprocess.Popen(
+    print("=== [W1/5] Selecting & Pairing Apple Watch Simulator ===", flush=True)
+    udid, sim_name, sim_runtime, phone_udid, phone_name = select_and_pair_watch_simulator(
+        preferred_phone_udid=args.preferred_phone_udid
+    )
+    # Refresh CoreSimulator registry before querying xcodebuild destinations.
+    subprocess.run(["xcrun", "simctl", "list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    pairs_text = subprocess.run(["xcrun", "simctl", "list", "pairs"], capture_output=True, text=True)
+    for pline in (pairs_text.stdout or "").splitlines()[:20]:
+        if pline.strip():
+            print(f"  [PAIRS] {pline}", flush=True)
+
+    print(
+        f"  [BOOT] Apple Watch Simulator ({sim_name} · {sim_runtime}, UDID={udid})"
+        + (f" paired with {phone_name} ({phone_udid})" if phone_udid else " (standalone)"),
+        flush=True,
+    )
+    phone_boot_proc = None
+    if phone_udid:
+        phone_boot_proc = subprocess.Popen(
+            ["xcrun", "simctl", "boot", phone_udid],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    watch_boot_proc = subprocess.Popen(
         ["xcrun", "simctl", "boot", udid],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
+    concrete_dests = discover_xcode_watch_destinations(repo_root)
+    if not concrete_dests:
+        print("  [INFO] Waiting for Watch+iPhone bootstatus before re-checking xcodebuild destinations...", flush=True)
+        if phone_boot_proc is not None:
+            phone_boot_proc.wait()
+            subprocess.run(["xcrun", "simctl", "bootstatus", phone_udid, "-b"], check=False)
+        watch_boot_proc.wait()
+        subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
+        subprocess.run(["xcrun", "simctl", "list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        concrete_dests = discover_xcode_watch_destinations(repo_root)
+
+    concrete_ids = {d["id"] for d in concrete_dests}
+    if udid in concrete_ids:
+        sim_build_dest = f"platform=watchOS Simulator,id={udid}"
+    elif concrete_dests:
+        adopted = concrete_dests[0]
+        print(
+            f"  [INFO] Adopting xcodebuild-visible Watch destination {adopted['name']} ({adopted['id']}) over {udid}",
+            flush=True,
+        )
+        udid = adopted["id"]
+        sim_name = adopted["name"]
+        sim_runtime = f"watchOS {adopted['os']}" if adopted.get("os") else sim_runtime
+        watch_boot_proc = subprocess.Popen(
+            ["xcrun", "simctl", "boot", udid],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        sim_build_dest = f"platform=watchOS Simulator,id={udid}"
+    else:
+        print(
+            "  [WARN] No concrete watchOS Simulator listed by -showdestinations; building with generic/platform=watchOS Simulator.",
+            flush=True,
+        )
+        sim_build_dest = "generic/platform=watchOS Simulator"
+
     t_build = time.monotonic()
-    print(f"=== [W2/5] Building {WATCH_SCHEME} + AGPocketWatchUITests for watchsimulator ({sim_name}) ===", flush=True)
+    print(
+        f"=== [W2/5] Building {WATCH_SCHEME} + AGPocketWatchUITests for watchsimulator ({sim_build_dest}) ===",
+        flush=True,
+    )
     sim_build_cmd = [
         "xcodebuild",
         "build-for-testing",
@@ -262,7 +539,7 @@ def main() -> int:
         "-scheme",
         WATCH_SCHEME,
         "-destination",
-        f"id={udid}",
+        sim_build_dest,
         "-derivedDataPath",
         str(derived_sim),
         "CODE_SIGN_IDENTITY=-",
@@ -274,7 +551,7 @@ def main() -> int:
 
     if not args.skip_device_build:
         t_dev = time.monotonic()
-        print(f"=== [W2b/5] Verifying watchOS Device (watchos arm64) Compile & Link ===", flush=True)
+        print("=== [W2b/5] Verifying watchOS Device (watchos arm64) Compile & Link ===", flush=True)
         dev_build_cmd = [
             "xcodebuild",
             "build",
@@ -295,7 +572,10 @@ def main() -> int:
         _stream_command(dev_build_cmd, repo_root, out_dir / "xcodebuild-watchos.log")
         timings["watchDeviceBuild"] = round(time.monotonic() - t_dev, 2)
 
-    boot_proc.wait()
+    if phone_boot_proc is not None and phone_udid:
+        phone_boot_proc.wait()
+        subprocess.run(["xcrun", "simctl", "bootstatus", phone_udid, "-b"], check=False)
+    watch_boot_proc.wait()
     subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
 
     t_uitest = time.monotonic()
@@ -310,7 +590,7 @@ def main() -> int:
         "-scheme",
         WATCH_SCHEME,
         "-destination",
-        f"id={udid}",
+        f"platform=watchOS Simulator,id={udid}",
         "-derivedDataPath",
         str(derived_sim),
         "-only-testing:AGPocketWatchUITests",
@@ -320,7 +600,14 @@ def main() -> int:
         "CODE_SIGNING_REQUIRED=NO",
         "AD_HOC_CODE_SIGNING_ALLOWED=YES",
     ]
-    _stream_command(watch_uitest_cmd, repo_root, out_dir / "watch-uitests.log")
+    _stream_command(
+        watch_uitest_cmd,
+        repo_root,
+        out_dir / "watch-uitests.log",
+        timeout_sec=480,
+        finish_grace_sec=25,
+        watch_test_markers=True,
+    )
     timings["watchUITests"] = round(time.monotonic() - t_uitest, 2)
     print(f"  [PASS] Real watchOS XCUITest Suite succeeded in {timings['watchUITests']}s.", flush=True)
 
@@ -353,7 +640,7 @@ def main() -> int:
             env=launch_env,
             check=True,
         )
-        time.sleep(1.8)
+        time.sleep(2.0)
         shot_path = out_dir / f"{scene_id}.png"
         subprocess.run(["xcrun", "simctl", "io", udid, "screenshot", str(shot_path)], check=True)
         captured.append(scene_id)
@@ -369,6 +656,8 @@ def main() -> int:
         "simulatorName": sim_name,
         "simulatorRuntime": sim_runtime,
         "simulatorUDID": udid,
+        "pairedPhoneName": phone_name,
+        "pairedPhoneUDID": phone_udid,
         "capturedScenes": captured,
         "timingsSec": timings,
     }

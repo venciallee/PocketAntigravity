@@ -766,13 +766,16 @@ def main() -> None:
 
     if cfg.get("runWatchOSSim"):
         t_watch = time.monotonic()
-        print("=== [5c/5] Running Real Apple Watch Simulator Build + 8 Native watchOS Screens (W01–W08) ===", flush=True)
+        print("=== [5c/5] Running Real Apple Watch Simulator Build + XCUITests + 8 Native watchOS Screens (W01–W08) ===", flush=True)
+        subprocess.run(["xcrun", "simctl", "shutdown", udid], check=False)
         subprocess.run(
             [
                 sys.executable,
                 str(repo_root / "verification" / "watchos-simulator-runner.py"),
                 "--out-dir",
                 str(out_dir / "watch"),
+                "--preferred-phone-udid",
+                udid,
             ],
             cwd=repo_root,
             check=True,

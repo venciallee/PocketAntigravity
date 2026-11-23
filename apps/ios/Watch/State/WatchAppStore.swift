@@ -484,8 +484,9 @@ public final class WatchAppStore {
     public func showToast(_ message: String) {
         toastClearTask?.cancel()
         statusToastMessage = message
+        let duration: Double = isVerificationMode ? 4.0 : 2.2
         toastClearTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.8))
+            try? await Task.sleep(for: .seconds(duration))
             guard !Task.isCancelled else { return }
             self?.statusToastMessage = nil
         }
