@@ -461,46 +461,26 @@ def main() -> int:
         print("=== [W0/5] Generating PocketAntigravity.xcodeproj via xcodegen ===", flush=True)
         subprocess.run(["xcodegen", "generate"], cwd=repo_root, check=True)
 
-    print("=== [W1/5] Selecting & Pairing Apple Watch Simulator ===", flush=True)
+    print("=== [W1/6] Selecting, Pairing & Booting Apple Watch Simulator ===", flush=True)
     udid, sim_name, sim_runtime, phone_udid, phone_name = select_and_pair_watch_simulator(
         preferred_phone_udid=args.preferred_phone_udid
     )
-    # Refresh CoreSimulator registry before querying xcodebuild destinations.
-    subprocess.run(["xcrun", "simctl", "list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    pairs_text = subprocess.run(["xcrun", "simctl", "list", "pairs"], capture_output=True, text=True)
-    for pline in (pairs_text.stdout or "").splitlines()[:20]:
-        if pline.strip():
-            print(f"  [PAIRS] {pline}", flush=True)
-
     print(
-        f"  [BOOT] Apple Watch Simulator ({sim_name} · {sim_runtime}, UDID={udid})"
-        + (f" paired with {phone_name} ({phone_udid})" if phone_udid else " (standalone)"),
+        f"  [BOOT] Booting Apple Watch Simulator ({sim_name} · {sim_runtime}, UDID={udid})"
+        + (f" [paired with {phone_name}]" if phone_udid else " [standalone]"),
         flush=True,
     )
-    phone_boot_proc = None
-    if phone_udid:
-        phone_boot_proc = subprocess.Popen(
-            ["xcrun", "simctl", "boot", phone_udid],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    watch_boot_proc = subprocess.Popen(
-        ["xcrun", "simctl", "boot", udid],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    # Boot ONLY the Watch Simulator (booting a second iPhone wastes ~3 min & RAM) and wait
+    # for bootstatus BEFORE calling `xcodebuild -showdestinations` so the watchOS runtime
+    # disk image is fully mounted on macOS 26 runners.
+    t_boot = time.monotonic()
+    subprocess.run(["xcrun", "simctl", "boot", udid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
+    subprocess.run(["xcrun", "simctl", "list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    timings["watchBoot"] = round(time.monotonic() - t_boot, 2)
+    print(f"  [BOOT] Apple Watch Simulator booted in {timings['watchBoot']}s.", flush=True)
 
     concrete_dests = discover_xcode_watch_destinations(repo_root)
-    if not concrete_dests:
-        print("  [INFO] Waiting for Watch+iPhone bootstatus before re-checking xcodebuild destinations...", flush=True)
-        if phone_boot_proc is not None:
-            phone_boot_proc.wait()
-            subprocess.run(["xcrun", "simctl", "bootstatus", phone_udid, "-b"], check=False)
-        watch_boot_proc.wait()
-        subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
-        subprocess.run(["xcrun", "simctl", "list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        concrete_dests = discover_xcode_watch_destinations(repo_root)
-
     concrete_ids = {d["id"] for d in concrete_dests}
     if udid in concrete_ids:
         sim_build_dest = f"platform=watchOS Simulator,id={udid}"
@@ -513,11 +493,8 @@ def main() -> int:
         udid = adopted["id"]
         sim_name = adopted["name"]
         sim_runtime = f"watchOS {adopted['os']}" if adopted.get("os") else sim_runtime
-        watch_boot_proc = subprocess.Popen(
-            ["xcrun", "simctl", "boot", udid],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        subprocess.run(["xcrun", "simctl", "boot", udid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
         sim_build_dest = f"platform=watchOS Simulator,id={udid}"
     else:
         print(
@@ -528,7 +505,7 @@ def main() -> int:
 
     t_build = time.monotonic()
     print(
-        f"=== [W2/5] Building {WATCH_SCHEME} + AGPocketWatchUITests for watchsimulator ({sim_build_dest}) ===",
+        f"=== [W2/6] Building {WATCH_SCHEME} + AGPocketWatchUITests for watchsimulator ({sim_build_dest}) ===",
         flush=True,
     )
     sim_build_cmd = [
@@ -542,46 +519,19 @@ def main() -> int:
         sim_build_dest,
         "-derivedDataPath",
         str(derived_sim),
+        "ONLY_ACTIVE_ARCH=YES",
         "CODE_SIGN_IDENTITY=-",
         "CODE_SIGNING_REQUIRED=NO",
         "AD_HOC_CODE_SIGNING_ALLOWED=YES",
     ]
     _stream_command(sim_build_cmd, repo_root, out_dir / "xcodebuild-watchsim.log")
     timings["watchSimBuild"] = round(time.monotonic() - t_build, 2)
-
-    if not args.skip_device_build:
-        t_dev = time.monotonic()
-        print("=== [W2b/5] Verifying watchOS Device (watchos arm64) Compile & Link ===", flush=True)
-        dev_build_cmd = [
-            "xcodebuild",
-            "build",
-            "-project",
-            "PocketAntigravity.xcodeproj",
-            "-scheme",
-            WATCH_SCHEME,
-            "-configuration",
-            "Debug",
-            "-destination",
-            "generic/platform=watchOS",
-            "-derivedDataPath",
-            str(derived_dev),
-            "CODE_SIGNING_ALLOWED=NO",
-            "CODE_SIGNING_REQUIRED=NO",
-            "CODE_SIGN_IDENTITY=",
-        ]
-        _stream_command(dev_build_cmd, repo_root, out_dir / "xcodebuild-watchos.log")
-        timings["watchDeviceBuild"] = round(time.monotonic() - t_dev, 2)
-
-    if phone_boot_proc is not None and phone_udid:
-        phone_boot_proc.wait()
-        subprocess.run(["xcrun", "simctl", "bootstatus", phone_udid, "-b"], check=False)
-    watch_boot_proc.wait()
-    subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
+    print(f"  [PASS] Watch Simulator build-for-testing succeeded in {timings['watchSimBuild']}s.", flush=True)
 
     t_uitest = time.monotonic()
     xcresult_path = out_dir / "AGPocketWatchUITests.xcresult"
     shutil.rmtree(xcresult_path, ignore_errors=True)
-    print(f"=== [W3/5] Running Real watchOS XCUITest E2E Suite (AGPocketWatchUITests) on {sim_name} ===", flush=True)
+    print(f"=== [W3/6] Running Real watchOS XCUITest E2E Suite (AGPocketWatchUITests) on {sim_name} ===", flush=True)
     watch_uitest_cmd = [
         "xcodebuild",
         "test-without-building",
@@ -617,12 +567,12 @@ def main() -> int:
             f"Built {WATCH_WRAPPER} not found under {derived_sim / 'Build/Products/Debug-watchsimulator'}"
         )
     watch_app_path = app_candidates[0]
-    print(f"=== [W4/5] Installing {watch_app_path.name} onto {sim_name} ===", flush=True)
+    print(f"=== [W4/6] Installing {watch_app_path.name} onto {sim_name} ===", flush=True)
     subprocess.run(["xcrun", "simctl", "install", udid, str(watch_app_path)], check=True)
 
     t_shots = time.monotonic()
     captured: list[str] = []
-    print(f"=== [W5/5] Capturing all {len(WATCH_SCENES)} Native watchOS SwiftUI Screens ===", flush=True)
+    print(f"=== [W5/6] Capturing all {len(WATCH_SCENES)} Native watchOS SwiftUI Screens ===", flush=True)
     for scene_id, label in WATCH_SCENES:
         subprocess.run(["xcrun", "simctl", "terminate", udid, WATCH_BUNDLE_ID], check=False)
         launch_env = {k: v for k, v in os.environ.items() if not k.startswith("SIMCTL_CHILD_AGPOCKET_")}
@@ -650,6 +600,32 @@ def main() -> int:
     build_watch_overview_sheet(out_dir, device_label)
     build_ref_vs_sim_comparison_sheet(repo_root, out_dir, device_label)
     timings["screenshots"] = round(time.monotonic() - t_shots, 2)
+
+    if not args.skip_device_build:
+        t_dev = time.monotonic()
+        print("=== [W6/6] Verifying watchOS Device (watchos arm64) Compile & Link ===", flush=True)
+        dev_build_cmd = [
+            "xcodebuild",
+            "build",
+            "-project",
+            "PocketAntigravity.xcodeproj",
+            "-scheme",
+            WATCH_SCHEME,
+            "-configuration",
+            "Debug",
+            "-destination",
+            "generic/platform=watchOS",
+            "-derivedDataPath",
+            str(derived_dev),
+            "ARCHS=arm64",
+            "CODE_SIGNING_ALLOWED=NO",
+            "CODE_SIGNING_REQUIRED=NO",
+            "CODE_SIGN_IDENTITY=",
+        ]
+        _stream_command(dev_build_cmd, repo_root, out_dir / "xcodebuild-watchos.log")
+        timings["watchDeviceBuild"] = round(time.monotonic() - t_dev, 2)
+        print(f"  [PASS] watchOS Device (arm64) compile & link succeeded in {timings['watchDeviceBuild']}s.", flush=True)
+
     timings["total"] = round(time.monotonic() - t_start, 2)
 
     manifest = {

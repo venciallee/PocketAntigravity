@@ -132,7 +132,7 @@ jobs:
     needs: plan-and-fast-gates
     if: needs.plan-and-fast-gates.outputs.needs_macos == 'true'
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 55
 
     steps:
       - name: Checkout repository
