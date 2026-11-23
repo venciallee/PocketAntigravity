@@ -54,17 +54,17 @@ public struct WatchApprovalNotificationView: View {
                     .padding(.top, 2)
 
                 Text(approval.commandLine)
-                    .font(.system(size: 12.5, weight: .regular, design: .monospaced))
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
                     .foregroundStyle(WatchTheme.inkBody)
-                    .lineSpacing(2)
+                    .lineSpacing(1.8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 9)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 13, style: .continuous)
                             .fill(WatchTheme.card)
                     )
-                    .padding(.top, 8)
+                    .padding(.top, 7)
                     .accessibilityIdentifier("watch.approval.command")
 
                 VStack(spacing: 7) {

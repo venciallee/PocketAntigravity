@@ -27,13 +27,14 @@ public struct WatchArtifactSummaryView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     WatchNavigationHeader(title: artifact.title, onBack: onBack)
 
-                    VStack(alignment: .leading, spacing: 9) {
+                    VStack(alignment: .leading, spacing: 7) {
                         Text(artifact.headline)
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 14.5, weight: .bold))
                             .foregroundStyle(WatchTheme.inkPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.9)
 
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 7) {
                             ForEach(artifact.points) { point in
                                 keyPointRow(point)
                             }

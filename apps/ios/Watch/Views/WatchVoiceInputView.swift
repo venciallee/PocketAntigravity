@@ -91,7 +91,7 @@ public struct WatchVoiceInputView: View {
                 + Text(store.voicePartialWord)
                     .foregroundStyle(WatchTheme.inkMuted)
             )
-            .font(.system(size: 16, weight: .bold))
+            .font(.system(size: 15, weight: .bold))
             .lineSpacing(1.5)
             .lineLimit(3)
             .frame(maxWidth: .infinity, alignment: .leading)

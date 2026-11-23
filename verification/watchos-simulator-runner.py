@@ -253,10 +253,10 @@ def main() -> int:
     )
 
     t_build = time.monotonic()
-    print(f"=== [W2/4] Building {WATCH_SCHEME} for watchsimulator ({sim_name}) ===", flush=True)
+    print(f"=== [W2/5] Building {WATCH_SCHEME} + AGPocketWatchUITests for watchsimulator ({sim_name}) ===", flush=True)
     sim_build_cmd = [
         "xcodebuild",
-        "build",
+        "build-for-testing",
         "-project",
         "PocketAntigravity.xcodeproj",
         "-scheme",
@@ -274,7 +274,7 @@ def main() -> int:
 
     if not args.skip_device_build:
         t_dev = time.monotonic()
-        print(f"=== [W2b/4] Verifying watchOS Device (watchos arm64) Compile & Link ===", flush=True)
+        print(f"=== [W2b/5] Verifying watchOS Device (watchos arm64) Compile & Link ===", flush=True)
         dev_build_cmd = [
             "xcodebuild",
             "build",
@@ -298,18 +298,44 @@ def main() -> int:
     boot_proc.wait()
     subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
 
+    t_uitest = time.monotonic()
+    xcresult_path = out_dir / "AGPocketWatchUITests.xcresult"
+    shutil.rmtree(xcresult_path, ignore_errors=True)
+    print(f"=== [W3/5] Running Real watchOS XCUITest E2E Suite (AGPocketWatchUITests) on {sim_name} ===", flush=True)
+    watch_uitest_cmd = [
+        "xcodebuild",
+        "test-without-building",
+        "-project",
+        "PocketAntigravity.xcodeproj",
+        "-scheme",
+        WATCH_SCHEME,
+        "-destination",
+        f"id={udid}",
+        "-derivedDataPath",
+        str(derived_sim),
+        "-only-testing:AGPocketWatchUITests",
+        "-resultBundlePath",
+        str(xcresult_path),
+        "CODE_SIGN_IDENTITY=-",
+        "CODE_SIGNING_REQUIRED=NO",
+        "AD_HOC_CODE_SIGNING_ALLOWED=YES",
+    ]
+    _stream_command(watch_uitest_cmd, repo_root, out_dir / "watch-uitests.log")
+    timings["watchUITests"] = round(time.monotonic() - t_uitest, 2)
+    print(f"  [PASS] Real watchOS XCUITest Suite succeeded in {timings['watchUITests']}s.", flush=True)
+
     app_candidates = list((derived_sim / "Build" / "Products" / "Debug-watchsimulator").glob(WATCH_WRAPPER))
     if not app_candidates:
         raise FileNotFoundError(
             f"Built {WATCH_WRAPPER} not found under {derived_sim / 'Build/Products/Debug-watchsimulator'}"
         )
     watch_app_path = app_candidates[0]
-    print(f"=== [W3/4] Installing {watch_app_path.name} onto {sim_name} ===", flush=True)
+    print(f"=== [W4/5] Installing {watch_app_path.name} onto {sim_name} ===", flush=True)
     subprocess.run(["xcrun", "simctl", "install", udid, str(watch_app_path)], check=True)
 
     t_shots = time.monotonic()
     captured: list[str] = []
-    print(f"=== [W4/4] Capturing all {len(WATCH_SCENES)} Native watchOS SwiftUI Screens ===", flush=True)
+    print(f"=== [W5/5] Capturing all {len(WATCH_SCENES)} Native watchOS SwiftUI Screens ===", flush=True)
     for scene_id, label in WATCH_SCENES:
         subprocess.run(["xcrun", "simctl", "terminate", udid, WATCH_BUNDLE_ID], check=False)
         launch_env = {k: v for k, v in os.environ.items() if not k.startswith("SIMCTL_CHILD_AGPOCKET_")}

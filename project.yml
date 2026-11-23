@@ -205,6 +205,23 @@ targets:
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Automatic
 
+  AGPocketWatchUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: tests/watchos-ui
+    dependencies:
+      - target: AGPocketWatch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(ANTIGRAVITY_BUNDLE_PREFIX).watchkitapp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: AGPocketWatch
+        TARGETED_DEVICE_FAMILY: "4"
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+
 schemes:
   AGPocket:
     build:
@@ -222,5 +239,10 @@ schemes:
     build:
       targets:
         AGPocketWatch: all
+        AGPocketWatchUITests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - name: AGPocketWatchUITests

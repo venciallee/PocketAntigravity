@@ -139,8 +139,8 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_stages"] = [1]
         return res
 
-    if norm == "verification/watchos-simulator-runner.py":
-        res = _empty_impact("watchos-runner", "Apple Watch Simulator runner changed")
+    if norm in {"verification/watchos-simulator-runner.py", "verification/verify_watch_esdd.py"}:
+        res = _empty_impact("watchos-runner", "Apple Watch Simulator or ESDD verification runner changed")
         res["gate3_ios_build"] = True
         res["watchos_sim"] = True
         return res
@@ -695,6 +695,12 @@ def classify_file(path: str) -> dict[str, Any]:
         return res
 
     # 13. UI Tests harness itself -> run all XCUITests (static 13-screen screenshots unaffected)
+    if norm.startswith("tests/watchos-ui/"):
+        res = _empty_impact("watchos-uitests", "Apple Watch XCUITest suite changed")
+        res["gate3_ios_build"] = True
+        res["watchos_sim"] = True
+        return res
+
     if norm.startswith("tests/ios-ui/"):
         res = _empty_impact("ios-uitests", "XCUITest suite changed (running all XCUITest cases)")
         res["gate3_ios_build"] = True
