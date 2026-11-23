@@ -146,4 +146,11 @@ public protocol AntigravityKmpEnginePort: Sendable {
     func onBackground()
     func onForeground() async
     func disconnectAndClearCredentials() async
+
+    /// Zero-secret stage-by-stage diagnostic breadcrumb from the active or latest KMP handshake attempt.
+    var lastHandshakeDiagnostic: String { get }
+}
+
+public extension AntigravityKmpEnginePort {
+    var lastHandshakeDiagnostic: String { "" }
 }

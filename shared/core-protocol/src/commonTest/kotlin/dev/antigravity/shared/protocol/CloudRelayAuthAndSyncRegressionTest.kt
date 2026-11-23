@@ -427,4 +427,90 @@ class CloudRelayAuthAndSyncRegressionTest {
             )
         }
     }
+
+    @Test
+    fun testApiServiceHeadersIncludeMobileSafariUserAgentAndNormalizeVanityOrigin() {
+        assertEquals(
+            "https://antigravity.google.com",
+            SapisidHashGenerator.normalizeOrigin("https://antigravity.google/r/abc-123"),
+        )
+        assertEquals(
+            "https://antigravity.google.com",
+            SapisidHashGenerator.normalizeOrigin("https://ANTIGRAVITY.GOOGLE"),
+        )
+
+        val headers = SapisidHashGenerator.buildApiServiceHeaders(
+            cookieHeader = "SAPISID=test_val; SID=test_sid",
+            origin = "https://antigravity.google/r/abc-123",
+            apiKey = "AI" + "zaSyUAHEADER0000000000000000000000000",
+            authUser = "0",
+            timestampSeconds = 1_750_000_000L,
+        )
+        assertEquals(SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT, headers["User-Agent"])
+        assertEquals("https://antigravity.google.com", headers["Origin"])
+        assertEquals("https://antigravity.google.com/", headers["Referer"])
+        assertTrue(headers["Authorization"]?.startsWith("SAPISIDHASH ") == true)
+    }
+
+    @Test
+    fun testVerifyConnectionDefersSlowInitialTrajectorySyncInsteadOfTimingOut504() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyFASTHANDSHAKE00000000000000000000"
+            val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            val secretCookie = "SUPER_SECRET_SAPISID_VALUE_999"
+            var observedUserAgent: String? = null
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        observedUserAgent = request.headers["User-Agent"]
+                        respond(
+                            content = """[[["$rawUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        // Simulate a slow VPN / large trajectory list stalling beyond the initial sync soft cap
+                        kotlinx.coroutines.delay(15_000L)
+                        respond("", HttpStatusCode.OK)
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = rawUuid,
+                hostname = "Antigravity Desktop",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google/r/$rawUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=$secretCookie; SID=sid_token",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val startedMs = currentTimeMillis()
+            val handshake = client.verifyConnection(allowCrossHostFallback = true)
+            val elapsedMs = currentTimeMillis() - startedMs
+
+            assertEquals("MacBook Pro", handshake.resolvedHostname)
+            assertEquals(rawUuid, handshake.resolvedInstanceUuid)
+            assertEquals(validKey, handshake.resolvedRelayApiKey)
+            assertTrue(handshake.isSelectedHostOnline)
+            assertTrue(handshake.summaries.isEmpty(), "Stalled initial sync must be deferred rather than blocking handshake")
+            assertTrue(elapsedMs < 12_000L, "Handshake must complete well before 22s hard cap even when initial sync stalls; took ${elapsedMs}ms")
+            assertEquals(SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT, observedUserAgent)
+
+            val diag = client.currentHandshakeDiagnostic()
+            assertTrue(diag.contains("engine=${platformTransportEngineName()}"), "Expected engine in diagnostic: $diag")
+            assertTrue(diag.contains("origin=antigravity.google.com"), "Expected canonical origin in diagnostic: $diag")
+            assertTrue(diag.contains("sync:deferred"), "Expected sync:deferred breadcrumb in diagnostic: $diag")
+            assertTrue(!diag.contains(secretCookie), "Diagnostic must never leak raw cookie values: $diag")
+            assertTrue(!diag.contains(validKey), "Diagnostic must never leak full API key: $diag")
+        }
+    }
 }

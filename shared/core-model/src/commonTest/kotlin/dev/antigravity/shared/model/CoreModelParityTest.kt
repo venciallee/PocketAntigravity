@@ -82,6 +82,18 @@ class CoreModelParityTest {
         val lanUri = "antigravity://pair?url=http://192.168.1.5:8787&csrf=secret-token"
         assertTrue(RemoteHostInstance.isDirectLanPairingUri(lanUri))
         assertNull(RemoteHostInstance.parseRemoteControlTarget(lanUri))
+
+        // Vanity `antigravity.google` host MUST canonicalize to `antigravity.google.com` so cookies and SAPISIDHASH align
+        assertEquals("antigravity.google.com", RemoteHostInstance.canonicalRelayHost("antigravity.google"))
+        assertEquals("antigravity.google.com", RemoteHostInstance.canonicalRelayHost("ANTIGRAVITY.GOOGLE"))
+        assertEquals("staging.antigravity.google.com", RemoteHostInstance.canonicalRelayHost("staging.antigravity.google"))
+        val vanity = RemoteHostInstance.parseRemoteControlTarget("https://antigravity.google/r/lt74xt6l0m-golden-star")
+        assertNotNull(vanity)
+        assertEquals("https://antigravity.google.com/r/lt74xt6l0m-golden-star", vanity.canonicalRelayUrlString)
+        assertEquals(
+            "https://antigravity.google.com/r/lt74xt6l0m-golden-star",
+            RemoteHostInstance.resolveEffectiveRelayTarget("https://antigravity.google/r/lt74xt6l0m-golden-star", null),
+        )
     }
 
     @Test
