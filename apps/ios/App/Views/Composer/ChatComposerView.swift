@@ -541,7 +541,7 @@ public struct ChatComposerView: View {
 
     private var unifiedComposerToolbar: some View {
         let modelPill = modelPillComponents
-        return HStack(spacing: 8) {
+        return HStack(spacing: 5) {
             // 1. `+` Add Context Button
             Button {
                 isShowingAddContextSheet = true
@@ -549,7 +549,7 @@ public struct ChatComposerView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(AntigravityTheme.inkReading)
-                    .frame(width: 34, height: AntigravityTheme.minTouchTargetPt)
+                    .frame(width: 30, height: AntigravityTheme.minTouchTargetPt)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -560,12 +560,13 @@ public struct ChatComposerView: View {
             Button {
                 isShowingModelAndModeSheet = true
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(modelPill.name)
                             .font(.system(size: 13.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.88)
                             .truncationMode(.tail)
                         if let effort = modelPill.effort {
                             Text(effort)
@@ -578,35 +579,37 @@ public struct ChatComposerView: View {
                         .font(.system(size: 9.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 2)
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .layoutPriority(1)
             .accessibilityLabel(
                 modelPill.effort.map { "\(modelPill.name), \($0) effort" } ?? modelPill.name
             )
             .accessibilityIdentifier("composer-pill-model")
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
 
             // 3. Permission Preset Pill (`🛡 Default ⌄`)
             Button {
                 isShowingPermissionsSheet = true
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Image(systemName: "shield")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Text(permissionShortLabel)
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
-                .padding(.horizontal, 6)
+                .padding(.horizontal, 4)
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 .contentShape(Rectangle())
             }
@@ -624,7 +627,7 @@ public struct ChatComposerView: View {
                     .font(.system(size: voiceManager.isRecording ? 12.5 : 16, weight: .regular))
                     .foregroundStyle(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.inkReading)
                     .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 34, height: AntigravityTheme.minTouchTargetPt)
+                    .frame(width: 30, height: AntigravityTheme.minTouchTargetPt)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -641,7 +644,7 @@ public struct ChatComposerView: View {
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 36, height: 36)
                     .background(primaryActionBackground, in: Circle())
-                    .frame(width: 38, height: AntigravityTheme.minTouchTargetPt)
+                    .frame(width: 36, height: AntigravityTheme.minTouchTargetPt)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

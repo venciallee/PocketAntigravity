@@ -157,6 +157,30 @@ fun AntigravityAppRoot(
         }
     }
 
+    val activeChatRouteId = (currentRoute as? AppRoute.CascadeChat)?.cascadeId
+    val activeChatSummary = remember(activeChatRouteId, syncState.summaries) {
+        if (activeChatRouteId.isNullOrBlank()) null
+        else syncState.summaries.firstOrNull { it.cascadeId == activeChatRouteId }
+    }
+    LaunchedEffect(
+        activeChatRouteId,
+        activeChatSummary?.stepCount,
+        activeChatSummary?.status,
+        activeChatSummary?.updatedAtEpochMs,
+    ) {
+        val cid = activeChatRouteId ?: return@LaunchedEffect
+        if (coordinator.isVerificationMode || cid.startsWith("cascade-new-")) return@LaunchedEffect
+        val summary = activeChatSummary ?: return@LaunchedEffect
+        runCatching {
+            coordinator.syncSteps(
+                cascadeId = cid,
+                knownStepCount = summary.stepCount,
+                isCloud = summary.isCloud,
+                instanceUuidOverride = summary.originInstanceUuid,
+            )
+        }
+    }
+
     fun navigateTo(destination: AppRoute) {
         previousRoute = currentRoute
         activeChatOverlay = ChatOverlaySheet.NONE

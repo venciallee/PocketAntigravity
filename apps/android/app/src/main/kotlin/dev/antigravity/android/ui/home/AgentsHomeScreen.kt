@@ -1125,11 +1125,27 @@ fun AgentsSidebarDrawerContent(
                 }
             }
 
-            allProjects.forEach { project ->
+            val consumedIds = mutableSetOf<String>()
+            val rawGroups = allProjects.map { project ->
+                val projIsCloud = project.runtime == ProjectRuntimeTarget.CLOUD
                 val projectItems = visibleSummaries.filter { s ->
-                    (s.projectSlug == project.id || s.projectSlug == project.name) &&
-                        (!s.isPinned || s.cascadeId == activeHighlightCascadeId)
+                    if (s.cascadeId in consumedIds) return@filter false
+                    val matchesProject = s.projectSlug == project.id ||
+                        (s.projectSlug == project.name && s.isCloud == projIsCloud)
+                    matchesProject && (!s.isPinned || s.cascadeId == activeHighlightCascadeId)
                 }
+                projectItems.forEach { consumedIds.add(it.cascadeId) }
+                project to projectItems
+            }
+            val populatedNames = rawGroups
+                .filter { (_, items) -> items.isNotEmpty() }
+                .map { (proj, _) -> proj.name }
+                .toSet()
+            val dedupedGroups = rawGroups.filterNot { (proj, items) ->
+                items.isEmpty() && proj.name in populatedNames
+            }
+
+            dedupedGroups.forEach { (project, projectItems) ->
                 item(key = "project-header-${project.id}") {
                     Row(
                         modifier = Modifier
@@ -1147,7 +1163,7 @@ fun AgentsSidebarDrawerContent(
                             modifier = Modifier.size(18.dp),
                         )
                         Text(
-                            text = if (project.runtime == ProjectRuntimeTarget.CLOUD && !project.name.contains("/")) {
+                            text = if (coordinator.isVerificationMode && project.runtime == ProjectRuntimeTarget.CLOUD && !project.name.contains("/")) {
                                 "acme/${project.name}"
                             } else {
                                 project.name

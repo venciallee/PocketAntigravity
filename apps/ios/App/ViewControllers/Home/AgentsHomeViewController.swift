@@ -227,11 +227,32 @@ public struct AgentsHomeViewController: View {
         ]
     }
 
-    private var resolvedSelectedProjectTitle: String {
+    private var resolvedSelectedProject: ProjectWorkspace? {
         if let match = selectableProjects.first(where: { $0.id == selectedProjectSlug || $0.name == selectedProjectSlug }) {
-            return match.name
+            return match
         }
-        return selectableProjects.first?.name ?? "ledger-svc"
+        return selectableProjects.first(where: { $0.runtime != .cloud }) ?? selectableProjects.first
+    }
+
+    private var resolvedSelectedProjectTitle: String {
+        resolvedSelectedProject?.name ?? "ledger-svc"
+    }
+
+    private func syncSelectedProjectWithLiveStore() {
+        let nonEmpty = store.projects.filter { !$0.isNoProject }
+        guard !nonEmpty.isEmpty else { return }
+        if let current = nonEmpty.first(where: { $0.id == selectedProjectSlug || $0.name == selectedProjectSlug }) {
+            selectedProjectSlug = current.id
+            isCloudTargetSelected = (current.runtime == .cloud)
+            return
+        }
+        let preferred = nonEmpty.first(where: { $0.id == store.selectedProjectId })
+            ?? nonEmpty.first(where: { $0.runtime != .cloud })
+            ?? nonEmpty.first
+        if let preferred {
+            selectedProjectSlug = preferred.id
+            isCloudTargetSelected = (preferred.runtime == .cloud)
+        }
     }
 
     public var body: some View {
@@ -300,11 +321,10 @@ public struct AgentsHomeViewController: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agents-home-screen")
         .onAppear {
-            if !store.selectedProjectId.isEmpty {
-                selectedProjectSlug = store.selectedProjectId
-            } else if let first = store.projects.first(where: { !$0.isNoProject }) {
-                selectedProjectSlug = first.id
-            }
+            syncSelectedProjectWithLiveStore()
+        }
+        .onChange(of: store.projects.map(\.id)) { _, _ in
+            syncSelectedProjectWithLiveStore()
         }
         .sheet(isPresented: $isShowingGlobalSearch) {
             GlobalConversationSearchSheet(
@@ -655,10 +675,13 @@ public struct AgentsHomeViewController: View {
                 placeholderOverride: "Ask anything, @ to mention, / for actions",
                 isHomeComposer: true,
                 onSubmitDraft: { promptText in
-                    let slug = selectedProjectSlug.isEmpty ? "ledger-svc" : selectedProjectSlug
-                    _ = store.createConversationInProject(slug)
-                    store.composerDraftText = promptText
-                    store.sendCurrentDraft()
+                    let slug = resolvedSelectedProject?.id ?? "ledger-svc"
+                    let cleanTitle = String(promptText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(48))
+                    _ = store.createConversationInProject(
+                        slug,
+                        title: cleanTitle.isEmpty ? "New Conversation" : cleanTitle,
+                        initialPrompt: promptText
+                    )
                 }
             )
             .padding(.horizontal, 6)
@@ -910,8 +933,13 @@ public struct AgentsSidebarDrawerView: View {
         var groups: [DrawerProjectGroup] = []
         var consumedIds: Set<String> = []
         for proj in store.projects {
-            let matching = visibleSummaries.filter {
-                $0.projectSlug == proj.id || $0.projectSlug == proj.name
+            let projIsCloud = (proj.runtime == .cloud)
+            let matching = visibleSummaries.filter { summary in
+                guard !consumedIds.contains(summary.cascadeId) else { return false }
+                if summary.projectSlug == proj.id {
+                    return true
+                }
+                return summary.projectSlug == proj.name && summary.isCloud == projIsCloud
             }
             for item in matching { consumedIds.insert(item.cascadeId) }
             let rows = matching.map(rowModel(from:)).filter(matchesSearch)
@@ -920,12 +948,15 @@ public struct AgentsSidebarDrawerView: View {
                     DrawerProjectGroup(
                         id: proj.id,
                         displayName: proj.name,
-                        isCloud: proj.runtime == .cloud,
+                        isCloud: projIsCloud,
                         conversations: rows
                     )
                 )
             }
         }
+        // Suppress empty duplicate project rows when another runtime group with the same display name already has active sessions
+        let populatedNames = Set(groups.filter { !$0.conversations.isEmpty }.map(\.displayName))
+        groups.removeAll { $0.conversations.isEmpty && populatedNames.contains($0.displayName) }
         let ungrouped = visibleSummaries
             .filter { !consumedIds.contains($0.cascadeId) }
             .map(rowModel(from:))

@@ -298,4 +298,208 @@ final class KmpEnginePortTests: XCTestCase {
         let disconnects = await engine.disconnectCount
         XCTAssertEqual(disconnects, 1)
     }
+
+    @MainActor
+    func testKmpSummaryStreamPreservesMarkAllReadAndTriggersActiveChatSync() async throws {
+        let engine = StreamingKmpEngineDouble()
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+
+        let connected = await store.connectDirectLAN(
+            endpointURLString: "http://127.0.0.1:18787",
+            csrfToken: "csrf-stream-test",
+            hostName: "Stream-MacBook"
+        )
+        XCTAssertTrue(connected)
+        XCTAssertEqual(store.unreadCount, 1)
+
+        // Mark all as read -> unread count drops to 0
+        store.markAllConversationsAsRead()
+        XCTAssertEqual(store.unreadCount, 0)
+
+        // Emit stale snapshot from KMP summary stream -> must NOT re-mark unread
+        let baseDate = store.summaries.first?.updatedAt ?? Date()
+        engine.emit([
+            CascadeSummary(
+                cascadeId: "kmp-live-session-1",
+                title: "KMP Powered Session",
+                projectSlug: "ledger-svc",
+                workspaceUri: "file:///Users/dev/code/ledger-svc",
+                status: .done,
+                stepCount: 2,
+                updatedAt: baseDate,
+                isUnread: true
+            )
+        ])
+        try? await Task.sleep(nanoseconds: 80_000_000)
+        XCTAssertEqual(store.unreadCount, 0, "Stale KMP stream snapshot must not revert markAllConversationsAsRead")
+
+        // Open active chat, then emit PC stepCount update -> must trigger immediate syncSteps without waiting for fallback timer
+        store.activeCascadeId = "kmp-live-session-1"
+        store.activeRoute = .cascadeChat("kmp-live-session-1")
+        let initialSyncCount = await engine.syncStepsCalls.count
+
+        engine.emit([
+            CascadeSummary(
+                cascadeId: "kmp-live-session-1",
+                title: "KMP Powered Session",
+                projectSlug: "ledger-svc",
+                workspaceUri: "file:///Users/dev/code/ledger-svc",
+                status: .done,
+                stepCount: 4,
+                updatedAt: baseDate.addingTimeInterval(15),
+                isUnread: true
+            )
+        ])
+        for _ in 0..<25 {
+            let count = await engine.syncStepsCalls.count
+            if count > initialSyncCount { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let finalSyncCount = await engine.syncStepsCalls.count
+        XCTAssertGreaterThan(finalSyncCount, initialSyncCount, "KMP stream update advancing active chat stepCount must immediately trigger syncSteps")
+        XCTAssertEqual(store.unreadCount, 0, "Activity on the currently viewed active chat must stay marked read")
+
+        // Verify CascadeDisplayItem.id includes step type so index collisions never reuse stale views
+        let userStep = CascadeStep(cascadeId: "cid-1", stepIndex: 1, type: .userInput, status: .done, userInput: "hi")
+        let plannerStep = CascadeStep(cascadeId: "cid-1", stepIndex: 1, type: .plannerResponse, status: .done, plannerResponse: PlannerResponsePayload(response: "hello"))
+        XCTAssertNotEqual(CascadeDisplayItem.single(userStep).id, CascadeDisplayItem.single(plannerStep).id)
+    }
+}
+
+private final class StreamHub: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncStream<[CascadeSummary]>.Continuation?
+
+    func makeStream() -> AsyncStream<[CascadeSummary]> {
+        AsyncStream { cont in
+            self.lock.lock()
+            self.continuation = cont
+            self.lock.unlock()
+        }
+    }
+
+    func yield(_ summaries: [CascadeSummary]) {
+        lock.lock()
+        let cont = continuation
+        lock.unlock()
+        cont?.yield(summaries)
+    }
+}
+
+private actor StreamingKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "StreamingKmpEngineDouble" }
+    private let hub = StreamHub()
+    var syncStepsCalls: [String] = []
+
+    nonisolated func emit(_ summaries: [CascadeSummary]) {
+        hub.yield(summaries)
+    }
+
+    func connectDirectLan(
+        endpointURLString: String,
+        csrfToken: String,
+        certSHA256: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(
+            latencyMs: 10,
+            workspaces: [WorkspaceInfo(workspaceUri: "file:///Users/dev/code/ledger-svc", displayName: "ledger-svc", activeBranch: "main")],
+            summaries: [
+                CascadeSummary(
+                    cascadeId: "kmp-live-session-1",
+                    title: "KMP Powered Session",
+                    projectSlug: "ledger-svc",
+                    workspaceUri: "file:///Users/dev/code/ledger-svc",
+                    status: .done,
+                    stepCount: 2,
+                    updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    isUnread: true
+                )
+            ],
+            resolvedHostname: hostName,
+            isSelectedHostOnline: true
+        )
+    }
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(latencyMs: 10, workspaces: [], summaries: [], isSelectedHostOnline: true)
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        HostReachabilityProbeResult(latencyMs: 10, isSelectedHostOnline: true)
+    }
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult {
+        KmpFederatedSyncResult(workspaces: [], summaries: [], latencyMs: 10)
+    }
+
+    func syncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        syncStepsCalls.append(cascadeId)
+        return [
+            CascadeStep(cascadeId: cascadeId, stepIndex: 0, type: .userInput, status: .done, userInput: "Hello"),
+            CascadeStep(cascadeId: cascadeId, stepIndex: 1, type: .plannerResponse, status: .done, plannerResponse: PlannerResponsePayload(response: "World"))
+        ]
+    }
+
+    func startConversation(
+        workspaceUri: String,
+        initialPrompt: String,
+        modelId: String,
+        cloudProjectId: String?,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> String { "cid-stream-created" }
+
+    func sendMessage(
+        cascadeId: String,
+        message: String,
+        workspaceUri: String,
+        attachments: [ComposerAttachmentChip],
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode,
+        agentPersona: String,
+        isCloud: Bool,
+        cloudProjectId: String?,
+        permissionPreset: AgentPermissionPreset?,
+        instanceUuidOverride: String?,
+        isOptimisticDraft: Bool
+    ) async throws -> KmpSendMessageResult {
+        KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: true, queuedInOutbox: false)
+    }
+
+    func resolveWaitingInteraction(
+        step: CascadeStep,
+        decision: InteractionDecision,
+        workspaceUri: String?,
+        instanceUuidOverride: String?
+    ) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { hub.makeStream() }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
 }

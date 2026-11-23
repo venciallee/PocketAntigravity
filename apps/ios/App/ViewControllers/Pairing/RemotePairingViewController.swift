@@ -589,12 +589,14 @@ public struct RemotePairingViewController: View {
                 .overlay(AntigravityTheme.subtleDivider)
 
             // Theme Swatch Row (`Obsidian`, `Nord`, `Everforest`)
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Text("Theme")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textPrimary)
-                Spacer()
-                HStack(spacing: 16) {
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 8)
+                HStack(spacing: 12) {
                     themeSwatchButton(
                         preset: .obsidian,
                         label: "Obsidian",
@@ -708,6 +710,8 @@ public struct RemotePairingViewController: View {
                 Text(label)
                     .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .buttonStyle(.plain)

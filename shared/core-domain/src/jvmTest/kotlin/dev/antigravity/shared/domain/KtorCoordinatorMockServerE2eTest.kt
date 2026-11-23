@@ -81,9 +81,10 @@ class KtorCoordinatorMockServerE2eTest {
             assertEquals(ConnectionLifecyclePhase.OnlineIdle, coordinator.connectionState.value.lifecyclePhase)
             assertNotNull(secretStore.loadCredentials())
 
-            // Wait briefly for 5-byte Connect-RPC JetboxSubscribeToSummaries stream to deliver snapshot + delta
-            repeat(20) {
-                if (coordinator.syncState.value.summaries.isNotEmpty()) return@repeat
+            // Wait briefly for 5-byte Connect-RPC JetboxSubscribeToSummaries stream to deliver snapshot (Frame 1) + delta (Frame 2)
+            repeat(40) {
+                val rl = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == "cas-rate-limiter" }
+                if (rl?.status == CortexStepStatus.WAITING) return@repeat
                 delay(50)
             }
             assertTrue(coordinator.syncState.value.summaries.isNotEmpty(), "Jetbox 5-byte stream should populate summaries")

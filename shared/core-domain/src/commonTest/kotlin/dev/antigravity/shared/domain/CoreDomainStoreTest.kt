@@ -212,4 +212,68 @@ class CoreDomainStoreTest {
         assertFalse(coordinator.connectionState.value.isConnecting)
         assertEquals(ConnectionLifecyclePhase.Disconnected, coordinator.connectionState.value.lifecyclePhase)
     }
+
+    @Test
+    fun testMarkAllReadPreservedAcrossJetboxStreamReplays() = runTest {
+        val coordinator = AntigravityCoreCoordinator(scope = this)
+        val baseUpdatedMs = 1_700_000_000_000L
+        coordinator.conversationSyncStore.applyStreamEvent(
+            JsonStepAndSummaryDecoder.JetboxDecodedEvent(
+                summaries = listOf(
+                    CascadeSummary(
+                        cascadeId = "cas-unread-1",
+                        title = "Review API",
+                        projectSlug = "ledger-svc",
+                        workspaceUri = "file:///Users/dev/ledger-svc",
+                        status = CortexStepStatus.DONE,
+                        stepCount = 5,
+                        updatedAtEpochMs = baseUpdatedMs,
+                        isUnread = true,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(1, coordinator.syncState.value.summaries.count { it.isUnread })
+
+        coordinator.markAllConversationsRead()
+        assertEquals(0, coordinator.syncState.value.summaries.count { it.isUnread })
+
+        // Replaying the same snapshot from JetboxSubscribeToSummaries must NOT flip unread back to true
+        coordinator.conversationSyncStore.applyStreamEvent(
+            JsonStepAndSummaryDecoder.JetboxDecodedEvent(
+                summaries = listOf(
+                    CascadeSummary(
+                        cascadeId = "cas-unread-1",
+                        title = "Review API",
+                        projectSlug = "ledger-svc",
+                        workspaceUri = "file:///Users/dev/ledger-svc",
+                        status = CortexStepStatus.DONE,
+                        stepCount = 5,
+                        updatedAtEpochMs = baseUpdatedMs,
+                        isUnread = true,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(0, coordinator.syncState.value.summaries.count { it.isUnread })
+
+        // Genuinely newer activity (higher stepCount + newer timestamp) marks unread again
+        coordinator.conversationSyncStore.applyStreamEvent(
+            JsonStepAndSummaryDecoder.JetboxDecodedEvent(
+                summaries = listOf(
+                    CascadeSummary(
+                        cascadeId = "cas-unread-1",
+                        title = "Review API",
+                        projectSlug = "ledger-svc",
+                        workspaceUri = "file:///Users/dev/ledger-svc",
+                        status = CortexStepStatus.DONE,
+                        stepCount = 7,
+                        updatedAtEpochMs = baseUpdatedMs + 60_000L,
+                        isUnread = true,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(1, coordinator.syncState.value.summaries.count { it.isUnread })
+    }
 }

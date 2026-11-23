@@ -478,16 +478,116 @@ public final class AntigravitySessionStore {
                 guard let self, !Task.isCancelled, self.summaryStreamGeneration == generation else { break }
                 guard !updatedSummaries.isEmpty else { continue }
                 self.hasReceivedLocalStreamEvent = true
-                self.lastBackendActivityAt = Date()
+                let now = Date()
+                self.lastBackendActivityAt = now
                 var byId = Dictionary(uniqueKeysWithValues: self.summaries.map { ($0.cascadeId, $0) })
-                for item in updatedSummaries {
-                    byId[item.cascadeId] = item
+                var shouldSyncActiveChat = false
+
+                for incoming in updatedSummaries {
+                    let cid = incoming.cascadeId
+                    if let existing = byId[cid] {
+                        var merged = incoming
+                        if existing.title != "New Conversation" && merged.title == "New Conversation" {
+                            merged.title = existing.title
+                        }
+                        if existing.isCloud && !merged.isCloud {
+                            merged.isCloud = true
+                            merged.originHostName = "Antigravity"
+                        }
+                        merged.isPinned = existing.isPinned || incoming.isPinned
+                        merged.isArchived = existing.isArchived || incoming.isArchived
+                        merged.stepCount = max(existing.stepCount, incoming.stepCount)
+                        merged.currentStepIndex = max(1, merged.stepCount)
+                        merged.totalSteps = max(1, merged.stepCount)
+                        merged.cloudProjectId = incoming.cloudProjectId ?? existing.cloudProjectId
+
+                        if let optimisticExpiry = self.optimisticActiveUntilByCascadeId[cid],
+                           optimisticExpiry > now,
+                           merged.status != .waiting && merged.status != .blocked && merged.status != .error {
+                            merged.status = .inProgress
+                        }
+
+                        let latestViewed = [existing.lastUserViewTime, incoming.lastUserViewTime].compactMap { $0 }.max()
+                        merged.lastUserViewTime = latestViewed
+
+                        let stepCountAdvanced = merged.stepCount > existing.stepCount
+                        let timestampAdvanced = incoming.updatedAt.timeIntervalSince(existing.updatedAt) > 0.5
+                        let statusChanged = merged.status != existing.status
+                        let hasNewActivity = stepCountAdvanced || timestampAdvanced
+
+                        if hasNewActivity {
+                            if self.activeRoute != .cascadeChat(cid) {
+                                merged.isUnread = (merged.status != .inProgress && merged.status != .pending)
+                                self.locallyViewedAtByCascadeId.removeValue(forKey: cid)
+                            } else {
+                                merged.isUnread = false
+                                self.locallyViewedAtByCascadeId[cid] = max(now, merged.updatedAt)
+                            }
+                        } else if merged.status == .inProgress || merged.status == .pending {
+                            merged.isUnread = false
+                        } else if let localViewed = self.locallyViewedAtByCascadeId[cid], merged.updatedAt <= localViewed {
+                            merged.isUnread = false
+                        } else if let latestViewed, merged.updatedAt <= latestViewed {
+                            merged.isUnread = false
+                        } else {
+                            merged.isUnread = incoming.isUnread
+                        }
+
+                        if let localViewed = self.locallyViewedAtByCascadeId[cid], merged.updatedAt <= localViewed {
+                            merged.isUnread = false
+                        }
+
+                        merged.statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                            status: merged.status,
+                            stepCount: merged.stepCount,
+                            isUnread: merged.isUnread
+                        )
+                        byId[cid] = merged
+
+                        if cid == self.activeCascadeId && (stepCountAdvanced || timestampAdvanced || statusChanged) {
+                            shouldSyncActiveChat = true
+                        }
+                    } else {
+                        var fresh = incoming
+                        if let localViewed = self.locallyViewedAtByCascadeId[cid], fresh.updatedAt <= localViewed {
+                            fresh.isUnread = false
+                            fresh.statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                                status: fresh.status,
+                                stepCount: fresh.stepCount,
+                                isUnread: false
+                            )
+                        }
+                        byId[cid] = fresh
+                        if cid == self.activeCascadeId {
+                            shouldSyncActiveChat = true
+                        }
+                    }
                 }
-                self.summaries = byId.values.sorted { lhs, rhs in
+
+                var nextSummaries = byId.values.sorted { lhs, rhs in
                     if lhs.updatedAt != rhs.updatedAt {
                         return lhs.updatedAt > rhs.updatedAt
                     }
                     return lhs.cascadeId < rhs.cascadeId
+                }
+                let existingCloudProjects = self.projects.filter { $0.runtime == .cloud }
+                self.projects = Self.reconcileLiveProjects(
+                    workspaces: self.workspaces,
+                    summaries: &nextSummaries,
+                    existingProjects: self.projects,
+                    hostName: self.activeHost.hostname,
+                    cloudProjects: existingCloudProjects
+                )
+                self.summaries = nextSummaries
+
+                if self.isLiveBackendConnected && self.activeHost.isOnline {
+                    self.connectionLifecyclePhase = self.isCascadeStreaming ? .onlineStreaming : .onlineIdle
+                }
+                if shouldSyncActiveChat && !self.activeCascadeId.isEmpty {
+                    self.syncStepsForCascade(
+                        self.activeCascadeId,
+                        pollUntilIdle: self.activeRoute == .cascadeChat(self.activeCascadeId)
+                    )
                 }
             }
         }

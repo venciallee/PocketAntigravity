@@ -138,7 +138,6 @@ public struct CascadeChatViewController: View {
                                     switch item {
                                     case .single(let step):
                                         CascadeStepCellView(store: store, step: step)
-                                            .id("step-\(step.stepIndex)")
                                             .contextMenu {
                                                 if let text = step.plannerResponse?.response ?? step.userInput, !text.isEmpty {
                                                     Button {
@@ -199,7 +198,7 @@ public struct CascadeChatViewController: View {
                 .onAppear {
                     guard !isStaticESDDFixtureView, !store.displayItems.isEmpty else { return }
                     if let waiting = store.pendingWaitingStep {
-                        scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+                        scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
                     } else {
                         scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
                     }
@@ -702,9 +701,23 @@ public struct CascadeChatViewController: View {
 
     // MARK: - Above-Composer Status Strip
 
+    private func scrollTargetId(forStepIndex stepIndex: Int) -> String {
+        for item in store.displayItems {
+            switch item {
+            case .single(let step) where step.stepIndex == stepIndex:
+                return item.id
+            case .evidenceGroup(_, let grouped) where grouped.contains(where: { $0.stepIndex == stepIndex }):
+                return item.id
+            default:
+                continue
+            }
+        }
+        return "chat-bottom-anchor"
+    }
+
     private func openPendingApproval(for waiting: CascadeStep, scrollProxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.2)) {
-            scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+            scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
         }
         let kind = waiting.effectiveRequestedInteraction?.kind
         if kind == .askQuestion || kind == .elicitation {
@@ -746,7 +759,7 @@ public struct CascadeChatViewController: View {
             if let waiting = waitingStep, !isStaticESDDFixtureView {
                 Button {
                     withAnimation(.easeOut(duration: 0.2)) {
-                        scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+                        scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
                     }
                 } label: {
                     HStack(spacing: 8) {

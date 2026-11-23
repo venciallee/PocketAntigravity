@@ -200,7 +200,7 @@ extension AntigravitySessionStore {
         let skipUpgradeWait = materializedDirectly
 
         var currentSteps = stepsByCascadeId[activeCascadeId] ?? []
-        let nextIndex = (currentSteps.map(\.stepIndex).max() ?? 0) + 1
+        let nextIndex = (currentSteps.map(\.stepIndex).max() ?? -1) + 1
         stepLoadErrorText = nil
 
         let userStep = CascadeStep(

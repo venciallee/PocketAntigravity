@@ -673,7 +673,7 @@ public enum CascadeDisplayItem: Identifiable, Sendable, Equatable {
     public var id: String {
         switch self {
         case .single(let step):
-            return step.id
+            return "\(step.id)-\(step.type.rawValue)"
         case .evidenceGroup(let groupId, _):
             return groupId
         }
