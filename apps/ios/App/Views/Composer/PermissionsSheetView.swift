@@ -387,7 +387,7 @@ public struct PermissionsPresetPopoverView: View {
                 }
             }
         }
-        .background(showHomeBackdrop ? AntigravityTheme.canvasObsidian.ignoresSafeArea() : Color.clear)
+        .background((showHomeBackdrop ? AntigravityTheme.canvasObsidian : Color.clear).ignoresSafeArea())
     }
 }
 
@@ -563,7 +563,7 @@ public struct SlashCommandMenuOverlayView: View {
                 }
             }
         }
-        .background(showHomeBackdrop ? AntigravityTheme.canvasObsidian.ignoresSafeArea() : Color.clear)
+        .background((showHomeBackdrop ? AntigravityTheme.canvasObsidian : Color.clear).ignoresSafeArea())
     }
 }
 

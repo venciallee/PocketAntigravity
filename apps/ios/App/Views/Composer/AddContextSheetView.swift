@@ -319,7 +319,7 @@ public struct AddContextSheetView: View {
                 }
             }
         }
-        .background(showHomeBackdrop ? AntigravityTheme.canvasObsidian.ignoresSafeArea() : Color.clear)
+        .background((showHomeBackdrop ? AntigravityTheme.canvasObsidian : Color.clear).ignoresSafeArea())
     }
 
     private func popoverCategoryRow(
