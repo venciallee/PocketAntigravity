@@ -102,7 +102,9 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 │   │   └── Packages/
 │   │       └── AntigravityData/    #   Pure Swift 6 store, port protocols & extension-safe RPC package
 │   └── android/                    # Native Kotlin + Jetpack Compose Material 3 client (Android 10–16)
-│       ├── app/                    #   13 UE screens + v2.33 sheets, FGS Live Updates, Glance widget, E2E & Roborazzi tests
+│       ├── app/                    #   13 UE screens + v2.33 sheets, FGS Live Updates, Glance widget
+│       │   ├── src/test/           #     Compose interactive E2E (ATC-01..18), Roborazzi 13-screen & unit tests
+│       │   └── src/androidTest/    #     Android KVM Emulator instrumented E2E (standard Gradle layout)
 │       ├── core-ui/                #   Material 3 theme (Dark/Light/Material You), SemanticIcon mapper & Markdown components
 │       ├── core-platform/          #   AndroidLiveUpdateBuilder, BiometricPrompt, Tink+Keystore SecretStore & OS adapters
 │       └── README.md               #   Android build, Roborazzi visual QA & KVM Emulator E2E guide
@@ -113,7 +115,8 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 │   ├── core-domain/                #   7 StateFlow domain stores, DurableOutbox & shared ESDD verification fixtures
 │   └── umbrella/                   #   SKIE facade exporting AntigravityShared.xcframework & JVM/Android
 ├── tests/
-│   └── ios-ui/                     # Native iOS XCUITest interactive tap & flow suite (AGPocketUITests)
+│   ├── ios-ui/                     # Native iOS XCUITest interactive tap & flow suite (AGPocketUITests)
+│   └── README.md                   # Cross-platform test & E2E directory map (iOS, Android Gradle layout & KMP)
 ├── project.yml                     # Root XcodeGen spec assembling apps/ios/*, tests/ios-ui & AntigravityShared.xcframework
 ├── docs/                           # Platform feature matrix (PLATFORM_STATUS.md), architecture SVGs & upstream snapshots
 ├── scripts/                        # Unified verify CLI, Xcode sync, icon renderer & upstream doc-sync automation
