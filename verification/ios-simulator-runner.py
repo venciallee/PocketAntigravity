@@ -636,21 +636,28 @@ def main() -> None:
         threading.Thread(target=bridge_srv.serve_forever, daemon=True).start()
 
         try:
-            subprocess.run(["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID], check=False)
             launch_env = os.environ.copy()
             launch_env["SIMCTL_CHILD_NO_PROXY"] = "127.0.0.1,localhost,::1"
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_BACKEND_URL"] = f"http://127.0.0.1:{bridge_port}"
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_CSRF_TOKEN"] = csrf_token
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_HOST_NAME"] = "Cloud Mac Runner"
-            subprocess.run(
-                ["xcrun", "simctl", "launch", udid, APP_BUNDLE_ID],
-                env=launch_env,
-                check=True,
-            )
-            for _ in range(20):
+            for attempt in range(2):
+                subprocess.run(["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID], check=False)
+                if attempt > 0:
+                    time.sleep(1.5)
+                subprocess.run(
+                    ["xcrun", "simctl", "launch", udid, APP_BUNDLE_ID],
+                    env=launch_env,
+                    check=True,
+                )
+                for _ in range(30):
+                    if any("GetWorkspaceInfos" in p for p in rpc_hits) and any("GetAllCascadeTrajectories" in p for p in rpc_hits):
+                        break
+                    time.sleep(0.5)
                 if any("GetWorkspaceInfos" in p for p in rpc_hits) and any("GetAllCascadeTrajectories" in p for p in rpc_hits):
                     break
-                time.sleep(0.5)
+                if attempt == 0:
+                    print("  [LIVE RPC] No Connect-RPC hits after 15s; relaunching app once on Simulator...", flush=True)
             time.sleep(1.5)
 
             live_shot = out_dir / "LIVE_CONNECTED_HOME.png"
