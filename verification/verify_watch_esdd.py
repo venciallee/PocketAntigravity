@@ -378,8 +378,9 @@ WATCH_INTERACTIVE_HTML = r"""<!doctype html>
   .wave span { width: 3px; border-radius: 2px; background: #8DB8FF; display: inline-block; }
   .toast {
     position: fixed; bottom: 52px; left: 50%; transform: translateX(-50%);
+    max-width: 188px; text-align: center; line-height: 1.25;
     background: rgba(38,38,43,0.96); color: #F1F1F3; font-size: 11px; font-weight: 600;
-    padding: 5px 11px; border-radius: 999px; white-space: nowrap; z-index: 20;
+    padding: 6px 11px; border-radius: 14px; z-index: 20;
   }
 </style>
 </head>
@@ -937,10 +938,14 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
             tc_results.append({"id": tc_id, "passed": True, "detail": desc})
 
         # WTC-13: Locked / off-wrist Watch blocks approvals (Allow & Accept all) + <=5 risky files forces WORTH A LOOK + iPhone review
+        guardrail_shots: list[tuple[str, Path]] = []
         load_scene("W08_APPROVAL_NOTIFICATION", extra_query="wristLocked=1")
         click_tid("watch.approval.allow")
         txt = body_text()
         assert "Unlock Watch on wrist to approve" in txt and "Run this command?" in txt
+        shot = cdp.call("Page.captureScreenshot", {"format": "png"})
+        p_locked = shots_dir / "WTC13_WRIST_LOCKED.png"
+        p_locked.write_bytes(base64.b64decode(shot["data"]))
         load_scene("W05_CHANGED_FILES_COMPACT", extra_query="wristLocked=1")
         click_tid("watch.changes.acceptAll")
         txt = body_text()
@@ -948,6 +953,9 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
         load_scene("W05_CHANGED_FILES_COMPACT", extra_query="riskySmall=1")
         txt = body_text()
         assert "3 files" in txt and "WORTH A LOOK · 1" in txt and "go.mod" in txt and "Accept all" not in txt and "iPhone" in txt
+        shot = cdp.call("Page.captureScreenshot", {"format": "png"})
+        p_risky = shots_dir / "WTC13_RISKY_SMALL.png"
+        p_risky.write_bytes(base64.b64decode(shot["data"]))
         tc_results.append({
             "id": "WTC-13",
             "passed": True,
@@ -958,6 +966,9 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
         load_scene("W01_SESSIONS")
         click_tid("watch.home.voiceButton")
         assert "To: New task" in body_text() and "Fix flaky webhook retries on staging" in body_text()
+        shot = cdp.call("Page.captureScreenshot", {"format": "png"})
+        p_new_task = shots_dir / "WTC14_VOICE_NEW_TASK.png"
+        p_new_task.write_bytes(base64.b64decode(shot["data"]))
         click_tid("watch.voice.sendButton")
         txt = body_text()
         assert "New task sent" in txt and "Fix flaky webhook retries" in txt and "Agents" in txt
@@ -965,8 +976,17 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
         click_tid("watch.artifact.proceed")
         assert "Unlock Watch on wrist to approve" in body_text() and "Proceeding" not in body_text()
         load_scene("W04_ARTIFACT_SUMMARY", extra_query="plan=1")
+        shot = cdp.call("Page.captureScreenshot", {"format": "png"})
+        p_plan = shots_dir / "WTC14_PLAN_PROCEED.png"
+        p_plan.write_bytes(base64.b64decode(shot["data"]))
         click_tid("watch.artifact.proceed")
         assert "Proceeding" in body_text()
+        guardrail_shots = [
+            ("WTC-14a: Top-Right -> New task", p_new_task),
+            ("WTC-14b: Plan <=3 pts + Proceed", p_plan),
+            ("WTC-13a: 3 files w/ risk -> iPhone", p_risky),
+            ("WTC-13b: Wrist Locked -> Blocked", p_locked),
+        ]
         tc_results.append({
             "id": "WTC-14",
             "passed": True,
@@ -977,7 +997,7 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
         bad_overflow = {k: v for k, v in overflow_audit.items() if v > 0}
         assert not bad_overflow, f"Horizontal overflow detected on Watch screens: {bad_overflow}"
 
-        # Build side-by-side comparison overview if Pillow available
+        # Build side-by-side comparison overview & guardrails acceptance board if Pillow available
         if Image is not None and ImageDraw is not None:
             ref_dir = repo_root / "specs" / "watch" / "reference"
             thumb_w, thumb_h = 208, 248
@@ -988,7 +1008,7 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
             outer = 20
             board = Image.new("RGB", (outer * 2 + cols * card_w + 16, 70 + rows * (card_h + 14) + outer), (9, 10, 13))
             draw = ImageDraw.Draw(board)
-            draw.text((outer, 20), "AG Pocket Apple Watch — Reference Mockup (Left) vs Interactive ESDD E2E (Right) [416x496 @2x]", fill=(241, 241, 243))
+            draw.text((outer, 20), "AG Pocket Apple Watch - Reference Mockup (Left) vs Interactive ESDD E2E (Right) [416x496 @2x]", fill=(241, 241, 243))
             for idx, sid in enumerate(overflow_audit.keys()):
                 r, c = idx // cols, idx % cols
                 cx = outer + c * (card_w + 16)
@@ -1001,6 +1021,23 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
                         im.thumbnail((thumb_w, thumb_h), Image.Resampling.LANCZOS)
                         board.paste(im, (cx + card_pad + slot * (thumb_w + gap), cy + 34))
             board.save(out_dir / "WATCH_ESDD_COMPARISON_OVERVIEW.png", format="PNG")
+
+            g_pad, g_gap, g_hdr = 14, 14, 34
+            g_cw = thumb_w + g_pad * 2
+            g_ch = g_hdr + thumb_h + g_pad
+            g_board = Image.new("RGB", (outer * 2 + len(guardrail_shots) * g_cw + (len(guardrail_shots) - 1) * g_gap, 68 + g_ch + outer), (9, 10, 13))
+            g_draw = ImageDraw.Draw(g_board)
+            g_draw.text((outer, 20), "AG Pocket Apple Watch - Six Guardrails Interactive Acceptance E2E (WTC-13 & WTC-14) [416x496 @2x]", fill=(241, 241, 243))
+            for idx, (label, img_p) in enumerate(guardrail_shots):
+                cx = outer + idx * (g_cw + g_gap)
+                cy = 60
+                g_draw.rectangle([cx, cy, cx + g_cw, cy + g_ch], fill=(20, 21, 25), outline=(44, 47, 56))
+                g_draw.text((cx + g_pad, cy + 10), label, fill=(242, 184, 102) if "WTC-13" in label else (141, 184, 255))
+                if img_p.exists():
+                    im = Image.open(img_p).convert("RGB")
+                    im.thumbnail((thumb_w, thumb_h), Image.Resampling.LANCZOS)
+                    g_board.paste(im, (cx + g_pad, cy + g_hdr))
+            g_board.save(out_dir / "WATCH_GUARDRAILS_E2E_BOARD.png", format="PNG")
 
         report = {
             "passed": True,

@@ -73,12 +73,16 @@ public struct WatchRootContainerView: View {
                 Text(toast)
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(WatchTheme.inkPrimary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(
-                        Capsule()
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(WatchTheme.elevatedButton.opacity(0.95))
                     )
+                    .padding(.horizontal, 10)
                     .padding(.bottom, 10)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
