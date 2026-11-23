@@ -645,7 +645,7 @@ public class AntigravityCoreCoordinator(
             if (startSummaryStream) {
                 conversationSyncStore.startSummarySubscriptionStream(client, host)
             }
-            if (handshake.summaries.isEmpty() && handshake.workspaces.isEmpty()) {
+            if (handshake.summaries.isEmpty() || handshake.workspaces.isEmpty()) {
                 val activeScope = connectionStore.state.value.selectedHostScope
                 scope.launch {
                     try {
