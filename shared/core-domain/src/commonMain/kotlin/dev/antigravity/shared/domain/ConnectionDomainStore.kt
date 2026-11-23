@@ -87,7 +87,18 @@ public class ConnectionDomainStore(
     private var reconnectAttempt: Int = 0
     private var isMonitoringNetwork: Boolean = false
     private var connectGeneration: Long = 0L
-    private val handshakeHardTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
+    internal var handshakeHardTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
+
+    @kotlin.concurrent.Volatile
+    private var activeHandshakeClient: AntigravityKmpRpcClient? = null
+
+    @kotlin.concurrent.Volatile
+    public var lastHandshakeDiagnostic: String = ""
+        private set
+
+    public fun currentHandshakeDiagnostic(): String =
+        activeHandshakeClient?.currentHandshakeDiagnostic()?.takeIf { it.isNotBlank() }
+            ?: lastHandshakeDiagnostic
 
     private val _state = MutableStateFlow(ConnectionState())
     public val state: StateFlow<ConnectionState> = _state.asStateFlow()
@@ -590,17 +601,26 @@ public class ConnectionDomainStore(
         candidate: AntigravityKmpRpcClient,
         allowCrossHostFallback: Boolean,
     ): BackendHandshakeResult {
+        activeHandshakeClient = candidate
         val result = try {
             withTimeoutOrNull(handshakeHardTimeoutMs) {
                 candidate.verifyConnection(allowCrossHostFallback = allowCrossHostFallback)
             }
         } catch (e: CancellationException) {
+            lastHandshakeDiagnostic = candidate.currentHandshakeDiagnostic()
             if (!currentCoroutineContext().isActive) throw e
             null
+        } finally {
+            lastHandshakeDiagnostic = candidate.currentHandshakeDiagnostic()
+            if (activeHandshakeClient === candidate) {
+                activeHandshakeClient = null
+            }
         }
-        return result ?: throw AntigravityRpcError.HttpError(
+        if (result != null) return result
+        val diag = lastHandshakeDiagnostic.ifBlank { candidate.currentHandshakeDiagnostic() }
+        throw AntigravityRpcError.HttpError(
             504,
-            "Connection timed out after ${handshakeHardTimeoutMs / 1000}s (${candidate.currentHandshakeDiagnosticSummary()}). Verify Google / VPN reachability and try again.",
+            "Cloud Relay handshake timed out after ${handshakeHardTimeoutMs / 1000}s. Check Google / VPN reachability or tap Sign in with Google. [$diag]",
         )
     }
 

@@ -900,7 +900,7 @@ extension AntigravitySessionStore {
         let handshakeURLString = canonicalURLString
         let handshakeApiKey = effectiveRelayApiKey
         let activeEngine = kmpEngine
-        let engineLabel = activeEngine != nil ? "KMP" : "Swift"
+        let engineLabel = activeEngine?.engineName ?? "Swift-URLSession"
         let cookieSummary = SAPISIDHashGenerator.summarizeCookieNames(trimmedCookie)
         let keySummary = handshakeApiKey.map { "len:\($0.count)" } ?? "none"
         Self.logCloudRelayDiagnostic(
@@ -929,15 +929,19 @@ extension AntigravitySessionStore {
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: 28_000_000_000)
-                    let diagnostic: String
-                    if activeEngine != nil {
-                        diagnostic = "engine=KMP phase=outer-timeout origin=\(initialOriginPrefix) key=\(keySummary) ck=\(cookieSummary)"
-                    } else {
-                        diagnostic = await candidateClient.currentHandshakeDiagnosticSummary()
-                    }
+                    let diag: String = {
+                        if let activeEngine {
+                            let kmpDiag = activeEngine.lastHandshakeDiagnostic
+                            if !kmpDiag.isEmpty {
+                                return kmpDiag
+                            }
+                            return "engine=\(activeEngine.engineName) origin=\(initialOriginPrefix) key=\(keySummary) ck=\(cookieSummary) trace=no-kmp-trace"
+                        }
+                        return candidateClient.currentHandshakeDiagnostic()
+                    }()
                     throw AntigravityRPCError.httpError(
                         statusCode: 504,
-                        body: "Cloud Relay handshake timed out after 28s [\(diagnostic)]. Check Google / VPN reachability or tap Sign in with Google."
+                        body: "Cloud Relay handshake timed out after 28s. Check Google / VPN reachability or tap Sign in with Google. [\(diag)]"
                     )
                 }
                 guard let first = try await group.next() else {
@@ -2286,9 +2290,16 @@ extension AntigravitySessionStore {
         }
 
         let keysToPersist = refreshedHostKeys
+        let needsDeferredInitialSync = hostOnline && handshake.summaries.isEmpty && handshake.workspaces.isEmpty
         Task { [weak self] in
             if !keysToPersist.isEmpty {
                 await self?.persistHostProjections(refreshedHostKeys: keysToPersist)
+            }
+            if needsDeferredInitialSync {
+                await self?.refreshWorkspacesAndSummaries(
+                    forceFullSync: true,
+                    includeAutomations: false
+                )
             }
             if hostOnline {
                 await self?.refreshModelCatalog()

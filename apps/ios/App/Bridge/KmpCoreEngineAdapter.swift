@@ -284,9 +284,14 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
     public func disconnectAndClearCredentials() async {
         try? await coordinator.disconnectAndClearCredentials()
     }
+
+    public var lastHandshakeDiagnostic: String {
+        coordinator.lastHandshakeDiagnostic()
+    }
     #else
     public static func makeDefault() -> (any AntigravityKmpEnginePort)? { nil }
     public var engineName: String { "Unavailable" }
+    public var lastHandshakeDiagnostic: String { "" }
     public func connectDirectLan(endpointURLString: String, csrfToken: String, certSHA256: String?, hostName: String, isRestoringSavedSession: Bool) async throws -> AntigravityData.BackendHandshakeResult { throw AntigravityRPCError.invalidEndpoint }
     public func connectCloudRelay(relayURLString: String, sessionCookie: String, authUser: String?, resolvedInstanceUuid: String?, relayApiKey: String?, hostName: String, isRestoringSavedSession: Bool, strictTargetMatch: Bool) async throws -> AntigravityData.BackendHandshakeResult { throw AntigravityRPCError.invalidEndpoint }
     public func probeHostReachability(allowCrossHostFallback: Bool) async throws -> AntigravityData.HostReachabilityProbeResult { throw AntigravityRPCError.invalidEndpoint }

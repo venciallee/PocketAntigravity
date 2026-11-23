@@ -83,28 +83,16 @@ class CoreModelParityTest {
         assertTrue(RemoteHostInstance.isDirectLanPairingUri(lanUri))
         assertNull(RemoteHostInstance.parseRemoteControlTarget(lanUri))
 
-        // Alias host `antigravity.google` (without `.com`) must canonicalize to `antigravity.google.com`
-        assertEquals("antigravity.google.com", RemoteHostInstance.canonicalizeRelayHost("antigravity.google"))
-        assertEquals("staging.antigravity.google.com", RemoteHostInstance.canonicalizeRelayHost("staging.antigravity.google"))
-        val aliasParsed = RemoteHostInstance.parseRemoteControlTarget("https://antigravity.google/r/golden-star")
-        assertNotNull(aliasParsed)
-        assertEquals("https://antigravity.google.com", aliasParsed.relayOrigin)
-        assertEquals("https://antigravity.google.com/r/golden-star", aliasParsed.canonicalRelayUrlString)
-
-        // resolveEffectiveRelayTarget upgrades alias host to .google.com
+        // Vanity `antigravity.google` host MUST canonicalize to `antigravity.google.com` so cookies and SAPISIDHASH align
+        assertEquals("antigravity.google.com", RemoteHostInstance.canonicalRelayHost("antigravity.google"))
+        assertEquals("antigravity.google.com", RemoteHostInstance.canonicalRelayHost("ANTIGRAVITY.GOOGLE"))
+        assertEquals("staging.antigravity.google.com", RemoteHostInstance.canonicalRelayHost("staging.antigravity.google"))
+        val vanity = RemoteHostInstance.parseRemoteControlTarget("https://antigravity.google/r/lt74xt6l0m-golden-star")
+        assertNotNull(vanity)
+        assertEquals("https://antigravity.google.com/r/lt74xt6l0m-golden-star", vanity.canonicalRelayUrlString)
         assertEquals(
-            "https://antigravity.google.com/r/golden-star",
-            RemoteHostInstance.resolveEffectiveRelayTarget(
-                scannedInput = "https://antigravity.google/r/golden-star",
-                webViewFinalUrl = "https://antigravity.google.com/r/golden-star",
-            ),
-        )
-        assertEquals(
-            "https://antigravity.google.com/r/golden-star",
-            RemoteHostInstance.resolveEffectiveRelayTarget(
-                scannedInput = "https://antigravity.google/r/golden-star",
-                webViewFinalUrl = null,
-            ),
+            "https://antigravity.google.com/r/lt74xt6l0m-golden-star",
+            RemoteHostInstance.resolveEffectiveRelayTarget("https://antigravity.google/r/lt74xt6l0m-golden-star", null),
         )
     }
 

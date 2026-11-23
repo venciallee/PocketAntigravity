@@ -29,6 +29,8 @@ import platform.Security.SecTrustCopyCertificateChain
 public actual fun currentTimeMillis(): Long =
     (NSDate().timeIntervalSince1970 * 1000.0).toLong()
 
+public actual fun platformTransportEngineName(): String = "KMP-Darwin"
+
 internal actual fun createPlatformHttpClient(
     endpointHost: String,
     config: TlsEngineConfig,

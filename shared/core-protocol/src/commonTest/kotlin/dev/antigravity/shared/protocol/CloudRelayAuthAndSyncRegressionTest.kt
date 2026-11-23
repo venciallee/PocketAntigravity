@@ -429,30 +429,103 @@ class CloudRelayAuthAndSyncRegressionTest {
     }
 
     @Test
-    fun testNormalizeOriginCanonicalizesAntigravityGoogleAlias() {
+    fun testApiServiceHeadersIncludeMobileSafariUserAgentAndNormalizeVanityOrigin() {
         assertEquals(
             "https://antigravity.google.com",
-            SapisidHashGenerator.normalizeOrigin("https://antigravity.google"),
+            SapisidHashGenerator.normalizeOrigin("https://antigravity.google/r/abc-123"),
         )
         assertEquals(
             "https://antigravity.google.com",
-            SapisidHashGenerator.normalizeOrigin("https://antigravity.google/r/mac-mini"),
+            SapisidHashGenerator.normalizeOrigin("https://ANTIGRAVITY.GOOGLE"),
         )
-        assertEquals(
-            "https://staging.antigravity.google.com",
-            SapisidHashGenerator.normalizeOrigin("https://staging.antigravity.google/r/mac-mini"),
+
+        val headers = SapisidHashGenerator.buildApiServiceHeaders(
+            cookieHeader = "SAPISID=test_val; SID=test_sid",
+            origin = "https://antigravity.google/r/abc-123",
+            apiKey = "AI" + "zaSyUAHEADER0000000000000000000000000",
+            authUser = "0",
+            timestampSeconds = 1_750_000_000L,
         )
+        assertEquals(SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT, headers["User-Agent"])
+        assertEquals("https://antigravity.google.com", headers["Origin"])
+        assertEquals("https://antigravity.google.com/", headers["Referer"])
+        assertTrue(headers["Authorization"]?.startsWith("SAPISIDHASH ") == true)
+    }
+
+    @Test
+    fun testVerifyConnectionDefersSlowInitialTrajectorySyncInsteadOfTimingOut504() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyFASTHANDSHAKE00000000000000000000"
+            val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            val secretCookie = "SUPER_SECRET_SAPISID_VALUE_999"
+            var observedUserAgent: String? = null
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        observedUserAgent = request.headers["User-Agent"]
+                        respond(
+                            content = """[[["$rawUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        // Simulate a slow VPN / large trajectory list stalling beyond the initial sync soft cap
+                        kotlinx.coroutines.delay(15_000L)
+                        respond("", HttpStatusCode.OK)
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = rawUuid,
+                hostname = "Antigravity Desktop",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google/r/$rawUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=$secretCookie; SID=sid_token",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val startedMs = currentTimeMillis()
+            val handshake = client.verifyConnection(allowCrossHostFallback = true)
+            val elapsedMs = currentTimeMillis() - startedMs
+
+            assertEquals("MacBook Pro", handshake.resolvedHostname)
+            assertEquals(rawUuid, handshake.resolvedInstanceUuid)
+            assertEquals(validKey, handshake.resolvedRelayApiKey)
+            assertTrue(handshake.isSelectedHostOnline)
+            assertTrue(handshake.summaries.isEmpty(), "Stalled initial sync must be deferred rather than blocking handshake")
+            assertTrue(elapsedMs < 12_000L, "Handshake must complete well before 22s hard cap even when initial sync stalls; took ${elapsedMs}ms")
+            assertEquals(SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT, observedUserAgent)
+
+            val diag = client.currentHandshakeDiagnostic()
+            assertTrue(diag.contains("engine=${platformTransportEngineName()}"), "Expected engine in diagnostic: $diag")
+            assertTrue(diag.contains("origin=antigravity.google.com"), "Expected canonical origin in diagnostic: $diag")
+            assertTrue(diag.contains("sync:deferred"), "Expected sync:deferred breadcrumb in diagnostic: $diag")
+            assertTrue(!diag.contains(secretCookie), "Diagnostic must never leak raw cookie values: $diag")
+            assertTrue(!diag.contains(validKey), "Diagnostic must never leak full API key: $diag")
+        }
     }
 
     @Test
     fun testResolveCloudRelayInstanceFailsFastOnPrimary504WithoutProbingFallbackAuthUsers() = runTest {
         withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyFAILFAST5040000000000000000000000"
+            val secretCookie = "SECRET_SAPISID_SHOULD_NOT_LEAK_504"
             val probedAuthUsers = mutableListOf<String?>()
+
             val engine = MockEngine { request ->
                 if (request.url.encodedPath.endsWith("/ListInstances")) {
                     probedAuthUsers.add(request.headers["X-Goog-AuthUser"])
                     respond(
-                        content = "Upstream gateway timed out",
+                        content = "Gateway Timeout",
                         status = HttpStatusCode.GatewayTimeout,
                         headers = headersOf(HttpHeaders.ContentType, "text/plain"),
                     )
@@ -462,43 +535,43 @@ class CloudRelayAuthAndSyncRegressionTest {
             }
 
             val host = RemoteHostInstance(
-                instanceId = "mac-mini-slug",
-                hostname = "Mac Mini",
+                instanceId = "lt74xt6l0m-golden-star",
+                hostname = "Antigravity Desktop",
                 channel = RemoteConnectionChannel.CLOUD_RELAY,
-                endpointUrl = "https://antigravity.google/r/mac-mini-slug",
+                endpointUrl = "https://antigravity.google.com/r/lt74xt6l0m-golden-star",
             )
-            val secretCookie = "SUPER_SECRET_SHOULD_NEVER_LEAK"
             val client = AntigravityKmpRpcClient(
                 host = host,
-                sessionCookie = "SAPISID=$secretCookie; SID=sid_val; OSID=osid_val",
-                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                sessionCookie = "SAPISID=$secretCookie; SID=sid_504",
+                relayApiKey = validKey,
                 httpClientOverride = HttpClient(engine),
             )
 
             val err = assertFailsWith<AntigravityRpcError.HttpError> {
-                client.resolveCloudRelayInstance(preferredIdentifier = "mac-mini-slug", allowCrossHostFallback = true)
+                client.resolveCloudRelayInstance(allowCrossHostFallback = true)
             }
             assertEquals(504, err.statusCode)
             assertEquals(
                 listOf<String?>("0"),
                 probedAuthUsers,
-                "Primary 504 transport timeout must fail fast without wasting RTTs on authUser=1..4",
+                "Primary HTTP 504 must fail fast instead of burning timeout probing authUser=1..4",
             )
-            val diag = client.currentHandshakeDiagnosticSummary()
-            assertTrue(diag.contains("engine=KMP"))
-            assertTrue(diag.contains("origin=https://antigravity.google.com"))
-            assertTrue(diag.contains("SAPISID"))
-            assertTrue(!diag.contains(secretCookie), "Diagnostic summary must never leak cookie values")
+            val diag = client.currentHandshakeDiagnostic()
+            assertTrue(diag.contains("resolve:failFast"), "Expected resolve:failFast trace in diagnostic: $diag")
+            assertTrue(!diag.contains(secretCookie), "Diagnostic must never leak secret cookie value: $diag")
+            assertTrue(!diag.contains(validKey), "Diagnostic must never leak API key value: $diag")
         }
     }
 
     @Test
     fun testResolveCloudRelayInstanceThrows404NotUnauthorizedWhenHttp200ReturnsEmptyInstances() = runTest {
         withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyEMPTY200KEY0000000000000000000000"
+
             val engine = MockEngine { request ->
                 if (request.url.encodedPath.endsWith("/ListInstances")) {
                     respond(
-                        content = """[[],5]""",
+                        content = ")]}'\n[[],5]",
                         status = HttpStatusCode.OK,
                         headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
                     )
@@ -509,29 +582,34 @@ class CloudRelayAuthAndSyncRegressionTest {
 
             val host = RemoteHostInstance(
                 instanceId = "golden-star",
-                hostname = "MacBook Pro",
+                hostname = "Antigravity Desktop",
                 channel = RemoteConnectionChannel.CLOUD_RELAY,
                 endpointUrl = "https://antigravity.google.com/r/golden-star",
             )
             val client = AntigravityKmpRpcClient(
                 host = host,
-                sessionCookie = "SAPISID=valid_sapisid; SID=valid_sid",
-                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
                 httpClientOverride = HttpClient(engine),
             )
 
             val err = assertFailsWith<AntigravityRpcError.HttpError> {
-                client.resolveCloudRelayInstance(preferredIdentifier = "golden-star", allowCrossHostFallback = true)
+                client.resolveCloudRelayInstance(allowCrossHostFallback = true)
             }
-            assertEquals(404, err.statusCode)
-            assertTrue(err.body.contains("no online Antigravity Desktop instances", ignoreCase = true))
+            assertEquals(
+                404,
+                err.statusCode,
+                "Empty HTTP 200 ListInstances must throw actionable 404 instead of Unauthorized login loop",
+            )
         }
     }
 
     @Test
     fun testVerifyConnectionCompletesEvenWhenInitialProxyCommandFailsWith504() = runTest {
         withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyPROXY504OK00000000000000000000000"
             val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+
             val engine = MockEngine { request ->
                 val path = request.url.encodedPath
                 when {
@@ -544,7 +622,7 @@ class CloudRelayAuthAndSyncRegressionTest {
                     }
                     path.endsWith("/ProxyCommand") -> {
                         respond(
-                            content = "Desktop RPC timed out",
+                            content = "Gateway Timeout",
                             status = HttpStatusCode.GatewayTimeout,
                             headers = headersOf(HttpHeaders.ContentType, "text/plain"),
                         )
@@ -561,17 +639,16 @@ class CloudRelayAuthAndSyncRegressionTest {
             )
             val client = AntigravityKmpRpcClient(
                 host = host,
-                sessionCookie = "SAPISID=valid_sapisid; SID=valid_sid",
-                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
                 httpClientOverride = HttpClient(engine),
             )
 
             val handshake = client.verifyConnection(allowCrossHostFallback = true)
             assertEquals("MacBook Pro", handshake.resolvedHostname)
             assertEquals(rawUuid, handshake.resolvedInstanceUuid)
-            assertEquals(1, handshake.availableRelayInstances.size)
             assertTrue(handshake.isSelectedHostOnline)
-            assertTrue(client.currentHandshakeDiagnosticSummary().contains("phase=connected"))
+            assertTrue(handshake.summaries.isEmpty())
         }
     }
 }

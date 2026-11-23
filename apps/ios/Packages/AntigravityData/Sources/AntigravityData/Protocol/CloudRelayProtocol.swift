@@ -486,6 +486,30 @@ public enum SAPISIDHashGenerator: Sendable {
         return schemes.isEmpty ? nil : schemes.joined(separator: " ")
     }
 
+    /// Safe, non-secret diagnostic summary of which Google auth cookie names are present (never exposes values).
+    public static func summarizeCookieNames(_ rawCookieHeader: String) -> String {
+        let trimmed = rawCookieHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "none" }
+        if trimmed.lowercased().hasPrefix("bearer ") || trimmed.hasPrefix("ya29.") { return "bearer" }
+        let cookies = parseCookies(trimmed)
+        let interesting = [
+            "SAPISID",
+            "__Secure-1PAPISID",
+            "__Secure-3PAPISID",
+            "SID",
+            "__Secure-1PSID",
+            "__Secure-3PSID",
+            "OSID",
+            "__Secure-OSID",
+            "SIDCC",
+            "__Secure-1PSIDCC",
+            "__Secure-1PSIDTS"
+        ]
+        let present = interesting.filter { cookies[$0] != nil }
+            .map { $0.hasPrefix("__Secure-") ? String($0.dropFirst("__Secure-".count)) : $0 }
+        return "n=\(cookies.count)[\(present.joined(separator: ","))]"
+    }
+
     /// Attaches all Google Boq `ApiService` JSPB request headers to `request`.
     public static func applyApiServiceHeaders(
         to request: inout URLRequest,
@@ -499,6 +523,7 @@ public enum SAPISIDHashGenerator: Sendable {
         let normalizedOrigin = normalizeOrigin(origin)
         request.setValue("application/json+protobuf", forHTTPHeaderField: "Content-Type")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue(mobileRemoteUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("grpc-web-javascript/0.1", forHTTPHeaderField: "X-User-Agent")
         let explicitKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveApiKey = (explicitKey?.isEmpty == false ? explicitKey : nil)
@@ -534,39 +559,15 @@ public enum SAPISIDHashGenerator: Sendable {
         }
     }
 
-    /// Safe, non-secret diagnostic summary of which Google auth cookie names are present (never exposes values).
-    public static func summarizeCookieNames(_ rawCookieHeader: String) -> String {
-        let trimmed = rawCookieHeader.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "none" }
-        if trimmed.lowercased().hasPrefix("bearer ") || trimmed.hasPrefix("ya29.") { return "bearer" }
-        let cookies = parseCookies(trimmed)
-        let interesting = [
-            "SAPISID",
-            "__Secure-1PAPISID",
-            "__Secure-3PAPISID",
-            "SID",
-            "__Secure-1PSID",
-            "__Secure-3PSID",
-            "OSID",
-            "__Secure-OSID",
-            "SIDCC",
-            "__Secure-1PSIDCC",
-            "__Secure-1PSIDTS",
-        ]
-        let present = interesting.filter { cookies[$0] != nil }.map { name -> String in
-            name.hasPrefix("__Secure-") ? String(name.dropFirst("__Secure-".count)) : name
-        }
-        return "n=\(cookies.count)[\(present.joined(separator: ","))]"
-    }
-
     public static func normalizeOrigin(_ rawOrigin: String) -> String {
         let trimmed = rawOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let comps = URLComponents(string: trimmed),
               let scheme = comps.scheme?.lowercased(),
-              let rawHost = comps.host?.lowercased() else {
+              let rawHost = comps.host?.lowercased(),
+              !rawHost.isEmpty else {
             return defaultOrigin
         }
-        let host = RemoteHostInstance.canonicalizeRelayHost(rawHost)
+        let host = RemoteHostInstance.canonicalRelayHost(rawHost)
         if let port = comps.port {
             return "\(scheme)://\(host):\(port)"
         }

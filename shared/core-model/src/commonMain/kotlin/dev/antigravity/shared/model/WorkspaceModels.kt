@@ -448,15 +448,27 @@ public data class RemoteHostInstance(
             return !csrf.isNullOrEmpty()
         }
 
-        public fun canonicalizeRelayHost(rawHost: String): String {
+        public fun canonicalRelayHost(rawHost: String): String {
             val host = rawHost.trim().lowercase()
-            if (host == "antigravity.google") {
-                return "antigravity.google.com"
+            return when {
+                host == "antigravity.google" || host == "www.antigravity.google" -> "antigravity.google.com"
+                host.endsWith(".antigravity.google") -> host.removeSuffix(".antigravity.google") + ".antigravity.google.com"
+                else -> host
             }
-            if (host.endsWith(".antigravity.google")) {
-                return "${host.removeSuffix(".antigravity.google")}.antigravity.google.com"
-            }
-            return host
+        }
+
+        private fun canonicalizeRelayUrlString(rawUrl: String): String {
+            val trimmed = rawUrl.trim()
+            if (trimmed.isEmpty()) return trimmed
+            val uri = SimpleUriParts.parse(trimmed) ?: return trimmed
+            val canonicalHost = canonicalRelayHost(uri.host)
+            if (canonicalHost.equals(uri.host, ignoreCase = true)) return trimmed
+            val schemeEnd = trimmed.indexOf("://")
+            if (schemeEnd < 0) return trimmed
+            val hostStart = schemeEnd + 3
+            val hostEnd = hostStart + uri.host.length
+            if (hostEnd > trimmed.length) return trimmed
+            return trimmed.substring(0, hostStart) + canonicalHost + trimmed.substring(hostEnd)
         }
 
         public fun resolveEffectiveRelayTarget(
@@ -470,29 +482,28 @@ public data class RemoteHostInstance(
 
             if (finalTarget != null && finalTarget.instanceId.isNotEmpty()) {
                 if (scannedTarget == null || scannedTarget.instanceId.isEmpty() || scannedTarget.requiresRedirectResolution) {
-                    return trimmedFinal
-                }
-                val scannedHost = SimpleUriParts.parse(trimmedScanned)?.host?.lowercase().orEmpty()
-                val finalHost = SimpleUriParts.parse(trimmedFinal)?.host?.lowercase().orEmpty()
-                if (scannedHost.isNotEmpty() && finalHost.isNotEmpty() && scannedHost != finalHost &&
-                    (scannedHost == "antigravity.google" || scannedHost.endsWith(".antigravity.google") ||
-                        scannedHost == "antigravity.dev" || scannedHost == "antigravity.app")
-                ) {
-                    return trimmedFinal
+                    return canonicalizeRelayUrlString(trimmedFinal)
                 }
             }
             if (trimmedScanned.isNotEmpty()) {
                 if (scannedTarget != null && !scannedTarget.requiresRedirectResolution) {
-                    val scannedHost = SimpleUriParts.parse(trimmedScanned)?.host?.lowercase().orEmpty()
-                    if (scannedHost == "antigravity.google" || scannedHost.endsWith(".antigravity.google")) {
-                        return scannedTarget.canonicalRelayUrlString
+                    val scannedLower = trimmedScanned.lowercase()
+                    val usesShortGoogleTld = scannedLower.contains("://antigravity.google/") ||
+                        scannedLower.endsWith("://antigravity.google") ||
+                        scannedLower.startsWith("antigravity.google/") ||
+                        scannedLower == "antigravity.google"
+                    if (usesShortGoogleTld && finalTarget != null &&
+                        finalTarget.relayOrigin.equals("https://antigravity.google.com", ignoreCase = true) &&
+                        (finalTarget.instanceId == scannedTarget.instanceId || finalTarget.instanceId.isNotEmpty())
+                    ) {
+                        return canonicalizeRelayUrlString(trimmedFinal)
                     }
-                    return trimmedScanned
+                    return canonicalizeRelayUrlString(trimmedScanned)
                 }
-                if (trimmedFinal.isNotEmpty()) return trimmedFinal
-                return trimmedScanned
+                if (trimmedFinal.isNotEmpty()) return canonicalizeRelayUrlString(trimmedFinal)
+                return canonicalizeRelayUrlString(trimmedScanned)
             }
-            return trimmedFinal.ifEmpty { "https://antigravity.google.com" }
+            return canonicalizeRelayUrlString(trimmedFinal.ifEmpty { "https://antigravity.google.com" })
         }
 
         public fun parseRemoteControlTarget(rawInput: String): ParsedRemoteControlTarget? =
@@ -610,7 +621,7 @@ public data class RemoteHostInstance(
             }
 
             val extracted = extractMetadata(parts, uri.queryParams, uri.fragment)
-            val canonicalHost = canonicalizeRelayHost(host)
+            val canonicalHost = canonicalRelayHost(host)
             val origin = if (uri.port != null) "$scheme://$canonicalHost:${uri.port}" else "$scheme://$canonicalHost"
             return ParsedRemoteControlTarget(
                 instanceId = extracted.instanceId,
