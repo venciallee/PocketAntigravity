@@ -600,7 +600,7 @@ public class ConnectionDomainStore(
         }
         return result ?: throw AntigravityRpcError.HttpError(
             504,
-            "Connection timed out after ${handshakeHardTimeoutMs / 1000}s. Verify your network and try again.",
+            "Connection timed out after ${handshakeHardTimeoutMs / 1000}s (${candidate.currentHandshakeDiagnosticSummary()}). Verify Google / VPN reachability and try again.",
         )
     }
 
@@ -691,6 +691,6 @@ public class ConnectionDomainStore(
 
     private companion object {
         private const val KEY_SELECTED_HOST_SCOPE = "antigravity.kmp.selectedHostScope.v1"
-        private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 25_000L
+        private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 22_000L
     }
 }

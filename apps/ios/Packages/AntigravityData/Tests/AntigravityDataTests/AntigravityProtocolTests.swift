@@ -4185,6 +4185,164 @@ final class AntigravityProtocolTests: XCTestCase {
         let emptyHttpErr = AntigravityRPCError.httpError(statusCode: 502, body: "   ")
         XCTAssertEqual(emptyHttpErr.localizedDescription, "HTTP 502")
     }
+
+    func testSwiftCanonicalizesAntigravityGoogleAliasHostAndOrigin() {
+        XCTAssertEqual(RemoteHostInstance.canonicalizeRelayHost("antigravity.google"), "antigravity.google.com")
+        XCTAssertEqual(RemoteHostInstance.canonicalizeRelayHost("staging.antigravity.google"), "staging.antigravity.google.com")
+        XCTAssertEqual(
+            SAPISIDHashGenerator.normalizeOrigin("https://antigravity.google/r/mac-mini"),
+            "https://antigravity.google.com"
+        )
+        let parsed = RemoteHostInstance.parseRemoteControlTarget("https://antigravity.google/r/golden-star")
+        XCTAssertEqual(parsed?.relayOrigin, "https://antigravity.google.com")
+        XCTAssertEqual(parsed?.canonicalRelayURLString, "https://antigravity.google.com/r/golden-star")
+        XCTAssertEqual(
+            RemoteHostInstance.resolveEffectiveRelayTarget(
+                scannedInput: "https://antigravity.google/r/golden-star",
+                webViewFinalURL: nil
+            ),
+            "https://antigravity.google.com/r/golden-star"
+        )
+    }
+
+    func testSwiftResolveCloudRelayInstanceFailsFastOnPrimary504AndHidesSecretCookieValues() async {
+        let probedUsers = AtomicTestString("")
+        HostIsolationMockRelayURLProtocol.storage.setHandler { request in
+            let url = request.url ?? URL(string: "https://antigravity.google.com")!
+            let authUser = request.value(forHTTPHeaderField: "X-Goog-AuthUser") ?? "?"
+            let prev = probedUsers.get()
+            probedUsers.set(prev.isEmpty ? authUser : "\(prev),\(authUser)")
+            let resp = HTTPURLResponse(
+                url: url,
+                statusCode: 504,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/plain"]
+            )!
+            return (resp, Data("Gateway timeout".utf8))
+        }
+        defer { HostIsolationMockRelayURLProtocol.storage.setHandler(nil) }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HostIsolationMockRelayURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let host = RemoteHostInstance(
+            instanceId: "golden-star",
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google/r/golden-star")!,
+            isOnline: true
+        )
+        let secretValue = "SUPER_SECRET_COOKIE_NEVER_EXPOSE"
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=\(secretValue); SID=sid_val; OSID=osid_val",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        do {
+            _ = try await client.resolveCloudRelayInstance(preferredIdentifier: "golden-star", allowCrossHostFallback: true)
+            XCTFail("Expected HTTP 504")
+        } catch let AntigravityRPCError.httpError(code, _) {
+            XCTAssertEqual(code, 504)
+        } catch {
+            XCTFail("Expected AntigravityRPCError.httpError(504), got \(error)")
+        }
+
+        XCTAssertEqual(probedUsers.get(), "0", "Primary 504 timeout must fail fast without probing authUser 1..4")
+        let summary = await client.currentHandshakeDiagnosticSummary()
+        XCTAssertTrue(summary.contains("engine=Swift"))
+        XCTAssertTrue(summary.contains("origin=https://antigravity.google.com"))
+        XCTAssertTrue(summary.contains("SAPISID"))
+        XCTAssertFalse(summary.contains(secretValue))
+    }
+
+    func testSwiftResolveCloudRelayEmptyHttp200Throws404AndVerifyConnectionSurvivesSlowProxyCommand() async throws {
+        // 1. Empty HTTP 200 on short slug -> HTTP 404 (not Unauthorized)
+        HostIsolationMockRelayURLProtocol.storage.setHandler { request in
+            let url = request.url ?? URL(string: "https://antigravity.google.com")!
+            let resp = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json+protobuf"]
+            )!
+            return (resp, Data("[[],5]".utf8))
+        }
+        defer { HostIsolationMockRelayURLProtocol.storage.setHandler(nil) }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HostIsolationMockRelayURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        let slugHost = RemoteHostInstance(
+            instanceId: "golden-star",
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/golden-star")!,
+            isOnline: true
+        )
+        let emptyClient = AntigravityRPCClient(
+            host: slugHost,
+            sessionCookie: "SAPISID=valid_sapisid; SID=valid_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+        do {
+            _ = try await emptyClient.resolveCloudRelayInstance(preferredIdentifier: "golden-star", allowCrossHostFallback: true)
+            XCTFail("Expected HTTP 404 when HTTP 200 ListInstances returns no online Desktop instances")
+        } catch let AntigravityRPCError.httpError(code, body) {
+            XCTAssertEqual(code, 404)
+            XCTAssertTrue(body.lowercased().contains("no online antigravity desktop instances"))
+        } catch {
+            XCTFail("Expected HTTP 404 instead of \(error)")
+        }
+
+        // 2. ListInstances HTTP 200 + ProxyCommand HTTP 504 -> verifyConnection still succeeds cleanly
+        let rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+        HostIsolationMockRelayURLProtocol.storage.setHandler { request in
+            let url = request.url ?? URL(string: "https://antigravity.google.com")!
+            if url.path.hasSuffix("/ListInstances") {
+                let resp = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json+protobuf"]
+                )!
+                let body = """
+                    [[["\(rawUuid)",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]
+                    """
+                return (resp, Data(body.utf8))
+            }
+            let resp = HTTPURLResponse(
+                url: url,
+                statusCode: 504,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/plain"]
+            )!
+            return (resp, Data("Proxy timeout".utf8))
+        }
+
+        let uuidHost = RemoteHostInstance(
+            instanceId: rawUuid,
+            hostname: "Antigravity Desktop",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(rawUuid)")!,
+            isOnline: true
+        )
+        let okClient = AntigravityRPCClient(
+            host: uuidHost,
+            sessionCookie: "SAPISID=valid_sapisid; SID=valid_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+        let handshake = try await okClient.verifyConnection(allowCrossHostFallback: true)
+        XCTAssertEqual(handshake.resolvedHostname, "MacBook Pro")
+        XCTAssertEqual(handshake.resolvedInstanceUuid, rawUuid)
+        XCTAssertTrue(handshake.isSelectedHostOnline)
+        XCTAssertEqual(handshake.availableRelayInstances.count, 1)
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {

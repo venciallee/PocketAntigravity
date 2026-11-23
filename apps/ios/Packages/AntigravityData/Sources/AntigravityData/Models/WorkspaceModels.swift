@@ -681,6 +681,20 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
         return false
     }
 
+    /// Canonicalizes redirecting Antigravity alias hosts (`antigravity.google` → `antigravity.google.com`)
+    /// so `ApiService` POST requests and `SAPISIDHASH` origins always target the live Boq origin.
+    public static func canonicalizeRelayHost(_ rawHost: String) -> String {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if host == "antigravity.google" {
+            return "antigravity.google.com"
+        }
+        if host.hasSuffix(".antigravity.google") {
+            let prefix = String(host.dropLast(".antigravity.google".count))
+            return "\(prefix).antigravity.google.com"
+        }
+        return host
+    }
+
     /// Selects the best Cloud Relay target URL after `WKWebView` sign-in completes, preserving
     /// resolved shortlink destinations while never dropping an explicit scanned `instanceId`.
     public static func resolveEffectiveRelayTarget(
@@ -697,9 +711,22 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
             if scannedTarget == nil || scannedTarget?.instanceId.isEmpty == true || scannedTarget?.requiresRedirectResolution == true {
                 return trimmedFinal
             }
+            let scannedHost = URLComponents(string: trimmedScanned)?.host?.lowercased() ?? ""
+            let finalHost = URLComponents(string: trimmedFinal)?.host?.lowercased() ?? ""
+            if !scannedHost.isEmpty && !finalHost.isEmpty && scannedHost != finalHost
+                && (scannedHost == "antigravity.google"
+                    || scannedHost.hasSuffix(".antigravity.google")
+                    || scannedHost == "antigravity.dev"
+                    || scannedHost == "antigravity.app") {
+                return trimmedFinal
+            }
         }
         if !trimmedScanned.isEmpty {
             if let scannedTarget, !scannedTarget.requiresRedirectResolution {
+                let scannedHost = URLComponents(string: trimmedScanned)?.host?.lowercased() ?? ""
+                if scannedHost == "antigravity.google" || scannedHost.hasSuffix(".antigravity.google") {
+                    return scannedTarget.canonicalRelayURLString
+                }
                 return trimmedScanned
             }
             if !trimmedFinal.isEmpty {
@@ -917,11 +944,12 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
         }
 
         let extracted = extractMetadata(parts: parts, queryItems: comps.queryItems, fragment: comps.fragment)
+        let canonicalHost = canonicalizeRelayHost(host)
         let origin: String
         if let port = comps.port {
-            origin = "\(scheme)://\(host):\(port)"
+            origin = "\(scheme)://\(canonicalHost):\(port)"
         } else {
-            origin = "\(scheme)://\(host)"
+            origin = "\(scheme)://\(canonicalHost)"
         }
 
         return ParsedRemoteControlTarget(

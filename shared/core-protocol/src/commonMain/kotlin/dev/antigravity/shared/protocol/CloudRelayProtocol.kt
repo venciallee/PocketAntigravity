@@ -383,7 +383,13 @@ public object SapisidHashGenerator {
         val afterScheme = trimmed.substring(schemeEnd + 3)
         val authority = afterScheme.substringBefore('/').substringBefore('?').substringBefore('#').lowercase()
         if (authority.isEmpty()) return DEFAULT_ORIGIN
-        return "$scheme://$authority"
+        val normalizedAuthority = when {
+            authority == "antigravity.google" -> "antigravity.google.com"
+            authority.startsWith("antigravity.google:") -> "antigravity.google.com:${authority.substringAfter(':')}"
+            authority.endsWith(".antigravity.google") -> "${authority.removeSuffix(".antigravity.google")}.antigravity.google.com"
+            else -> authority
+        }
+        return "$scheme://$normalizedAuthority"
     }
 
     public fun sha1Hex(input: String): String =

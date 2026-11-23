@@ -82,6 +82,30 @@ class CoreModelParityTest {
         val lanUri = "antigravity://pair?url=http://192.168.1.5:8787&csrf=secret-token"
         assertTrue(RemoteHostInstance.isDirectLanPairingUri(lanUri))
         assertNull(RemoteHostInstance.parseRemoteControlTarget(lanUri))
+
+        // Alias host `antigravity.google` (without `.com`) must canonicalize to `antigravity.google.com`
+        assertEquals("antigravity.google.com", RemoteHostInstance.canonicalizeRelayHost("antigravity.google"))
+        assertEquals("staging.antigravity.google.com", RemoteHostInstance.canonicalizeRelayHost("staging.antigravity.google"))
+        val aliasParsed = RemoteHostInstance.parseRemoteControlTarget("https://antigravity.google/r/golden-star")
+        assertNotNull(aliasParsed)
+        assertEquals("https://antigravity.google.com", aliasParsed.relayOrigin)
+        assertEquals("https://antigravity.google.com/r/golden-star", aliasParsed.canonicalRelayUrlString)
+
+        // resolveEffectiveRelayTarget upgrades alias host to .google.com
+        assertEquals(
+            "https://antigravity.google.com/r/golden-star",
+            RemoteHostInstance.resolveEffectiveRelayTarget(
+                scannedInput = "https://antigravity.google/r/golden-star",
+                webViewFinalUrl = "https://antigravity.google.com/r/golden-star",
+            ),
+        )
+        assertEquals(
+            "https://antigravity.google.com/r/golden-star",
+            RemoteHostInstance.resolveEffectiveRelayTarget(
+                scannedInput = "https://antigravity.google/r/golden-star",
+                webViewFinalUrl = null,
+            ),
+        )
     }
 
     @Test

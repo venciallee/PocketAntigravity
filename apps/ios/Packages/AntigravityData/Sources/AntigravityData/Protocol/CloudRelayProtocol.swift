@@ -534,13 +534,39 @@ public enum SAPISIDHashGenerator: Sendable {
         }
     }
 
+    /// Safe, non-secret diagnostic summary of which Google auth cookie names are present (never exposes values).
+    public static func summarizeCookieNames(_ rawCookieHeader: String) -> String {
+        let trimmed = rawCookieHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "none" }
+        if trimmed.lowercased().hasPrefix("bearer ") || trimmed.hasPrefix("ya29.") { return "bearer" }
+        let cookies = parseCookies(trimmed)
+        let interesting = [
+            "SAPISID",
+            "__Secure-1PAPISID",
+            "__Secure-3PAPISID",
+            "SID",
+            "__Secure-1PSID",
+            "__Secure-3PSID",
+            "OSID",
+            "__Secure-OSID",
+            "SIDCC",
+            "__Secure-1PSIDCC",
+            "__Secure-1PSIDTS",
+        ]
+        let present = interesting.filter { cookies[$0] != nil }.map { name -> String in
+            name.hasPrefix("__Secure-") ? String(name.dropFirst("__Secure-".count)) : name
+        }
+        return "n=\(cookies.count)[\(present.joined(separator: ","))]"
+    }
+
     public static func normalizeOrigin(_ rawOrigin: String) -> String {
         let trimmed = rawOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let comps = URLComponents(string: trimmed),
               let scheme = comps.scheme?.lowercased(),
-              let host = comps.host?.lowercased() else {
+              let rawHost = comps.host?.lowercased() else {
             return defaultOrigin
         }
+        let host = RemoteHostInstance.canonicalizeRelayHost(rawHost)
         if let port = comps.port {
             return "\(scheme)://\(host):\(port)"
         }

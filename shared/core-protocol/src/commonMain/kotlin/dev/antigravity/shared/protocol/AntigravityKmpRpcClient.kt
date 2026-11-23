@@ -274,6 +274,14 @@ public class AntigravityKmpRpcClient(
     private var cachedDefaultUpstreamModel: String? = null
     private val wokenInstanceCascadeKeys = mutableSetOf<String>()
     private val capabilityProfilesByHost = linkedMapOf<String, HostCapabilityProfile>()
+    @kotlin.concurrent.Volatile
+    private var lastHandshakePhase: String = "init"
+    @kotlin.concurrent.Volatile
+    private var lastObservedKeyState: String = if (relayApiKey?.trim()?.isNotEmpty() == true) {
+        "provided(${relayApiKey.trim().length})"
+    } else {
+        "none"
+    }
 
     private val httpClient: HttpClient = httpClientOverride ?: createPlatformHttpClient(
         endpointHost = endpointHost,
@@ -286,6 +294,15 @@ public class AntigravityKmpRpcClient(
 
     public val channel: RemoteConnectionChannel
         get() = host.channel
+
+    /**
+     * Safe, secret-free diagnostic summary of the current/last Cloud Relay handshake phase.
+     * Never exposes cookie values, CSRF tokens, or API key strings.
+     */
+    public fun currentHandshakeDiagnosticSummary(): String {
+        val ck = SapisidHashGenerator.summarizeCookieNames(sessionCookie.orEmpty())
+        return "engine=KMP phase=$lastHandshakePhase origin=$relayOrigin key=$lastObservedKeyState ck=$ck"
+    }
 
     public suspend fun currentCachedRelayInstances(): List<RelayInstanceInfo> =
         stateMutex.withLock { cachedRelayInstances }
@@ -545,6 +562,7 @@ public class AntigravityKmpRpcClient(
     }
 
     private suspend fun discoverRelayWebApiKeysFromOrigin(): List<String> {
+        lastHandshakePhase = "api-key-discovery(page)"
         val originHost = extractHostFromUrl(relayOrigin).lowercase()
         val candidatePages = buildList {
             if (extractHostFromUrl(endpointBaseUrl).lowercase() == originHost && endpointBaseUrl.isNotEmpty()) {
@@ -572,7 +590,7 @@ public class AntigravityKmpRpcClient(
             }
             val pageHost = extractHostFromUrl(pageUrl).lowercase()
             val pageResp = try {
-                withSafeTimeoutOrNull(if (pageIdx == 0) 4_500L else 3_500L) {
+                withSafeTimeoutOrNull(if (pageIdx == 0) 3_000L else 2_500L) {
                     httpClient.get(pageUrl) {
                         header("Accept", "text/html,application/xhtml+xml,application/javascript,*/*;q=0.8")
                         header("User-Agent", SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT)
@@ -609,22 +627,23 @@ public class AntigravityKmpRpcClient(
                 SapisidHashGenerator.extractBootstrapScriptUrls(
                     html = html,
                     baseUrl = effectiveBaseUrl,
-                    limit = 8,
+                    limit = 6,
                 )
             )
             if (collectedKeys.size >= 4) break
         }
 
-        // Inspect prioritized bootstrap script bundles IN PARALLEL with a tight 4.5s per-script budget
-        // (total <= 4.5s instead of 12 x 12s = 144s sequential crawl).
+        // Inspect top prioritized bootstrap script bundles IN PARALLEL with a tight 3s per-script budget
+        // so origin discovery finishes within <=6s total even over high-latency VPN/proxy links.
         if (collectedKeys.size < 3 && scriptUrlsToInspect.isNotEmpty()) {
-            val batch = scriptUrlsToInspect.take(6)
+            lastHandshakePhase = "api-key-discovery(scripts)"
+            val batch = scriptUrlsToInspect.take(4)
             val scriptResults = coroutineScope {
                 batch.map { scriptUrl ->
                     async {
                         val scriptHost = extractHostFromUrl(scriptUrl).lowercase()
                         try {
-                            withSafeTimeoutOrNull(4_500L) {
+                            withSafeTimeoutOrNull(3_000L) {
                                 val sResp = httpClient.get(scriptUrl) {
                                     header("Accept", "application/javascript,*/*;q=0.8")
                                     header("User-Agent", SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT)
@@ -652,7 +671,11 @@ public class AntigravityKmpRpcClient(
                 if (collectedKeys.size >= 6) break
             }
         }
-        return collectedKeys.toList()
+        val discovered = collectedKeys.toList()
+        if (discovered.isNotEmpty()) {
+            lastObservedKeyState = "discovered(${discovered.size})"
+        }
+        return discovered
     }
 
     private fun unwrapErrorBodyText(rawBytes: ByteArray, responseHeaders: Map<String, String>): String {
@@ -715,7 +738,7 @@ public class AntigravityKmpRpcClient(
         val activeAuthUser = authUserOverride ?: stateMutex.withLock { currentAuthUser }
         val url = "$relayOrigin${SapisidHashGenerator.API_SERVICE_PREFIX}/ListInstances"
 
-        suspend fun perform(apiKey: String?, timeoutMs: Long = 8_000L): Pair<HttpResponse, ByteArray> {
+        suspend fun perform(apiKey: String?, timeoutMs: Long = 6_500L): Pair<HttpResponse, ByteArray> {
             val headers = SapisidHashGenerator.buildApiServiceHeaders(
                 cookieHeader = sessionCookie.orEmpty(),
                 origin = relayOrigin,
@@ -738,10 +761,17 @@ public class AntigravityKmpRpcClient(
                     )
                 }
                 response to response.bodyAsBytes()
-            } ?: throw AntigravityRpcError.HttpError(504, "ListInstances timed out (authUser=$activeAuthUser)")
+            } ?: throw AntigravityRpcError.HttpError(
+                504,
+                "ListInstances timed out after ${timeoutMs / 1000}s (${currentHandshakeDiagnosticSummary()})",
+            )
         }
 
         var activeApiKey = ensureRelayWebApiKey()
+        if (!activeApiKey.isNullOrEmpty() && lastObservedKeyState == "none") {
+            lastObservedKeyState = "resolved(${activeApiKey.length})"
+        }
+        lastHandshakePhase = "list-instances(u=$activeAuthUser)"
         val triedKeys = mutableSetOf<String>()
         triedKeys.add(activeApiKey.orEmpty())
 
@@ -761,10 +791,11 @@ public class AntigravityKmpRpcClient(
                 val knownRejected = stateMutex.withLock { rejectedRelayApiKeys.toSet() }
                 var rotationAttempts = 0
                 for (candidateKey in candidates) {
-                    if (rotationAttempts >= 3) break
+                    if (rotationAttempts >= 2) break
                     if (candidateKey.isBlank() || candidateKey in knownRejected || !triedKeys.add(candidateKey)) continue
                     rotationAttempts += 1
-                    val retry = perform(candidateKey, timeoutMs = 5_000L)
+                    lastHandshakePhase = "list-instances-rotate(u=$activeAuthUser,#$rotationAttempts)"
+                    val retry = perform(candidateKey, timeoutMs = 3_500L)
                     response = retry.first
                     rawBytes = retry.second
                     statusCode = response.status.value
@@ -805,6 +836,13 @@ public class AntigravityKmpRpcClient(
             stateMutex.withLock { currentRelayApiKey = activeApiKey }
         }
         return CloudRelayJspbCodec.decodeListInstancesResponse(rawBytes, respHeaders)
+    }
+
+    private fun isTransportOrTimeoutFailure(error: Throwable): Boolean {
+        if (error is AntigravityRpcError.HttpError) {
+            return error.statusCode == 504 || error.statusCode == -1
+        }
+        return error !is AntigravityRpcError
     }
 
     @Throws(Throwable::class)
@@ -880,17 +918,22 @@ public class AntigravityKmpRpcClient(
         } catch (e: Throwable) {
             primaryError = e
             lastError = e
+            // Fail fast on network/timeout errors: probing authUser=1..4 cannot fix an unreachable relay/VPN.
+            if (isTransportOrTimeoutFailure(e)) {
+                stopFallbacks = true
+            }
         }
 
-        // 2. If primary authUser did not return a reachable match, probe remaining multi-login slots IN PARALLEL
-        // with a tight 5s budget instead of 4 sequential retries.
+        // 2. If primary authUser did not return a reachable match (e.g. multi-account Google login),
+        // probe remaining authUser slots IN PARALLEL with a tight 4.5s budget.
         val fallbackUsers = if (stopFallbacks) emptyList() else candidateAuthUsers.drop(1)
         if (fallbackUsers.isNotEmpty()) {
+            lastHandshakePhase = "list-instances-fallback"
             val parallelOutcomes = coroutineScope {
                 fallbackUsers.map { candidateUser ->
                     async {
                         try {
-                            val list = withSafeTimeoutOrNull(5_000L) {
+                            val list = withSafeTimeoutOrNull(4_500L) {
                                 listRelayInstances(authUserOverride = candidateUser)
                             }
                             candidateUser to (if (list != null) Result.success(list) else null)
@@ -950,6 +993,12 @@ public class AntigravityKmpRpcClient(
             updateRelayCache(auth, rawTarget, listOf(direct))
             return RelayResolutionResult(direct, listOf(direct), auth)
         }
+        if (anySucceededCall && primaryError == null && lastError == null) {
+            throw AntigravityRpcError.HttpError(
+                404,
+                "Signed in to Google, but no online Antigravity Desktop instances were found on this account. Enable Remote Control in Antigravity Desktop and verify both devices use the same Google account.",
+            )
+        }
         throw primaryError ?: lastError ?: AntigravityRpcError.Unauthorized("No reachable Cloud Relay instance resolved")
     }
 
@@ -974,6 +1023,7 @@ public class AntigravityKmpRpcClient(
         var allRelayInstances = emptyList<RelayInstanceInfo>()
 
         if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            lastHandshakePhase = "resolve-relay-instance"
             val preferred = selectedUuid?.takeIf { it.isNotEmpty() } ?: stateMutex.withLock { targetInstanceIdentifier }
             val resolution = resolveCloudRelayInstance(
                 preferredIdentifier = preferred,
@@ -986,15 +1036,27 @@ public class AntigravityKmpRpcClient(
             allRelayInstances = resolution.allInstances
         }
 
+        lastHandshakePhase = "federated-sync"
         val federated = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
-            withSafeTimeoutOrNull(12_000L) {
-                fetchFederatedWorkspacesAndSummaries(
-                    skipRelayListRefresh = allRelayInstances.isNotEmpty(),
-                    targetInstanceUuid = if (!allowCrossHostFallback && isSelectedOnline) selectedUuid else null,
-                    includeLocal = isSelectedOnline || allowCrossHostFallback,
-                    includeCloud = true,
-                    includeJetboxSnapshot = false,
-                )
+            // Once ListInstances authenticated and resolved the Desktop host, give initial workspace/summary
+            // hydration a bounded 6s window. Slow desktop RPCs must never abort pairing with a 504;
+            // the live summary stream and foreground refresh hydrate conversations immediately afterward.
+            try {
+                withSafeTimeoutOrNull(6_000L) {
+                    fetchFederatedWorkspacesAndSummaries(
+                        skipRelayListRefresh = allRelayInstances.isNotEmpty(),
+                        targetInstanceUuid = if (!allowCrossHostFallback && isSelectedOnline) selectedUuid else null,
+                        includeLocal = isSelectedOnline || allowCrossHostFallback,
+                        includeCloud = true,
+                        includeJetboxSnapshot = false,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (_: Throwable) {
+                null
             } ?: FederatedWorkspaceSyncResult(
                 workspaces = emptyList(),
                 summaries = emptyList(),
@@ -1016,6 +1078,7 @@ public class AntigravityKmpRpcClient(
         }
         val latestActive = currentActiveRelayInstance()
         val elapsedMs = max(1L, currentTimeMillis() - startMs).toInt()
+        lastHandshakePhase = "connected"
         return BackendHandshakeResult(
             latencyMs = elapsedMs,
             workspaces = federated.workspaces,

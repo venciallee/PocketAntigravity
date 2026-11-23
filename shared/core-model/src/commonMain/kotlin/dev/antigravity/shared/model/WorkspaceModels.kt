@@ -448,6 +448,17 @@ public data class RemoteHostInstance(
             return !csrf.isNullOrEmpty()
         }
 
+        public fun canonicalizeRelayHost(rawHost: String): String {
+            val host = rawHost.trim().lowercase()
+            if (host == "antigravity.google") {
+                return "antigravity.google.com"
+            }
+            if (host.endsWith(".antigravity.google")) {
+                return "${host.removeSuffix(".antigravity.google")}.antigravity.google.com"
+            }
+            return host
+        }
+
         public fun resolveEffectiveRelayTarget(
             scannedInput: String,
             webViewFinalUrl: String?,
@@ -461,9 +472,21 @@ public data class RemoteHostInstance(
                 if (scannedTarget == null || scannedTarget.instanceId.isEmpty() || scannedTarget.requiresRedirectResolution) {
                     return trimmedFinal
                 }
+                val scannedHost = SimpleUriParts.parse(trimmedScanned)?.host?.lowercase().orEmpty()
+                val finalHost = SimpleUriParts.parse(trimmedFinal)?.host?.lowercase().orEmpty()
+                if (scannedHost.isNotEmpty() && finalHost.isNotEmpty() && scannedHost != finalHost &&
+                    (scannedHost == "antigravity.google" || scannedHost.endsWith(".antigravity.google") ||
+                        scannedHost == "antigravity.dev" || scannedHost == "antigravity.app")
+                ) {
+                    return trimmedFinal
+                }
             }
             if (trimmedScanned.isNotEmpty()) {
                 if (scannedTarget != null && !scannedTarget.requiresRedirectResolution) {
+                    val scannedHost = SimpleUriParts.parse(trimmedScanned)?.host?.lowercase().orEmpty()
+                    if (scannedHost == "antigravity.google" || scannedHost.endsWith(".antigravity.google")) {
+                        return scannedTarget.canonicalRelayUrlString
+                    }
                     return trimmedScanned
                 }
                 if (trimmedFinal.isNotEmpty()) return trimmedFinal
@@ -587,7 +610,8 @@ public data class RemoteHostInstance(
             }
 
             val extracted = extractMetadata(parts, uri.queryParams, uri.fragment)
-            val origin = if (uri.port != null) "$scheme://$host:${uri.port}" else "$scheme://$host"
+            val canonicalHost = canonicalizeRelayHost(host)
+            val origin = if (uri.port != null) "$scheme://$canonicalHost:${uri.port}" else "$scheme://$canonicalHost"
             return ParsedRemoteControlTarget(
                 instanceId = extracted.instanceId,
                 conversationId = extracted.conversationId,

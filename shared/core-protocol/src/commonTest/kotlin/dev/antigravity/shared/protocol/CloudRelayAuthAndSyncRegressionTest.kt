@@ -427,4 +427,151 @@ class CloudRelayAuthAndSyncRegressionTest {
             )
         }
     }
+
+    @Test
+    fun testNormalizeOriginCanonicalizesAntigravityGoogleAlias() {
+        assertEquals(
+            "https://antigravity.google.com",
+            SapisidHashGenerator.normalizeOrigin("https://antigravity.google"),
+        )
+        assertEquals(
+            "https://antigravity.google.com",
+            SapisidHashGenerator.normalizeOrigin("https://antigravity.google/r/mac-mini"),
+        )
+        assertEquals(
+            "https://staging.antigravity.google.com",
+            SapisidHashGenerator.normalizeOrigin("https://staging.antigravity.google/r/mac-mini"),
+        )
+    }
+
+    @Test
+    fun testResolveCloudRelayInstanceFailsFastOnPrimary504WithoutProbingFallbackAuthUsers() = runTest {
+        withContext(Dispatchers.Default) {
+            val probedAuthUsers = mutableListOf<String?>()
+            val engine = MockEngine { request ->
+                if (request.url.encodedPath.endsWith("/ListInstances")) {
+                    probedAuthUsers.add(request.headers["X-Goog-AuthUser"])
+                    respond(
+                        content = "Upstream gateway timed out",
+                        status = HttpStatusCode.GatewayTimeout,
+                        headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                    )
+                } else {
+                    respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = "mac-mini-slug",
+                hostname = "Mac Mini",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google/r/mac-mini-slug",
+            )
+            val secretCookie = "SUPER_SECRET_SHOULD_NEVER_LEAK"
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=$secretCookie; SID=sid_val; OSID=osid_val",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val err = assertFailsWith<AntigravityRpcError.HttpError> {
+                client.resolveCloudRelayInstance(preferredIdentifier = "mac-mini-slug", allowCrossHostFallback = true)
+            }
+            assertEquals(504, err.statusCode)
+            assertEquals(
+                listOf<String?>("0"),
+                probedAuthUsers,
+                "Primary 504 transport timeout must fail fast without wasting RTTs on authUser=1..4",
+            )
+            val diag = client.currentHandshakeDiagnosticSummary()
+            assertTrue(diag.contains("engine=KMP"))
+            assertTrue(diag.contains("origin=https://antigravity.google.com"))
+            assertTrue(diag.contains("SAPISID"))
+            assertTrue(!diag.contains(secretCookie), "Diagnostic summary must never leak cookie values")
+        }
+    }
+
+    @Test
+    fun testResolveCloudRelayInstanceThrows404NotUnauthorizedWhenHttp200ReturnsEmptyInstances() = runTest {
+        withContext(Dispatchers.Default) {
+            val engine = MockEngine { request ->
+                if (request.url.encodedPath.endsWith("/ListInstances")) {
+                    respond(
+                        content = """[[],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                } else {
+                    respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = "golden-star",
+                hostname = "MacBook Pro",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/golden-star",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=valid_sapisid; SID=valid_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val err = assertFailsWith<AntigravityRpcError.HttpError> {
+                client.resolveCloudRelayInstance(preferredIdentifier = "golden-star", allowCrossHostFallback = true)
+            }
+            assertEquals(404, err.statusCode)
+            assertTrue(err.body.contains("no online Antigravity Desktop instances", ignoreCase = true))
+        }
+    }
+
+    @Test
+    fun testVerifyConnectionCompletesEvenWhenInitialProxyCommandFailsWith504() = runTest {
+        withContext(Dispatchers.Default) {
+            val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$rawUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        respond(
+                            content = "Desktop RPC timed out",
+                            status = HttpStatusCode.GatewayTimeout,
+                            headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = rawUuid,
+                hostname = "Antigravity Desktop",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$rawUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=valid_sapisid; SID=valid_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val handshake = client.verifyConnection(allowCrossHostFallback = true)
+            assertEquals("MacBook Pro", handshake.resolvedHostname)
+            assertEquals(rawUuid, handshake.resolvedInstanceUuid)
+            assertEquals(1, handshake.availableRelayInstances.size)
+            assertTrue(handshake.isSelectedHostOnline)
+            assertTrue(client.currentHandshakeDiagnosticSummary().contains("phase=connected"))
+        }
+    }
 }

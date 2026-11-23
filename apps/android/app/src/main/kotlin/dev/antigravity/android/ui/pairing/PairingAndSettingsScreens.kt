@@ -231,6 +231,9 @@ fun WelcomeAndPairingScreen(
                         )
                         if (errorText.contains("401") ||
                             errorText.contains("403") ||
+                            errorText.contains("404") ||
+                            errorText.contains("504") ||
+                            errorText.contains("timed out", ignoreCase = true) ||
                             errorText.contains("cookie", ignoreCase = true) ||
                             errorText.contains("sign", ignoreCase = true) ||
                             errorText.contains("auth", ignoreCase = true)

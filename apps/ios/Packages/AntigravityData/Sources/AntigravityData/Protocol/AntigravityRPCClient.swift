@@ -33,6 +33,8 @@ public actor AntigravityRPCClient {
     internal var cachedValidUpstreamModels: Set<String>?
     internal var cachedDefaultUpstreamModel: String?
     internal var capabilityProfilesByHost: [String: HostCapabilityProfile] = [:]
+    internal var lastHandshakePhase: String = "init"
+    internal var lastObservedKeyState: String = "none"
     internal let urlSession: URLSession
     internal let streamingURLSession: URLSession
 
@@ -81,8 +83,10 @@ public actor AntigravityRPCClient {
         self.targetInstanceIdentifier = extractedId
         self.resolvedInstanceUuid = resolvedInstanceUuid
         let trimmedRelayKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.relayApiKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
+        let resolvedInitialKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
             ?? SAPISIDHashGenerator.configuredRelayWebApiKeyOverride()
+        self.relayApiKey = resolvedInitialKey
+        self.lastObservedKeyState = resolvedInitialKey.map { "provided(\($0.count))" } ?? "none"
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         self.explicitAuthUser = effectiveAuthUser
         self.authUser = effectiveAuthUser ?? "0"
@@ -127,8 +131,10 @@ public actor AntigravityRPCClient {
         self.targetInstanceIdentifier = parsedTarget?.instanceId ?? ""
         self.resolvedInstanceUuid = resolvedInstanceUuid
         let trimmedRelayKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.relayApiKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
+        let resolvedInitialKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
             ?? SAPISIDHashGenerator.configuredRelayWebApiKeyOverride()
+        self.relayApiKey = resolvedInitialKey
+        self.lastObservedKeyState = resolvedInitialKey.map { "provided(\($0.count))" } ?? "none"
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         self.explicitAuthUser = effectiveAuthUser
         self.authUser = effectiveAuthUser ?? "0"
@@ -167,6 +173,7 @@ public actor AntigravityRPCClient {
         config.timeoutIntervalForResource = resourceTimeout
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
+        config.urlCache = nil
         let host = (endpointURL.host ?? "").lowercased()
         let isLocalOrPrivateHost =
             host == "localhost" ||
@@ -189,6 +196,13 @@ public actor AntigravityRPCClient {
     }
 
     // MARK: - Cloud Relay Public Web API Key Runtime Discovery
+
+    /// Safe, secret-free diagnostic summary of the current/last Cloud Relay handshake phase.
+    public func currentHandshakeDiagnosticSummary() -> String {
+        let origin = SAPISIDHashGenerator.normalizeOrigin(relayOriginURL.absoluteString)
+        let ck = SAPISIDHashGenerator.summarizeCookieNames(sessionCookie ?? "")
+        return "engine=Swift phase=\(lastHandshakePhase) origin=\(origin) key=\(lastObservedKeyState) ck=\(ck)"
+    }
 
     /// Returns the currently active Cloud Relay public web API key (captured via Sign-In WebView,
     /// discovered dynamically from the relay web frontend, or supplied via environment/Info.plist).
@@ -215,6 +229,7 @@ public actor AntigravityRPCClient {
         }
         if let key = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
             self.relayApiKey = key
+            self.lastObservedKeyState = "seeded(\(key.count))"
         }
         if !relayInstances.isEmpty {
             self.cachedRelayInstances = relayInstances
@@ -238,6 +253,7 @@ public actor AntigravityRPCClient {
         } else if !isLoopback,
                   let cached = await KeychainStore.shared.loadRelayWebApiKey(forOrigin: originStr) {
             relayApiKey = cached
+            lastObservedKeyState = "cached(\(cached.count))"
             return cached
         }
 
@@ -263,7 +279,10 @@ public actor AntigravityRPCClient {
     ) -> URLRequest {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        req.timeoutInterval = 8
+        req.timeoutInterval = 4.0
+        #if os(iOS) || os(macOS)
+        req.assumesHTTP3Capable = false
+        #endif
         req.setValue("text/html,application/xhtml+xml,application/javascript,*/*;q=0.8", forHTTPHeaderField: "Accept")
         req.setValue(SAPISIDHashGenerator.mobileRemoteUserAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("\(originStr)/", forHTTPHeaderField: "Referer")
@@ -294,6 +313,7 @@ public actor AntigravityRPCClient {
         if !forceRefresh && didRunOriginApiKeyDiscovery {
             return discoveredRelayApiKeyCandidates
         }
+        lastHandshakePhase = "api-key-discovery(page)"
         let originHost = relayOriginURL.host?.lowercased()
         var candidatePages: [URL] = []
         if endpointURL.host?.lowercased() == originHost {
@@ -325,7 +345,7 @@ public actor AntigravityRPCClient {
                 originStr: originStr,
                 includeSessionCookie: pageURL.host?.lowercased() == originHost
             )
-            pageReq.timeoutInterval = pageIdx == 0 ? 4.5 : 3.5
+            pageReq.timeoutInterval = pageIdx == 0 ? 3.0 : 2.5
             guard let (data, response) = try? await urlSession.data(for: pageReq),
                   let http = response as? HTTPURLResponse,
                   (200..<400).contains(http.statusCode) else {
@@ -354,7 +374,7 @@ public actor AntigravityRPCClient {
             for scriptURL in SAPISIDHashGenerator.extractBootstrapScriptURLs(
                 fromHTML: html,
                 baseURL: effectiveBaseURL,
-                limit: 8
+                limit: 6
             ) {
                 if seenScripts.insert(scriptURL.absoluteString).inserted {
                     scriptURLsToInspect.append(scriptURL)
@@ -366,14 +386,15 @@ public actor AntigravityRPCClient {
         }
 
         if collectedKeys.count < 3 && !scriptURLsToInspect.isEmpty {
+            lastHandshakePhase = "api-key-discovery(scripts)"
             let session = urlSession
-            let indexedRequests: [(Int, URLRequest)] = scriptURLsToInspect.prefix(6).enumerated().map { idx, scriptURL in
+            let indexedRequests: [(Int, URLRequest)] = scriptURLsToInspect.prefix(4).enumerated().map { idx, scriptURL in
                 var scriptReq = makeBootstrapGetRequest(
                     for: scriptURL,
                     originStr: originStr,
                     includeSessionCookie: scriptURL.host?.lowercased() == originHost
                 )
-                scriptReq.timeoutInterval = 4.5
+                scriptReq.timeoutInterval = 3.0
                 return (idx, scriptReq)
             }
             var orderedResults: [(Int, [String])] = []
@@ -408,6 +429,7 @@ public actor AntigravityRPCClient {
         didRunOriginApiKeyDiscovery = true
         if !collectedKeys.isEmpty {
             discoveredRelayApiKeyCandidates = collectedKeys
+            lastObservedKeyState = "discovered(\(collectedKeys.count))"
         }
         return collectedKeys
     }
@@ -895,9 +917,13 @@ public actor AntigravityRPCClient {
             let activeApiKey = await resolveRelayApiKey()
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
+            request.cachePolicy = .reloadIgnoringLocalCacheData
             if let timeoutInterval {
                 request.timeoutInterval = timeoutInterval
             }
+            #if os(iOS) || os(macOS)
+            request.assumesHTTP3Capable = false
+            #endif
             SAPISIDHashGenerator.applyApiServiceHeaders(
                 to: &request,
                 cookieHeader: currentCookie,

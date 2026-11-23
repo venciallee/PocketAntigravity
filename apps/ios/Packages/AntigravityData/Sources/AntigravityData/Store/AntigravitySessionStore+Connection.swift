@@ -1,7 +1,23 @@
 import Foundation
+#if canImport(os)
+import os
+#endif
 
 /// Backend login, pairing, Cloud Relay / Direct LAN auth, lifecycle suspension, and network path handling.
 extension AntigravitySessionStore {
+    #if canImport(os)
+    private static let cloudRelayLogger = Logger(
+        subsystem: "com.thousandtimes.agpocket",
+        category: "CloudRelay"
+    )
+    #endif
+
+    internal static func logCloudRelayDiagnostic(_ message: String) {
+        #if canImport(os)
+        cloudRelayLogger.notice("\(message, privacy: .public)")
+        #endif
+    }
+
     // MARK: - Live Backend Login, Pairing & Streaming Actions
 
     /// Computes the canonical shard key (`"cloud"` or `"host:<uuid|hostname>"`) for per-host disk caching.
@@ -884,6 +900,12 @@ extension AntigravitySessionStore {
         let handshakeURLString = canonicalURLString
         let handshakeApiKey = effectiveRelayApiKey
         let activeEngine = kmpEngine
+        let engineLabel = activeEngine != nil ? "KMP" : "Swift"
+        let cookieSummary = SAPISIDHashGenerator.summarizeCookieNames(trimmedCookie)
+        let keySummary = handshakeApiKey.map { "len:\($0.count)" } ?? "none"
+        Self.logCloudRelayDiagnostic(
+            "Handshake start engine=\(engineLabel) origin=\(initialOriginPrefix) target=\(targetBadge) authUser=\(effectiveAuthUser ?? "auto") key=\(keySummary) ck=\(cookieSummary) restore=\(isRestoringSavedSession) strict=\(strictTargetMatch)"
+        )
 
         do {
             let handshake: BackendHandshakeResult = try await withThrowingTaskGroup(of: BackendHandshakeResult.self) { group in
@@ -906,10 +928,16 @@ extension AntigravitySessionStore {
                     }
                 }
                 group.addTask {
-                    try await Task.sleep(nanoseconds: 25_000_000_000)
+                    try await Task.sleep(nanoseconds: 28_000_000_000)
+                    let diagnostic: String
+                    if activeEngine != nil {
+                        diagnostic = "engine=KMP phase=outer-timeout origin=\(initialOriginPrefix) key=\(keySummary) ck=\(cookieSummary)"
+                    } else {
+                        diagnostic = await candidateClient.currentHandshakeDiagnosticSummary()
+                    }
                     throw AntigravityRPCError.httpError(
                         statusCode: 504,
-                        body: "Cloud Relay handshake timed out after 25s. Check Google / VPN reachability or tap Sign in with Google."
+                        body: "Cloud Relay handshake timed out after 28s [\(diagnostic)]. Check Google / VPN reachability or tap Sign in with Google."
                     )
                 }
                 guard let first = try await group.next() else {
@@ -934,6 +962,10 @@ extension AntigravitySessionStore {
                 ?? candidateApiKey
                 ?? effectiveRelayApiKey
                 ?? (kmpSavedApiKey?.isEmpty == false ? kmpSavedApiKey : nil)
+
+            Self.logCloudRelayDiagnostic(
+                "Handshake OK engine=\(engineLabel) host=\(finalHostName) online=\(handshake.isSelectedHostOnline) instances=\(handshake.availableRelayInstances.count) workspaces=\(handshake.workspaces.count) summaries=\(handshake.summaries.count) authUser=\(finalAuthUser) latencyMs=\(handshake.latencyMs)"
+            )
 
             if kmpEngine != nil {
                 await candidateClient.seedRelayState(
@@ -1034,6 +1066,7 @@ extension AntigravitySessionStore {
             return true
         } catch let AntigravityRPCError.unauthorized(reason) {
             guard self.hostSwitchGeneration == generation else { return false }
+            Self.logCloudRelayDiagnostic("Handshake Unauthorized engine=\(engineLabel) reason=\(reason)")
             if !SAPISIDHashGenerator.isLoopbackOrigin(initialOriginPrefix) {
                 await secretStore.clearRelayWebApiKey(forOrigin: initialOriginPrefix)
             }
@@ -1058,6 +1091,7 @@ extension AntigravitySessionStore {
             return false
         } catch let AntigravityRPCError.httpError(code, body) {
             guard self.hostSwitchGeneration == generation else { return false }
+            Self.logCloudRelayDiagnostic("Handshake HTTP error engine=\(engineLabel) status=\(code) detail=\(body)")
             let errMsg = "Cloud Relay error (\(code)): \(body)"
             if (isRestoringSavedSession || (hasPairedBackend && !wasOptimisticInitial)) && (code == 502 || code == 503 || code == 504) {
                 await applyOfflinePairedSession(
@@ -1079,6 +1113,7 @@ extension AntigravitySessionStore {
             return false
         } catch {
             guard self.hostSwitchGeneration == generation else { return false }
+            Self.logCloudRelayDiagnostic("Handshake failed engine=\(engineLabel) error=\(error.localizedDescription)")
             let errMsg = "Cloud Relay handshake failed: \(error.localizedDescription)"
             if isRestoringSavedSession || (hasPairedBackend && !wasOptimisticInitial) {
                 await applyOfflinePairedSession(
