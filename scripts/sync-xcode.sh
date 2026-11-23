@@ -127,6 +127,7 @@ canonical_dirs = [
     "apps",
     "apps/ios",
     "apps/ios/App",
+    "apps/ios/Watch",
     "apps/ios/SharedUI",
     "apps/ios/Extensions",
     "apps/ios/Packages",
@@ -427,6 +428,7 @@ assert "AntigravityShared.xcframework" not in txt, "XCFramework reference was no
 assert "apps/ios/Packages/AntigravityData" in txt, "AntigravityData package was lost"
 assert "target: AGPocketLiveActivity" in txt, "AGPocketLiveActivity target was lost"
 assert "target: AGPocketShare" in txt, "AGPocketShare target was lost"
+assert "target: AGPocketWatch" in txt, "AGPocketWatch target was lost"
 assert "AGPocketUITests:" in txt, "AGPocketUITests target was lost"
 PY
 

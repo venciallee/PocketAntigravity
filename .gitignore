@@ -18,6 +18,7 @@ local.properties
 apps/ios/App/Support/Info.plist
 apps/ios/Extensions/LiveActivity/Info.plist
 apps/ios/Extensions/Share/Info.plist
+apps/ios/Watch/Support/Info.plist
 
 # Gemini CLI runtime artifacts (keep .gemini/commands/ tracked)
 .gemini/telemetry.log

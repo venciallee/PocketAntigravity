@@ -70,6 +70,7 @@ PY_COMPILE_FILES = [
     "verification/verify_advisory_hygiene.py",
     "verification/verify-compat-matrix.py",
     "verification/e2e_impact_planner.py",
+    "verification/watchos-simulator-runner.py",
     "verification/android_visual_compare.py",
     "verification/esdd_inspector.py",
 ]

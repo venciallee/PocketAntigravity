@@ -113,20 +113,37 @@ public struct AntigravityApp: App {
                         }
                     }
                     LiveActivityCoordinator.shared.sync(with: store)
+                    NotificationCoordinator.shared.attach(store: store)
+                    WatchConnectivityBridge.shared.attach(store: store)
                 }
                 .onChange(of: store.summaries) { _, _ in
                     guard activeVerifyCase == nil else { return }
                     LiveActivityCoordinator.shared.sync(with: store)
+                    WatchConnectivityBridge.shared.sync(with: store)
+                }
+                .onChange(of: store.activeHost) { _, _ in
+                    guard activeVerifyCase == nil else { return }
+                    WatchConnectivityBridge.shared.sync(with: store)
+                }
+                .onChange(of: store.selectedHostScope) { _, _ in
+                    guard activeVerifyCase == nil else { return }
+                    WatchConnectivityBridge.shared.sync(with: store)
+                }
+                .onChange(of: store.activeTurnDiffs.count) { _, _ in
+                    guard activeVerifyCase == nil else { return }
+                    WatchConnectivityBridge.shared.sync(with: store)
                 }
                 .onChange(of: store.lastNotificationEvent?.id) { _, _ in
                     guard activeVerifyCase == nil else { return }
-                    NotificationCoordinator.shared.deliverIfNeeded(event: store.lastNotificationEvent)
+                    NotificationCoordinator.shared.deliverIfNeeded(event: store.lastNotificationEvent, store: store)
+                    WatchConnectivityBridge.shared.sync(with: store, immediate: true)
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     guard activeVerifyCase == nil else { return }
                     switch newPhase {
                     case .background:
                         LiveActivityCoordinator.shared.sync(with: store)
+                        WatchConnectivityBridge.shared.sync(with: store, immediate: true)
                         store.suspendNetworkingForBackground()
                     case .active:
                         applyUIKitWindowInterfaceStyle(resolvedColorScheme)
@@ -138,11 +155,18 @@ public struct AntigravityApp: App {
                             await store.consumePendingLiveActivityActions()
                             await store.resumeNetworkingFromForeground()
                             LiveActivityCoordinator.shared.sync(with: store)
+                            WatchConnectivityBridge.shared.sync(with: store, immediate: true)
                         }
                     case .inactive:
                         break
                     @unknown default:
                         break
+                    }
+                }
+                .onContinueUserActivity(WatchConnectivityCodec.handoffActivityType) { activity in
+                    guard activeVerifyCase == nil else { return }
+                    if let userInfo = activity.userInfo {
+                        WatchConnectivityBridge.shared.handleHandoffUserInfo(userInfo, in: store)
                     }
                 }
                 #if canImport(UIKit)
@@ -186,6 +210,22 @@ public struct AntigravityApp: App {
                             if !cascadeId.isEmpty {
                                 store.selectCascade(cascadeId)
                             }
+                            return
+                        }
+                        if host == "changes" || host == "diff" {
+                            let cascadeId = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                            if !cascadeId.isEmpty {
+                                store.selectCascade(cascadeId)
+                            }
+                            store.activeRoute = .turnDiffReview
+                            return
+                        }
+                        if host == "artifact" || host == "plan" {
+                            let cascadeId = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                            if !cascadeId.isEmpty {
+                                store.selectCascade(cascadeId)
+                            }
+                            store.activeRoute = .planReview
                             return
                         }
                     }
