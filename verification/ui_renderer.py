@@ -65,13 +65,13 @@ MOBILE_CSS = """
   user-select: none;
 }
 html, body {
-  width: 393px;
-  max-width: 393px;
-  height: 852px;
-  max-height: 852px;
+  width: 390px;
+  max-width: 390px;
+  height: 844px;
+  max-height: 844px;
   overflow: hidden;
-  background: #090A0D;
-  color: #F5F7FA;
+  background: #0B0B0C;
+  color: #F5F6F8;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Roboto', 'Noto Sans CJK SC', sans-serif;
   position: relative;
 }
@@ -87,10 +87,10 @@ input, textarea, button {
 }
 .screen {
   position: relative;
-  width: 393px;
-  height: 852px;
+  width: 390px;
+  height: 844px;
   overflow: hidden;
-  background: #090A0D;
+  background: #0B0B0C;
 }
 .circle-icon-btn {
   width: 44px;
@@ -315,7 +315,7 @@ def _wrap_mobile_page(state_id: str, body_html: str, page_js: str, selectors: li
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=393, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="viewport" content="width=390, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>{state_id}</title>
 <style>{MOBILE_CSS}</style>
 </head>
@@ -400,172 +400,86 @@ def _floating_tab_bar(active_tab: str, fab_testid: str, fab_icon: str) -> str:
 def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
     if state_id == "UE01_AGENTS_HOME":
         body = f"""
-        <div style="padding: 56px 16px 0 16px; display: flex; flex-direction: column;">
-          <!-- Top Utility Bar -->
+        <div style="padding: 54px 16px 14px 16px; height: 100%; display: flex; flex-direction: column; justify-content: space-between;">
+          <!-- Top Bar: Sidebar + Centered Host Switcher + Search -->
           <div style="display:flex; align-items:center; justify-content:space-between;">
-            <button data-testid="host-switcher-pill" data-online="true" style="min-height:44px; padding:0 14px; border-radius:22px; background:#1A1B20; border:1px solid rgba(255,255,255,0.05); display:inline-flex; align-items:center; gap:8px; cursor:pointer;">
-              <span data-testid="host-online-dot" style="width:8.5px; height:8.5px; border-radius:50%; background:#57C88A;"></span>
-              <span style="font-size:14.5px; font-weight:600; color:#F5F7FA;">MacBook Pro</span>
-              <span style="color:#8E929F; display:flex;">{ICONS['chev_down']}</span>
+            <button data-testid="btn-open-sidebar" style="width:44px; height:44px; display:inline-flex; align-items:center; justify-content:flex-start; color:#F5F6F8; cursor:pointer;">
+              <svg width="22" height="18" viewBox="0 0 22 18" fill="none"><rect x="1" y="1" width="20" height="16" rx="3.5" stroke="currentColor" stroke-width="1.6"/><line x1="7.5" y1="1" x2="7.5" y2="17" stroke="currentColor" stroke-width="1.6"/></svg>
             </button>
-            <div style="display:flex; align-items:center; gap:10px;">
-              <button data-testid="btn-display-options" class="circle-icon-btn">{ICONS['filter_bars']}</button>
-              <button data-testid="btn-new-project" class="circle-icon-btn">{ICONS['folder_plus']}</button>
-            </div>
-          </div>
-
-          <!-- Large Title -->
-          <h1 style="font-size:34px; font-weight:700; letter-spacing:-0.7px; margin-top:14px; color:#F5F7FA;">Agents</h1>
-
-          <!-- Search Input -->
-          <div style="margin-top:12px; height:44px; border-radius:13px; background:#17181D; padding:0 13px; display:flex; align-items:center; gap:9px;">
-            <span style="color:#7D818D; display:flex;">{ICONS['search']}</span>
-            <input data-testid="agents-search-input" type="text" placeholder="Search conversations" style="flex:1; height:44px; font-size:15.5px; color:#F5F7FA;" />
-          </div>
-
-          <!-- Filter Pills -->
-          <div style="margin-top:12px; display:flex; align-items:center; gap:7px; overflow:hidden;">
-            <button data-testid="filter-pill-all" data-filter="all" class="agy-filter-pill" style="height:36px; min-width:46px; padding:0 14px; border-radius:18px; background:#FFFFFF; color:#0A0E17; font-size:13.5px; font-weight:700; cursor:pointer;">All</button>
-            <button data-testid="filter-pill-running" data-filter="running" class="agy-filter-pill" style="height:36px; padding:0 12px; border-radius:18px; background:#17181D; color:#D5D8E2; font-size:13.5px; font-weight:500; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; cursor:pointer;">
-              <span style="width:7px; height:7px; border-radius:50%; background:#7DA7FF;"></span>Running 2
+            <button data-testid="host-switcher-pill" data-online="true" style="min-height:44px; padding:0 15px; border-radius:22px; background:#141416; border:1px solid rgba(255,255,255,0.07); display:inline-flex; align-items:center; gap:8px; cursor:pointer;">
+              <span data-testid="host-online-dot" style="width:8px; height:8px; border-radius:50%; background:#6FD8A6;"></span>
+              <span style="font-size:14.5px; font-weight:500; color:#F5F6F8;">MacBook Pro</span>
+              <span style="color:#8E929B; display:flex;">{ICONS['chev_down']}</span>
             </button>
-            <button data-testid="filter-pill-needs-you" data-filter="needs-you" class="agy-filter-pill" style="height:36px; padding:0 12px; border-radius:18px; background:#17181D; color:#D5D8E2; font-size:13.5px; font-weight:500; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; cursor:pointer;">
-              <span style="width:7px; height:7px; border-radius:50%; background:#EBB365;"></span>Needs you 1
-            </button>
-            <button data-testid="filter-pill-unread" data-filter="unread" class="agy-filter-pill" style="height:36px; padding:0 12px; border-radius:18px; background:#17181D; color:#D5D8E2; font-size:13.5px; font-weight:500; white-space:nowrap; cursor:pointer;">Unread 3</button>
+            <button data-testid="btn-global-search" style="width:44px; height:44px; display:inline-flex; align-items:center; justify-content:flex-end; color:#F5F6F8; cursor:pointer;">{ICONS['search']}</button>
           </div>
 
-          <!-- PINNED Section -->
-          <div id="pinned-header" style="margin-top:16px; margin-bottom:8px; display:flex; align-items:center; gap:6px; padding-left:2px;">
-            <span style="color:#7D818D; display:flex;">{ICONS['pin']}</span>
-            <span class="section-label">PINNED</span>
+          <!-- Centered Hero Greeting -->
+          <div style="flex:1; display:flex; align-items:center; justify-content:center; padding:0 18px;">
+            <h1 data-testid="home-greeting-title" style="font-size:30px; line-height:37px; font-weight:700; letter-spacing:-0.6px; text-align:center; color:#F5F6F8;">Welcome back,<br/>Alex. Where<br/>should we pick up?</h1>
           </div>
-          <div data-testid="pinned-section-card" class="card-group">
-            <div class="conv-row" data-category="running" data-title="Add rate limiter to /transfers" style="padding:13px 15px; display:flex; gap:11px; align-items:flex-start;">
-              <span style="margin-top:2px; display:flex;">{ICONS['spinner_blue']}</span>
-              <div style="flex:1; min-width:0;">
-                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px;">
-                  <span style="font-size:15.5px; font-weight:600; color:#F5F7FA; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Add rate limiter to /transfers</span>
-                  <span style="font-size:12.5px; color:#7D818D; flex-shrink:0;">now</span>
+
+          <!-- Bottom Docked Banner + Composer -->
+          <div style="display:flex; flex-direction:column; gap:12px;">
+            <button data-testid="banner-needs-approval" style="width:100%; min-height:48px; padding:0 15px; border-radius:15px; background:rgba(242,184,102,0.11); border:1px solid rgba(242,184,102,0.28); display:flex; align-items:center; gap:9px; text-align:left; cursor:pointer;">
+              <span style="width:8px; height:8px; border-radius:50%; background:#F2B866; flex-shrink:0;"></span>
+              <span style="font-size:14px; color:#F5F6F8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;">
+                <strong style="color:#F2B866; font-weight:600;">Needs approval</strong> · Add rate limiter to /tran...
+              </span>
+              <span style="color:#8E929B; display:flex;">{ICONS['chev_right']}</span>
+            </button>
+
+            <div style="background:#141416; border:1px solid rgba(255,255,255,0.08); border-radius:26px; padding:10px 8px 8px 8px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; padding:0 8px 10px 8px;">
+                <div style="display:flex; align-items:center; gap:14px;">
+                  <button data-testid="composer-project-pill" style="display:inline-flex; align-items:center; gap:6px; font-size:13.5px; color:#D5D8E2; cursor:pointer;">
+                    {ICONS['folder']}<span>ledger-svc</span>{ICONS['chev_down']}
+                  </button>
+                  <button data-testid="composer-branch-pill" style="display:inline-flex; align-items:center; gap:6px; font-size:13.5px; color:#D5D8E2; cursor:pointer;">
+                    <span>Repo default</span>{ICONS['chev_down']}
+                  </button>
                 </div>
-                <div style="font-size:13.5px; color:#7DA7FF; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Running · Step 4 of 7 · go test ./internal/...</div>
-                <div style="font-size:12.5px; color:#7D818D; margin-top:2px;">ledger-svc</div>
+                <button data-testid="composer-cloud-toggle" data-cloud="false" style="width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; color:#8E929B; cursor:pointer;">{ICONS['cloud']}</button>
               </div>
-            </div>
-            <div class="divider"></div>
-            <div class="conv-row" data-category="done" data-title="Release checklist v2.3" style="padding:13px 15px 13px 44px;">
-              <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                <span style="font-size:15.5px; font-weight:600; color:#F5F7FA;">Release checklist v2.3</span>
-                <span style="font-size:12.5px; color:#7D818D;">1h</span>
-              </div>
-              <div style="font-size:13.5px; color:#8A8E9B; margin-top:3px;">Done · Walkthrough ready</div>
-              <div style="font-size:12.5px; color:#7D818D; margin-top:2px;">web-console</div>
-            </div>
-          </div>
 
-          <!-- Project Group: ledger-svc -->
-          <div data-testid="project-group-ledger-svc" style="margin-top:18px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:9px;">
-              <div style="display:flex; align-items:center; gap:10px;">
-                <div style="width:34px; height:34px; border-radius:10px; background:#18191F; border:1px solid rgba(255,255,255,0.05); display:flex; align-items:center; justify-content:center; color:#A5AAB8;">{ICONS['folder']}</div>
-                <div>
-                  <div style="font-size:16px; font-weight:600; color:#F5F7FA; line-height:19px;">ledger-svc</div>
-                  <div style="font-size:12.5px; color:#7D818D;">Local · MacBook Pro · main</div>
-                </div>
-              </div>
-              <div style="display:flex; align-items:center; gap:20px; color:#9DA2B0; padding-right:4px;">
-                <span style="display:flex;">{ICONS['plus']}</span>
-                <span style="display:flex;">{ICONS['chev_down']}</span>
-              </div>
-            </div>
-
-            <div class="card-group">
-              <div class="conv-row" data-testid="conv-row-flaky" data-category="needs-you unread" data-title="Fix flaky TestSettlementBatch" style="padding:13px 15px; display:flex; gap:11px; align-items:flex-start;">
-                <span class="amber-halo" style="margin-top:2px;"></span>
-                <div style="flex:1; min-width:0;">
-                  <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                    <span style="font-size:15.5px; font-weight:600; color:#F5F7FA;">Fix flaky TestSettlementBatch</span>
-                    <span style="font-size:12.5px; color:#7D818D;">8m</span>
+              <div style="background:#1B1B1F; border:1px solid rgba(255,255,255,0.07); border-radius:20px; padding:12px;">
+                <input id="home-composer-input" type="text" placeholder="Ask anything, @ to mention, / for actions" style="width:100%; font-size:15.5px; color:#F5F6F8; margin-bottom:12px;" />
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                  <div style="display:flex; align-items:center; gap:10px;">
+                    <button data-testid="composer-btn-add-context" style="width:34px; height:44px; display:inline-flex; align-items:center; justify-content:center; color:#F5F6F8; cursor:pointer;">{ICONS['plus']}</button>
+                    <button data-testid="composer-pill-model" style="min-height:44px; display:inline-flex; align-items:center; gap:5px; text-align:left; cursor:pointer;">
+                      <div>
+                        <div style="font-size:13px; font-weight:500; color:#F5F6F8; line-height:16px;">Gemini 4 Neon</div>
+                        <div style="font-size:11px; color:#8E929B; line-height:14px;">Extra High</div>
+                      </div>
+                      <span style="color:#8E929B; display:flex;">{ICONS['chev_down']}</span>
+                    </button>
                   </div>
-                  <div style="font-size:13.5px; color:#EBB365; margin-top:3px;">Needs review · Implementation plan ready</div>
-                </div>
-              </div>
-              <div class="divider"></div>
-              <div class="conv-row" data-category="unread" data-title="Upgrade to Go 1.25" style="padding:13px 15px; display:flex; gap:11px; align-items:flex-start;">
-                <span style="width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center; margin-top:2px; flex-shrink:0;">
-                  <span style="width:8.5px; height:8.5px; border-radius:50%; background:#8EB4FF;"></span>
-                </span>
-                <div style="flex:1; min-width:0;">
-                  <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                    <span style="font-size:15.5px; font-weight:600; color:#F5F7FA;">Upgrade to Go 1.25</span>
-                    <span style="font-size:12.5px; color:#7D818D;">1h</span>
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <button data-testid="composer-pill-preset" style="min-height:44px; display:inline-flex; align-items:center; gap:4px; font-size:13px; color:#D5D8E2; cursor:pointer;">
+                      <span>Default</span>{ICONS['chev_down']}
+                    </button>
+                    <span style="color:#D5D8E2; display:flex;">{ICONS['mic']}</span>
+                    <button data-testid="composer-btn-send" style="width:44px; height:44px; border-radius:22px; background:#26262B; color:#8E929B; display:inline-flex; align-items:center; justify-content:center; cursor:pointer;">→</button>
                   </div>
-                  <div style="font-size:13.5px; color:#8A8E9B; margin-top:3px;">Done · 6 files changed <span style="color:#57C88A; font-weight:600;">+42</span> <span style="color:#F07167; font-weight:600;">-31</span></div>
                 </div>
               </div>
-              <div class="divider"></div>
-              <div class="conv-row" data-category="unread" data-title="Idempotency keys for payouts" style="padding:13px 15px 13px 44px;">
-                <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                  <span style="font-size:15.5px; font-weight:600; color:#F5F7FA;">Idempotency keys for payouts</span>
-                  <span style="font-size:12.5px; color:#7D818D;">Yesterday</span>
-                </div>
-                <div style="font-size:13.5px; color:#8A8E9B; margin-top:3px;">Done · Merged into main</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Project Group: web-console (peeking beneath Floating Tab Bar) -->
-          <div id="project-group-web-console" style="margin-top:18px; opacity:0.78;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-              <div style="display:flex; align-items:center; gap:10px;">
-                <div style="width:34px; height:34px; border-radius:10px; background:#18191F; display:flex; align-items:center; justify-content:center; color:#A5AAB8;">{ICONS['cloud']}</div>
-                <div>
-                  <div style="font-size:16px; font-weight:600; color:#F5F7FA;">web-console</div>
-                  <div style="font-size:12px; color:#7D818D;">Cloud · acme/web-console</div>
-                </div>
-              </div>
-              <div style="display:flex; align-items:center; gap:20px; color:#9DA2B0; padding-right:4px;">
-                <span style="display:flex;">{ICONS['plus']}</span>
-                <span style="display:flex;">{ICONS['chev_down']}</span>
-              </div>
-            </div>
-            <div class="card-group" style="padding:12px 15px; opacity:0.55;">
-              <div style="font-size:15px; font-weight:600; color:#F5F7FA;">Dark mode for settings page</div>
-              <div style="font-size:13px; color:#7DA7FF; margin-top:3px;">Running in cloud · Step 2 of 5</div>
             </div>
           </div>
         </div>
-        {_floating_tab_bar("agents", "fab-compose", "pencil")}
         """
         js = """
-        document.querySelectorAll('.agy-filter-pill').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const filter = btn.dataset.filter;
-            document.body.dataset.activeFilter = filter;
-            document.querySelectorAll('.agy-filter-pill').forEach(b => {
-              const active = b === btn;
-              b.style.background = active ? '#FFFFFF' : '#17181D';
-              b.style.color = active ? '#0A0E17' : '#D5D8E2';
-              b.style.fontWeight = active ? '700' : '500';
-            });
-            document.querySelectorAll('.conv-row').forEach(row => {
-              const cats = (row.dataset.category || '').split(' ');
-              const show = filter === 'all' || cats.includes(filter);
-              row.style.display = show ? '' : 'none';
-            });
-            const pinnedCard = document.querySelector("[data-testid='pinned-section-card']");
-            const anyPinned = Array.from(pinnedCard.querySelectorAll('.conv-row')).some(r => r.style.display !== 'none');
-            pinnedCard.style.display = anyPinned ? '' : 'none';
-            document.getElementById('pinned-header').style.display = anyPinned ? 'flex' : 'none';
-          });
+        document.querySelector("[data-testid='btn-open-sidebar']").addEventListener('click', () => {
+          document.body.dataset.sidebarOpened = 'true';
         });
-        const searchInput = document.querySelector("[data-testid='agents-search-input']");
-        searchInput.addEventListener('input', () => {
-          const q = searchInput.value.toLowerCase();
-          document.querySelectorAll('.conv-row').forEach(row => {
-            const match = (row.dataset.title || '').toLowerCase().includes(q);
-            row.style.display = match ? '' : 'none';
-          });
+        document.querySelector("[data-testid='banner-needs-approval']").addEventListener('click', () => {
+          document.body.dataset.openedApprovalCascade = 'cas-rate-limiter';
+        });
+        document.querySelector("[data-testid='composer-cloud-toggle']").addEventListener('click', (e) => {
+          const btn = e.currentTarget;
+          const next = btn.dataset.cloud !== 'true';
+          btn.dataset.cloud = String(next);
+          document.body.dataset.cloudTarget = String(next);
         });
         """
         return _wrap_mobile_page(state_id, body, js, selectors, rpc_port)
@@ -1063,8 +977,11 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
 
     if state_id == "UE06_AUTOMATIONS":
         body = f"""
-        <div style="padding:56px 16px 0 16px; display:flex; flex-direction:column;">
-          <div style="display:flex; justify-content:flex-end;">
+        <div style="padding:54px 16px 0 16px; display:flex; flex-direction:column;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <button data-testid="btn-open-sidebar" style="width:44px; height:44px; display:inline-flex; align-items:center; justify-content:flex-start; color:#F5F6F8; cursor:pointer;">
+              <svg width="22" height="18" viewBox="0 0 22 18" fill="none"><rect x="1" y="1" width="20" height="16" rx="3.5" stroke="currentColor" stroke-width="1.6"/><line x1="7.5" y1="1" x2="7.5" y2="17" stroke="currentColor" stroke-width="1.6"/></svg>
+            </button>
             <button class="circle-icon-btn">{ICONS['filter_bars']}</button>
           </div>
           <h1 style="font-size:34px; font-weight:700; letter-spacing:-0.7px; margin-top:8px; color:#F5F7FA;">Automations</h1>
@@ -1148,7 +1065,6 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
             <button data-testid="btn-resume-paused" style="height:36px; padding:0 15px; border-radius:18px; background:#23252E; color:#D5D8E2; font-size:13.5px; font-weight:600; cursor:pointer; position:relative; z-index:45;">Resume</button>
           </div>
         </div>
-        {_floating_tab_bar("automations", "fab-add-automation", "plus")}
         """
         js = """
         let schedCount = 2;
@@ -1301,14 +1217,20 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
             </div>
             <textarea id="composer-input" data-testid="composer-text-input" rows="2" style="width:100%; resize:none; font-size:15px; line-height:20px; color:#F5F7FA;">Use 1000/s instead — staging is smaller than prod.</textarea>
             <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px;">
-              <div style="display:flex; align-items:center; gap:7px;">
-                <button data-testid="composer-btn-add-context" style="width:36px; height:36px; border-radius:18px; background:#252730; color:#E5E7EF; display:flex; align-items:center; justify-content:center; cursor:pointer;">{ICONS['plus']}</button>
-                <button data-testid="composer-pill-mode" style="height:34px; padding:0 12px; border-radius:17px; background:#252730; color:#F5F7FA; font-size:13px; font-weight:600; display:inline-flex; align-items:center; gap:5px; cursor:pointer;">Planning {ICONS['chev_down']}</button>
-                <button data-testid="composer-pill-model" style="height:34px; padding:0 12px; border-radius:17px; background:#252730; color:#D5D8E2; font-size:13px; font-weight:500; display:inline-flex; align-items:center; gap:5px; cursor:pointer;">Gemini 3.1 Pro {ICONS['chev_down']}</button>
+              <div style="display:flex; align-items:center; gap:9px;">
+                <button data-testid="composer-btn-add-context" style="width:34px; height:36px; color:#F5F6F8; display:flex; align-items:center; justify-content:center; cursor:pointer;">{ICONS['plus']}</button>
+                <button data-testid="composer-pill-model" style="min-height:36px; display:inline-flex; align-items:center; gap:5px; text-align:left; cursor:pointer;">
+                  <div>
+                    <div style="font-size:13px; font-weight:500; color:#F5F6F8; line-height:16px;">Gemini 4 Neon</div>
+                    <div style="font-size:11px; color:#8E929B; line-height:14px;">Extra High</div>
+                  </div>
+                  <span style="color:#8E929B; display:flex;">{ICONS['chev_down']}</span>
+                </button>
               </div>
-              <div style="display:flex; align-items:center; gap:10px;">
-                <span style="color:#9EA2B0; display:flex;">{ICONS['mic']}</span>
-                <button data-testid="composer-btn-send" style="width:38px; height:38px; border-radius:19px; background:#8EB4FF; color:#0A0E17; display:flex; align-items:center; justify-content:center; cursor:pointer;">{ICONS['arrow_up']}</button>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button data-testid="composer-pill-preset" style="height:34px; padding:0 8px; color:#D5D8E2; font-size:13px; font-weight:500; display:inline-flex; align-items:center; gap:4px; cursor:pointer;">Default {ICONS['chev_down']}</button>
+                <span style="color:#D5D8E2; display:flex;">{ICONS['mic']}</span>
+                <button data-testid="composer-btn-send" style="width:38px; height:38px; border-radius:19px; background:#8DB8FF; color:#0A0E17; display:flex; align-items:center; justify-content:center; cursor:pointer; font-weight:700;">→</button>
               </div>
             </div>
           </div>
@@ -1360,7 +1282,7 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
 
     if state_id == "UE08_ADD_CONTEXT":
         body = f"""
-        <div style="position:absolute; top:65px; left:0; right:0; bottom:0; background:#16171C; border-radius:28px 28px 0 0; border-top:1px solid rgba(255,255,255,0.08); display:flex; flex-direction:column;">
+        <div data-testid="add-context-menu" style="position:absolute; top:65px; left:0; right:0; bottom:0; background:#16171C; border-radius:28px 28px 0 0; border-top:1px solid rgba(255,255,255,0.08); display:flex; flex-direction:column;">
           <div style="padding:0 16px;">
             <div class="sheet-grabber"></div>
             <div style="height:48px; display:flex; align-items:center; justify-content:space-between; margin-top:4px;">
@@ -1375,7 +1297,7 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
               <input data-testid="context-search-input" type="text" placeholder="Search files, folders, skills..." style="flex:1; height:44px; font-size:15px; color:#F5F7FA;" />
             </div>
 
-            <!-- 5 Category Tiles -->
+            <!-- 5 Category Tiles (Files, Folder, Mentions, Actions, Drive) -->
             <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:8px; margin-top:14px;">
               <button data-testid="tile-files" data-cat="files" class="ctx-tile" style="height:68px; border-radius:15px; background:#202229; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; font-size:12px; font-weight:600; color:#E5E7EF; cursor:pointer;">
                 {ICONS['doc']}<span>Files</span>
@@ -1389,8 +1311,8 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
               <button data-testid="tile-actions" data-cat="actions" class="ctx-tile" style="height:68px; border-radius:15px; background:#202229; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; font-size:12px; font-weight:600; color:#E5E7EF; cursor:pointer;">
                 {ICONS['bolt']}<span>Actions</span>
               </button>
-              <button data-testid="tile-skills" data-cat="skills" class="ctx-tile" style="height:68px; border-radius:15px; background:#202229; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; font-size:12px; font-weight:600; color:#E5E7EF; cursor:pointer;">
-                {ICONS['cube']}<span>Skills</span>
+              <button data-testid="tile-drive" data-cat="drive" class="ctx-tile" style="height:68px; border-radius:15px; background:#202229; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; font-size:12px; font-weight:600; color:#E5E7EF; cursor:pointer;">
+                {ICONS['cloud']}<span>Drive</span>
               </button>
             </div>
 
@@ -1525,105 +1447,81 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
 
     if state_id == "UE09_MODEL_AND_MODE":
         body = f"""
-        <!-- Subtle Dimmed Chat Shapes Above Sheet -->
-        <div style="padding:70px 16px 0 16px; opacity:0.25;">
-          <div style="height:44px; border-radius:14px; background:#191B22;"></div>
-          <div style="height:54px; width:260px; margin-left:auto; margin-top:18px; border-radius:18px; background:#1D2028;"></div>
+        <div style="padding:56px 16px 0 16px; opacity:0.22;">
+          <div style="height:40px; border-radius:14px; background:#141416;"></div>
         </div>
 
-        <div style="position:absolute; top:177px; left:0; right:0; bottom:0; background:#16171C; border-radius:28px 28px 0 0; border-top:1px solid rgba(255,255,255,0.08); padding:0 16px;">
+        <div style="position:absolute; top:92px; left:0; right:0; bottom:0; background:#161619; border-radius:28px 28px 0 0; border-top:1px solid rgba(255,255,255,0.08); padding:0 16px;">
           <div class="sheet-grabber"></div>
           <div style="height:48px; display:flex; align-items:center; justify-content:space-between; margin-top:4px;">
             <span style="width:54px;"></span>
-            <span style="font-size:17.5px; font-weight:700; color:#F5F7FA;">Model &amp; Mode</span>
-            <button data-testid="btn-model-done" style="min-width:54px; min-height:44px; text-align:right; font-size:16px; font-weight:700; color:#8EB4FF; cursor:pointer;">Done</button>
+            <span style="font-size:17.5px; font-weight:700; color:#F5F6F8;">Model</span>
+            <button data-testid="btn-model-done" style="min-width:54px; min-height:44px; text-align:right; font-size:16px; font-weight:700; color:#8DB8FF; cursor:pointer;">Done</button>
           </div>
 
-          <!-- Mode Cards -->
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
-            <button data-testid="mode-card-planning" data-mode="Planning" class="mode-card" style="padding:14px; border-radius:18px; background:#202533; border:1.5px solid #8EB4FF; text-align:left; cursor:pointer;">
-              <div style="display:flex; align-items:center; gap:7px; font-size:15.5px; font-weight:700; color:#F5F7FA;">
-                <span style="color:#8EB4FF;">{ICONS['doc']}</span><span>Planning</span>
-              </div>
-              <p style="font-size:12.5px; line-height:17.5px; color:#A5AAB8; margin-top:8px;">
-                Plans first and writes artifacts for you to review
-              </p>
-            </button>
-            <button data-testid="mode-card-fast" data-mode="Fast" class="mode-card" style="padding:14px; border-radius:18px; background:#202229; border:1.5px solid transparent; text-align:left; cursor:pointer;">
-              <div style="display:flex; align-items:center; gap:7px; font-size:15.5px; font-weight:700; color:#F5F7FA;">
-                <span style="color:#9EA2B0;">{ICONS['bolt']}</span><span>Fast</span>
-              </div>
-              <p style="font-size:12.5px; line-height:17.5px; color:#8A8E9B; margin-top:8px;">
-                Acts directly — best for small, local edits
-              </p>
-            </button>
-          </div>
-
-          <div class="section-label" style="margin-top:18px; margin-bottom:8px;">MODEL</div>
-          <div style="background:#202229; border-radius:16px; overflow:hidden;">
-            <div data-testid="model-row-gemini-pro" data-model="Gemini 3.1 Pro" class="model-row" style="min-height:58px; padding:10px 15px; display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
-              <div>
-                <div style="font-size:15.5px; font-weight:700; color:#F5F7FA;">Gemini 3.1 Pro</div>
-                <div style="font-size:12.5px; color:#8A8E9B; margin-top:2px;">Deep reasoning for long, multi-step tasks</div>
-              </div>
-              <span class="model-chk" style="color:#8EB4FF;">{ICONS['check']}</span>
+          <div style="background:#202024; border-radius:16px; overflow:hidden; margin-top:8px;">
+            <div data-testid="model-row-orchestrator" data-model="Orchestrator" class="model-row" style="min-height:46px; padding:10px 15px; display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
+              <span style="font-size:15.5px; font-weight:500; color:#F5F6F8;">Orchestrator</span>
+              <span class="model-chk" style="color:#8DB8FF; display:none;">{ICONS['check']}</span>
             </div>
             <div class="divider"></div>
-            <div data-testid="model-row-gemini-flash" data-model="Gemini 3.8 Flash" class="model-row" style="min-height:58px; padding:10px 15px; display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
-              <div>
-                <div style="font-size:15.5px; font-weight:500; color:#F5F7FA;">Gemini 3.8 Flash</div>
-                <div style="font-size:12.5px; color:#8A8E9B; margin-top:2px;">Fastest responses, lowest cost</div>
-              </div>
-              <span class="model-chk" style="color:#8EB4FF; display:none;">{ICONS['check']}</span>
-            </div>
-            <div class="divider"></div>
-            <div data-testid="model-row-claude-opus" data-model="Claude Opus 5.5" class="model-row" style="min-height:58px; padding:10px 15px; display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
-              <div>
+            <div data-testid="model-row-gemini-4-neon" data-model="Gemini 4 Neon" class="model-row" style="padding:12px 15px; cursor:pointer;">
+              <div style="display:flex; align-items:center; justify-content:space-between;">
                 <div style="display:flex; align-items:center; gap:7px;">
-                  <span style="font-size:15.5px; font-weight:500; color:#F5F7FA;">Claude Opus 5.5</span>
-                  <span style="font-size:11px; font-weight:600; padding:2px 7px; border-radius:6px; background:#2E313B; color:#B8BCC8;">Thinking</span>
+                  <span style="font-size:15.5px; font-weight:700; color:#F5F6F8;">Gemini 4 Neon</span>
+                  <span style="font-size:11px; font-weight:600; padding:2px 7px; border-radius:6px; background:#202533; color:#8DB8FF;">New</span>
                 </div>
-                <div style="font-size:12.5px; color:#8A8E9B; margin-top:2px;">Requires Google AI Pro or Ultra</div>
+                <span class="model-chk" style="color:#8DB8FF;">{ICONS['check']}</span>
               </div>
-              <span class="model-chk" style="color:#8EB4FF; display:none;">{ICONS['check']}</span>
+              <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:4px; margin-top:10px; background:#141416; padding:3px; border-radius:10px;">
+                <button data-testid="effort-seg-low" data-effort="Low" class="effort-seg" style="height:30px; border-radius:7px; font-size:12px; color:#8E929B; cursor:pointer;">Low</button>
+                <button data-testid="effort-seg-medium" data-effort="Medium" class="effort-seg" style="height:30px; border-radius:7px; font-size:12px; color:#8E929B; cursor:pointer;">Medium</button>
+                <button data-testid="effort-seg-high" data-effort="High" class="effort-seg" style="height:30px; border-radius:7px; font-size:12px; color:#8E929B; cursor:pointer;">High</button>
+                <button data-testid="effort-seg-extra" data-effort="Extra High" class="effort-seg" style="height:30px; border-radius:7px; background:#31323A; font-size:12px; font-weight:600; color:#F5F6F8; cursor:pointer;">Extra High</button>
+              </div>
             </div>
             <div class="divider"></div>
-            <div data-testid="model-row-claude-sonnet" data-model="Claude Sonnet 5.5" class="model-row" style="min-height:58px; padding:10px 15px; display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
-              <div>
-                <div style="display:flex; align-items:center; gap:7px;">
-                  <span style="font-size:15.5px; font-weight:500; color:#F5F7FA;">Claude Sonnet 5.5</span>
-                  <span style="font-size:11px; font-weight:600; padding:2px 7px; border-radius:6px; background:#2E313B; color:#B8BCC8;">Thinking</span>
-                </div>
-                <div style="font-size:12.5px; color:#8A8E9B; margin-top:2px;">Requires Google AI Pro or Ultra</div>
-              </div>
-              <span class="model-chk" style="color:#8EB4FF; display:none;">{ICONS['check']}</span>
+            <div data-testid="model-row-gemini-4-carbon" data-model="Gemini 4 Carbon" class="model-row" style="min-height:46px; padding:10px 15px; display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
+              <span style="font-size:15.5px; font-weight:500; color:#F5F6F8;">Gemini 4 Carbon</span>
+              <span class="model-chk" style="color:#8DB8FF; display:none;">{ICONS['check']}</span>
+            </div>
+            <div class="divider"></div>
+            <div data-testid="model-row-claude-opus" data-model="Claude Opus 5.5" class="model-row" style="min-height:46px; padding:10px 15px; display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
+              <span style="font-size:15.5px; font-weight:500; color:#F5F6F8;">Claude Opus 5.5</span>
+              <span class="model-chk" style="color:#8DB8FF; display:none;">{ICONS['check']}</span>
+            </div>
+            <div class="divider"></div>
+            <div data-testid="model-row-gemini-flash" data-model="Gemini 3.8 Flash" class="model-row" style="min-height:46px; padding:10px 15px; display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
+              <span style="font-size:15.5px; font-weight:500; color:#F5F6F8;">Gemini 3.8 Flash</span>
+              <span class="model-chk" style="color:#8DB8FF; display:none;">{ICONS['check']}</span>
             </div>
           </div>
 
-          <div style="font-size:12.5px; color:#7D818D; margin-top:9px;">A new model takes effect on the next turn.</div>
-
-          <div class="section-label" style="margin-top:16px; margin-bottom:9px;">AGENT</div>
-          <div style="display:flex; flex-wrap:wrap; gap:8px;">
-            <button data-testid="agent-pill-default" data-agent="Default" class="agent-pill" style="height:38px; padding:0 16px; border-radius:19px; background:#FFFFFF; color:#0A0E17; font-size:14px; font-weight:700; cursor:pointer;">Default</button>
-            <button data-testid="agent-pill-go-reviewer" data-agent="go-reviewer" class="agent-pill mono" style="height:38px; padding:0 16px; border-radius:19px; background:#22242C; color:#D5D8E2; font-size:13.5px; cursor:pointer;">go-reviewer</button>
-            <button data-testid="agent-pill-release-captain" data-agent="release-captain" class="agent-pill mono" style="height:38px; padding:0 16px; border-radius:19px; background:#22242C; color:#D5D8E2; font-size:13.5px; cursor:pointer;">release-captain</button>
+          <div style="margin-top:16px; background:#202024; border-radius:16px; padding:14px; display:flex; flex-direction:column; gap:12px;">
+            <div data-testid="model-quota-5h">
+              <div style="display:flex; justify-content:space-between; font-size:13px;">
+                <span style="color:#D5D8E2; font-weight:500;">Five Hour Limit Remaining</span>
+                <span style="color:#8DB8FF; font-weight:600;">View Usage</span>
+              </div>
+              <div style="height:6px; border-radius:3px; background:#141416; margin-top:6px; overflow:hidden;">
+                <div style="width:94%; height:100%; background:#8DB8FF; border-radius:3px;"></div>
+              </div>
+            </div>
+            <div data-testid="model-quota-weekly">
+              <div style="display:flex; justify-content:space-between; font-size:13px;">
+                <span style="color:#D5D8E2; font-weight:500;">Weekly Limit Remaining</span>
+                <span style="color:#8E929B;">86%</span>
+              </div>
+              <div style="height:6px; border-radius:3px; background:#141416; margin-top:6px; overflow:hidden;">
+                <div style="width:86%; height:100%; background:#6FD8A6; border-radius:3px;"></div>
+              </div>
+            </div>
           </div>
         </div>
         """
         js = """
-        let activeMode = 'Planning';
-        let activeModel = 'Gemini 3.1 Pro';
-        let activeAgent = 'Default';
-        document.querySelectorAll('.mode-card').forEach(card => {
-          card.addEventListener('click', () => {
-            activeMode = card.dataset.mode;
-            document.querySelectorAll('.mode-card').forEach(c => {
-              const on = c === card;
-              c.style.borderColor = on ? '#8EB4FF' : 'transparent';
-              c.style.background = on ? '#202533' : '#202229';
-            });
-          });
-        });
+        let activeModel = 'Gemini 4 Neon';
+        let activeEffort = 'Extra High';
         document.querySelectorAll('.model-row').forEach(row => {
           row.addEventListener('click', () => {
             activeModel = row.dataset.model;
@@ -1631,21 +1529,21 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
             row.querySelector('.model-chk').style.display = 'inline';
           });
         });
-        document.querySelectorAll('.agent-pill').forEach(pill => {
-          pill.addEventListener('click', () => {
-            activeAgent = pill.dataset.agent;
-            document.querySelectorAll('.agent-pill').forEach(p => {
-              const on = p === pill;
-              p.style.background = on ? '#FFFFFF' : '#22242C';
-              p.style.color = on ? '#0A0E17' : '#D5D8E2';
-              p.style.fontWeight = on ? '700' : '400';
+        document.querySelectorAll('.effort-seg').forEach(seg => {
+          seg.addEventListener('click', (e) => {
+            e.stopPropagation();
+            activeEffort = seg.dataset.effort;
+            document.querySelectorAll('.effort-seg').forEach(s => {
+              const on = s === seg;
+              s.style.background = on ? '#31323A' : 'transparent';
+              s.style.color = on ? '#F5F6F8' : '#8E929B';
+              s.style.fontWeight = on ? '600' : '400';
             });
           });
         });
         document.querySelector("[data-testid='btn-model-done']").addEventListener('click', () => {
-          document.body.dataset.selectedMode = activeMode;
           document.body.dataset.selectedModel = activeModel;
-          document.body.dataset.selectedAgent = activeAgent;
+          document.body.dataset.selectedEffort = activeEffort;
         });
         """
         return _wrap_mobile_page(state_id, body, js, selectors, rpc_port)

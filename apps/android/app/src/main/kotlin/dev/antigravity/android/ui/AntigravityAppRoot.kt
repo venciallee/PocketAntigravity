@@ -6,24 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.Schedule
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -33,22 +15,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
 import dev.antigravity.android.core.platform.CloudRelayCookieBridge
-import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.AntigravityTheme
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.ui.automations.AutomationDetailScreen
+import dev.antigravity.android.ui.automations.AutomationEditScreen
 import dev.antigravity.android.ui.automations.AutomationsScreen
 import dev.antigravity.android.ui.chat.AddContextSheetScreen
 import dev.antigravity.android.ui.chat.CascadeChatScreen
 import dev.antigravity.android.ui.chat.ConversationOverviewSheet
 import dev.antigravity.android.ui.chat.ModelAndModeSheetScreen
+import dev.antigravity.android.ui.chat.PermissionsPresetOverlayScreen
 import dev.antigravity.android.ui.chat.SideQuestionSheet
+import dev.antigravity.android.ui.chat.SlashMenuOverlayScreen
 import dev.antigravity.android.ui.chat.StructuredQuestionScreen
 import dev.antigravity.android.ui.chat.SwarmBoardSheet
 import dev.antigravity.android.ui.chat.VoiceModeSheet
 import dev.antigravity.android.ui.home.AgentsHomeScreen
+import dev.antigravity.android.ui.home.AgentsSidebarDrawerOverlay
 import dev.antigravity.android.ui.home.ConversationContextSheetScreen
 import dev.antigravity.android.ui.home.DisplayOptionsOverlayScreen
 import dev.antigravity.android.ui.liveprogress.AndroidLiveUpdatesSpecGallery
@@ -59,6 +43,7 @@ import dev.antigravity.android.ui.pairing.SettingsAndCustomizationsScreen
 import dev.antigravity.android.ui.pairing.WelcomeAndPairingScreen
 import dev.antigravity.android.ui.projects.CreateProjectScreen
 import dev.antigravity.android.ui.projects.ProjectDetailScreen
+import dev.antigravity.android.ui.projects.ProjectRulesAndSkillsScreen
 import dev.antigravity.android.ui.review.ImplementationPlanReviewScreen
 import dev.antigravity.android.ui.review.TurnDiffReviewScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
@@ -66,24 +51,31 @@ import dev.antigravity.shared.domain.EsddVerificationFixtures
 import dev.antigravity.shared.model.AppAppearanceMode
 import dev.antigravity.shared.model.AppThemePreset
 import dev.antigravity.shared.model.EsddVerifySceneCase
-import dev.antigravity.shared.model.PrimaryTab
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.protocol.SapisidHashGenerator
 import kotlinx.coroutines.launch
 
 private sealed interface AppRoute {
-    data class RootTab(val tab: PrimaryTab) : AppRoute
+    data object NewConversationHome : AppRoute
+    data object SidebarDrawer : AppRoute
     data class DisplayOptions(val expandSortMenu: Boolean = false) : AppRoute
     data class ContextMenu(val cascadeId: String) : AppRoute
     data class ProjectDetail(val projectId: String) : AppRoute
     data object CreateProject : AppRoute
+    data class Automations(val expandedMenuId: String? = null) : AppRoute
+    data class AutomationDetail(val automationId: String) : AppRoute
+    data class AutomationEdit(val automationId: String) : AppRoute
     data class CascadeChat(val cascadeId: String) : AppRoute
+    data object PermissionsPreset : AppRoute
     data object AddContext : AppRoute
+    data class SlashMenu(val includeSideQuestionPreview: Boolean = false) : AppRoute
     data object ModelAndMode : AppRoute
     data object StructuredQuestion : AppRoute
     data object PlanReview : AppRoute
     data object TurnDiffReview : AppRoute
     data object LiveUpdatesSpec : AppRoute
+    data class RulesAndSkills(val projectName: String = "ledger-svc") : AppRoute
+    data object Settings : AppRoute
     data object Pairing : AppRoute
     data class CloudRelaySignIn(val targetRelayUrl: String = SapisidHashGenerator.DEFAULT_ORIGIN) : AppRoute
 }
@@ -92,6 +84,8 @@ private enum class ChatOverlaySheet {
     NONE,
     ADD_CONTEXT,
     MODEL_AND_MODE,
+    PERMISSIONS_PRESET,
+    SLASH_MENU,
     OVERVIEW,
     SIDE_QUESTION,
     SWARM_BOARD,
@@ -99,8 +93,8 @@ private enum class ChatOverlaySheet {
 }
 
 /**
- * Root Jetpack Compose application shell routing across all 13 canonical UE states (`UE01`..`UE13`),
- * Material 3 bottom `NavigationBar` (`Agents`, `Automations`, `Settings`) + Squircle FABs,
+ * Root Jetpack Compose application shell routing across all 20 aligned UE states (`UE01`..`UE15`),
+ * New Conversation Home + Left Modal Navigation Drawer (replacing legacy bottom tab bar),
  * v2.33 orchestration sheets, and pairing/settings flows.
  */
 @Composable
@@ -122,6 +116,7 @@ fun AntigravityAppRoot(
     val settingsState by coordinator.settingsStore.state.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
     val syncState by coordinator.syncState.collectAsState()
+    val workspaceState by coordinator.workspaceStore.state.collectAsState()
     val scope = rememberCoroutineScope()
 
     val appearance = settingsState.appearance
@@ -138,18 +133,16 @@ fun AntigravityAppRoot(
         } else if (!connectionState.hasPairedBackend && !coordinator.isVerificationMode && syncState.summaries.isEmpty()) {
             AppRoute.Pairing
         } else {
-            AppRoute.RootTab(PrimaryTab.AGENTS)
+            AppRoute.NewConversationHome
         }
     }
 
     var currentRoute by remember(initialVerifyScene) { mutableStateOf(defaultStartRoute) }
-    var previousRoute by remember(initialVerifyScene) { mutableStateOf<AppRoute>(AppRoute.RootTab(PrimaryTab.AGENTS)) }
+    var previousRoute by remember(initialVerifyScene) { mutableStateOf<AppRoute>(AppRoute.NewConversationHome) }
     var activeChatOverlay by remember(initialVerifyScene) { mutableStateOf(ChatOverlaySheet.NONE) }
     var showRemoteLinkDialog by remember { mutableStateOf(false) }
     var userExplicitlyOpenedPairing by remember { mutableStateOf(false) }
 
-    // Automatically enter Agents Home once background cold-start cache hydration or saved-session
-    // restoration completes (matching iOS Frame-0 instant conversations launch).
     LaunchedEffect(
         initialVerifyScene,
         connectionState.hasPairedBackend,
@@ -161,7 +154,31 @@ fun AntigravityAppRoot(
             currentRoute == AppRoute.Pairing &&
             (connectionState.isConnected || connectionState.hasPairedBackend || syncState.summaries.isNotEmpty())
         ) {
-            currentRoute = AppRoute.RootTab(PrimaryTab.AGENTS)
+            currentRoute = AppRoute.NewConversationHome
+        }
+    }
+
+    val activeChatRouteId = (currentRoute as? AppRoute.CascadeChat)?.cascadeId
+    val activeChatSummary = remember(activeChatRouteId, syncState.summaries) {
+        if (activeChatRouteId.isNullOrBlank()) null
+        else syncState.summaries.firstOrNull { it.cascadeId == activeChatRouteId }
+    }
+    LaunchedEffect(
+        activeChatRouteId,
+        activeChatSummary?.stepCount,
+        activeChatSummary?.status,
+        activeChatSummary?.updatedAtEpochMs,
+    ) {
+        val cid = activeChatRouteId ?: return@LaunchedEffect
+        if (coordinator.isVerificationMode || cid.startsWith("cascade-new-")) return@LaunchedEffect
+        val summary = activeChatSummary ?: return@LaunchedEffect
+        runCatching {
+            coordinator.syncSteps(
+                cascadeId = cid,
+                knownStepCount = summary.stepCount,
+                isCloud = summary.isCloud,
+                instanceUuidOverride = summary.originInstanceUuid,
+            )
         }
     }
 
@@ -170,16 +187,18 @@ fun AntigravityAppRoot(
         activeChatOverlay = ChatOverlaySheet.NONE
         if (destination == AppRoute.Pairing) {
             userExplicitlyOpenedPairing = true
-        } else if (destination is AppRoute.RootTab) {
+        } else if (destination == AppRoute.NewConversationHome) {
             userExplicitlyOpenedPairing = false
         }
         currentRoute = destination
     }
 
     fun openNewConversation(projectId: String = "") {
+        if (projectId.isNotBlank()) {
+            coordinator.workspaceStore.selectProject(projectId)
+        }
         if (coordinator.isVerificationMode) {
-            coordinator.chatStore.setActiveCascade("cas-rate-limiter")
-            navigateTo(AppRoute.CascadeChat("cas-rate-limiter"))
+            navigateTo(AppRoute.NewConversationHome)
             return
         }
         val draftId = coordinator.createLocalDraftConversation(projectSlug = projectId)
@@ -213,30 +232,46 @@ fun AntigravityAppRoot(
             activeChatOverlay = ChatOverlaySheet.NONE
             return
         }
-        currentRoute = when (currentRoute) {
-            is AppRoute.RootTab -> currentRoute
-            is AppRoute.CloudRelaySignIn -> AppRoute.Pairing
+        currentRoute = when (val route = currentRoute) {
+            AppRoute.NewConversationHome -> AppRoute.NewConversationHome
+            AppRoute.SidebarDrawer,
             is AppRoute.DisplayOptions,
             is AppRoute.ContextMenu,
             is AppRoute.ProjectDetail,
             AppRoute.CreateProject,
+            is AppRoute.Automations,
+            AppRoute.PermissionsPreset,
+            AppRoute.AddContext,
+            is AppRoute.SlashMenu,
+            AppRoute.ModelAndMode,
             AppRoute.LiveUpdatesSpec,
+            AppRoute.Settings,
             AppRoute.Pairing,
-            -> AppRoute.RootTab(PrimaryTab.AGENTS)
+            -> AppRoute.NewConversationHome
+
+            is AppRoute.AutomationDetail -> {
+                if (previousRoute is AppRoute.ProjectDetail) previousRoute else AppRoute.Automations()
+            }
+
+            is AppRoute.AutomationEdit -> AppRoute.AutomationDetail(route.automationId)
+
+            is AppRoute.RulesAndSkills -> {
+                if (previousRoute is AppRoute.ProjectDetail) previousRoute else AppRoute.NewConversationHome
+            }
+
+            is AppRoute.CloudRelaySignIn -> AppRoute.Pairing
 
             is AppRoute.CascadeChat,
             AppRoute.StructuredQuestion,
-            -> if (previousRoute is AppRoute.ProjectDetail) previousRoute else AppRoute.RootTab(PrimaryTab.AGENTS)
+            -> if (previousRoute is AppRoute.ProjectDetail) previousRoute else AppRoute.NewConversationHome
 
-            AppRoute.AddContext,
-            AppRoute.ModelAndMode,
             AppRoute.PlanReview,
             AppRoute.TurnDiffReview,
             -> AppRoute.CascadeChat(coordinator.chatState.value.activeCascadeId.ifBlank { "cas-rate-limiter" })
         }
     }
 
-    BackHandler(enabled = currentRoute !is AppRoute.RootTab || activeChatOverlay != ChatOverlaySheet.NONE) {
+    BackHandler(enabled = currentRoute != AppRoute.NewConversationHome || activeChatOverlay != ChatOverlaySheet.NONE) {
         navigateBack()
     }
 
@@ -253,69 +288,56 @@ fun AntigravityAppRoot(
                 .background(colors.canvasObsidian),
         ) {
             when (val route = currentRoute) {
-                is AppRoute.RootTab -> {
-                    RootTabScaffold(
-                        activeTab = route.tab,
-                        onSelectTab = { nextTab -> currentRoute = AppRoute.RootTab(nextTab) },
-                        onTapAgentsComposeFab = { openNewConversation() },
-                        onTapAutomationsAddFab = {
-                            scope.launch {
-                                val client = coordinator.connectionStore.activeClient()
-                                coordinator.workspaceStore.createAutomationFromPrompt(
-                                    client = client,
-                                    prompt = "Nightly lint and security audit",
-                                )
-                            }
+                AppRoute.NewConversationHome -> {
+                    AgentsHomeScreen(
+                        coordinator = coordinator,
+                        onOpenSidebar = { navigateTo(AppRoute.SidebarDrawer) },
+                        onOpenConversation = { cascadeId -> openConversation(cascadeId) },
+                        onOpenAddContext = { navigateTo(AppRoute.AddContext) },
+                        onOpenModelPicker = { navigateTo(AppRoute.ModelAndMode) },
+                        onOpenPermissionsPreset = { navigateTo(AppRoute.PermissionsPreset) },
+                        onOpenSlashMenu = { navigateTo(AppRoute.SlashMenu(includeSideQuestionPreview = false)) },
+                        onOpenVoiceMode = {
+                            coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+                            currentRoute = AppRoute.CascadeChat("cas-rate-limiter")
+                            activeChatOverlay = ChatOverlaySheet.VOICE_MODE
                         },
-                    ) { contentModifier ->
-                        when (route.tab) {
-                            PrimaryTab.AGENTS -> {
-                                AgentsHomeScreen(
-                                    coordinator = coordinator,
-                                    onOpenDisplayOptions = { navigateTo(AppRoute.DisplayOptions(expandSortMenu = false)) },
-                                    onOpenNewProject = { navigateTo(AppRoute.CreateProject) },
-                                    onOpenProjectDetail = { projectId ->
-                                        coordinator.workspaceStore.selectProject(projectId)
-                                        navigateTo(AppRoute.ProjectDetail(projectId))
-                                    },
-                                    onOpenConversation = { cascadeId -> openConversation(cascadeId) },
-                                    onLongPressConversation = { cascadeId ->
-                                        navigateTo(AppRoute.ContextMenu(cascadeId))
-                                    },
-                                    onTapComposeFab = { openNewConversation() },
-                                    onOpenReSignIn = {
-                                        val relayUrl = connectionState.activeHost?.endpointUrl
-                                            ?.takeIf { it.startsWith("https://") }
-                                            ?: SapisidHashGenerator.DEFAULT_ORIGIN
-                                        navigateTo(AppRoute.CloudRelaySignIn(relayUrl))
-                                    },
-                                    modifier = contentModifier,
-                                )
-                            }
+                        onOpenReSignIn = {
+                            val relayUrl = connectionState.activeHost?.endpointUrl
+                                ?.takeIf { it.startsWith("https://") }
+                                ?: SapisidHashGenerator.DEFAULT_ORIGIN
+                            navigateTo(AppRoute.CloudRelaySignIn(relayUrl))
+                        },
+                    )
+                }
 
-                            PrimaryTab.AUTOMATIONS -> {
-                                AutomationsScreen(
-                                    coordinator = coordinator,
-                                    onTapAddFab = {},
-                                    modifier = contentModifier,
-                                )
-                            }
-
-                            PrimaryTab.SETTINGS -> {
-                                SettingsAndCustomizationsScreen(
-                                    coordinator = coordinator,
-                                    onOpenPairing = { navigateTo(AppRoute.Pairing) },
-                                    modifier = contentModifier,
-                                )
-                            }
-                        }
-                    }
+                AppRoute.SidebarDrawer -> {
+                    AgentsSidebarDrawerOverlay(
+                        coordinator = coordinator,
+                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                        onNewConversation = { projectId -> openNewConversation(projectId) },
+                        onOpenAutomations = { navigateTo(AppRoute.Automations()) },
+                        onOpenCustomizations = {
+                            val activeProjName = workspaceState.projects
+                                .firstOrNull { it.id == workspaceState.selectedProjectId }?.name ?: "ledger-svc"
+                            navigateTo(AppRoute.RulesAndSkills(activeProjName))
+                        },
+                        onOpenDisplayOptions = { navigateTo(AppRoute.DisplayOptions(expandSortMenu = false)) },
+                        onOpenNewProject = { navigateTo(AppRoute.CreateProject) },
+                        onOpenProjectDetail = { projectId ->
+                            coordinator.workspaceStore.selectProject(projectId)
+                            navigateTo(AppRoute.ProjectDetail(projectId))
+                        },
+                        onOpenConversation = { cascadeId -> openConversation(cascadeId) },
+                        onLongPressConversation = { cascadeId -> navigateTo(AppRoute.ContextMenu(cascadeId)) },
+                        onOpenSettings = { navigateTo(AppRoute.Settings) },
+                    )
                 }
 
                 is AppRoute.DisplayOptions -> {
                     DisplayOptionsOverlayScreen(
                         coordinator = coordinator,
-                        onDismiss = { navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS)) },
+                        onDismiss = { navigateTo(AppRoute.SidebarDrawer) },
                         initialSortMenuExpanded = route.expandSortMenu,
                     )
                 }
@@ -324,26 +346,68 @@ fun AntigravityAppRoot(
                     ConversationContextSheetScreen(
                         coordinator = coordinator,
                         targetCascadeId = route.cascadeId,
-                        onDismiss = { navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS)) },
+                        onDismiss = { navigateTo(AppRoute.SidebarDrawer) },
                     )
                 }
 
                 is AppRoute.ProjectDetail -> {
+                    val projName = workspaceState.projects.firstOrNull { it.id == route.projectId }?.name ?: route.projectId
                     ProjectDetailScreen(
                         coordinator = coordinator,
                         projectId = route.projectId,
-                        onBack = { navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS)) },
+                        onBack = { navigateTo(AppRoute.SidebarDrawer) },
                         onNewConversation = { openNewConversation(projectId = route.projectId) },
                         onOpenConversation = { cascadeId -> openConversation(cascadeId) },
-                        onOpenAutomations = { navigateTo(AppRoute.RootTab(PrimaryTab.AUTOMATIONS)) },
+                        onOpenAutomationDetail = { automationId ->
+                            coordinator.workspaceStore.selectAutomation(automationId)
+                            navigateTo(AppRoute.AutomationDetail(automationId))
+                        },
+                        onOpenRulesAndSkills = {
+                            navigateTo(AppRoute.RulesAndSkills(projectName = projName))
+                        },
                     )
                 }
 
                 AppRoute.CreateProject -> {
                     CreateProjectScreen(
                         coordinator = coordinator,
-                        onDismiss = { navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS)) },
-                        onCreated = { navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS)) },
+                        onDismiss = { navigateTo(AppRoute.SidebarDrawer) },
+                        onCreated = { navigateTo(AppRoute.SidebarDrawer) },
+                    )
+                }
+
+                is AppRoute.Automations -> {
+                    AutomationsScreen(
+                        coordinator = coordinator,
+                        onOpenSidebar = { navigateTo(AppRoute.SidebarDrawer) },
+                        onOpenAutomationDetail = { automationId ->
+                            coordinator.workspaceStore.selectAutomation(automationId)
+                            navigateTo(AppRoute.AutomationDetail(automationId))
+                        },
+                        onEditAutomation = { automationId ->
+                            coordinator.workspaceStore.selectAutomation(automationId)
+                            navigateTo(AppRoute.AutomationEdit(automationId))
+                        },
+                        initialExpandedMenuAutomationId = route.expandedMenuId,
+                    )
+                }
+
+                is AppRoute.AutomationDetail -> {
+                    AutomationDetailScreen(
+                        coordinator = coordinator,
+                        automationId = route.automationId,
+                        onBack = { navigateBack() },
+                        onEdit = { aid -> navigateTo(AppRoute.AutomationEdit(aid)) },
+                        onOpenConversation = { cascadeId -> openConversation(cascadeId) },
+                    )
+                }
+
+                is AppRoute.AutomationEdit -> {
+                    AutomationEditScreen(
+                        coordinator = coordinator,
+                        automationId = route.automationId,
+                        onDismiss = { navigateTo(AppRoute.AutomationDetail(route.automationId)) },
+                        onDeleted = { navigateTo(AppRoute.Automations()) },
                     )
                 }
 
@@ -352,10 +416,12 @@ fun AntigravityAppRoot(
                         CascadeChatScreen(
                             coordinator = coordinator,
                             onBack = { navigateBack() },
+                            onOpenSidebar = { navigateTo(AppRoute.SidebarDrawer) },
                             onOpenDiffReview = { navigateTo(AppRoute.TurnDiffReview) },
                             onOpenPlanReview = { navigateTo(AppRoute.PlanReview) },
                             onOpenAddContext = { activeChatOverlay = ChatOverlaySheet.ADD_CONTEXT },
                             onOpenModelAndMode = { activeChatOverlay = ChatOverlaySheet.MODEL_AND_MODE },
+                            onOpenPermissionsPreset = { activeChatOverlay = ChatOverlaySheet.PERMISSIONS_PRESET },
                             onOpenOverview = { activeChatOverlay = ChatOverlaySheet.OVERVIEW },
                             onOpenSideQuestion = { activeChatOverlay = ChatOverlaySheet.SIDE_QUESTION },
                             onOpenSwarmBoard = { activeChatOverlay = ChatOverlaySheet.SWARM_BOARD },
@@ -369,6 +435,7 @@ fun AntigravityAppRoot(
                                 AddContextSheetScreen(
                                     coordinator = coordinator,
                                     onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                    showHomeBackdrop = false,
                                 )
                             }
 
@@ -376,6 +443,28 @@ fun AntigravityAppRoot(
                                 ModelAndModeSheetScreen(
                                     coordinator = coordinator,
                                     onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                    showHomeBackdrop = false,
+                                )
+                            }
+
+                            ChatOverlaySheet.PERMISSIONS_PRESET -> {
+                                PermissionsPresetOverlayScreen(
+                                    coordinator = coordinator,
+                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                    onOpenSettings = { navigateTo(AppRoute.Settings) },
+                                    showHomeBackdrop = false,
+                                )
+                            }
+
+                            ChatOverlaySheet.SLASH_MENU -> {
+                                SlashMenuOverlayScreen(
+                                    coordinator = coordinator,
+                                    onSelectCommand = { cmd ->
+                                        coordinator.chatStore.setDraftInputText("$cmd ")
+                                        activeChatOverlay = ChatOverlaySheet.NONE
+                                    },
+                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                    showHomeBackdrop = false,
                                 )
                             }
 
@@ -412,29 +501,41 @@ fun AntigravityAppRoot(
                     }
                 }
 
+                AppRoute.PermissionsPreset -> {
+                    PermissionsPresetOverlayScreen(
+                        coordinator = coordinator,
+                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                        onOpenSettings = { navigateTo(AppRoute.Settings) },
+                        showHomeBackdrop = true,
+                    )
+                }
+
                 AppRoute.AddContext -> {
                     AddContextSheetScreen(
                         coordinator = coordinator,
-                        onDismiss = {
-                            navigateTo(
-                                AppRoute.CascadeChat(
-                                    coordinator.chatState.value.activeCascadeId.ifBlank { "cas-rate-limiter" },
-                                ),
-                            )
+                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                        showHomeBackdrop = true,
+                    )
+                }
+
+                is AppRoute.SlashMenu -> {
+                    SlashMenuOverlayScreen(
+                        coordinator = coordinator,
+                        onSelectCommand = { cmd ->
+                            coordinator.chatStore.setDraftInputText("$cmd ")
+                            navigateTo(AppRoute.NewConversationHome)
                         },
+                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                        includeSideQuestionPreview = route.includeSideQuestionPreview,
+                        showHomeBackdrop = true,
                     )
                 }
 
                 AppRoute.ModelAndMode -> {
                     ModelAndModeSheetScreen(
                         coordinator = coordinator,
-                        onDismiss = {
-                            navigateTo(
-                                AppRoute.CascadeChat(
-                                    coordinator.chatState.value.activeCascadeId.ifBlank { "cas-rate-limiter" },
-                                ),
-                            )
-                        },
+                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                        showHomeBackdrop = true,
                     )
                 }
 
@@ -467,6 +568,22 @@ fun AntigravityAppRoot(
                     AndroidLiveUpdatesSpecGallery(snapshot = liveSnapshot)
                 }
 
+                is AppRoute.RulesAndSkills -> {
+                    ProjectRulesAndSkillsScreen(
+                        coordinator = coordinator,
+                        projectName = route.projectName,
+                        onBack = { navigateBack() },
+                    )
+                }
+
+                AppRoute.Settings -> {
+                    SettingsAndCustomizationsScreen(
+                        coordinator = coordinator,
+                        onOpenPairing = { navigateTo(AppRoute.Pairing) },
+                        onBack = { navigateTo(AppRoute.SidebarDrawer) },
+                    )
+                }
+
                 AppRoute.Pairing -> {
                     WelcomeAndPairingScreen(
                         onScanQr = { showRemoteLinkDialog = true },
@@ -480,13 +597,13 @@ fun AntigravityAppRoot(
                                         endpointUrlString = endpointUrl,
                                         csrfToken = csrf,
                                     )
-                                    navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                                    navigateTo(AppRoute.NewConversationHome)
                                 }
                             }
                         },
                         onContinueDemo = {
                             EsddVerificationFixtures.seedCoordinator(coordinator)
-                            navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                            navigateTo(AppRoute.NewConversationHome)
                         },
                         isConnecting = connectionState.isConnecting,
                         statusText = connectionState.statusText,
@@ -516,7 +633,7 @@ fun AntigravityAppRoot(
                                                 )
                                             }
                                             if (result.isSuccess) {
-                                                navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                                                navigateTo(AppRoute.NewConversationHome)
                                             } else if (result.exceptionOrNull() is dev.antigravity.shared.protocol.AntigravityRpcError.Unauthorized) {
                                                 navigateTo(AppRoute.CloudRelaySignIn(relayTarget.canonicalRelayUrlString))
                                             }
@@ -526,7 +643,7 @@ fun AntigravityAppRoot(
                                     scope.launch {
                                         runCatching {
                                             coordinator.connectWithPairingUri(trimmed)
-                                            navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                                            navigateTo(AppRoute.NewConversationHome)
                                         }
                                     }
                                 }
@@ -566,7 +683,7 @@ fun AntigravityAppRoot(
                                         "CloudRelay",
                                         "Android handshake OK host=${hs?.resolvedHostname} instances=${hs?.availableRelayInstances?.size} latencyMs=${hs?.latencyMs}",
                                     )
-                                    navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                                    navigateTo(AppRoute.NewConversationHome)
                                 } else {
                                     Log.w(
                                         "CloudRelay",
@@ -583,146 +700,25 @@ fun AntigravityAppRoot(
     }
 }
 
-@Composable
-private fun RootTabScaffold(
-    activeTab: PrimaryTab,
-    onSelectTab: (PrimaryTab) -> Unit,
-    onTapAgentsComposeFab: () -> Unit,
-    onTapAutomationsAddFab: () -> Unit,
-    content: @Composable (Modifier) -> Unit,
-) {
-    val colors = LocalAntigravityColors.current
-
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = colors.canvasObsidian,
-        bottomBar = {
-            NavigationBar(
-                modifier = Modifier.testTag("bottom-nav-bar"),
-                containerColor = colors.surfaceObsidian,
-                tonalElevation = 0.dp,
-            ) {
-                NavigationBarItem(
-                    selected = activeTab == PrimaryTab.AGENTS,
-                    onClick = { onSelectTab(PrimaryTab.AGENTS) },
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Rounded.AutoAwesome,
-                            contentDescription = "Agents",
-                        )
-                    },
-                    label = { Text("Agents", style = MaterialTheme.typography.labelMedium) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = colors.accentPeriwinkle,
-                        selectedTextColor = colors.accentPeriwinkle,
-                        indicatorColor = colors.surfaceSelectionTint,
-                        unselectedIconColor = colors.inkSecondary,
-                        unselectedTextColor = colors.inkSecondary,
-                    ),
-                    modifier = Modifier.testTag("nav-tab-agents"),
-                )
-                NavigationBarItem(
-                    selected = activeTab == PrimaryTab.AUTOMATIONS,
-                    onClick = { onSelectTab(PrimaryTab.AUTOMATIONS) },
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Rounded.Schedule,
-                            contentDescription = "Automations",
-                        )
-                    },
-                    label = { Text("Automations", style = MaterialTheme.typography.labelMedium) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = colors.accentPeriwinkle,
-                        selectedTextColor = colors.accentPeriwinkle,
-                        indicatorColor = colors.surfaceSelectionTint,
-                        unselectedIconColor = colors.inkSecondary,
-                        unselectedTextColor = colors.inkSecondary,
-                    ),
-                    modifier = Modifier.testTag("nav-tab-automations"),
-                )
-                NavigationBarItem(
-                    selected = activeTab == PrimaryTab.SETTINGS,
-                    onClick = { onSelectTab(PrimaryTab.SETTINGS) },
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Rounded.Settings,
-                            contentDescription = "Settings",
-                        )
-                    },
-                    label = { Text("Settings", style = MaterialTheme.typography.labelMedium) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = colors.accentPeriwinkle,
-                        selectedTextColor = colors.accentPeriwinkle,
-                        indicatorColor = colors.surfaceSelectionTint,
-                        unselectedIconColor = colors.inkSecondary,
-                        unselectedTextColor = colors.inkSecondary,
-                    ),
-                    modifier = Modifier.testTag("nav-tab-settings"),
-                )
-            }
-        },
-        floatingActionButton = {
-            when (activeTab) {
-                PrimaryTab.AGENTS -> {
-                    FloatingActionButton(
-                        onClick = onTapAgentsComposeFab,
-                        modifier = Modifier
-                            .size(AntigravityDesignTokens.FabSize)
-                            .testTag("fab-compose"),
-                        shape = RoundedCornerShape(AntigravityDesignTokens.FabCornerRadius),
-                        containerColor = colors.accentPeriwinkle,
-                        contentColor = colors.inkOnPrimaryCta,
-                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Edit,
-                            contentDescription = "New Conversation",
-                        )
-                    }
-                }
-
-                PrimaryTab.AUTOMATIONS -> {
-                    FloatingActionButton(
-                        onClick = onTapAutomationsAddFab,
-                        modifier = Modifier
-                            .size(AntigravityDesignTokens.FabSize)
-                            .testTag("fab-add-automation"),
-                        shape = RoundedCornerShape(AntigravityDesignTokens.FabCornerRadius),
-                        containerColor = colors.accentPeriwinkle,
-                        contentColor = colors.inkOnPrimaryCta,
-                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = "New Automation",
-                        )
-                    }
-                }
-
-                PrimaryTab.SETTINGS -> Unit
-            }
-        },
-    ) { innerPadding ->
-        content(
-            Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-        )
-    }
-}
-
 private fun routeForVerifyScene(scene: EsddVerifySceneCase): AppRoute = when (scene) {
-    EsddVerifySceneCase.AGENTS_HOME -> AppRoute.RootTab(PrimaryTab.AGENTS)
+    EsddVerifySceneCase.AGENTS_HOME -> AppRoute.NewConversationHome
+    EsddVerifySceneCase.SIDEBAR_DRAWER -> AppRoute.SidebarDrawer
     EsddVerifySceneCase.DISPLAY_OPTIONS -> AppRoute.DisplayOptions(expandSortMenu = true)
     EsddVerifySceneCase.CONTEXT_MENU_PIN -> AppRoute.ContextMenu("cas-flaky-settlement")
     EsddVerifySceneCase.PROJECT_DETAIL -> AppRoute.ProjectDetail("ledger-svc")
     EsddVerifySceneCase.CREATE_PROJECT -> AppRoute.CreateProject
-    EsddVerifySceneCase.AUTOMATIONS -> AppRoute.RootTab(PrimaryTab.AUTOMATIONS)
+    EsddVerifySceneCase.AUTOMATIONS -> AppRoute.Automations(expandedMenuId = "auto-nightly-audit")
+    EsddVerifySceneCase.AUTOMATION_DETAIL -> AppRoute.AutomationDetail("auto-nightly-audit")
+    EsddVerifySceneCase.AUTOMATION_EDIT -> AppRoute.AutomationEdit("auto-nightly-audit")
     EsddVerifySceneCase.CHAT_AND_COMPOSER -> AppRoute.CascadeChat("cas-rate-limiter")
+    EsddVerifySceneCase.PERMISSIONS_PRESET -> AppRoute.PermissionsPreset
     EsddVerifySceneCase.ADD_CONTEXT -> AppRoute.AddContext
+    EsddVerifySceneCase.SLASH_MENU -> AppRoute.SlashMenu(includeSideQuestionPreview = true)
     EsddVerifySceneCase.MODEL_AND_MODE -> AppRoute.ModelAndMode
     EsddVerifySceneCase.STRUCTURED_QUESTION -> AppRoute.StructuredQuestion
     EsddVerifySceneCase.PLAN_REVIEW -> AppRoute.PlanReview
     EsddVerifySceneCase.TURN_DIFF_REVIEW -> AppRoute.TurnDiffReview
     EsddVerifySceneCase.LIVE_ACTIVITY_SPEC -> AppRoute.LiveUpdatesSpec
+    EsddVerifySceneCase.RULES_AND_SKILLS -> AppRoute.RulesAndSkills("ledger-svc")
+    EsddVerifySceneCase.SETTINGS -> AppRoute.Settings
 }

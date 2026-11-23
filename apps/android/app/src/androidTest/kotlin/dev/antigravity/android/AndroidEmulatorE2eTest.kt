@@ -16,7 +16,7 @@ import org.junit.runner.RunWith
 /**
  * Real Android Emulator Instrumented E2E test suite executed on GitHub Actions `ubuntu-latest` KVM runners.
  * Routes via `agpocket://verify/<case>` deep links to validate live Activity startup, Compose rendering,
- * and interactive journeys on a real Android 16 (API 36) runtime.
+ * and interactive journeys across all aligned UE boards on a real Android 16 (API 36) runtime.
  */
 @RunWith(AndroidJUnit4::class)
 class AndroidEmulatorE2eTest {
@@ -35,12 +35,15 @@ class AndroidEmulatorE2eTest {
     }
 
     @Test
-    fun emulatorLaunchAgentsHomeAndFilterNeedsYou() {
+    fun emulatorLaunchNewConversationHomeAndOpenSidebarDrawer() {
         launchVerifyScene("UE01_AGENTS_HOME").use {
+            composeRule.onNodeWithTag("btn-sidebar").assertIsDisplayed()
             composeRule.onNodeWithTag("host-switcher-pill").assertIsDisplayed()
-            composeRule.onNodeWithTag("fab-compose").assertIsDisplayed()
-            composeRule.onNodeWithTag("filter-pill-needs-you").performClick()
-            composeRule.onNodeWithTag("bottom-nav-bar").assertIsDisplayed()
+            composeRule.onNodeWithTag("home-needs-approval-banner").assertIsDisplayed()
+            composeRule.onNodeWithTag("home-composer-card").assertIsDisplayed()
+            composeRule.onNodeWithTag("btn-sidebar").performClick()
+            composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
+            composeRule.onNodeWithTag("drawer-automations").assertIsDisplayed()
         }
     }
 
@@ -50,6 +53,8 @@ class AndroidEmulatorE2eTest {
             composeRule.onNodeWithTag("chat-diff-pill").assertIsDisplayed()
             composeRule.onNodeWithTag("card-task-progress-7seg").assertIsDisplayed()
             composeRule.onNodeWithTag("card-command-approval").assertIsDisplayed()
+            composeRule.onNodeWithTag("composer-pill-model").assertIsDisplayed()
+            composeRule.onNodeWithTag("composer-pill-permissions").assertIsDisplayed()
             composeRule.onNodeWithTag("composer-btn-send").assertIsDisplayed()
         }
     }
@@ -67,11 +72,30 @@ class AndroidEmulatorE2eTest {
     }
 
     @Test
-    fun emulatorLiveUpdatesSpecShowcase() {
+    fun emulatorLiveUpdatesNotificationShade() {
         launchVerifyScene("UE13_LIVE_ACTIVITY_SPEC").use {
-            composeRule.onNodeWithTag("lu-chip-running").assertIsDisplayed()
-            composeRule.onNodeWithTag("lu-expanded-waiting").assertIsDisplayed()
-            composeRule.onNodeWithTag("lu-lockscreen-multi-agent").assertIsDisplayed()
+            composeRule.onNodeWithTag("live-card-running").assertIsDisplayed()
+            composeRule.onNodeWithTag("live-card-approval").assertIsDisplayed()
+            composeRule.onNodeWithTag("live-card-cloud").assertIsDisplayed()
+            composeRule.onNodeWithTag("live-card-done").assertIsDisplayed()
+        }
+    }
+
+    @Test
+    fun emulatorAutomationDetailRulesSkillsAndFlattenedSettings() {
+        launchVerifyScene("UE06B_AUTOMATION_DETAIL").use {
+            composeRule.onNodeWithTag("btn-automation-run-now").assertIsDisplayed()
+            composeRule.onNodeWithTag("btn-retry-run-3").assertIsDisplayed()
+        }
+        launchVerifyScene("UE14_RULES_AND_SKILLS").use {
+            composeRule.onNodeWithTag("rules-token-budget-card").assertIsDisplayed()
+            composeRule.onNodeWithTag("skill-row-go-testing").assertIsDisplayed()
+        }
+        launchVerifyScene("UE15_SETTINGS").use {
+            composeRule.onNodeWithTag("btn-scan-new-qr").assertIsDisplayed()
+            composeRule.onNodeWithTag("row-settings-language").assertIsDisplayed()
+            composeRule.onNodeWithTag("row-settings-more").performClick()
+            composeRule.onNodeWithTag("settings-more-subpage").assertIsDisplayed()
         }
     }
 }

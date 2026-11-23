@@ -2,21 +2,25 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AntigravityData
 
-/// Native Matte Obsidian / Liquid Glass Composer (`ChatComposerView`) pinned at the bottom of `UE07_CHAT_AND_COMPOSER`.
-/// Live Antigravity 2.x mode adopts a clean, Claude-inspired 4-control layout:
-/// - Clean multi-line `TextField` on top (contextual `/` slash popup, `@` mention popup, attached chips, workflow pill, and queued follow-ups appear only when active)
-/// - Single bottom toolbar: circular `+` Menu (`Add Context`, `Attach Files`, `Permissions`),
-///   two-tone `[<Model>  <Effort>]` pill -> `ModelAndModeSheetView`, circular `mic` dictation button (`SFSpeechRecognizer`),
-///   and an adaptive primary action circle (`Voice Mode` waveform when empty -> `Send ↑` when typing/attached -> `Stop ■` while streaming).
-/// - ESDD verification mode (`UE07`) preserves the `[Planning ⌄]` pill (`composer-pill-mode`) alongside `[Gemini 3.1 Pro ⌄]`.
+/// Native Matte Obsidian Composer (`ChatComposerView`) pinned at the bottom of `UE01` (New Conversation Home)
+/// and `UE07_CHAT_AND_COMPOSER` (`docs/ue/ios/Main.png` & `docs/ue/ios/ios-chat.png`).
+/// Unified toolbar across Live and ESDD verification modes:
+/// - Clean multi-line `TextField` on top (contextual `/` slash popup, `@` mention popup, attached chips,
+///   workflow pill, and queued follow-ups appear only when active)
+/// - Single bottom toolbar: `+` (`AddContextSheetView`), two-line `[Gemini 4 Neon / Extra High ⌄]`
+///   (`ModelAndModeSheetView`), `[🛡 Default ⌄]` (`PermissionsSheetView`), `mic` dictation button,
+///   and adaptive primary action circle (`→` send / `■` stop / dimmed `→` when empty).
 public struct ChatComposerView: View {
     private enum PrimaryActionMode: Equatable {
-        case voiceMode
+        case disabledSend
         case send
         case stop
     }
 
     @Bindable public var store: AntigravitySessionStore
+    public var placeholderOverride: String?
+    public var isHomeComposer: Bool
+    public var onSubmitDraft: ((String) -> Void)?
     @FocusState private var isInputFocused: Bool
 
     @State private var attachedChipLabels: [String]
@@ -27,11 +31,19 @@ public struct ChatComposerView: View {
     @State private var isShowingFileImporter: Bool = false
     @State private var voiceManager = VoiceInputManager()
 
-    public init(store: AntigravitySessionStore) {
+    public init(
+        store: AntigravitySessionStore,
+        placeholderOverride: String? = nil,
+        isHomeComposer: Bool = false,
+        onSubmitDraft: ((String) -> Void)? = nil
+    ) {
         self.store = store
-        if !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected {
-            self._attachedChipLabels = State(initialValue: store.composerAttachments.map(\.label))
-            self._draftMessageText = State(initialValue: store.composerDraftText)
+        self.placeholderOverride = placeholderOverride
+        self.isHomeComposer = isHomeComposer
+        self.onSubmitDraft = onSubmitDraft
+        if isHomeComposer || !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected {
+            self._attachedChipLabels = State(initialValue: isHomeComposer ? [] : store.composerAttachments.map(\.label))
+            self._draftMessageText = State(initialValue: isHomeComposer ? "" : store.composerDraftText)
         } else {
             self._attachedChipLabels = State(initialValue: ["@ratelimit.go"])
             self._draftMessageText = State(initialValue: "Use 1000/s instead — staging is smaller than prod.")
@@ -39,7 +51,6 @@ public struct ChatComposerView: View {
     }
 
     private var activeMentionQuery: String? {
-        guard !store.isVerificationMode else { return nil }
         guard let lastToken = draftMessageText.split(whereSeparator: \.isWhitespace).last,
               lastToken.hasPrefix("@"),
               lastToken.count >= 2 else {
@@ -49,16 +60,12 @@ public struct ChatComposerView: View {
     }
 
     private var activeSlashCommands: [SlashCommandItem] {
-        guard !store.isVerificationMode, !store.isSlashPopupDismissedManually else { return [] }
-        return store.filteredSlashCommands(for: draftMessageText).filter { $0.command != "/btw" }
+        guard !store.isSlashPopupDismissedManually else { return [] }
+        return store.filteredSlashCommands(for: draftMessageText)
     }
 
     private var activeQueuedMessages: [QueuedMessageItem] {
         store.queuedMessages.filter { $0.cascadeId == store.activeCascadeId }
-    }
-
-    private var isLiveAntigravity2Mode: Bool {
-        !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected
     }
 
     private var canSendDraft: Bool {
@@ -69,14 +76,13 @@ public struct ChatComposerView: View {
     }
 
     private var primaryActionMode: PrimaryActionMode {
-        guard isLiveAntigravity2Mode else { return .send }
         if canSendDraft {
             return .send
         }
-        if store.isCascadeStreaming {
+        if store.isCascadeStreaming && !isHomeComposer {
             return .stop
         }
-        return .voiceMode
+        return .disabledSend
     }
 
     private var modelPillComponents: (name: String, effort: String?) {
@@ -85,10 +91,10 @@ public struct ChatComposerView: View {
         var parsedEffort: String? = nil
 
         let effortSuffixes: [(String, String)] = [
-            (" (XHigh)", "XHigh"),
-            (" (X-High)", "XHigh"),
-            (" (Extra High)", "XHigh"),
-            (" (Extra)", "XHigh"),
+            (" (XHigh)", "Extra High"),
+            (" (X-High)", "Extra High"),
+            (" (Extra High)", "Extra High"),
+            (" (Extra)", "Extra High"),
             (" (Max)", "Max"),
             (" (High)", "High"),
             (" (Medium)", "Medium"),
@@ -113,7 +119,7 @@ public struct ChatComposerView: View {
                 case .low: return "Low"
                 case .medium: return "Medium"
                 case .high: return "High"
-                case .extra: return "XHigh"
+                case .extra: return "Extra High"
                 }
             }
             return nil
@@ -122,12 +128,20 @@ public struct ChatComposerView: View {
         return (name, effortLabel)
     }
 
+    private var permissionShortLabel: String {
+        switch store.activePermissionPreset {
+        case .requestReview: return "Ask"
+        case .defaultPolicy: return "Default"
+        case .auto: return "Auto"
+        case .turbo: return "Turbo"
+        case .inheritGlobal: return "Default"
+        }
+    }
+
     private var primaryActionIconName: String {
         switch primaryActionMode {
-        case .voiceMode:
-            return "waveform"
-        case .send:
-            return "arrow.up"
+        case .disabledSend, .send:
+            return "arrow.right"
         case .stop:
             return "stop.fill"
         }
@@ -135,9 +149,7 @@ public struct ChatComposerView: View {
 
     private var primaryActionIconSize: CGFloat {
         switch primaryActionMode {
-        case .voiceMode:
-            return 16
-        case .send:
+        case .disabledSend, .send:
             return 15.5
         case .stop:
             return 12.5
@@ -148,7 +160,9 @@ public struct ChatComposerView: View {
         switch primaryActionMode {
         case .send:
             return AntigravityTheme.inkOnPrimaryCTA
-        case .voiceMode, .stop:
+        case .disabledSend:
+            return AntigravityTheme.inkSecondary
+        case .stop:
             return AntigravityTheme.pillActiveForeground
         }
     }
@@ -157,16 +171,16 @@ public struct ChatComposerView: View {
         switch primaryActionMode {
         case .send:
             return AntigravityTheme.accentPeriwinkle
-        case .voiceMode, .stop:
+        case .disabledSend:
+            return AntigravityTheme.surfacePopover
+        case .stop:
             return AntigravityTheme.pillActiveBackground
         }
     }
 
     private var primaryActionAccessibilityId: String {
         switch primaryActionMode {
-        case .voiceMode:
-            return "composer-btn-voice-mode"
-        case .send:
+        case .disabledSend, .send:
             return "composer-btn-send"
         case .stop:
             return "composer-btn-stop"
@@ -175,18 +189,23 @@ public struct ChatComposerView: View {
 
     private var primaryActionAccessibilityLabel: String {
         switch primaryActionMode {
-        case .voiceMode:
-            return "Start Voice Mode"
-        case .send:
+        case .disabledSend, .send:
             return "Send message"
         case .stop:
             return "Stop response"
         }
     }
 
+    private var resolvedPlaceholder: String {
+        if let placeholderOverride {
+            return placeholderOverride
+        }
+        return store.isCascadeStreaming ? "Ask a follow-up..." : "Ask anything, @ to mention, / for actions"
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Live-mode Slash Command Popup (`/plan`, `/btw`, `/swarm`, `/run-workflow`, etc.)
+            // Contextual Slash Command Popup (`/plan`, `/compact`, `/new`, `/swarm`, `/run-workflow`, etc.)
             if !activeSlashCommands.isEmpty {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -202,10 +221,10 @@ public struct ChatComposerView: View {
                                         .frame(width: 20)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(cmd.command)
-                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                            .font(.system(size: 13.5, weight: .bold, design: .monospaced))
                                             .foregroundStyle(AntigravityTheme.inkReading)
                                         Text(cmd.summary)
-                                            .font(.system(size: 11.5))
+                                            .font(.system(size: 12))
                                             .foregroundStyle(AntigravityTheme.inkSecondary)
                                             .lineLimit(1)
                                     }
@@ -229,7 +248,7 @@ public struct ChatComposerView: View {
                 .accessibilityIdentifier("composer-slash-popup")
             }
 
-            // Live-mode Typo-Tolerant @Mention Autocomplete Popup
+            // Typo-Tolerant @Mention Autocomplete Popup
             if let mentionQuery = activeMentionQuery {
                 let matches = store.filteredMentionCandidates(for: mentionQuery)
                 if !matches.isEmpty {
@@ -270,7 +289,7 @@ public struct ChatComposerView: View {
             }
 
             // Queued Follow-Up Messages Strip (when messages were queued mid-stream)
-            if !store.isVerificationMode && !activeQueuedMessages.isEmpty {
+            if !activeQueuedMessages.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(activeQueuedMessages) { queued in
                         HStack(spacing: 8) {
@@ -303,7 +322,7 @@ public struct ChatComposerView: View {
             }
 
             // Composer Card
-            VStack(alignment: .leading, spacing: isLiveAntigravity2Mode ? 10 : 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 // Context Chips Strip (only rendered when attachments are present)
                 if !attachedChipLabels.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -315,7 +334,7 @@ public struct ChatComposerView: View {
                                 } label: {
                                     HStack(spacing: 6) {
                                         Text(label)
-                                            .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                                            .font(.system(size: 13, weight: .medium, design: .monospaced))
                                             .foregroundStyle(AntigravityTheme.inkReading)
                                         Image(systemName: "xmark")
                                             .font(.system(size: 10, weight: .semibold))
@@ -323,7 +342,7 @@ public struct ChatComposerView: View {
                                     }
                                     .padding(.horizontal, 11)
                                     .frame(height: 30)
-                                    .background(AntigravityTheme.surfacePill)
+                                    .background(AntigravityTheme.surfaceElevated)
                                     .overlay(
                                         Capsule()
                                             .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
@@ -391,14 +410,12 @@ public struct ChatComposerView: View {
 
                 // Multi-line Draft Input
                 TextField(
-                    isLiveAntigravity2Mode
-                        ? (store.isCascadeStreaming ? "Ask a follow-up..." : "Chat with Antigravity")
-                        : "Reply to agent or @mention files...",
+                    resolvedPlaceholder,
                     text: $draftMessageText,
                     axis: .vertical
                 )
                 .lineLimit(1...5)
-                .font(.system(size: isLiveAntigravity2Mode ? 16 : 15.5))
+                .font(.system(size: 16))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .focused($isInputFocused)
                 .onChange(of: draftMessageText) { _, newValue in
@@ -409,46 +426,38 @@ public struct ChatComposerView: View {
                 .onSubmit {
                     submitMessage()
                 }
-                .padding(.horizontal, isLiveAntigravity2Mode ? 6 : 4)
+                .padding(.horizontal, 4)
                 .padding(.top, 2)
                 .accessibilityIdentifier("composer-text-input")
 
-                // Bottom Toolbar
-                if isLiveAntigravity2Mode {
-                    liveClaudeStyleToolbar
-                } else {
-                    verificationModeToolbar
-                }
+                // Unified Bottom Toolbar (`+`, `Gemini 4 Neon / Extra High ⌄`, `🛡 Default ⌄`, `mic`, `→`)
+                unifiedComposerToolbar
             }
             .padding(.horizontal, 12)
-            .padding(.top, isLiveAntigravity2Mode ? 12 : 10)
-            .padding(.bottom, isLiveAntigravity2Mode ? 8 : 10)
-            .background(AntigravityTheme.surfaceCard)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            .background(isHomeComposer ? AntigravityTheme.surfaceElevated.opacity(0.65) : AntigravityTheme.surfaceCard)
             .overlay(
-                RoundedRectangle(cornerRadius: isLiveAntigravity2Mode ? 26 : 24, style: .continuous)
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: isLiveAntigravity2Mode ? 26 : 24, style: .continuous))
-            .shadow(
-                color: isLiveAntigravity2Mode ? AntigravityTheme.glassShadow.opacity(0.32) : .clear,
-                radius: 10,
-                x: 0,
-                y: 3
-            )
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .onAppear {
-            if !store.composerDraftText.isEmpty {
+            if !isHomeComposer && !store.composerDraftText.isEmpty {
                 draftMessageText = store.composerDraftText
             }
         }
         .onChange(of: store.composerDraftText) { _, newValue in
-            if draftMessageText != newValue {
+            if !isHomeComposer && draftMessageText != newValue {
                 draftMessageText = newValue
             }
         }
         .onChange(of: store.composerAttachments.count) { _, _ in
-            guard !store.isVerificationMode else { return }
-            attachedChipLabels = store.composerAttachments.map(\.label)
+            guard !isHomeComposer else { return }
+            if !store.composerAttachments.isEmpty || !store.isVerificationMode {
+                attachedChipLabels = store.composerAttachments.map(\.label)
+            }
         }
         .onDisappear {
             voiceManager.stopRecording()
@@ -483,6 +492,8 @@ public struct ChatComposerView: View {
         .sheet(isPresented: $isShowingAddContextSheet) {
             AddContextSheetView(
                 store: store,
+                startExpanded: true,
+                showHomeBackdrop: false,
                 onAddLabels: { added in
                     for item in added where !attachedChipLabels.contains(item) {
                         attachedChipLabels.append(item)
@@ -507,7 +518,7 @@ public struct ChatComposerView: View {
                     isShowingModelAndModeSheet = false
                 }
             )
-            .presentationDetents([.fraction(0.78), .large])
+            .presentationDetents([.fraction(0.82), .large])
             .presentationDragIndicator(.visible)
             .presentationCornerRadius(28)
             .presentationBackground(ModelAndModeSheetView.sheetSurfaceColor)
@@ -526,104 +537,104 @@ public struct ChatComposerView: View {
         }
     }
 
-    // MARK: - Live Mode Toolbar (Claude-Inspired 4-Control Layout)
+    // MARK: - Unified Toolbar (`Main.png` & `ios-chat.png`)
 
-    private var liveClaudeStyleToolbar: some View {
+    private var unifiedComposerToolbar: some View {
         let modelPill = modelPillComponents
-        return HStack(spacing: 8) {
-            // 1. Circular `+` Menu (`Add Context`, `Attach Files`, `Permissions`)
-            Menu {
-                Button {
-                    isShowingAddContextSheet = true
-                } label: {
-                    Label("Add Context", systemImage: "at")
-                }
-
-                Button {
-                    isShowingFileImporter = true
-                } label: {
-                    Label("Attach Files", systemImage: "paperclip")
-                }
-
-                Divider()
-
-                Button {
-                    isShowingPermissionsSheet = true
-                } label: {
-                    Label(
-                        "Permissions · \(store.activePermissionPreset.displayTitle)",
-                        systemImage: store.activePermissionPreset.semanticIcon.sfSymbolName
-                    )
-                }
+        return HStack(spacing: 5) {
+            // 1. `+` Add Context Button
+            Button {
+                isShowingAddContextSheet = true
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(AntigravityTheme.inkReading)
-                    .frame(width: 36, height: 36)
-                    .background(AntigravityTheme.surfaceElevated, in: Circle())
-                    .frame(width: 40, height: AntigravityTheme.minTouchTargetPt)
+                    .frame(width: 30, height: AntigravityTheme.minTouchTargetPt)
                     .contentShape(Rectangle())
             }
-            .accessibilityLabel("Add context or actions")
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add context")
             .accessibilityIdentifier("composer-btn-add-context")
 
-            // 2. Two-tone `[<Model>  <Effort>]` Pill -> `ModelAndModeSheetView`
+            // 2. Two-line `[Gemini 4 Neon / Extra High ⌄]` Model & Effort Picker
             Button {
                 isShowingModelAndModeSheet = true
             } label: {
-                HStack(spacing: 5) {
-                    Text(modelPill.name)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.inkReading)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if let effort = modelPill.effort {
-                        Text(effort)
-                            .font(.system(size: 13.5, weight: .regular))
-                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                HStack(spacing: 4) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(modelPill.name)
+                            .font(.system(size: 13.5, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.inkReading)
                             .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
+                            .minimumScaleFactor(0.88)
+                            .truncationMode(.tail)
+                        if let effort = modelPill.effort {
+                            Text(effort)
+                                .font(.system(size: 11.5, weight: .regular))
+                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                                .lineLimit(1)
+                        }
                     }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
-                .padding(.horizontal, 13)
-                .frame(height: 36)
-                .background(AntigravityTheme.surfaceElevated, in: Capsule())
+                .padding(.horizontal, 2)
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .layoutPriority(1)
             .accessibilityLabel(
                 modelPill.effort.map { "\(modelPill.name), \($0) effort" } ?? modelPill.name
             )
             .accessibilityIdentifier("composer-pill-model")
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
 
-            // 3. Circular Speech-to-Text Dictation Button (`SFSpeechRecognizer`)
+            // 3. Permission Preset Pill (`🛡 Default ⌄`)
+            Button {
+                isShowingPermissionsSheet = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "shield")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                    Text(permissionShortLabel)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                }
+                .padding(.horizontal, 4)
+                .frame(minHeight: AntigravityTheme.minTouchTargetPt)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Permissions \(store.activePermissionPreset.displayTitle)")
+            .accessibilityIdentifier("composer-pill-permissions")
+
+            // 4. Speech-to-Text Dictation Button (`mic`)
             Button {
                 voiceManager.toggleRecording { transcript in
                     draftMessageText = transcript
                 }
             } label: {
                 Image(systemName: voiceManager.isRecording ? "stop.fill" : "mic")
-                    .font(.system(size: voiceManager.isRecording ? 12.5 : 15.5, weight: .medium))
+                    .font(.system(size: voiceManager.isRecording ? 12.5 : 16, weight: .regular))
                     .foregroundStyle(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.inkReading)
                     .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 36, height: 36)
-                    .background(
-                        voiceManager.isRecording
-                            ? AntigravityTheme.statusError.opacity(0.16)
-                            : AntigravityTheme.surfaceElevated,
-                        in: Circle()
-                    )
-                    .frame(width: 40, height: AntigravityTheme.minTouchTargetPt)
+                    .frame(width: 30, height: AntigravityTheme.minTouchTargetPt)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(voiceManager.isRecording ? "Stop dictation" : "Dictate message")
             .accessibilityIdentifier("composer-btn-mic")
 
-            // 4. Adaptive Primary Action Circle (`Voice Mode` -> `Send ↑` -> `Stop ■`)
+            // 5. Adaptive Primary Action Circle (`→` Send / `■` Stop / Dimmed `→` when empty)
             Button {
                 handlePrimaryAction()
             } label: {
@@ -633,125 +644,14 @@ public struct ChatComposerView: View {
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 36, height: 36)
                     .background(primaryActionBackground, in: Circle())
-                    .frame(width: 40, height: AntigravityTheme.minTouchTargetPt)
+                    .frame(width: 36, height: AntigravityTheme.minTouchTargetPt)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(primaryActionMode == .disabledSend)
             .animation(.snappy(duration: 0.2), value: primaryActionMode)
             .accessibilityLabel(primaryActionAccessibilityLabel)
             .accessibilityIdentifier(primaryActionAccessibilityId)
-        }
-    }
-
-    // MARK: - ESDD UE07 Verification Toolbar
-
-    private var verificationModeToolbar: some View {
-        let modelPill = modelPillComponents
-        return HStack(spacing: 6) {
-            Button {
-                isShowingAddContextSheet = true
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 15.5, weight: .medium))
-                    .foregroundStyle(AntigravityTheme.inkReading)
-                    .frame(width: 34, height: 34)
-                    .background(AntigravityTheme.surfaceElevated)
-                    .overlay(
-                        Circle()
-                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
-                    )
-                    .clipShape(Circle())
-                    .frame(width: 38, height: AntigravityTheme.minTouchTargetPt)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("composer-btn-add-context")
-
-            Button {
-                isShowingModelAndModeSheet = true
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: store.selectedModelConfig.mode == .planning ? "doc.text" : "bolt.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    Text(store.selectedModelConfig.mode.rawValue)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.inkReading)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                }
-                .padding(.horizontal, 11)
-                .frame(height: 34)
-                .background(AntigravityTheme.surfaceElevated)
-                .overlay(
-                    Capsule()
-                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
-                )
-                .clipShape(Capsule())
-                .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .layoutPriority(1)
-            .accessibilityIdentifier("composer-pill-mode")
-
-            Button {
-                isShowingModelAndModeSheet = true
-            } label: {
-                HStack(spacing: 4) {
-                    Text(modelPill.name)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(AntigravityTheme.inkLabel)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                }
-                .padding(.horizontal, 11)
-                .frame(height: 34)
-                .background(AntigravityTheme.surfaceElevated)
-                .overlay(
-                    Capsule()
-                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
-                )
-                .clipShape(Capsule())
-                .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("composer-pill-model")
-
-            Spacer(minLength: 0)
-
-            Button {
-                isInputFocused = true
-            } label: {
-                Image(systemName: "mic")
-                    .font(.system(size: 15.5, weight: .medium))
-                    .foregroundStyle(AntigravityTheme.inkSecondary)
-                    .frame(width: 34, height: AntigravityTheme.minTouchTargetPt)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("composer-btn-mic")
-
-            Button {
-                submitMessage()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 15.5, weight: .bold))
-                    .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
-                    .frame(width: 34, height: 34)
-                    .background(AntigravityTheme.accentPeriwinkle)
-                    .clipShape(Circle())
-                    .frame(width: 38, height: AntigravityTheme.minTouchTargetPt)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("composer-btn-send")
         }
     }
 
@@ -759,9 +659,8 @@ public struct ChatComposerView: View {
 
     private func handlePrimaryAction() {
         switch primaryActionMode {
-        case .voiceMode:
-            voiceManager.stopRecording()
-            store.startVoiceMode()
+        case .disabledSend:
+            break
         case .stop:
             voiceManager.stopRecording()
             store.stopActiveCascadeStreaming()
@@ -798,8 +697,12 @@ public struct ChatComposerView: View {
                 targetUri: targetUri
             )
         }
-        store.composerDraftText = trimmed
-        store.sendCurrentDraft()
+        if let onSubmitDraft {
+            onSubmitDraft(trimmed)
+        } else {
+            store.composerDraftText = trimmed
+            store.sendCurrentDraft()
+        }
         draftMessageText = ""
         attachedChipLabels.removeAll()
     }

@@ -1,11 +1,13 @@
 import Foundation
 import Observation
 
-/// Active navigation destination in `AntigravityShellController` across all 13 UE screens.
+/// Active navigation destination in `AntigravityShellController` across all 20 UE screens.
 public enum AntigravityNavigationRoute: Sendable, Equatable, Hashable {
     case tabRoot
     case projectDetail(String)
     case cascadeChat(String)
+    case automationDetail(String)
+    case rulesAndSkills
     case planReview
     case turnDiffReview
     case pairingSettings
@@ -23,7 +25,10 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
     case displayOptions
     case contextMenuPreview(cascadeId: String)
     case createProject
+    case automationEdit(automationId: String)
+    case permissionsPreset
     case addContext
+    case slashMenu
     case modelAndMode
     case permissionGate(stepIndex: Int)
     case askQuestion(stepIndex: Int)
@@ -42,7 +47,10 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
         case .displayOptions: return "display-options"
         case .contextMenuPreview(let cid): return "context-menu-\(cid)"
         case .createProject: return "create-project"
+        case .automationEdit(let aid): return "automation-edit-\(aid)"
+        case .permissionsPreset: return "permissions-preset"
         case .addContext: return "add-context"
+        case .slashMenu: return "slash-menu"
         case .modelAndMode: return "model-and-mode"
         case .permissionGate(let idx): return "permission-\(idx)"
         case .askQuestion(let idx): return "question-\(idx)"
@@ -59,11 +67,13 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
     }
 }
 
-/// Central `@Observable` state coordinator for `PocketAntigravity` (v2.0 UE Aligned).
-/// Drives all 13 UE screens: Agents Home (`UE01`), Display Options (`UE02`), Long-Press & Pin (`UE03`),
-/// Project Detail (`UE04`), Create New Project (`UE05`), Automations (`UE06`), Chat & Composer (`UE07`),
-/// Add Context (`UE08`), Model & Mode (`UE09`), Structured Multi-Step Question (`UE10`),
-/// Implementation Plan Review (`UE11`), Turn Diff Line Review (`UE12`), and Live Activity (`UE13`).
+/// Central `@Observable` state coordinator for `PocketAntigravity` (v2.1 UE Aligned).
+/// Drives all 20 UE screens: Agents Home (`UE01`), Sidebar Drawer (`UE01B`), Display Options (`UE02`),
+/// Long-Press & Pin (`UE03`), Project Detail (`UE04`), Create New Project (`UE05`), Automations (`UE06`),
+/// Automation Detail (`UE06B`), Automation Edit (`UE06C`), Chat & Composer (`UE07`), Permissions Preset (`UE07B`),
+/// Add Context (`UE08`), Slash Menu (`UE08B`), Model & Effort (`UE09`), Structured Multi-Step Question (`UE10`),
+/// Implementation Plan Review (`UE11`), Turn Diff Line Review (`UE12`), Live Activity (`UE13`),
+/// Rules & Skills (`UE14`), and Settings (`UE15`).
 @MainActor
 @Observable
 public final class AntigravitySessionStore {
@@ -72,6 +82,8 @@ public final class AntigravitySessionStore {
     public var selectedTab: PrimaryTab = .agents
     public var activeRoute: AntigravityNavigationRoute = .tabRoot
     public var presentedSheet: AntigravityModalSheet? = nil
+    public var isSidebarPresented: Bool = false
+    public var isGlobalSearchPresented: Bool = false
 
     public var currentRoute: AntigravityNavigationRoute {
         get { activeRoute }
@@ -84,7 +96,7 @@ public final class AntigravitySessionStore {
         }
     }
 
-    // MARK: - Agents Home, Display Options & Search State (`UE01`, `UE02`, `UE03`)
+    // MARK: - Agents Home, Display Options & Search State (`UE01`, `UE01B`, `UE02`, `UE03`)
     public var quickFilter: AgentsQuickFilter = .all
     public var displayOptions: AgentDisplayOptions = AgentDisplayOptions()
     public var isSortPopoverPresented: Bool = false
@@ -106,9 +118,10 @@ public final class AntigravitySessionStore {
     public var workspaces: [WorkspaceInfo]
     public var selectedWorkspaceUri: String
 
-    // MARK: - Conversations, Automations & Context State (`UE01`, `UE06`, `UE08`)
+    // MARK: - Conversations, Automations & Context State (`UE01`, `UE06`, `UE06B`, `UE06C`, `UE08`)
     public var summaries: [CascadeSummary]
     public var automations: [AutomationItem]
+    public var selectedAutomationId: String = "auto-nightly-audit"
     public var automationPromptDraft: String = ""
     public var isLoadingAutomations: Bool = false
     public var isMutatingAutomation: Bool = false
@@ -117,6 +130,8 @@ public final class AntigravitySessionStore {
     public var contextCandidates: [ContextCandidateItem]
     public var contextSearchQuery: String = ""
     public var selectedContextCategoryFilter: ContextCategory? = nil
+    /// Feature-flag override enabling optional side-question entry in slash command popup (false by default in live mode).
+    public var includeSideQuestionInSlashMenu: Bool = false
 
     // MARK: - Active Trajectory & Message List State (`UE07`)
     public var activeCascadeId: String
@@ -463,16 +478,116 @@ public final class AntigravitySessionStore {
                 guard let self, !Task.isCancelled, self.summaryStreamGeneration == generation else { break }
                 guard !updatedSummaries.isEmpty else { continue }
                 self.hasReceivedLocalStreamEvent = true
-                self.lastBackendActivityAt = Date()
+                let now = Date()
+                self.lastBackendActivityAt = now
                 var byId = Dictionary(uniqueKeysWithValues: self.summaries.map { ($0.cascadeId, $0) })
-                for item in updatedSummaries {
-                    byId[item.cascadeId] = item
+                var shouldSyncActiveChat = false
+
+                for incoming in updatedSummaries {
+                    let cid = incoming.cascadeId
+                    if let existing = byId[cid] {
+                        var merged = incoming
+                        if existing.title != "New Conversation" && merged.title == "New Conversation" {
+                            merged.title = existing.title
+                        }
+                        if existing.isCloud && !merged.isCloud {
+                            merged.isCloud = true
+                            merged.originHostName = "Antigravity"
+                        }
+                        merged.isPinned = existing.isPinned || incoming.isPinned
+                        merged.isArchived = existing.isArchived || incoming.isArchived
+                        merged.stepCount = max(existing.stepCount, incoming.stepCount)
+                        merged.currentStepIndex = max(1, merged.stepCount)
+                        merged.totalSteps = max(1, merged.stepCount)
+                        merged.cloudProjectId = incoming.cloudProjectId ?? existing.cloudProjectId
+
+                        if let optimisticExpiry = self.optimisticActiveUntilByCascadeId[cid],
+                           optimisticExpiry > now,
+                           merged.status != .waiting && merged.status != .blocked && merged.status != .error {
+                            merged.status = .inProgress
+                        }
+
+                        let latestViewed = [existing.lastUserViewTime, incoming.lastUserViewTime].compactMap { $0 }.max()
+                        merged.lastUserViewTime = latestViewed
+
+                        let stepCountAdvanced = merged.stepCount > existing.stepCount
+                        let timestampAdvanced = incoming.updatedAt.timeIntervalSince(existing.updatedAt) > 0.5
+                        let statusChanged = merged.status != existing.status
+                        let hasNewActivity = stepCountAdvanced || timestampAdvanced
+
+                        if hasNewActivity {
+                            if self.activeRoute != .cascadeChat(cid) {
+                                merged.isUnread = (merged.status != .inProgress && merged.status != .pending)
+                                self.locallyViewedAtByCascadeId.removeValue(forKey: cid)
+                            } else {
+                                merged.isUnread = false
+                                self.locallyViewedAtByCascadeId[cid] = max(now, merged.updatedAt)
+                            }
+                        } else if merged.status == .inProgress || merged.status == .pending {
+                            merged.isUnread = false
+                        } else if let localViewed = self.locallyViewedAtByCascadeId[cid], merged.updatedAt <= localViewed {
+                            merged.isUnread = false
+                        } else if let latestViewed, merged.updatedAt <= latestViewed {
+                            merged.isUnread = false
+                        } else {
+                            merged.isUnread = incoming.isUnread
+                        }
+
+                        if let localViewed = self.locallyViewedAtByCascadeId[cid], merged.updatedAt <= localViewed {
+                            merged.isUnread = false
+                        }
+
+                        merged.statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                            status: merged.status,
+                            stepCount: merged.stepCount,
+                            isUnread: merged.isUnread
+                        )
+                        byId[cid] = merged
+
+                        if cid == self.activeCascadeId && (stepCountAdvanced || timestampAdvanced || statusChanged) {
+                            shouldSyncActiveChat = true
+                        }
+                    } else {
+                        var fresh = incoming
+                        if let localViewed = self.locallyViewedAtByCascadeId[cid], fresh.updatedAt <= localViewed {
+                            fresh.isUnread = false
+                            fresh.statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                                status: fresh.status,
+                                stepCount: fresh.stepCount,
+                                isUnread: false
+                            )
+                        }
+                        byId[cid] = fresh
+                        if cid == self.activeCascadeId {
+                            shouldSyncActiveChat = true
+                        }
+                    }
                 }
-                self.summaries = byId.values.sorted { lhs, rhs in
+
+                var nextSummaries = byId.values.sorted { lhs, rhs in
                     if lhs.updatedAt != rhs.updatedAt {
                         return lhs.updatedAt > rhs.updatedAt
                     }
                     return lhs.cascadeId < rhs.cascadeId
+                }
+                let existingCloudProjects = self.projects.filter { $0.runtime == .cloud }
+                self.projects = Self.reconcileLiveProjects(
+                    workspaces: self.workspaces,
+                    summaries: &nextSummaries,
+                    existingProjects: self.projects,
+                    hostName: self.activeHost.hostname,
+                    cloudProjects: existingCloudProjects
+                )
+                self.summaries = nextSummaries
+
+                if self.isLiveBackendConnected && self.activeHost.isOnline {
+                    self.connectionLifecyclePhase = self.isCascadeStreaming ? .onlineStreaming : .onlineIdle
+                }
+                if shouldSyncActiveChat && !self.activeCascadeId.isEmpty {
+                    self.syncStepsForCascade(
+                        self.activeCascadeId,
+                        pollUntilIdle: self.activeRoute == .cascadeChat(self.activeCascadeId)
+                    )
                 }
             }
         }

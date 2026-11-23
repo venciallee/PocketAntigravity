@@ -179,8 +179,8 @@ public struct AntigravityInteractiveRowButtonStyle: ButtonStyle {
     }
 }
 
-/// Adaptive shell container (`AntigravityShellController`) routing all 13 UE v2.0 flows
-/// interactively or rendering deterministic isolated ESDD verification scenes (`UE01`..`UE13`).
+/// Adaptive shell container (`AntigravityShellController`) routing all 20 UE v2.1 flows
+/// via Sidebar-First IA or rendering deterministic isolated ESDD verification scenes (`UE01`..`UE15`).
 public struct AntigravityRootContainerView: View {
     @Bindable public var store: AntigravitySessionStore
     @Binding public var activeVerifyCase: ESDDVerifySceneCase?
@@ -203,7 +203,9 @@ public struct AntigravityRootContainerView: View {
 
     private enum ShellPushDestination: Hashable {
         case projectDetail(String)
-        case cascadeChat
+        case cascadeChat(fromProject: Bool)
+        case automationDetail(String)
+        case rulesAndSkills
         case planReview
         case turnDiffReview
     }
@@ -272,20 +274,85 @@ public struct AntigravityRootContainerView: View {
 
     @ViewBuilder
     private var pairedShellView: some View {
-        NavigationStack(path: $navigationPath) {
-            withInteractivePopGesture(
-                tabRootContentView
-                    .toolbar(.hidden, for: .navigationBar)
-            )
-            .navigationDestination(for: ShellPushDestination.self) { destination in
+        ZStack(alignment: .leading) {
+            NavigationStack(path: $navigationPath) {
                 withInteractivePopGesture(
-                    pushedDestinationView(for: destination)
+                    tabRootContentView
                         .toolbar(.hidden, for: .navigationBar)
-                        .navigationBarBackButtonHidden(true)
                 )
+                .navigationDestination(for: ShellPushDestination.self) { destination in
+                    withInteractivePopGesture(
+                        pushedDestinationView(for: destination)
+                            .toolbar(.hidden, for: .navigationBar)
+                            .navigationBarBackButtonHidden(true)
+                    )
+                }
+            }
+            .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
+
+            // Slide-over Left Sidebar Drawer (`UE01B`)
+            if store.isSidebarPresented {
+                AgentsSidebarDrawerView(
+                    store: store,
+                    showWelcomeBackdrop: false,
+                    onClose: {
+                        withAnimation(.snappy(duration: 0.22)) {
+                            store.isSidebarPresented = false
+                        }
+                    },
+                    onNewConversation: {
+                        withAnimation(.snappy(duration: 0.22)) {
+                            store.isSidebarPresented = false
+                        }
+                        navigationPath.removeAll()
+                        selectedTab = .agents
+                        store.activeRoute = .tabRoot
+                    },
+                    onOpenAutomations: {
+                        withAnimation(.snappy(duration: 0.22)) {
+                            store.isSidebarPresented = false
+                        }
+                        navigationPath.removeAll()
+                        selectedTab = .automations
+                        store.activeRoute = .tabRoot
+                    },
+                    onOpenCustomizations: {
+                        withAnimation(.snappy(duration: 0.22)) {
+                            store.isSidebarPresented = false
+                        }
+                        store.activeRoute = .rulesAndSkills
+                    },
+                    onOpenSettings: {
+                        withAnimation(.snappy(duration: 0.22)) {
+                            store.isSidebarPresented = false
+                        }
+                        navigationPath.removeAll()
+                        selectedTab = .settings
+                        store.activeRoute = .pairingSettings
+                    },
+                    onOpenDisplayOptions: {
+                        activeModalSheet = .displayOptions
+                    },
+                    onOpenNewProject: {
+                        activeModalSheet = .createProject
+                    },
+                    onOpenProjectDetail: { slug in
+                        withAnimation(.snappy(duration: 0.22)) {
+                            store.isSidebarPresented = false
+                        }
+                        store.selectProject(slug)
+                    },
+                    onOpenConversation: { convId in
+                        withAnimation(.snappy(duration: 0.22)) {
+                            store.isSidebarPresented = false
+                        }
+                        openOrCreateConversation(convId, defaultProjectSlug: store.selectedProjectId)
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(50)
             }
         }
-        .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
         .overlay(alignment: .top) {
             if !store.isVerificationMode,
                let notice = store.compatibilityNoticeText,
@@ -367,10 +434,36 @@ public struct AntigravityRootContainerView: View {
                 RichArtifactViewerSheet(store: store, artifactPath: artifactPath)
             case .customizationsSettings:
                 CustomizationsSettingsView(store: store)
+            case .automationEdit(let automationId):
+                AutomationEditSheetView(
+                    store: store,
+                    automationId: automationId,
+                    onDismiss: { store.presentedSheet = nil }
+                )
+            case .permissionsPreset:
+                PermissionsSheetView(
+                    store: store,
+                    onDismiss: { store.presentedSheet = nil }
+                )
+            case .slashMenu:
+                SlashCommandMenuOverlayView(
+                    store: store,
+                    showHomeBackdrop: false,
+                    onDismiss: { store.presentedSheet = nil }
+                )
             case .modelAndMode, .modelConfigPicker:
-                ModelAndModeSheetView(store: store)
+                ModelAndModeSheetView(
+                    store: store,
+                    isPresentedAsNativeSheet: true,
+                    onDismiss: { store.presentedSheet = nil }
+                )
             case .addContext, .fileMentionPicker:
-                AddContextSheetView(store: store)
+                AddContextSheetView(
+                    store: store,
+                    startExpanded: true,
+                    showHomeBackdrop: false,
+                    onDismiss: { store.presentedSheet = nil }
+                )
             case .displayOptions:
                 DisplayOptionsSheetView(store: store, onDismiss: { store.presentedSheet = nil })
             case .createProject:
@@ -392,6 +485,11 @@ public struct AntigravityRootContainerView: View {
             AgentsHomeViewController(
                 store: store,
                 onSelectTab: { tab in selectedTab = tab },
+                onOpenSidebar: {
+                    withAnimation(.snappy(duration: 0.24)) {
+                        store.isSidebarPresented = true
+                    }
+                },
                 onOpenDisplayOptions: { activeModalSheet = .displayOptions },
                 onOpenNewProject: { activeModalSheet = .createProject },
                 onOpenProjectDetail: { slug in
@@ -400,13 +498,25 @@ public struct AntigravityRootContainerView: View {
                 onOpenContextMenuPreview: { activeModalSheet = .contextMenuPreview },
                 onOpenConversation: { convId in
                     openOrCreateConversation(convId, defaultProjectSlug: store.selectedProjectId)
+                },
+                onOpenSettings: {
+                    selectedTab = .settings
+                    store.activeRoute = .pairingSettings
                 }
             )
         case .automations:
             AutomationsViewController(
                 store: store,
                 onSelectTab: { tab in selectedTab = tab },
-                onOpenDisplayOptions: { activeModalSheet = .displayOptions }
+                onOpenDisplayOptions: { activeModalSheet = .displayOptions },
+                onOpenSidebar: {
+                    withAnimation(.snappy(duration: 0.24)) {
+                        store.isSidebarPresented = true
+                    }
+                },
+                onOpenAutomationDetail: { autoId in
+                    store.openAutomationDetail(autoId)
+                }
             )
         case .settings:
             settingsTabContainerView
@@ -427,9 +537,30 @@ public struct AntigravityRootContainerView: View {
                     openOrCreateConversation(convId, defaultProjectSlug: projectSlug)
                 }
             )
-        case .cascadeChat:
+        case .cascadeChat(let fromProject):
             CascadeChatViewController(
                 store: store,
+                onBack: fromProject ? {
+                    popTopDestination()
+                } : nil,
+                onOpenSidebar: {
+                    withAnimation(.snappy(duration: 0.24)) {
+                        store.isSidebarPresented = true
+                    }
+                }
+            )
+        case .automationDetail(let automationId):
+            AutomationDetailView(
+                store: store,
+                automationId: automationId,
+                onBack: {
+                    popTopDestination()
+                }
+            )
+        case .rulesAndSkills:
+            CustomizationsSettingsView(
+                store: store,
+                projectName: store.selectedProject?.name ?? "ledger-svc",
                 onBack: {
                     popTopDestination()
                 }
@@ -491,37 +622,61 @@ public struct AntigravityRootContainerView: View {
                 navigationPath = [target]
             }
         case .cascadeChat:
-            if navigationPath.last == .cascadeChat {
+            if case .cascadeChat = navigationPath.last {
                 return
             }
-            if let existingIndex = navigationPath.lastIndex(of: .cascadeChat) {
+            if let existingIndex = navigationPath.lastIndex(where: {
+                if case .cascadeChat = $0 { return true }
+                return false
+            }) {
                 navigationPath.removeSubrange((existingIndex + 1)...)
             } else if case .projectDetail = navigationPath.last {
-                navigationPath.append(.cascadeChat)
+                navigationPath.append(.cascadeChat(fromProject: true))
             } else {
-                navigationPath = [.cascadeChat]
+                navigationPath = [.cascadeChat(fromProject: false)]
+            }
+        case .automationDetail(let aid):
+            let target = ShellPushDestination.automationDetail(aid)
+            if navigationPath.last == target {
+                return
+            }
+            navigationPath = [target]
+        case .rulesAndSkills:
+            if navigationPath.last == .rulesAndSkills {
+                return
+            }
+            if case .projectDetail = navigationPath.last {
+                navigationPath.append(.rulesAndSkills)
+            } else {
+                navigationPath = [.rulesAndSkills]
             }
         case .planReview:
             if navigationPath.last == .planReview {
                 return
             }
-            if let chatIdx = navigationPath.lastIndex(of: .cascadeChat) {
+            if let chatIdx = navigationPath.lastIndex(where: {
+                if case .cascadeChat = $0 { return true }
+                return false
+            }) {
                 var updated = Array(navigationPath.prefix(through: chatIdx))
                 updated.append(.planReview)
                 navigationPath = updated
             } else {
-                navigationPath = [.cascadeChat, .planReview]
+                navigationPath = [.cascadeChat(fromProject: false), .planReview]
             }
         case .turnDiffReview:
             if navigationPath.last == .turnDiffReview {
                 return
             }
-            if let chatIdx = navigationPath.lastIndex(of: .cascadeChat) {
+            if let chatIdx = navigationPath.lastIndex(where: {
+                if case .cascadeChat = $0 { return true }
+                return false
+            }) {
                 var updated = Array(navigationPath.prefix(through: chatIdx))
                 updated.append(.turnDiffReview)
                 navigationPath = updated
             } else {
-                navigationPath = [.cascadeChat, .turnDiffReview]
+                navigationPath = [.cascadeChat(fromProject: false), .turnDiffReview]
             }
         }
     }
@@ -542,6 +697,14 @@ public struct AntigravityRootContainerView: View {
             } else {
                 store.activeRoute = .cascadeChat(store.activeCascadeId)
             }
+        case .automationDetail(let aid):
+            if store.activeRoute != .automationDetail(aid) {
+                store.activeRoute = .automationDetail(aid)
+            }
+        case .rulesAndSkills:
+            if store.activeRoute != .rulesAndSkills {
+                store.activeRoute = .rulesAndSkills
+            }
         case .planReview:
             if store.activeRoute != .planReview {
                 store.activeRoute = .planReview
@@ -554,32 +717,23 @@ public struct AntigravityRootContainerView: View {
     }
 
     private var settingsTabContainerView: some View {
-        VStack(spacing: 0) {
-            RemotePairingViewController(
-                store: store,
-                externalScannerTrigger: $settingsScannerTriggered,
-                onConnected: {
-                    if case .cascadeChat(let cid) = store.activeRoute, !cid.isEmpty {
-                        selectedTab = .agents
-                    } else {
-                        store.activeRoute = .tabRoot
-                        selectedTab = .agents
-                    }
-                }
-            )
-            Spacer(minLength: 0)
-            AntigravityFloatingTabBar(
-                selectedTab: .settings,
-                onSelectTab: { tab in
+        RemotePairingViewController(
+            store: store,
+            externalScannerTrigger: $settingsScannerTriggered,
+            onConnected: {
+                if case .cascadeChat(let cid) = store.activeRoute, !cid.isEmpty {
+                    selectedTab = .agents
+                } else {
                     store.activeRoute = .tabRoot
-                    selectedTab = tab
-                },
-                onTapFAB: {
-                    settingsScannerTriggered = true
+                    selectedTab = .agents
                 }
-            )
-        }
-        .background(AntigravityTheme.canvasObsidian)
+            },
+            onDismiss: {
+                selectedTab = .agents
+                store.activeRoute = .tabRoot
+            }
+        )
+        .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
     }
 
     private func openOrCreateConversation(_ rawId: String, defaultProjectSlug: String) {
@@ -610,13 +764,15 @@ public struct AntigravityRootContainerView: View {
         store.selectCascade(mappedId)
     }
 
-    // MARK: - Isolated Deterministic ESDD Scenes (UE01 .. UE13)
+    // MARK: - Isolated Deterministic ESDD Scenes (All 20 UE v2.1 Boards)
 
     @ViewBuilder
     private func isolatedESDDSceneView(for verifyCase: ESDDVerifySceneCase) -> some View {
         switch verifyCase {
         case .agentsHome:
             AgentsHomeViewController(store: store)
+        case .sidebarDrawer:
+            AgentsSidebarDrawerView(store: store, showWelcomeBackdrop: true)
         case .displayOptions:
             DisplayOptionsSheetView(store: store)
         case .contextMenuPin:
@@ -627,10 +783,18 @@ public struct AntigravityRootContainerView: View {
             CreateProjectSheetView(store: store)
         case .automations:
             AutomationsViewController(store: store)
+        case .automationDetail:
+            AutomationDetailView(store: store)
+        case .automationEdit:
+            AutomationEditSheetView(store: store)
         case .chatAndComposer:
             CascadeChatViewController(store: store)
+        case .permissionsPreset:
+            PermissionsPresetPopoverView(store: store, showHomeBackdrop: true)
         case .addContext:
-            AddContextSheetView(store: store)
+            AddContextSheetView(store: store, startExpanded: false, showHomeBackdrop: true)
+        case .slashMenu:
+            SlashCommandMenuOverlayView(store: store, showHomeBackdrop: true)
         case .modelAndMode:
             ModelAndModeSheetView(store: store)
         case .structuredQuestion:
@@ -641,6 +805,10 @@ public struct AntigravityRootContainerView: View {
             TurnDiffReviewViewController(store: store)
         case .liveActivitySpec:
             AntigravityLiveActivitySpecShowcaseView(store: store)
+        case .rulesAndSkills:
+            CustomizationsSettingsView(store: store, projectName: "ledger-svc")
+        case .settings:
+            RemotePairingViewController(store: store)
         }
     }
 }

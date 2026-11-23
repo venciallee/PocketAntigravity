@@ -8,14 +8,17 @@ import AntigravityData
 public struct CascadeChatViewController: View {
     @Bindable public var store: AntigravitySessionStore
     public var onBack: (() -> Void)?
+    public var onOpenSidebar: (() -> Void)?
     @State private var isTurnStopped: Bool = false
 
     public init(
         store: AntigravitySessionStore,
-        onBack: (() -> Void)? = nil
+        onBack: (() -> Void)? = nil,
+        onOpenSidebar: (() -> Void)? = nil
     ) {
         self.store = store
         self.onBack = onBack
+        self.onOpenSidebar = onOpenSidebar
     }
 
     private var isStaticESDDFixtureView: Bool {
@@ -124,6 +127,9 @@ public struct CascadeChatViewController: View {
                         if isStaticESDDFixtureView {
                             VStack(alignment: .leading, spacing: 9) {
                                 staticRateLimiterShowcaseBody
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id("chat-bottom-anchor")
                             }
                         } else if store.displayItems.isEmpty {
                             VStack(alignment: .leading, spacing: 9) {
@@ -135,7 +141,6 @@ public struct CascadeChatViewController: View {
                                     switch item {
                                     case .single(let step):
                                         CascadeStepCellView(store: store, step: step)
-                                            .id("step-\(step.stepIndex)")
                                             .contextMenu {
                                                 if let text = step.plannerResponse?.response ?? step.userInput, !text.isEmpty {
                                                     Button {
@@ -194,9 +199,16 @@ public struct CascadeChatViewController: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {
-                    guard !isStaticESDDFixtureView, !store.displayItems.isEmpty else { return }
+                    if isStaticESDDFixtureView {
+                        scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                        DispatchQueue.main.async {
+                            scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                        }
+                        return
+                    }
+                    guard !store.displayItems.isEmpty else { return }
                     if let waiting = store.pendingWaitingStep {
-                        scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+                        scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
                     } else {
                         scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
                     }
@@ -569,22 +581,48 @@ public struct CascadeChatViewController: View {
         let showDiffPill = activePendingDraft == nil && (!isLiveOrPaired || store.totalDiffAdditions > 0 || store.totalDiffDeletions > 0)
 
         return HStack(spacing: 8) {
-            Button {
-                store.discardPendingDraftConversation()
-                if let onBack {
-                    onBack()
-                } else {
-                    store.currentRoute = .tabRoot
+            if let onOpenSidebar, onBack == nil {
+                Button {
+                    store.discardPendingDraftConversation()
+                    onOpenSidebar()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                 }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
-                    .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open sidebar")
+                .accessibilityIdentifier("btn-sidebar")
+            } else if let onBack {
+                Button {
+                    store.discardPendingDraftConversation()
+                    onBack()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("btn-back-sessions")
+            } else {
+                Button {
+                    store.discardPendingDraftConversation()
+                    store.isSidebarPresented = true
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open sidebar")
+                .accessibilityIdentifier("btn-sidebar")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("btn-back-sessions")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(navTitle)
@@ -614,13 +652,14 @@ public struct CascadeChatViewController: View {
                     }
                     .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                     .padding(.horizontal, 11)
-                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
+                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: 34)
                     .background(AntigravityTheme.surfacePill)
                     .overlay(
                         Capsule()
                             .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
                     .clipShape(Capsule())
+                    .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("chat-diff-pill")
@@ -646,7 +685,12 @@ public struct CascadeChatViewController: View {
                     store.currentRoute = .turnDiffReview
                 }
                 Button {
-                    store.presentedSheet = .customizationsSettings
+                    store.activeRoute = .rulesAndSkills
+                } label: {
+                    Label("Rules & Skills", systemImage: "doc.text")
+                }
+                Button {
+                    store.presentedSheet = .permissionsPreset
                 } label: {
                     Label("Permissions", systemImage: "shield.lefthalf.filled")
                 }
@@ -661,15 +705,29 @@ public struct CascadeChatViewController: View {
             }
             .accessibilityIdentifier("btn-chat-more")
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
         .padding(.vertical, 2)
     }
 
     // MARK: - Above-Composer Status Strip
 
+    private func scrollTargetId(forStepIndex stepIndex: Int) -> String {
+        for item in store.displayItems {
+            switch item {
+            case .single(let step) where step.stepIndex == stepIndex:
+                return item.id
+            case .evidenceGroup(_, let grouped) where grouped.contains(where: { $0.stepIndex == stepIndex }):
+                return item.id
+            default:
+                continue
+            }
+        }
+        return "chat-bottom-anchor"
+    }
+
     private func openPendingApproval(for waiting: CascadeStep, scrollProxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.2)) {
-            scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+            scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
         }
         let kind = waiting.effectiveRequestedInteraction?.kind
         if kind == .askQuestion || kind == .elicitation {
@@ -711,7 +769,7 @@ public struct CascadeChatViewController: View {
             if let waiting = waitingStep, !isStaticESDDFixtureView {
                 Button {
                     withAnimation(.easeOut(duration: 0.2)) {
-                        scrollProxy.scrollTo("step-\(waiting.stepIndex)", anchor: .bottom)
+                        scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
                     }
                 } label: {
                     HStack(spacing: 8) {

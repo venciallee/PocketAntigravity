@@ -1308,6 +1308,31 @@ extension AntigravitySessionStore {
         }
     }
 
+    public var selectedAutomation: AutomationItem? {
+        automations.first(where: { $0.id == selectedAutomationId }) ?? automations.first
+    }
+
+    public func openAutomationDetail(_ automationId: String) {
+        selectedAutomationId = automationId
+        isSidebarPresented = false
+        activeRoute = .automationDetail(automationId)
+    }
+
+    public func openAutomationEdit(_ automationId: String) {
+        selectedAutomationId = automationId
+        presentedSheet = .automationEdit(automationId: automationId)
+    }
+
+    public func retryAutomationRun(automationId: String, runId: String) {
+        guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
+        if let runIdx = automations[idx].recentRuns.firstIndex(where: { $0.id == runId }) {
+            automations[idx].recentRuns[runIdx].status = .running
+            automations[idx].recentRuns[runIdx].relativeTimeLabel = "now"
+            automations[idx].recentRuns[runIdx].summaryText = "Retrying run..."
+        }
+        triggerAutomationNow(automationId)
+    }
+
     public func restartAutomation(_ automationId: String) {
         guard let idx = automations.firstIndex(where: { $0.id == automationId }) else { return }
         let originUuid = automations[idx].originInstanceUuid

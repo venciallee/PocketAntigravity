@@ -310,7 +310,7 @@ public sealed interface CascadeDisplayItem {
     public val id: String
 
     public data class Single(public val step: CascadeStep) : CascadeDisplayItem {
-        override val id: String get() = step.id
+        override val id: String get() = "${step.id}-${step.type.rawValue}"
     }
 
     public data class EvidenceGroup(

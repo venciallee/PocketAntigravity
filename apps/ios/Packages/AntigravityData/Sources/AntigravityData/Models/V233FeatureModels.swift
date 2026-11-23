@@ -821,6 +821,7 @@ public struct PluginCatalogItem: Codable, Sendable, Equatable, Identifiable {
     public var name: String
     public var provider: String
     public var description: String
+    public var scope: String
     public var isInstalled: Bool
     public var isEnabled: Bool
     public var isFeaturedPartner: Bool
@@ -833,6 +834,7 @@ public struct PluginCatalogItem: Codable, Sendable, Equatable, Identifiable {
         name: String,
         provider: String,
         description: String,
+        scope: String = "Global",
         isInstalled: Bool = false,
         isEnabled: Bool = true,
         isFeaturedPartner: Bool = false,
@@ -844,12 +846,34 @@ public struct PluginCatalogItem: Codable, Sendable, Equatable, Identifiable {
         self.name = name
         self.provider = provider
         self.description = description
+        self.scope = scope
         self.isInstalled = isInstalled
         self.isEnabled = isEnabled
         self.isFeaturedPartner = isFeaturedPartner
         self.accountSignedIn = accountSignedIn
         self.mcpStartupError = mcpStartupError
         self.suggestedPrompts = suggestedPrompts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, provider, description, scope
+        case isInstalled, isEnabled, isFeaturedPartner, accountSignedIn
+        case mcpStartupError, suggestedPrompts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? self.name
+        self.description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        self.scope = try c.decodeIfPresent(String.self, forKey: .scope) ?? "Global"
+        self.isInstalled = try c.decodeIfPresent(Bool.self, forKey: .isInstalled) ?? false
+        self.isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        self.isFeaturedPartner = try c.decodeIfPresent(Bool.self, forKey: .isFeaturedPartner) ?? false
+        self.accountSignedIn = try c.decodeIfPresent(Bool.self, forKey: .accountSignedIn) ?? false
+        self.mcpStartupError = try c.decodeIfPresent(String.self, forKey: .mcpStartupError)
+        self.suggestedPrompts = try c.decodeIfPresent([String].self, forKey: .suggestedPrompts) ?? []
     }
 }
 
@@ -885,6 +909,7 @@ public struct CustomizationsCatalog: Codable, Sendable, Equatable {
     public var mcpServers: [McpServerStatusItem]
     public var plugins: [PluginCatalogItem]
     public var hooks: [LifecycleHookItem]
+    public var loadedTokensLabel: String
 
     public init(
         skills: [SkillSummary] = [],
@@ -892,7 +917,8 @@ public struct CustomizationsCatalog: Codable, Sendable, Equatable {
         customAgents: [String] = ["Default"],
         mcpServers: [McpServerStatusItem] = [],
         plugins: [PluginCatalogItem] = [],
-        hooks: [LifecycleHookItem] = []
+        hooks: [LifecycleHookItem] = [],
+        loadedTokensLabel: String = "6.2k tokens"
     ) {
         self.skills = skills
         self.rules = rules
@@ -900,83 +926,78 @@ public struct CustomizationsCatalog: Codable, Sendable, Equatable {
         self.mcpServers = mcpServers
         self.plugins = plugins
         self.hooks = hooks
+        self.loadedTokensLabel = loadedTokensLabel
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skills, rules, customAgents, mcpServers, plugins, hooks, loadedTokensLabel
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.skills = try c.decodeIfPresent([SkillSummary].self, forKey: .skills) ?? []
+        self.rules = try c.decodeIfPresent([RuleSummary].self, forKey: .rules) ?? []
+        self.customAgents = try c.decodeIfPresent([String].self, forKey: .customAgents) ?? ["Default"]
+        self.mcpServers = try c.decodeIfPresent([McpServerStatusItem].self, forKey: .mcpServers) ?? []
+        self.plugins = try c.decodeIfPresent([PluginCatalogItem].self, forKey: .plugins) ?? []
+        self.hooks = try c.decodeIfPresent([LifecycleHookItem].self, forKey: .hooks) ?? []
+        self.loadedTokensLabel = try c.decodeIfPresent(String.self, forKey: .loadedTokensLabel) ?? "6.2k tokens"
     }
 
     public static let defaultCatalog = CustomizationsCatalog(
         skills: [
-            SkillSummary(name: "antigravity-doc-sync", description: "Auto-sync Antigravity 2.0 docs & ESDD deltas", scope: "Workspace"),
-            SkillSummary(name: "go-testing", description: "Table-driven Go tests & fake clock patterns", scope: "Workspace"),
-            SkillSummary(name: "generative_ui", description: "Interactive HTML widgets & data diagrams", scope: "Global")
+            SkillSummary(name: "go-testing", description: "Table-driven tests with -race", scope: "Global"),
+            SkillSummary(name: "pr-summary", description: "Write PR descriptions from the diff", scope: "Global"),
+            SkillSummary(name: "api-review", description: "Check handlers against API rules · .agents/skills", scope: "Project"),
+            SkillSummary(name: "add-endpoint", description: "Scaffold handler + test + route · .agents/skills", scope: "Project"),
+            SkillSummary(name: "firebase:deploy", description: "From plugin firebase", scope: "Plugin")
         ],
         rules: [
-            RuleSummary(name: "AGENTS.md", scope: "Workspace", preview: "Pure Swift 6 AntigravityData isolation & 4-gate ESDD verification.")
+            RuleSummary(name: "AGENTS.md", scope: "Project", preview: "Injected clock, deterministic tests, zero package-level mutable state."),
+            RuleSummary(name: "go-style.md", scope: "Project", preview: "Wrap errors with %w, table-driven subtests, no naked returns."),
+            RuleSummary(name: "security-invariants.md", scope: "Project", preview: "Rate limits & idempotency keys required on all transfer mutations."),
+            RuleSummary(name: "global-conventions.md", scope: "Global", preview: "Prefer concise diffs and cite exact file paths.")
         ],
-        customAgents: ["Default", "go-reviewer", "release-captain"],
+        customAgents: ["go-reviewer"],
         mcpServers: [
-            McpServerStatusItem(name: "github", transport: "remote-oauth", state: .connected, toolCount: 18, oauthConnected: true),
-            McpServerStatusItem(name: "postgres-dev", transport: "stdio", state: .connected, toolCount: 6, oauthConnected: true)
+            McpServerStatusItem(name: "firebase", transport: "remote-oauth", state: .connected, toolCount: 6, oauthConnected: true),
+            McpServerStatusItem(name: "datadog", transport: "stdio", state: .error, toolCount: 4, errorMessage: "MCP needs an API key", oauthConnected: false)
         ],
         plugins: [
             PluginCatalogItem(
-                id: "plugin-github",
-                name: "GitHub",
-                provider: "GitHub",
-                description: "Repositories, PR status pills, Issues & Actions",
+                id: "plugin-firebase",
+                name: "Firebase",
+                provider: "Google",
+                description: "2 skills · 1 MCP server",
+                scope: "Global",
                 isInstalled: true,
                 isEnabled: true,
                 isFeaturedPartner: true,
                 accountSignedIn: true,
-                suggestedPrompts: ["Review open PRs with failing checks"]
+                suggestedPrompts: ["Inspect Crashlytics regressions for latest build"]
             ),
             PluginCatalogItem(
-                id: "plugin-figma",
-                name: "Figma",
-                provider: "Figma",
-                description: "Inspect design frames, tokens & screenshots",
-                isInstalled: false,
+                id: "plugin-datadog",
+                name: "Datadog",
+                provider: "Datadog",
+                description: "MCP needs an API key",
+                scope: "Workspace",
+                isInstalled: true,
                 isEnabled: false,
                 isFeaturedPartner: true,
                 accountSignedIn: false,
-                suggestedPrompts: ["Audit iOS theme tokens against Figma"]
-            ),
-            PluginCatalogItem(
-                id: "plugin-linear",
-                name: "Linear",
-                provider: "Linear",
-                description: "Triage issues, link PRs & sync sprint status",
-                isInstalled: false,
-                isEnabled: false,
-                isFeaturedPartner: true,
-                accountSignedIn: false
-            ),
-            PluginCatalogItem(
-                id: "plugin-notion",
-                name: "Notion",
-                provider: "Notion",
-                description: "Read & update PRDs, specs and runbooks",
-                isInstalled: false,
-                isEnabled: false,
-                isFeaturedPartner: true,
-                accountSignedIn: false
-            ),
-            PluginCatalogItem(
-                id: "plugin-stripe",
-                name: "Stripe",
-                provider: "Stripe",
-                description: "Inspect test webhooks, customers & billing logs",
-                isInstalled: false,
-                isEnabled: false,
-                isFeaturedPartner: true,
-                accountSignedIn: false
+                mcpStartupError: "MCP needs an API key",
+                suggestedPrompts: ["Check p99 latency on /transfers"]
             )
         ],
         hooks: [
             LifecycleHookItem(eventName: "PreToolUse", matcher: "run_command", command: "scripts/verify-safe-cmd.sh", timeoutSeconds: 30)
-        ]
+        ],
+        loadedTokensLabel: "6.2k tokens"
     )
 }
 
-// MARK: - Appearance, Layout, Queued Messages & Turn Navigator (v2.28 - v2.33)
+// MARK: - Appearance, Language, Layout, Queued Messages & Turn Navigator (v2.28 - v2.34)
 
 public enum InterfaceLayoutMode: String, ResilientStringEnum, CaseIterable, Identifiable {
     case softwareEngineering = "Software Engineering"
@@ -1022,35 +1043,57 @@ public enum AppAppearanceMode: String, ResilientStringEnum, CaseIterable, Identi
     }
 }
 
+/// User-facing display language preference (`UE15` Settings).
+public enum AppLanguage: String, ResilientStringEnum, CaseIterable, Identifiable {
+    case english = "en"
+    case zhHans = "zh-Hans"
+
+    public var id: String { rawValue }
+    public static var unknownFallback: AppLanguage { .english }
+
+    public var displayLabel: String {
+        switch self {
+        case .english: return "English"
+        case .zhHans: return "简体中文"
+        }
+    }
+}
+
 public struct AppAppearancePreferences: Codable, Sendable, Equatable {
     public var interfaceLayout: InterfaceLayoutMode
     public var appearanceMode: AppAppearanceMode
+    public var language: AppLanguage
     public var theme: AppThemePreset
     public var fontSizePt: Int
     public var collapsedProjectIds: Set<String>
     public var notificationsEnabled: Bool
     public var suppressManualStopNotification: Bool
+    public var liveUpdatesEnabled: Bool
     public var globalPermissionPreset: AgentPermissionPreset
     public var terminalSandboxEnabled: Bool
 
     public init(
         interfaceLayout: InterfaceLayoutMode = .softwareEngineering,
         appearanceMode: AppAppearanceMode = .system,
+        language: AppLanguage = .english,
         theme: AppThemePreset = .obsidian,
         fontSizePt: Int = 14,
         collapsedProjectIds: Set<String> = [],
         notificationsEnabled: Bool = true,
         suppressManualStopNotification: Bool = true,
+        liveUpdatesEnabled: Bool = true,
         globalPermissionPreset: AgentPermissionPreset = .defaultSandbox,
         terminalSandboxEnabled: Bool = true
     ) {
         self.interfaceLayout = interfaceLayout
         self.appearanceMode = appearanceMode
+        self.language = language
         self.theme = theme
         self.fontSizePt = [12, 14, 16].contains(fontSizePt) ? fontSizePt : 14
         self.collapsedProjectIds = collapsedProjectIds
         self.notificationsEnabled = notificationsEnabled
         self.suppressManualStopNotification = suppressManualStopNotification
+        self.liveUpdatesEnabled = liveUpdatesEnabled
         self.globalPermissionPreset = globalPermissionPreset
         self.terminalSandboxEnabled = terminalSandboxEnabled
     }
@@ -1058,11 +1101,13 @@ public struct AppAppearancePreferences: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case interfaceLayout
         case appearanceMode
+        case language
         case theme
         case fontSizePt
         case collapsedProjectIds
         case notificationsEnabled
         case suppressManualStopNotification
+        case liveUpdatesEnabled
         case globalPermissionPreset
         case terminalSandboxEnabled
     }
@@ -1078,21 +1123,25 @@ public struct AppAppearancePreferences: Codable, Sendable, Equatable {
             // Migrate legacy `appearance_prefs.json` snapshots without `appearanceMode`.
             decodedAppearanceMode = (decodedTheme == .everforestLight) ? .light : .system
         }
+        let decodedLanguage = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .english
         let rawFontSize = try container.decodeIfPresent(Int.self, forKey: .fontSizePt) ?? 14
         let decodedCollapsed = try container.decodeIfPresent(Set<String>.self, forKey: .collapsedProjectIds) ?? []
         let decodedNotifications = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
         let decodedSuppressStop = try container.decodeIfPresent(Bool.self, forKey: .suppressManualStopNotification) ?? true
+        let decodedLiveUpdates = try container.decodeIfPresent(Bool.self, forKey: .liveUpdatesEnabled) ?? true
         let decodedPermission = try container.decodeIfPresent(AgentPermissionPreset.self, forKey: .globalPermissionPreset) ?? .defaultSandbox
         let decodedSandbox = try container.decodeIfPresent(Bool.self, forKey: .terminalSandboxEnabled) ?? true
 
         self.init(
             interfaceLayout: decodedLayout,
             appearanceMode: decodedAppearanceMode,
+            language: decodedLanguage,
             theme: decodedTheme,
             fontSizePt: rawFontSize,
             collapsedProjectIds: decodedCollapsed,
             notificationsEnabled: decodedNotifications,
             suppressManualStopNotification: decodedSuppressStop,
+            liveUpdatesEnabled: decodedLiveUpdates,
             globalPermissionPreset: decodedPermission,
             terminalSandboxEnabled: decodedSandbox
         )

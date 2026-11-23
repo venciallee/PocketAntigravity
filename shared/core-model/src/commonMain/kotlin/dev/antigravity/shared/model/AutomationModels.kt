@@ -51,6 +51,33 @@ public data class SidecarRunEvent(
     public val prompt: String? = null,
 )
 
+@Serializable(with = AutomationRunStatusSerializer::class)
+public enum class AutomationRunStatus(public val displayTitle: String) {
+    SUCCEEDED("Succeeded"),
+    NEEDS_REVIEW("Needs review"),
+    FAILED("Failed"),
+    RUNNING("Running"),
+}
+
+public object AutomationRunStatusSerializer : ResilientEnumSerializer<AutomationRunStatus>(
+    serialName = "dev.antigravity.shared.model.AutomationRunStatus",
+    entriesProvider = { AutomationRunStatus.entries },
+    fallbackProvider = { AutomationRunStatus.SUCCEEDED },
+    extraMatcher = { raw ->
+        val norm = normalizeResilientEnumToken(raw)
+        AutomationRunStatus.entries.firstOrNull { normalizeResilientEnumToken(it.displayTitle) == norm }
+    },
+)
+
+@Serializable
+public data class AutomationRunRecord(
+    public val id: String,
+    public val status: AutomationRunStatus,
+    public val timestampLabel: String,
+    public val summary: String,
+    public val canRetry: Boolean = status == AutomationRunStatus.FAILED,
+)
+
 @Serializable
 public data class AutomationItem(
     public val id: String,
@@ -73,10 +100,14 @@ public data class AutomationItem(
     public val isEnabled: Boolean = section != AutomationSectionKind.PAUSED,
     public val isScheduleBuiltin: Boolean = section != AutomationSectionKind.ALWAYS_ON,
     public val originInstanceUuid: String? = null,
+    public val repeatsLabel: String = "Every day · 2:00 AM",
+    public val timeLabel: String = "2:00 AM",
+    public val timezoneLabel: String = "GMT+8:00",
+    public val recentRuns: List<AutomationRunRecord> = emptyList(),
 )
 
 /**
- * Category tiles at the top of the Add Context sheet (`UE08`).
+ * Category entries in the Add Context popover & picker (`UE08`).
  */
 @Serializable(with = ContextCandidateCategorySerializer::class)
 public enum class ContextCandidateCategory(public val displayTitle: String) {
@@ -84,6 +115,7 @@ public enum class ContextCandidateCategory(public val displayTitle: String) {
     FOLDER("Folder"),
     MENTIONS("Mentions"),
     ACTIONS("Actions"),
+    DRIVE("Drive"),
     SKILLS("Skills"),
 }
 
@@ -98,7 +130,7 @@ public object ContextCandidateCategorySerializer : ResilientEnumSerializer<Conte
 )
 
 /**
- * Selectable file, folder, mention, action, or skill item in the Add Context sheet (`UE08`).
+ * Selectable file, folder, mention, action, drive, or skill item in Add Context (`UE08`).
  */
 @Serializable
 public data class ContextCandidateItem(
@@ -118,6 +150,7 @@ public data class ContextCandidateItem(
                 if (title.lowercase().contains("terminal")) ComposerAttachmentChip.Kind.TERMINAL_LOG
                 else ComposerAttachmentChip.Kind.CONVERSATION_MENTION
             ContextCandidateCategory.ACTIONS -> ComposerAttachmentChip.Kind.WORKFLOW
+            ContextCandidateCategory.DRIVE -> ComposerAttachmentChip.Kind.FILE_MENTION
             ContextCandidateCategory.SKILLS -> ComposerAttachmentChip.Kind.SKILL
         }
 }

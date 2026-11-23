@@ -1,26 +1,26 @@
 {
-  "specVersion": "2.0.0",
+  "specVersion": "2.1.0",
   "project": "PocketAntigravity",
   "targetPlatform": {
     "os": "iOS 18.0+",
     "swiftVersion": "6.0",
     "baselineDevice": "iPhone 16 Pro",
-    "viewportPt": { "width": 393, "height": 852 },
+    "viewportPt": { "width": 390, "height": 844 },
     "scaleFactor": 3,
-    "screenshotPx": { "width": 1179, "height": 2556 },
+    "screenshotPx": { "width": 1170, "height": 2532 },
     "minTouchTargetPt": 44
   },
   "designTokens": {
     "colors": {
-      "canvasObsidian": "#090A0D",
-      "surfaceCard": "#141519",
-      "surfaceElevated": "#1D1F26",
-      "surfacePopover": "#25272F",
-      "accentPeriwinkle": "#8EB4FF",
+      "canvasObsidian": "#0B0B0C",
+      "surfaceCard": "#141416",
+      "surfaceElevated": "#1D1D20",
+      "surfacePopover": "#26262B",
+      "accentPeriwinkle": "#8DB8FF",
       "inkOnPrimaryCTA": "#0A0E17",
       "statusRunning": "#7DA7FF",
-      "statusWaiting": "#EBB365",
-      "statusDone": "#57C88A",
+      "statusWaiting": "#F2B866",
+      "statusDone": "#6FD8A6",
       "statusError": "#F07167"
     },
     "typographyTiers": ["Reading", "Evidence", "Process", "Metadata", "Chrome"]
@@ -28,27 +28,29 @@
   "states": [
     {
       "id": "UE01_AGENTS_HOME",
-      "title": "Agents Home (Conversation & Project Hub)",
-      "referenceUEImage": "/home/antigravity/iOS_·_Agents_首页.png",
+      "title": "New Conversation Home (PC-Aligned Greeting, Needs Approval Banner & Composer)",
+      "referenceUEImage": "docs/ue/ios/Main.png",
       "swiftController": "AgentsHomeViewController",
       "claimId": "CLAIM-01",
       "requiredSelectors": [
+        "[data-testid='btn-open-sidebar']",
         "[data-testid='host-switcher-pill']",
-        "[data-testid='btn-display-options']",
-        "[data-testid='btn-new-project']",
-        "[data-testid='agents-search-input']",
-        "[data-testid='filter-pill-all']",
-        "[data-testid='filter-pill-needs-you']",
-        "[data-testid='pinned-section-card']",
-        "[data-testid='project-group-ledger-svc']",
-        "[data-testid='floating-tab-bar']",
-        "[data-testid='fab-compose']"
+        "[data-testid='btn-global-search']",
+        "[data-testid='home-greeting-title']",
+        "[data-testid='banner-needs-approval']",
+        "[data-testid='composer-project-pill']",
+        "[data-testid='composer-branch-pill']",
+        "[data-testid='composer-cloud-toggle']",
+        "[data-testid='composer-btn-add-context']",
+        "[data-testid='composer-pill-model']",
+        "[data-testid='composer-pill-preset']",
+        "[data-testid='composer-btn-send']"
       ]
     },
     {
       "id": "UE02_DISPLAY_OPTIONS",
       "title": "Display Options & Sort Popover Sheet",
-      "referenceUEImage": "/home/antigravity/iOS_·_Display_Options.png",
+      "referenceUEImage": "docs/ue/ios/ios-display-options.png",
       "swiftController": "DisplayOptionsSheetView",
       "claimId": "CLAIM-02",
       "requiredSelectors": [
@@ -65,7 +67,7 @@
     {
       "id": "UE03_CONTEXT_MENU_PIN",
       "title": "Long-Press Context Preview Menu & Swipe Pin/Archive",
-      "referenceUEImage": "/home/antigravity/iOS_·_长按菜单_Pin.png",
+      "referenceUEImage": "docs/ue/ios/ios-pin-menu.png",
       "swiftController": "ConversationContextPreviewMenu",
       "claimId": "CLAIM-03",
       "requiredSelectors": [
@@ -81,8 +83,8 @@
     },
     {
       "id": "UE04_PROJECT_DETAIL",
-      "title": "Project Page & New Conversation in Project",
-      "referenceUEImage": "/home/antigravity/iOS_·_项目页_New_Conversation_in_Project.png",
+      "title": "Project Detail Page & New Conversation in Project",
+      "referenceUEImage": "docs/ue/ios/ios-project-detail.png",
       "swiftController": "ProjectDetailViewController",
       "claimId": "CLAIM-04",
       "requiredSelectors": [
@@ -98,7 +100,7 @@
     {
       "id": "UE05_CREATE_PROJECT",
       "title": "Create New Project (MacBook Pro / Cloud + GitHub / Drive)",
-      "referenceUEImage": "/home/antigravity/iOS_·_Create_New_Project.png",
+      "referenceUEImage": "docs/ue/ios/ios-new-project.png",
       "swiftController": "CreateProjectSheetView",
       "claimId": "CLAIM-05",
       "requiredSelectors": [
@@ -114,26 +116,25 @@
     },
     {
       "id": "UE06_AUTOMATIONS",
-      "title": "Automations (Scheduled, Always On, Paused)",
-      "referenceUEImage": "/home/antigravity/iOS_·_Automations.png",
+      "title": "Automations (Scheduled, Always On, Paused — Sidebar Navigated)",
+      "referenceUEImage": "docs/ue/ios/ios-automations.png",
       "swiftController": "AutomationsViewController",
       "claimId": "CLAIM-06",
       "requiredSelectors": [
+        "[data-testid='btn-open-sidebar']",
         "[data-testid='automation-prompt-input']",
         "[data-testid='btn-create-automation-inline']",
         "[data-testid='automation-card-nightly']",
         "[data-testid='btn-run-nightly']",
         "[data-testid='automation-card-flaky']",
         "[data-testid='automation-card-always-on']",
-        "[data-testid='btn-resume-paused']",
-        "[data-testid='floating-tab-bar']",
-        "[data-testid='fab-add-automation']"
+        "[data-testid='btn-resume-paused']"
       ]
     },
     {
       "id": "UE07_CHAT_AND_COMPOSER",
-      "title": "Message List, 7-Segment Task Card, Face ID Command Gate & Composer",
-      "referenceUEImage": "/home/antigravity/iOS_·_消息列表与输入框.png",
+      "title": "Message List, 7-Segment Task Card, Face ID Command Gate & PC-Aligned Composer",
+      "referenceUEImage": "docs/ue/ios/ios-chat.png",
       "swiftController": "CascadeChatViewController",
       "claimId": "CLAIM-07",
       "requiredSelectors": [
@@ -147,50 +148,51 @@
         "[data-testid='btn-stop-turn']",
         "[data-testid='composer-chip-ratelimit']",
         "[data-testid='composer-btn-add-context']",
-        "[data-testid='composer-pill-mode']",
         "[data-testid='composer-pill-model']",
+        "[data-testid='composer-pill-preset']",
         "[data-testid='composer-btn-send']"
       ]
     },
     {
       "id": "UE08_ADD_CONTEXT",
-      "title": "Add Context Sheet (Files, Folder, Mentions, Actions, Skills)",
-      "referenceUEImage": "/home/antigravity/iOS_·_Add_Context.png",
+      "title": "Add Context Menu (Files, Folder, Mentions, Actions, Drive)",
+      "referenceUEImage": "docs/ue/ios/ios-add-context.png",
       "swiftController": "AddContextSheetView",
       "claimId": "CLAIM-08",
       "requiredSelectors": [
-        "[data-testid='context-search-input']",
+        "[data-testid='add-context-menu']",
         "[data-testid='tile-files']",
         "[data-testid='tile-folder']",
         "[data-testid='tile-mentions']",
         "[data-testid='tile-actions']",
-        "[data-testid='tile-skills']",
-        "[data-testid='ctx-row-ratelimit']",
-        "[data-testid='ctx-row-go-testing']",
-        "[data-testid='btn-add-to-message']"
+        "[data-testid='tile-drive']"
       ]
     },
     {
       "id": "UE09_MODEL_AND_MODE",
-      "title": "Model, Mode (Planning / Fast) & Custom Agent Picker",
-      "referenceUEImage": "/home/antigravity/iOS_·_模型_Agent_模式选择.png",
+      "title": "Model, Orchestrator, 4-Level Thinking Effort & Usage Quota Sheet",
+      "referenceUEImage": "docs/ue/ios/ios-model.png",
       "swiftController": "ModelAndModeSheetView",
       "claimId": "CLAIM-09",
       "requiredSelectors": [
         "[data-testid='btn-model-done']",
-        "[data-testid='mode-card-planning']",
-        "[data-testid='mode-card-fast']",
-        "[data-testid='model-row-gemini-pro']",
-        "[data-testid='model-row-gemini-flash']",
+        "[data-testid='model-row-orchestrator']",
+        "[data-testid='model-row-gemini-4-neon']",
+        "[data-testid='effort-seg-low']",
+        "[data-testid='effort-seg-medium']",
+        "[data-testid='effort-seg-high']",
+        "[data-testid='effort-seg-extra']",
+        "[data-testid='model-row-gemini-4-carbon']",
         "[data-testid='model-row-claude-opus']",
-        "[data-testid='agent-pill-default']",
-        "[data-testid='agent-pill-go-reviewer']"
+        "[data-testid='model-row-gemini-flash']",
+        "[data-testid='model-quota-5h']",
+        "[data-testid='model-quota-weekly']"
       ]
     },
     {
       "id": "UE10_STRUCTURED_QUESTION",
-      "title": "Interactive Multi-Step Multi-Select Question Card",
-      "referenceUEImage": "/home/antigravity/iOS_·_结构化多选问答（可交互）.png",
+      "title": "Interactive /plan Interview Multi-Step Multi-Select Question Card",
+      "referenceUEImage": "docs/ue/ios/ios-ask.png",
       "swiftController": "StructuredQuestionCardView",
       "claimId": "CLAIM-10",
       "requiredSelectors": [
@@ -209,7 +211,7 @@
     {
       "id": "UE11_PLAN_REVIEW",
       "title": "Implementation Plan Review & Inline Selection Commenting",
-      "referenceUEImage": "/home/antigravity/iOS_·_Implementation_Plan_审阅.png",
+      "referenceUEImage": "docs/ue/ios/ios-plan-review.png",
       "swiftController": "ImplementationPlanReviewViewController",
       "claimId": "CLAIM-11",
       "requiredSelectors": [
@@ -223,8 +225,8 @@
     },
     {
       "id": "UE12_TURN_DIFF_REVIEW",
-      "title": "Turn Diff Line-Level Review & Comment Composer",
-      "referenceUEImage": "/home/antigravity/iOS_·_Turn_Diff_行级审查.png",
+      "title": "Turn Diff Line-Level Review (Single-Column Gutter) & Comment Composer",
+      "referenceUEImage": "docs/ue/ios/ios-diff.png",
       "swiftController": "TurnDiffReviewViewController",
       "claimId": "CLAIM-12",
       "requiredSelectors": [
@@ -244,7 +246,7 @@
     {
       "id": "UE13_LIVE_ACTIVITY_SPEC",
       "title": "Dynamic Island (Compact / Minimal / Expanded) & Lock Screen Multi-Agent Spec",
-      "referenceUEImage": "/home/antigravity/灵动岛_Live_Activity_规格.png",
+      "referenceUEImage": "docs/ue/ios/live-activity.png",
       "swiftController": "AntigravityLiveActivityWidget",
       "claimId": "CLAIM-13",
       "viewportOverridePt": { "width": 800, "height": 500 },
@@ -259,34 +261,78 @@
       ]
     }
   ],
+  "extendedScreens": [
+    {
+      "id": "UE01B_SIDEBAR_DRAWER",
+      "title": "PC-Aligned Sidebar Drawer (New Conversation, Automations, Customizations, Pinned, Projects, Settings)",
+      "referenceUEImage": "docs/ue/ios/ios-drawer.png",
+      "swiftController": "AgentsSidebarDrawerView"
+    },
+    {
+      "id": "UE06B_AUTOMATION_DETAIL",
+      "title": "Automation Detail & Recent Runs History",
+      "referenceUEImage": "docs/ue/ios/ios-automation-detail.png",
+      "swiftController": "AutomationDetailView"
+    },
+    {
+      "id": "UE06C_AUTOMATION_EDIT",
+      "title": "Edit Schedule & Prompt Form",
+      "referenceUEImage": "docs/ue/ios/ios-automation-edit.png",
+      "swiftController": "AutomationEditSheetView"
+    },
+    {
+      "id": "UE07B_PERMISSIONS_PRESET",
+      "title": "Per-Conversation Permissions Preset Popover",
+      "referenceUEImage": "docs/ue/ios/ios-preset.png",
+      "swiftController": "PermissionsSheetView"
+    },
+    {
+      "id": "UE08B_SLASH_MENU",
+      "title": "/ Actions & Skills Slash Command Overlay",
+      "referenceUEImage": "docs/ue/ios/ios-slash.png",
+      "swiftController": "ChatComposerView"
+    },
+    {
+      "id": "UE14_RULES_AND_SKILLS",
+      "title": "Project Rules & Skills (Lightweight Customizations & Plugin Toggles)",
+      "referenceUEImage": "docs/ue/ios/ios-customizations.png",
+      "swiftController": "CustomizationsSettingsView"
+    },
+    {
+      "id": "UE15_SETTINGS",
+      "title": "Settings (Remote Control, Hosts, Appearance, Theme, Language, Permissions, Notifications)",
+      "referenceUEImage": "docs/ue/ios/ios-settings.png",
+      "swiftController": "RemotePairingViewController"
+    }
+  ],
   "events": [
-    { "id": "E01", "from": "UE01_AGENTS_HOME", "to": "UE02_DISPLAY_OPTIONS", "trigger": "Tap Display Options filter button" },
-    { "id": "E02", "from": "UE01_AGENTS_HOME", "to": "UE03_CONTEXT_MENU_PIN", "trigger": "Long-press or swipe conversation row" },
-    { "id": "E03", "from": "UE01_AGENTS_HOME", "to": "UE04_PROJECT_DETAIL", "trigger": "Tap project header ledger-svc" },
-    { "id": "E04", "from": "UE01_AGENTS_HOME", "to": "UE05_CREATE_PROJECT", "trigger": "Tap folder+ New Project button" },
-    { "id": "E05", "from": "UE01_AGENTS_HOME", "to": "UE06_AUTOMATIONS", "trigger": "Tap Automations tab in Liquid Glass tab bar" },
-    { "id": "E06", "from": "UE01_AGENTS_HOME", "to": "UE07_CHAT_AND_COMPOSER", "trigger": "Tap conversation row Add rate limiter to /transfers" },
+    { "id": "E01", "from": "UE01_AGENTS_HOME", "to": "UE02_DISPLAY_OPTIONS", "trigger": "Open Sidebar Drawer and tap Display Options filter icon" },
+    { "id": "E02", "from": "UE01_AGENTS_HOME", "to": "UE03_CONTEXT_MENU_PIN", "trigger": "Open Sidebar Drawer and long-press or swipe conversation row" },
+    { "id": "E03", "from": "UE01_AGENTS_HOME", "to": "UE04_PROJECT_DETAIL", "trigger": "Open Sidebar Drawer and tap project ledger-svc" },
+    { "id": "E04", "from": "UE01_AGENTS_HOME", "to": "UE05_CREATE_PROJECT", "trigger": "Open Sidebar Drawer and tap New Project folder+ button" },
+    { "id": "E05", "from": "UE01_AGENTS_HOME", "to": "UE06_AUTOMATIONS", "trigger": "Open Sidebar Drawer and tap Automations" },
+    { "id": "E06", "from": "UE01_AGENTS_HOME", "to": "UE07_CHAT_AND_COMPOSER", "trigger": "Tap Needs approval banner or conversation row Add rate limiter to /transfers" },
     { "id": "E07", "from": "UE04_PROJECT_DETAIL", "to": "UE07_CHAT_AND_COMPOSER", "trigger": "Tap New Conversation in Project CTA" },
     { "id": "E08", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE08_ADD_CONTEXT", "trigger": "Tap + button in ChatComposerView" },
-    { "id": "E09", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE09_MODEL_AND_MODE", "trigger": "Tap Planning or Gemini 3.1 Pro pill in ChatComposerView" },
-    { "id": "E10", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE10_STRUCTURED_QUESTION", "trigger": "Receive ask_question step in trajectory" },
+    { "id": "E09", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE09_MODEL_AND_MODE", "trigger": "Tap Gemini 4 Neon / Extra High pill in ChatComposerView" },
+    { "id": "E10", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE10_STRUCTURED_QUESTION", "trigger": "Invoke /plan interview and receive ask_question step" },
     { "id": "E11", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE11_PLAN_REVIEW", "trigger": "Tap Implementation Plan artifact card" },
     { "id": "E12", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE12_TURN_DIFF_REVIEW", "trigger": "Tap +128 -14 diff badge in top bar" },
     { "id": "E13", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE13_LIVE_ACTIVITY_SPEC", "trigger": "Background app while trajectory is Running or Waiting" }
   ],
   "claims": [
-    { "id": "CLAIM-01", "state": "UE01_AGENTS_HOME", "description": "Agents Home renders Host pill, Search, Filter pills, Pinned & Project-grouped conversations, Liquid Glass Tab Bar, and Compose FAB" },
-    { "id": "CLAIM-02", "state": "UE02_DISPLAY_OPTIONS", "description": "Display Options sheet renders Group By, Sort Conversations popover menu, Auto Pin / Archived Only toggles, and Mark All as Read" },
-    { "id": "CLAIM-03", "state": "UE03_CONTEXT_MENU_PIN", "description": "Context Menu renders rich Plan preview card, Pin/Unread/Rename/Move/Archive/Delete actions, and Swipe Pin/Archive shortcuts" },
-    { "id": "CLAIM-04", "state": "UE04_PROJECT_DETAIL", "description": "Project Detail renders ledger-svc metadata pills, New Conversation CTA, Active/Archived/Automations tabs, and This Project tools" },
+    { "id": "CLAIM-01", "state": "UE01_AGENTS_HOME", "description": "New Conversation Home renders Sidebar toggle, Host switcher pill, Search, Welcome greeting, amber Needs approval banner, and PC-aligned bottom Composer (Project, Branch, Cloud, +, Gemini 4 Neon / Extra High, Default preset, Mic, Send)" },
+    { "id": "CLAIM-02", "state": "UE02_DISPLAY_OPTIONS", "description": "Display Options sheet renders Group By Project, Sort Conversations popover menu, Sort Projects, Filter, Display, Auto Pin / Archived Only toggles, and Mark All as Read" },
+    { "id": "CLAIM-03", "state": "UE03_CONTEXT_MENU_PIN", "description": "Context Menu renders rich Plan preview card (Gemini 4 Neon), Pin/Unread/Rename/Move/Archive/Delete actions, and Swipe Pin/Archive shortcuts" },
+    { "id": "CLAIM-04", "state": "UE04_PROJECT_DETAIL", "description": "Project Detail renders ledger-svc metadata pills (Local · MacBook Pro, main ↑2, Working tree clean), New Conversation CTA, Active 4/Archived 2/Automations 1 tabs, clean single-line conversation rows, and wired THIS PROJECT tools (Nightly dependency audit, Project rules & skills, Reveal in Finder)" },
     { "id": "CLAIM-05", "state": "UE05_CREATE_PROJECT", "description": "New Project sheet supports MacBook Pro vs Cloud runtime, GitHub vs Drive source, repo search, worktree config, and Create Project CTA" },
-    { "id": "CLAIM-06", "state": "UE06_AUTOMATIONS", "description": "Automations hub renders NL quick-create bar, Scheduled cards with Next/Last Run stats, Always On PR triage, and Paused Resume action" },
-    { "id": "CLAIM-07", "state": "UE07_CHAT_AND_COMPOSER", "description": "Chat screen renders +128 -14 badge, Thought for 14s, Plan card, 7-segment Task card, Face ID Allow/Deny command card, and Composer with @chip, Mode, Model, Mic, and Send" },
-    { "id": "CLAIM-08", "state": "UE08_ADD_CONTEXT", "description": "Add Context sheet renders 5 category tiles (Files, Folder, Mentions, Actions, Skills), multi-select rows, and Add to message CTA" },
-    { "id": "CLAIM-09", "state": "UE09_MODEL_AND_MODE", "description": "Model & Mode sheet renders Planning/Fast cards, Gemini 3.1 Pro / 3.8 Flash / Claude Opus 5.5 / Sonnet 5.5 rows, and Agent persona pills" },
-    { "id": "CLAIM-10", "state": "UE10_STRUCTURED_QUESTION", "description": "Structured Question card renders 3-step stepper pills, multi-select checkboxes, Something else write-in, Back/Next buttons, and freeform composer" },
+    { "id": "CLAIM-06", "state": "UE06_AUTOMATIONS", "description": "Automations hub (sidebar-navigated without bottom tab bar) renders NL quick-create bar, Scheduled cards with Next/Last Run stats & Run Now, Always On PR triage, Paused Resume action, and navigates to Automation Detail & Edit" },
+    { "id": "CLAIM-07", "state": "UE07_CHAT_AND_COMPOSER", "description": "Chat screen renders +128 -14 badge, Thought for 14s, Plan card, 7-segment Task card, Face ID Allow/Deny command card, Stop bar, and Composer with @chip, +, Gemini 4 Neon / Extra High, Default permission preset, Mic, and Send" },
+    { "id": "CLAIM-08", "state": "UE08_ADD_CONTEXT", "description": "Add Context anchored menu renders Files, Folder, Mentions, Actions, and Drive (Set up), expanding into file/mention picker or / Actions & Skills overlay" },
+    { "id": "CLAIM-09", "state": "UE09_MODEL_AND_MODE", "description": "Model sheet (no Planning/Fast) renders Orchestrator, Gemini 4 Neon [New] with 4-level Thinking selector (Low/Medium/High/Extra High), Gemini 4 Carbon/Argon/Hydrogen, Claude Opus 5.5, Gemini 3.8 Flash, More models, and 5h/Weekly usage quota bars" },
+    { "id": "CLAIM-10", "state": "UE10_STRUCTURED_QUESTION", "description": "Structured /plan interview Question card renders 3-step stepper pills, multi-select checkboxes, Something else write-in, Back/Next buttons, and freeform composer" },
     { "id": "CLAIM-11", "state": "UE11_PLAN_REVIEW", "description": "Implementation Plan review renders paused amber banner, MODIFY/NEW badges, pending comment card, text selection Comment/Copy callout, and Proceed / Send 2 comments bar" },
-    { "id": "CLAIM-12", "state": "UE12_TURN_DIFF_REVIEW", "description": "Turn Diff review renders Turn 1..3/All pills, File 1 of 4 pager, Revert hunk, syntax diff lines, Line 29 comment composer, and Viewed / Revert file / Accept file bar" },
+    { "id": "CLAIM-12", "state": "UE12_TURN_DIFF_REVIEW", "description": "Turn Diff review renders Turn 1..3/All pills, File 1 of 4 pager, Revert hunk, single-column line gutter with syntax diff lines, Line 29 comment composer, and Viewed / Revert file / Accept file bar" },
     { "id": "CLAIM-13", "state": "UE13_LIVE_ACTIVITY_SPEC", "description": "Live Activity & Dynamic Island renders all 7 variants: Compact Running/Waiting/Done, Minimal Ring, Expanded Running/Waiting (Face ID), and Lock Screen Multi-Agent card" }
   ]
 }

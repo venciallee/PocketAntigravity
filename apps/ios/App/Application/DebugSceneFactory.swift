@@ -11,18 +11,25 @@ public extension ESDDVerifySceneCase {
     var claimId: String {
         switch self {
         case .agentsHome:         return "CLAIM-01"
+        case .sidebarDrawer:      return "CLAIM-14"
         case .displayOptions:     return "CLAIM-02"
         case .contextMenuPin:     return "CLAIM-03"
         case .projectDetail:      return "CLAIM-04"
         case .createProject:      return "CLAIM-05"
         case .automations:        return "CLAIM-06"
+        case .automationDetail:   return "CLAIM-15"
+        case .automationEdit:     return "CLAIM-15"
         case .chatAndComposer:    return "CLAIM-07"
+        case .permissionsPreset:  return "CLAIM-16"
         case .addContext:         return "CLAIM-08"
+        case .slashMenu:          return "CLAIM-17"
         case .modelAndMode:       return "CLAIM-09"
         case .structuredQuestion: return "CLAIM-10"
         case .planReview:         return "CLAIM-11"
         case .turnDiffReview:     return "CLAIM-12"
         case .liveActivitySpec:   return "CLAIM-13"
+        case .rulesAndSkills:     return "CLAIM-18"
+        case .settings:           return "CLAIM-19"
         }
     }
 }
@@ -68,8 +75,10 @@ public enum DebugSceneFactory {
         }
 
         switch trimmed.lowercased() {
-        case "ue01", "agents-home", "workspace-home":
+        case "ue01", "agents-home", "workspace-home", "new-conversation":
             return .agentsHome
+        case "ue01b", "sidebar-drawer", "drawer":
+            return .sidebarDrawer
         case "ue02", "display-options":
             return .displayOptions
         case "ue03", "context-menu-pin", "context-menu":
@@ -80,11 +89,19 @@ public enum DebugSceneFactory {
             return .createProject
         case "ue06", "automations":
             return .automations
+        case "ue06b", "automation-detail":
+            return .automationDetail
+        case "ue06c", "automation-edit":
+            return .automationEdit
         case "ue07", "chat-and-composer", "cascade-streaming":
             return .chatAndComposer
+        case "ue07b", "permissions-preset", "preset":
+            return .permissionsPreset
         case "ue08", "add-context":
             return .addContext
-        case "ue09", "model-and-mode":
+        case "ue08b", "slash-menu", "slash":
+            return .slashMenu
+        case "ue09", "model-and-mode", "model":
             return .modelAndMode
         case "ue10", "structured-question", "ask-question":
             return .structuredQuestion
@@ -94,6 +111,10 @@ public enum DebugSceneFactory {
             return .turnDiffReview
         case "ue13", "live-activity-spec", "live-activity":
             return .liveActivitySpec
+        case "ue14", "rules-and-skills", "customizations":
+            return .rulesAndSkills
+        case "ue15", "settings", "pairing-settings":
+            return .settings
         default:
             return nil
         }

@@ -41,9 +41,9 @@ public struct ProjectDetailViewController: View {
         ProjectConversationRowModel(
             id: "proj-conv-rate-limiter",
             title: "Add rate limiter to /transfers",
-            subtitle: "Running · Step 4 of 7",
+            subtitle: "Needs approval · vegeta load test",
             timestamp: "now",
-            indicator: .runningArc,
+            indicator: .needsReviewHalo,
             additions: nil,
             deletions: nil
         ),
@@ -52,7 +52,7 @@ public struct ProjectDetailViewController: View {
             title: "Fix flaky TestSettlementBatch",
             subtitle: "Needs review · Implementation plan ready",
             timestamp: "8m",
-            indicator: .needsReviewHalo,
+            indicator: .unreadDot,
             additions: nil,
             deletions: nil
         ),
@@ -60,23 +60,23 @@ public struct ProjectDetailViewController: View {
             id: "proj-conv-upgrade-go",
             title: "Upgrade to Go 1.25",
             subtitle: "Done · 6 files",
-            timestamp: "1h",
-            indicator: .unreadDot,
-            additions: 42,
-            deletions: 31
-        )
-    ]
-
-    private let archivedRows: [ProjectConversationRowModel] = [
+            timestamp: "4h",
+            indicator: .none,
+            additions: nil,
+            deletions: nil
+        ),
         ProjectConversationRowModel(
             id: "proj-conv-idempotency",
             title: "Idempotency keys for payouts",
             subtitle: "Done · Merged into main",
-            timestamp: "Yesterday",
+            timestamp: "1d",
             indicator: .none,
-            additions: 88,
-            deletions: 12
-        ),
+            additions: nil,
+            deletions: nil
+        )
+    ]
+
+    private let archivedRows: [ProjectConversationRowModel] = [
         ProjectConversationRowModel(
             id: "proj-conv-webhook-sig",
             title: "Rotate HMAC webhook verifier",
@@ -85,6 +85,15 @@ public struct ProjectDetailViewController: View {
             indicator: .none,
             additions: 34,
             deletions: 9
+        ),
+        ProjectConversationRowModel(
+            id: "proj-conv-metrics-otel",
+            title: "Migrate OTel collector exporter",
+            subtitle: "Done · Merged into main",
+            timestamp: "1w",
+            indicator: .none,
+            additions: 51,
+            deletions: 18
         )
     ]
 
@@ -107,7 +116,7 @@ public struct ProjectDetailViewController: View {
                 projectHeroSection
                 metadataPillsRow
                 newConversationButton
-            underlineTabsStrip
+                underlineTabsStrip
                 tabBodyContent
                 if !isNoProject {
                     thisProjectSection
@@ -120,7 +129,7 @@ public struct ProjectDetailViewController: View {
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
     }
 
-    // MARK: - 1. Top Navigation (< Agents + More Menu)
+    // MARK: - 1. Top Navigation (< Projects + More Menu)
 
     private var topNavigationBar: some View {
         HStack {
@@ -134,7 +143,7 @@ public struct ProjectDetailViewController: View {
                 HStack(spacing: 5) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 16, weight: .semibold))
-                    Text("Agents")
+                    Text("Projects")
                         .font(.system(size: 17, weight: .regular))
                 }
                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
@@ -159,7 +168,9 @@ public struct ProjectDetailViewController: View {
                             Label("Switch Git Branch (\(effectiveBranchName))", systemImage: "arrow.triangle.branch")
                         }
                     }
-                    Button {} label: {
+                    Button {
+                        store.activeRoute = .rulesAndSkills
+                    } label: {
                         Label("Project Rules & Skills", systemImage: "doc.text")
                     }
                 } else {
@@ -394,10 +405,7 @@ public struct ProjectDetailViewController: View {
     // MARK: - 3. Metadata Pills
 
     private var metadataPillsRow: some View {
-        let totalConvCount = usesPairedStoreData
-            ? (effectiveActiveRows.count + effectiveArchivedRows.count)
-            : 5
-        return ScrollView(.horizontal, showsIndicators: false) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Circle()
@@ -420,14 +428,21 @@ public struct ProjectDetailViewController: View {
                         Text(effectiveBranchName)
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textBody)
+                        if !usesPairedStoreData {
+                            Text("↑2")
+                                .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                        }
                     }
                     .padding(.horizontal, 11)
                     .padding(.vertical, 7)
                     .background(Capsule().fill(AntigravityTheme.surfacePill))
                     .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                 }
+            }
 
-                Text("\(totalConvCount) conversations")
+            if !isNoProject {
+                Text("Working tree clean")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textBody)
                     .padding(.horizontal, 11)
@@ -476,7 +491,7 @@ public struct ProjectDetailViewController: View {
     // MARK: - 5. Active / Archived / Automations Underline Tabs
 
     private var underlineTabsStrip: some View {
-        let activeCountText = usesPairedStoreData ? "\(effectiveActiveRows.count)" : "3"
+        let activeCountText = usesPairedStoreData ? "\(effectiveActiveRows.count)" : "4"
         let archivedCountText = usesPairedStoreData ? "\(effectiveArchivedRows.count)" : "2"
         let autoCountText = usesPairedStoreData ? "\(effectiveProjectAutomations.count)" : "1"
         return VStack(spacing: 0) {
@@ -547,7 +562,7 @@ public struct ProjectDetailViewController: View {
     @ViewBuilder
     private var tabBodyContent: some View {
         let rows: [ProjectConversationRowModel] = (selectedTab == .archived) ? effectiveArchivedRows : effectiveActiveRows
-        if usesPairedStoreData && selectedTab == .automations {
+        if selectedTab == .automations {
             VStack(alignment: .leading, spacing: 0) {
                 if effectiveProjectAutomations.isEmpty {
                     Text("No automations configured for \(projectSlug) yet.")
@@ -569,9 +584,7 @@ public struct ProjectDetailViewController: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if let cid = auto.lastRunCascadeId, !cid.isEmpty {
-                                    store.selectCascade(cid)
-                                }
+                                store.openAutomationDetail(auto.id)
                             }
 
                             if auto.section == .scheduled {
@@ -640,57 +653,18 @@ public struct ProjectDetailViewController: View {
                         triggerOpenConversation(row.id)
                     } label: {
                         HStack(alignment: .center, spacing: 11) {
-                            HStack(alignment: .top, spacing: 11) {
-                                rowIndicator(row.indicator)
-                                    .frame(width: 18, height: 20)
-                                    .padding(.top, 1)
+                            Text(row.title)
+                                .font(.system(size: 15.5, weight: .regular))
+                                .foregroundStyle(AntigravityTheme.textPrimary)
+                                .lineLimit(1)
 
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack(alignment: .firstTextBaseline) {
-                                        Text(row.title)
-                                            .font(.system(size: 15.5, weight: .semibold))
-                                            .foregroundStyle(AntigravityTheme.textPrimary)
-                                            .lineLimit(1)
-                                        Spacer()
-                                        if row.indicator == .runningArc {
-                                            AntigravityFourDotLoadingView(isAnimated: shouldAnimateLive)
-                                                .accessibilityElement(children: .ignore)
-                                                .accessibilityLabel("Running")
-                                                .accessibilityIdentifier("loading-four-dots-\(row.id)")
-                                        } else {
-                                            Text(row.timestamp)
-                                                .font(.system(size: 12.5, weight: .regular))
-                                                .foregroundStyle(AntigravityTheme.textMuted)
-                                        }
-                                    }
+                            Spacer(minLength: 8)
 
-                                    HStack(spacing: 5) {
-                                        Text(row.subtitle)
-                                            .font(.system(size: 13.5, weight: .regular))
-                                            .foregroundStyle(subtitleColor(for: row.indicator))
-                                            .lineLimit(1)
-
-                                        if let add = row.additions, let del = row.deletions {
-                                            Text("+\(add)")
-                                                .font(.system(size: 13.5, weight: .medium))
-                                                .foregroundStyle(AntigravityTheme.statusDone)
-                                            Text("−\(del)")
-                                                .font(.system(size: 13.5, weight: .medium))
-                                                .foregroundStyle(AntigravityTheme.statusError)
-                                        }
-                                    }
-                                }
-                            }
-
-                            if store.isLiveBackendConnected && row.indicator != .runningArc {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 11.5, weight: .semibold))
-                                    .foregroundStyle(AntigravityTheme.textMuted.opacity(0.65))
-                            }
+                            trailingRowStatus(for: row)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .frame(minHeight: 58)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 13)
+                        .frame(minHeight: 50)
                     }
                     .buttonStyle(AntigravityInteractiveRowButtonStyle())
                     .accessibilityIdentifier("project-conv-row-\(row.id)")
@@ -698,7 +672,7 @@ public struct ProjectDetailViewController: View {
                     if index < rows.count - 1 {
                         Divider()
                             .overlay(AntigravityTheme.subtleDivider)
-                            .padding(.leading, 44)
+                            .padding(.leading, 16)
                     }
                 }
             }
@@ -718,38 +692,23 @@ public struct ProjectDetailViewController: View {
     }
 
     @ViewBuilder
-    private func rowIndicator(_ kind: ProjectConversationRowModel.IndicatorKind) -> some View {
-        switch kind {
+    private func trailingRowStatus(for row: ProjectConversationRowModel) -> some View {
+        switch row.indicator {
         case .runningArc:
             AntigravityRunningArcIndicatorView(isAnimated: shouldAnimateLive)
+                .frame(width: 16, height: 16)
         case .needsReviewHalo:
-            ZStack {
-                Circle()
-                    .fill(AntigravityTheme.statusWaiting.opacity(0.22))
-                    .frame(width: 18, height: 18)
-                Circle()
-                    .fill(AntigravityTheme.statusWaiting)
-                    .frame(width: 8.5, height: 8.5)
-            }
+            Circle()
+                .fill(AntigravityTheme.statusWaiting)
+                .frame(width: 8.5, height: 8.5)
         case .unreadDot:
-            ZStack {
-                Circle()
-                    .fill(AntigravityTheme.statusRunning.opacity(0.20))
-                    .frame(width: 17, height: 17)
-                Circle()
-                    .fill(AntigravityTheme.statusRunning)
-                    .frame(width: 8, height: 8)
-            }
+            Circle()
+                .fill(AntigravityTheme.statusRunning)
+                .frame(width: 8.5, height: 8.5)
         case .none:
-            Color.clear.frame(width: 15, height: 15)
-        }
-    }
-
-    private func subtitleColor(for kind: ProjectConversationRowModel.IndicatorKind) -> Color {
-        switch kind {
-        case .runningArc:      return AntigravityTheme.statusRunning
-        case .needsReviewHalo: return AntigravityTheme.statusWaiting
-        case .unreadDot, .none: return AntigravityTheme.textSecondary
+            Text(row.timestamp)
+                .font(.system(size: 13.5, weight: .regular))
+                .foregroundStyle(AntigravityTheme.textMuted)
         }
     }
 
@@ -767,10 +726,10 @@ public struct ProjectDetailViewController: View {
 
             VStack(spacing: 0) {
                 Button {
-                    selectedTab = .automations
+                    store.openAutomationDetail(firstAuto?.id ?? "auto-nightly-audit")
                 } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: "clock.arrow.circlepath")
+                        Image(systemName: "clock")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                             .frame(width: 22)
@@ -779,7 +738,7 @@ public struct ProjectDetailViewController: View {
                             Text(usesPairedStoreData ? (firstAuto?.title ?? "Project automations") : "Nightly dependency audit")
                                 .font(.system(size: 15.5, weight: .medium))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
-                            Text(usesPairedStoreData ? (firstAuto?.scheduleSummary ?? "0 active · Tap to inspect") : "Daily 02:00 · Next run in 6h")
+                            Text(usesPairedStoreData ? (firstAuto?.scheduleSummary ?? "0 active · Tap to inspect") : "Every day · 2:00 AM · next in 6h")
                                 .font(.system(size: 13, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textMuted)
                         }
@@ -796,6 +755,40 @@ public struct ProjectDetailViewController: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("project-row-automation")
+
+                Divider()
+                    .overlay(AntigravityTheme.subtleDivider)
+                    .padding(.leading, 48)
+
+                Button {
+                    store.activeRoute = .rulesAndSkills
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "doc")
+                            .font(.system(size: 15.5, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                            .frame(width: 22)
+
+                        Text("Project rules & skills")
+                            .font(.system(size: 15.5, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.textPrimary)
+
+                        Spacer()
+
+                        Text("\(liveProject?.rulesAndSkillsCount ?? 4)")
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textMuted)
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.textMuted)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("project-row-skills")
 
                 Divider()
                     .overlay(AntigravityTheme.subtleDivider)
@@ -823,34 +816,6 @@ public struct ProjectDetailViewController: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("project-row-finder")
-
-                Divider()
-                    .overlay(AntigravityTheme.subtleDivider)
-                    .padding(.leading, 48)
-
-                Button {} label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "doc")
-                            .font(.system(size: 15.5, weight: .medium))
-                            .foregroundStyle(AntigravityTheme.textSecondary)
-                            .frame(width: 22)
-
-                        Text("Project rules & skills")
-                            .font(.system(size: 15.5, weight: .medium))
-                            .foregroundStyle(AntigravityTheme.textPrimary)
-
-                        Spacer()
-
-                        Text("4")
-                            .font(.system(size: 15, weight: .regular))
-                            .foregroundStyle(AntigravityTheme.textMuted)
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 48)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("project-row-skills")
             }
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)

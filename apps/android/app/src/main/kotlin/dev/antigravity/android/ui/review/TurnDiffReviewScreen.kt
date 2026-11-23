@@ -671,42 +671,54 @@ private fun DiffCodeLineRow(
         modifier = modifier
             .fillMaxWidth()
             .background(rowBg)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = if (isSelected) 5.dp else 2.5.dp),
+            .clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(
-            text = line.displayLineNumber?.toString().orEmpty(),
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.5.sp,
-            ),
-            color = lineNumColor,
-            modifier = Modifier.width(22.dp),
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(if (isSelected) 28.dp else 22.dp)
+                .background(if (isSelected) colors.accentPeriwinkle else Color.Transparent),
         )
-        Text(
-            text = prefixSymbol,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-            ),
-            color = prefixColor,
-            modifier = Modifier.width(10.dp),
-        )
-        Text(
-            text = highlightedCode,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-            ),
-            color = colors.inkReading,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 8.dp, vertical = if (isSelected) 5.dp else 2.5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = line.displayLineNumber?.toString().orEmpty(),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.5.sp,
+                ),
+                color = lineNumColor,
+                modifier = Modifier.width(22.dp),
+            )
+            Text(
+                text = prefixSymbol,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                ),
+                color = prefixColor,
+                modifier = Modifier.width(10.dp),
+            )
+            Text(
+                text = highlightedCode,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                ),
+                color = colors.inkReading,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

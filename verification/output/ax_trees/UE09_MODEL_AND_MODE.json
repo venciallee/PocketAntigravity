@@ -1,74 +1,106 @@
 {
   "stateId": "UE09_MODEL_AND_MODE",
-  "viewportWidth": 393,
-  "viewportHeight": 852,
-  "scrollWidth": 393,
-  "scrollHeight": 852,
+  "viewportWidth": 390,
+  "viewportHeight": 844,
+  "scrollWidth": 390,
+  "scrollHeight": 844,
   "overflowPx": 0,
   "elements": {
     "[data-testid='btn-model-done']": {
       "exists": true,
-      "x": 323,
-      "y": 197.5,
+      "x": 320,
+      "y": 112.5,
       "width": 54,
       "height": 44,
       "text": "Done"
     },
-    "[data-testid='mode-card-planning']": {
+    "[data-testid='model-row-orchestrator']": {
       "exists": true,
       "x": 16,
-      "y": 253.5,
-      "width": 175.5,
-      "height": 92,
-      "text": "Planning\n\nPlans first and writes artifacts for you to review"
+      "y": 166.5,
+      "width": 358,
+      "height": 46,
+      "text": "Orchestrator"
     },
-    "[data-testid='mode-card-fast']": {
-      "exists": true,
-      "x": 201.5,
-      "y": 253.5,
-      "width": 175.5,
-      "height": 92,
-      "text": "Fast\n\nActs directly \u2014 best for small, local edits"
-    },
-    "[data-testid='model-row-gemini-pro']": {
+    "[data-testid='model-row-gemini-4-neon']": {
       "exists": true,
       "x": 16,
-      "y": 385.5,
-      "width": 361,
-      "height": 58,
-      "text": "Gemini 3.1 Pro\nDeep reasoning for long, multi-step tasks"
+      "y": 213.5,
+      "width": 358,
+      "height": 94,
+      "text": "Gemini 4 Neon\nNew\nLow\nMedium\nHigh\nExtra High"
     },
-    "[data-testid='model-row-gemini-flash']": {
+    "[data-testid='effort-seg-low']": {
+      "exists": true,
+      "x": 34,
+      "y": 262.5,
+      "width": 77.5,
+      "height": 30,
+      "text": "Low"
+    },
+    "[data-testid='effort-seg-medium']": {
+      "exists": true,
+      "x": 115.5,
+      "y": 262.5,
+      "width": 77.5,
+      "height": 30,
+      "text": "Medium"
+    },
+    "[data-testid='effort-seg-high']": {
+      "exists": true,
+      "x": 197,
+      "y": 262.5,
+      "width": 77.5,
+      "height": 30,
+      "text": "High"
+    },
+    "[data-testid='effort-seg-extra']": {
+      "exists": true,
+      "x": 278.5,
+      "y": 262.5,
+      "width": 77.5,
+      "height": 30,
+      "text": "Extra High"
+    },
+    "[data-testid='model-row-gemini-4-carbon']": {
       "exists": true,
       "x": 16,
-      "y": 444.5,
-      "width": 361,
-      "height": 58,
-      "text": "Gemini 3.8 Flash\nFastest responses, lowest cost"
+      "y": 308.5,
+      "width": 358,
+      "height": 46,
+      "text": "Gemini 4 Carbon"
     },
     "[data-testid='model-row-claude-opus']": {
       "exists": true,
       "x": 16,
-      "y": 503.5,
-      "width": 361,
-      "height": 58,
-      "text": "Claude Opus 5.5\nThinking\nRequires Google AI Pro or Ultra"
+      "y": 355.5,
+      "width": 358,
+      "height": 46,
+      "text": "Claude Opus 5.5"
     },
-    "[data-testid='agent-pill-default']": {
+    "[data-testid='model-row-gemini-flash']": {
       "exists": true,
       "x": 16,
-      "y": 683.5,
-      "width": 77.5,
-      "height": 38,
-      "text": "Default"
+      "y": 402.5,
+      "width": 358,
+      "height": 46,
+      "text": "Gemini 3.8 Flash"
     },
-    "[data-testid='agent-pill-go-reviewer']": {
+    "[data-testid='model-quota-5h']": {
       "exists": true,
-      "x": 101.5,
-      "y": 683.5,
-      "width": 121.1,
-      "height": 38,
-      "text": "go-reviewer"
+      "x": 30,
+      "y": 478.5,
+      "width": 330,
+      "height": 31,
+      "text": "Five Hour Limit Remaining\nView Usage"
+    },
+    "[data-testid='model-quota-weekly']": {
+      "exists": true,
+      "x": 30,
+      "y": 521.5,
+      "width": 330,
+      "height": 31,
+      "text": "Weekly Limit Remaining\n86%"
     }
   }
 }

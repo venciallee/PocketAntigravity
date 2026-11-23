@@ -19,15 +19,15 @@ from ui_renderer import render_scene_html
 
 
 EXPECTED_COLORS = {
-    "canvasObsidian": "#090A0D",
-    "surfaceCard": "#141519",
-    "surfaceElevated": "#1D1F26",
-    "surfacePopover": "#25272F",
-    "accentPeriwinkle": "#8EB4FF",
+    "canvasObsidian": "#0B0B0C",
+    "surfaceCard": "#141416",
+    "surfaceElevated": "#1D1D20",
+    "surfacePopover": "#26262B",
+    "accentPeriwinkle": "#8DB8FF",
     "inkOnPrimaryCTA": "#0A0E17",
     "statusRunning": "#7DA7FF",
-    "statusWaiting": "#EBB365",
-    "statusDone": "#57C88A",
+    "statusWaiting": "#F2B866",
+    "statusDone": "#6FD8A6",
     "statusError": "#F07167",
 }
 
@@ -56,8 +56,9 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
             f"Design tokens verified: {len(EXPECTED_COLORS)} OLED/Periwinkle color tokens & 5 typography tiers"
         )
 
-    # 2. Validate 13 States & Reference UE PNGs
+    # 2. Validate 13 Canonical States + Extended UE v2.1 Screens & Reference UE PNGs
     states_list = ir.get("states", [])
+    extended_list = ir.get("extendedScreens", [])
     states = {s["id"]: s for s in states_list}
     if len(states) != 13:
         errors.append(f"Expected 13 UE states, found {len(states)}")
@@ -66,7 +67,8 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
     total_selectors = 0
     missing_renderer_selectors = []
     for idx, st in enumerate(states_list, start=1):
-        ref_img = Path(st["referenceUEImage"])
+        raw_ref = Path(st["referenceUEImage"])
+        ref_img = raw_ref if raw_ref.is_absolute() else (repo_root / raw_ref)
         tracked_cmp = repo_root / "verification" / "output" / "comparisons" / f"CMP_UE{idx:02d}.png"
         if not ref_img.exists() and not tracked_cmp.exists():
             missing_refs.append(str(ref_img))
@@ -80,10 +82,19 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
                 if f'data-testid="{tid}"' not in rendered_html and f"data-testid='{tid}'" not in rendered_html:
                     missing_renderer_selectors.append(f"{st['id']}:{sel}")
 
+    for ext in extended_list:
+        raw_ref = Path(ext["referenceUEImage"])
+        ref_img = raw_ref if raw_ref.is_absolute() else (repo_root / raw_ref)
+        if not ref_img.exists():
+            missing_refs.append(str(ref_img))
+
     if missing_refs:
         errors.append(f"Missing reference UE PNGs: {missing_refs}")
     else:
-        checks.append("All 13 reference UE baselines verified on disk")
+        checks.append(
+            f"All {len(states_list) + len(extended_list)} reference UE baselines verified on disk "
+            f"({len(states_list)} canonical + {len(extended_list)} extended)"
+        )
 
     if missing_renderer_selectors:
         errors.append(f"Missing required data-testid selectors in renderer: {missing_renderer_selectors}")
@@ -151,21 +162,22 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
         except Exception:
             pass
 
+    all_screen_entries = states_list + extended_list
     matched_controllers = [
         st["swiftController"]
-        for st in states_list
+        for st in all_screen_entries
         if st.get("swiftController") and st["swiftController"] in combined_swift
     ]
-    if len(matched_controllers) == len(states_list):
+    if len(matched_controllers) == len(all_screen_entries):
         checks.append(
-            f"All {len(matched_controllers)}/13 Swift controllers grounded across {len(swift_files)} Swift files"
+            f"All {len(matched_controllers)}/{len(all_screen_entries)} Swift controllers grounded across {len(swift_files)} Swift files"
         )
     else:
         warnings.append(
-            f"Swift controller check (non-blocking): {len(matched_controllers)}/{len(states_list)} matched across {len(swift_files)} Swift files"
+            f"Swift controller check (non-blocking): {len(matched_controllers)}/{len(all_screen_entries)} matched across {len(swift_files)} Swift files"
         )
         checks.append(
-            f"Swift source scan completed ({len(swift_files)} Swift files; {len(matched_controllers)}/{len(states_list)} v2 controllers present)"
+            f"Swift source scan completed ({len(swift_files)} Swift files; {len(matched_controllers)}/{len(all_screen_entries)} v2.1 controllers present)"
         )
 
     # Enforce AGENTS.md Rule 1: apps/ios/Packages/AntigravityData never imports UIKit, WebKit, or AVFoundation

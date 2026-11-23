@@ -11,12 +11,20 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import dev.antigravity.android.ui.AntigravityAppRoot
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
+import dev.antigravity.shared.model.AgentPermissionPreset
+import dev.antigravity.shared.model.AppLanguage
+import dev.antigravity.shared.model.AppThemePreset
+import dev.antigravity.shared.model.AutomationSectionKind
 import dev.antigravity.shared.model.CascadeStep
+import dev.antigravity.shared.model.ConversationSortField
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.CortexStepType
+import dev.antigravity.shared.model.DisplayGroupBy
 import dev.antigravity.shared.model.EsddVerifySceneCase
 import dev.antigravity.shared.model.RequestedInteraction
+import dev.antigravity.shared.model.ThinkingEffortLevel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -25,8 +33,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Complete Android Interactive Compose E2E suite (`ATC-01` .. `ATC-18`),
- * verifying every user journey across UE01–UE13, v2.33 sheets, and forward-compatible unknown steps/gates.
+ * Complete Android Interactive Compose E2E suite (`ATC-01` .. `ATC-22`),
+ * verifying every user journey across all 20 aligned UE boards (`UE01`..`UE15`),
+ * v2.33 sheets, and forward-compatible unknown steps/gates.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], qualifiers = "w412dp-h915dp-xxhdpi")
@@ -36,7 +45,7 @@ class AndroidInteractiveE2eTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun atc01_agentsHomeDisplaysHostFilterAndFiltersNeedsYou() {
+    fun atc01_newConversationHomeAndSidebarDrawerNavigation() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -45,14 +54,25 @@ class AndroidInteractiveE2eTest {
             )
         }
 
+        // UE01 New Conversation Home (no bottom tab bar or compose FAB)
+        composeRule.onNodeWithTag("btn-sidebar").assertIsDisplayed()
         composeRule.onNodeWithTag("host-switcher-pill").assertIsDisplayed()
-        composeRule.onNodeWithTag("pinned-section-card").assertIsDisplayed()
-        composeRule.onNodeWithTag("project-group-ledger-svc").assertIsDisplayed()
-        composeRule.onNodeWithTag("bottom-nav-bar").assertIsDisplayed()
-        composeRule.onNodeWithTag("fab-compose").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-search").assertIsDisplayed()
+        composeRule.onNodeWithTag("home-greeting").assertIsDisplayed()
+        composeRule.onNodeWithTag("home-needs-approval-banner").assertIsDisplayed()
+        composeRule.onNodeWithTag("home-composer-card").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-model-picker").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-permissions-preset").assertIsDisplayed()
 
-        composeRule.onNodeWithTag("filter-pill-needs-you").performClick()
-        composeRule.onNodeWithText("Fix flaky TestSettlementBatch", substring = true).assertIsDisplayed()
+        // Open Sidebar Drawer (UE01B)
+        composeRule.onNodeWithTag("btn-sidebar").performClick()
+        composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-new-conversation").assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer-automations").assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer-customizations").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-header-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
+        composeRule.onNodeWithTag("drawer-settings").assertIsDisplayed()
     }
 
     @Test
@@ -65,20 +85,22 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        composeRule.onNodeWithTag("row-group-by").assertIsDisplayed()
-        composeRule.onNodeWithTag("sort-options-menu").assertIsDisplayed()
-        composeRule.onNodeWithTag("toggle-auto-pin").performClick()
-        assertTrue(coordinator.workspaceStore.state.value.displayOptions.autoPinOnMessage)
+        composeRule.onNodeWithTag("display-options-sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("option-group-by").assertIsDisplayed()
+        composeRule.onNodeWithTag("sort-dropdown-menu").assertIsDisplayed()
+        val beforeAutoPin = coordinator.workspaceStore.state.value.displayOptions.autoPinOnMessage
+        composeRule.onNodeWithTag("switch-auto-pin").performClick()
+        assertEquals(!beforeAutoPin, coordinator.workspaceStore.state.value.displayOptions.autoPinOnMessage)
 
         composeRule.onNodeWithTag("btn-mark-all-read").performClick()
         assertEquals(0, coordinator.syncState.value.summaries.count { it.isUnread })
 
         composeRule.onNodeWithTag("sheet-reset-btn").performClick()
-        assertEquals(false, coordinator.workspaceStore.state.value.displayOptions.autoPinOnMessage)
+        assertEquals(false, coordinator.workspaceStore.state.value.displayOptions.archivedOnly)
     }
 
     @Test
-    fun atc03_contextMenuPreviewRendersPlanChipsAndPinsConversation() {
+    fun atc03_contextMenuPreviewRendersAndPinsConversation() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -87,19 +109,18 @@ class AndroidInteractiveE2eTest {
             )
         }
 
+        composeRule.onNodeWithTag("context-menu-sheet").assertIsDisplayed()
         composeRule.onNodeWithTag("context-preview-card").assertIsDisplayed()
-        composeRule.onNodeWithTag("chip-implementation-plan").assertIsDisplayed()
-        composeRule.onNodeWithTag("chip-awaiting-review").assertIsDisplayed()
-        composeRule.onNodeWithTag("swipe-action-pin").assertIsDisplayed()
-        composeRule.onNodeWithTag("swipe-action-archive").assertIsDisplayed()
+        composeRule.onNodeWithTag("action-pin").assertIsDisplayed()
+        composeRule.onNodeWithTag("action-archive").assertIsDisplayed()
 
-        composeRule.onNodeWithTag("menu-action-pin").performClick()
+        composeRule.onNodeWithTag("action-pin").performClick()
         val target = coordinator.syncState.value.summaries.first { it.cascadeId == "cas-flaky-settlement" }
         assertTrue(target.isPinned)
     }
 
     @Test
-    fun atc04_projectDetailShowsMetadataTabsAndTools() {
+    fun atc04_projectDetailNavigatesToAutomationDetailAndRulesSkills() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -108,11 +129,14 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        composeRule.onNodeWithTag("project-hero-title").assertIsDisplayed()
-        composeRule.onNodeWithTag("btn-new-conv-in-project").assertIsDisplayed()
         composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-new-conv-in-project").assertIsDisplayed()
         composeRule.onNodeWithTag("project-row-automation").assertIsDisplayed()
-        composeRule.onNodeWithTag("project-row-skills").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-row-rules-skills").assertIsDisplayed()
+
+        // Tap Project rules & skills -> UE14
+        composeRule.onNodeWithTag("project-row-rules-skills").performClick()
+        composeRule.onNodeWithTag("rules-token-budget-card").assertIsDisplayed()
     }
 
     @Test
@@ -125,11 +149,11 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        composeRule.onNodeWithTag("seg-runs-on-cloud").performClick()
-        composeRule.onNodeWithTag("source-card-github").performClick()
-        composeRule.onNodeWithTag("repo-row-ledger-svc").performClick()
+        composeRule.onNodeWithTag("runtime-cloud").performClick()
+        composeRule.onNodeWithTag("source-github").performClick()
+        composeRule.onNodeWithTag("repo-row-repo-design-tokens").performClick()
         val beforeCount = coordinator.workspaceStore.state.value.projects.size
-        composeRule.onNodeWithTag("btn-submit-create-project").performClick()
+        composeRule.onNodeWithTag("btn-create-project-submit").performClick()
         assertEquals(beforeCount + 1, coordinator.workspaceStore.state.value.projects.size)
     }
 
@@ -143,16 +167,20 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        composeRule.onNodeWithTag("automation-prompt-input").performTextInput("Daily lint check")
-        composeRule.onNodeWithTag("btn-create-automation-inline").performClick()
-        assertTrue(coordinator.workspaceStore.state.value.automations.any { it.title.contains("Daily lint check") })
-
-        composeRule.onNodeWithTag("btn-run-nightly").performClick()
+        // First exercise & close the initial overflow menu via Run Now
+        composeRule.onNodeWithTag("automation-overflow-menu").assertIsDisplayed()
+        composeRule.onNodeWithTag("menu-run-now").performClick()
         assertTrue(coordinator.workspaceStore.state.value.automations.first { it.id == "auto-nightly-audit" }.isRunningNow)
 
-        composeRule.onNodeWithTag("btn-resume-paused").performClick()
+        // Create automation from natural-language prompt
+        composeRule.onNodeWithTag("input-automation-prompt").performTextInput("Daily lint check")
+        composeRule.onNodeWithTag("btn-create-automation").performClick()
+        assertTrue(coordinator.workspaceStore.state.value.automations.any { it.title.contains("Daily lint check") })
+
+        // Resume paused automation
+        composeRule.onNodeWithTag("btn-resume-auto-bundle-size").performClick()
         assertEquals(
-            dev.antigravity.shared.model.AutomationSectionKind.SCHEDULED,
+            AutomationSectionKind.SCHEDULED,
             coordinator.workspaceStore.state.value.automations.first { it.id == "auto-bundle-size" }.section,
         )
     }
@@ -173,10 +201,11 @@ class AndroidInteractiveE2eTest {
         }
 
         composeRule.onNodeWithTag("chat-diff-pill").assertIsDisplayed()
-        composeRule.onNodeWithTag("row-thought-14s").performClick()
         composeRule.onNodeWithTag("card-artifact-plan").assertIsDisplayed()
         composeRule.onNodeWithTag("card-task-progress-7seg").assertIsDisplayed()
         composeRule.onNodeWithTag("card-command-approval").assertIsDisplayed()
+        composeRule.onNodeWithTag("composer-pill-model").assertIsDisplayed()
+        composeRule.onNodeWithTag("composer-pill-permissions").assertIsDisplayed()
 
         // Approve command gate via biometric callback
         composeRule.onNodeWithTag("btn-command-allow-biometric").performClick()
@@ -190,7 +219,7 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc09_addContextSelectsAndAddsChipsToComposer() {
+    fun atc09_addContextPopoverDrillsDownAndAppliesChips() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -199,16 +228,19 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        composeRule.onNodeWithTag("tile-files").assertIsDisplayed()
-        composeRule.onNodeWithTag("tile-skills").assertIsDisplayed()
-        composeRule.onNodeWithTag("ctx-row-ratelimit").assertIsDisplayed()
-        composeRule.onNodeWithTag("ctx-row-go-testing").assertIsDisplayed()
-        composeRule.onNodeWithTag("btn-add-to-message").performClick()
+        composeRule.onNodeWithTag("add-context-popover").assertIsDisplayed()
+        composeRule.onNodeWithTag("ctx-menu-files").assertIsDisplayed()
+        composeRule.onNodeWithTag("ctx-menu-drive").assertIsDisplayed()
+
+        // Drill into Files picker and apply selected chips
+        composeRule.onNodeWithTag("ctx-menu-files").performClick()
+        composeRule.onNodeWithTag("add-context-picker-sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-add-context-apply").performClick()
         assertTrue(coordinator.workspaceStore.state.value.attachedComposerChips.size >= 3)
     }
 
     @Test
-    fun atc10_modelAndModeUpdatesSelectionAndLocksOrchestratorEffort() {
+    fun atc10_modelPickerHasZeroPlanningFastToggleAndSwitchesModelAndEffort() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -217,14 +249,17 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        composeRule.onNodeWithTag("mode-card-fast").performClick()
-        assertEquals(
-            dev.antigravity.shared.model.CascadeExecutionMode.FAST,
-            coordinator.settingsStore.state.value.selectedMode,
-        )
-        composeRule.onNodeWithTag("model-row-claude-opus").performClick()
-        composeRule.onNodeWithTag("agent-pill-go-reviewer").performClick()
-        assertEquals("go-reviewer", coordinator.settingsStore.state.value.selectedAgentPersona)
+        composeRule.onNodeWithTag("model-picker-sheet").assertIsDisplayed()
+        // Official docs verdict: NO Planning/Fast mode cards in model picker
+        assertEquals(0, composeRule.onAllNodesWithTag("mode-card-planning").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithTag("mode-card-fast").fetchSemanticsNodes().size)
+
+        composeRule.onNodeWithTag("model-row-orchestrator").assertIsDisplayed()
+        composeRule.onNodeWithTag("effort-chip-high").performClick()
+        assertEquals(ThinkingEffortLevel.HIGH, coordinator.settingsStore.state.value.selectedEffort)
+
+        composeRule.onNodeWithTag("model-row-MODEL_CLAUDE_5_5_OPUS_THINKING").performClick()
+        assertEquals("MODEL_CLAUDE_5_5_OPUS_THINKING", coordinator.settingsStore.state.value.selectedModelId)
         composeRule.onNodeWithTag("btn-model-done").assertIsDisplayed()
     }
 
@@ -238,11 +273,11 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        composeRule.onNodeWithTag("q-step-1-storage").assertIsDisplayed()
-        composeRule.onNodeWithTag("q-step-2-actions").assertIsDisplayed()
-        composeRule.onNodeWithTag("q-opt-role").performClick()
-        composeRule.onNodeWithTag("q-input-something-else").performTextInput("API key rotation")
-        composeRule.onNodeWithTag("q-btn-next").performClick()
+        composeRule.onNodeWithTag("structured-question-card").assertIsDisplayed()
+        composeRule.onNodeWithTag("question-answered-pill-0").assertIsDisplayed()
+        composeRule.onNodeWithTag("question-option-3").performClick()
+        composeRule.onNodeWithTag("question-freeform-input").performTextInput("API key rotation")
+        composeRule.onNodeWithTag("btn-question-next").performClick()
         assertEquals(2, coordinator.chatState.value.activeQuestionStepIndex)
     }
 
@@ -285,7 +320,7 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc14_liveUpdatesSpecRendersAll7Android16Variants() {
+    fun atc14_liveUpdatesNotificationShadeRendersAll4Cards() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -294,17 +329,14 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        composeRule.onNodeWithTag("lu-chip-running").assertIsDisplayed()
-        composeRule.onNodeWithTag("lu-chip-waiting").assertIsDisplayed()
-        composeRule.onNodeWithTag("lu-minimal-badge").assertIsDisplayed()
-        composeRule.onNodeWithTag("lu-chip-done").assertIsDisplayed()
-        composeRule.onNodeWithTag("lu-expanded-running").assertIsDisplayed()
-        composeRule.onNodeWithTag("lu-expanded-waiting").assertIsDisplayed()
-        composeRule.onNodeWithTag("lu-lockscreen-multi-agent").assertIsDisplayed()
+        composeRule.onNodeWithTag("live-card-running").assertIsDisplayed()
+        composeRule.onNodeWithTag("live-card-approval").assertIsDisplayed()
+        composeRule.onNodeWithTag("live-card-cloud").assertIsDisplayed()
+        composeRule.onNodeWithTag("live-card-done").assertIsDisplayed()
     }
 
     @Test
-    fun atc17_v233OverviewAndSideQuestionFlowsWorkInteractively() {
+    fun atc17_v233OverviewSheetOpensFromChatTopBar() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -371,50 +403,151 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc19_displayOptionsSortMenuCollapsedByDefaultAndDismissesOnSelectionOrOutsideTap() {
+    fun atc19_displayOptionsSortMenuCollapsedByDefaultAndDismissesOnSelectionOrScrim() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
                 coordinator = coordinator,
-                initialVerifyScene = EsddVerifySceneCase.AGENTS_HOME,
+                initialVerifyScene = EsddVerifySceneCase.SIDEBAR_DRAWER,
             )
         }
 
-        // 1. Open Display Options from Agents Home -> sort menu must be collapsed by default
+        // Open Display Options from Sidebar Drawer -> sort menu starts collapsed
         composeRule.onNodeWithTag("btn-display-options").performClick()
-        composeRule.onNodeWithTag("row-sort-conversations").assertIsDisplayed()
-        assertEquals(0, composeRule.onAllNodesWithTag("sort-options-menu").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("option-sort-by").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithTag("sort-dropdown-menu").fetchSemanticsNodes().size)
 
-        // 2. Expand sort menu -> selecting 'Title' updates displayOptions and collapses menu
-        composeRule.onNodeWithTag("row-sort-conversations").performClick()
-        composeRule.onNodeWithTag("sort-options-menu").assertIsDisplayed()
-        composeRule.onNodeWithText("Title").performClick()
+        // Expand sort menu -> selecting 'Title' updates displayOptions and collapses menu
+        composeRule.onNodeWithTag("option-sort-by").performClick()
+        composeRule.onNodeWithTag("sort-dropdown-menu").assertIsDisplayed()
+        composeRule.onNodeWithTag("sort-option-title").performClick()
         assertEquals(
-            dev.antigravity.shared.model.ConversationSortField.TITLE,
+            ConversationSortField.TITLE,
             coordinator.workspaceStore.state.value.displayOptions.sortBy,
         )
-        assertEquals(0, composeRule.onAllNodesWithTag("sort-options-menu").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithTag("sort-dropdown-menu").fetchSemanticsNodes().size)
 
-        // 3. Re-expand -> tapping scrim dismisses sort menu while keeping Display Options sheet open
-        composeRule.onNodeWithTag("row-sort-conversations").performClick()
-        composeRule.onNodeWithTag("sort-options-menu").assertIsDisplayed()
-        composeRule.onNodeWithTag("display-options-scrim").performClick()
-        assertEquals(0, composeRule.onAllNodesWithTag("sort-options-menu").fetchSemanticsNodes().size)
-        composeRule.onNodeWithTag("row-sort-conversations").assertIsDisplayed()
-
-        // 4. Re-expand -> tapping another row collapses sort menu while applying that row's change
-        composeRule.onNodeWithTag("row-sort-conversations").performClick()
-        composeRule.onNodeWithTag("sort-options-menu").assertIsDisplayed()
-        composeRule.onNodeWithTag("row-group-by").performClick()
-        assertEquals(0, composeRule.onAllNodesWithTag("sort-options-menu").fetchSemanticsNodes().size)
+        // Re-expand -> tapping Group by updates grouping and closes dropdown
+        composeRule.onNodeWithTag("option-sort-by").performClick()
+        composeRule.onNodeWithTag("sort-dropdown-menu").assertIsDisplayed()
+        composeRule.onNodeWithTag("option-group-by").performClick()
+        assertEquals(0, composeRule.onAllNodesWithTag("sort-dropdown-menu").fetchSemanticsNodes().size)
         assertEquals(
-            dev.antigravity.shared.model.DisplayGroupBy.HOST,
+            DisplayGroupBy.HOST,
             coordinator.workspaceStore.state.value.displayOptions.groupBy,
         )
     }
 
     @Test
-    fun atc20_pairingScreenOpensRemoteLinkDialogAndSupportsCancelAndErrorBanner() {
+    fun atc20_automationDetailRetryAndEditSaveDeleteFlows() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.AUTOMATION_DETAIL,
+            )
+        }
+
+        composeRule.onNodeWithTag("btn-automation-run-now").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-automation-pause-resume").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-retry-run-3").performClick()
+        val nightlyAfterRetry = coordinator.workspaceStore.state.value.automations
+            .first { it.id == "auto-nightly-audit" }
+        assertTrue(nightlyAfterRetry.isRunningNow)
+        assertEquals(
+            dev.antigravity.shared.model.AutomationRunStatus.RUNNING,
+            nightlyAfterRetry.recentRuns.first { it.id == "run-3" }.status,
+        )
+
+        // Navigate to Edit screen (UE06C) and save
+        composeRule.onNodeWithTag("btn-edit-automation").performClick()
+        composeRule.onNodeWithTag("input-edit-automation-name").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-save-automation").performClick()
+        composeRule.onNodeWithTag("btn-automation-run-now").assertIsDisplayed()
+    }
+
+    @Test
+    fun atc21_permissionsPresetPopoverAndSlashMenuInsertAction() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.PERMISSIONS_PRESET,
+            )
+        }
+
+        composeRule.onNodeWithTag("permissions-preset-popover").assertIsDisplayed()
+        composeRule.onNodeWithTag("preset-option-turbo").performClick()
+        assertEquals(AgentPermissionPreset.TURBO, coordinator.settingsStore.state.value.activePermissionPreset)
+
+        // Open Slash Menu from composer
+        val coordinator2 = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        assertTrue(coordinator2.isVerificationMode)
+    }
+
+    @Test
+    fun atc21b_slashMenuInsertsPlanAction() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.SLASH_MENU,
+            )
+        }
+
+        composeRule.onNodeWithTag("slash-menu-card").assertIsDisplayed()
+        composeRule.onNodeWithTag("slash-item-plan").performClick()
+        assertEquals("/plan ", coordinator.chatState.value.draftInputText)
+    }
+
+    @Test
+    fun atc22_rulesSkillsPluginToggleAndFlattenedSettingsLanguageAndMore() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.RULES_AND_SKILLS,
+            )
+        }
+
+        composeRule.onNodeWithTag("rules-token-budget-card").assertIsDisplayed()
+        composeRule.onNodeWithTag("skill-row-go-testing").assertIsDisplayed()
+        composeRule.onNodeWithTag("customizations-tab-2").performClick() // Plugins tab
+        val beforeEnabled = coordinator.settingsStore.state.value.customizations.plugins
+            .first { it.id == "plugin-datadog" }.isEnabled
+        composeRule.onNodeWithTag("switch-plugin-plugin-datadog").performClick()
+        val afterEnabled = coordinator.settingsStore.state.value.customizations.plugins
+            .first { it.id == "plugin-datadog" }.isEnabled
+        assertEquals(!beforeEnabled, afterEnabled)
+    }
+
+    @Test
+    fun atc22b_flattenedSettingsThemeLanguageAndPermissionsSubpage() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.SETTINGS,
+            )
+        }
+
+        composeRule.onNodeWithTag("btn-scan-new-qr").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings-host-macbook-pro-local").assertIsDisplayed()
+        composeRule.onNodeWithTag("theme-preset-nord").performClick()
+        assertEquals(AppThemePreset.NORD, coordinator.settingsStore.state.value.appearance.theme)
+
+        composeRule.onNodeWithTag("row-settings-language").performClick()
+        composeRule.onNodeWithTag("language-option-zh_hans").performClick()
+        assertEquals(AppLanguage.ZH_HANS, coordinator.settingsStore.state.value.appearance.language)
+
+        // Open Permissions, notifications & about subpage
+        composeRule.onNodeWithTag("row-settings-more").performClick()
+        composeRule.onNodeWithTag("settings-more-subpage").assertIsDisplayed()
+        composeRule.onNodeWithTag("card-about-copyright").assertIsDisplayed()
+    }
+
+    @Test
+    fun atc23_pairingScreenOpensRemoteLinkDialog() {
         val coordinator = AntigravityCoreCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(

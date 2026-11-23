@@ -68,7 +68,7 @@ public struct ConversationContextPreviewMenu: View {
                     Text("Fix flaky TestSettlementBatch")
                         .font(.system(size: 16.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
-                    Text("ledger-svc · Gemini 3.1 Pro · 8m")
+                    Text("ledger-svc · Gemini 4 Neon · 8m")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
@@ -153,6 +153,7 @@ public struct ConversationContextPreviewMenu: View {
                 accessibilityId: "menu-action-pin"
             ) {
                 isPinned.toggle()
+                store.togglePinCascade("cas-flaky-settlement")
             }
 
             Divider().overlay(AntigravityTheme.subtleDivider)
@@ -165,6 +166,7 @@ public struct ConversationContextPreviewMenu: View {
                 accessibilityId: "menu-action-unread"
             ) {
                 isUnread.toggle()
+                store.toggleUnreadCascade("cas-flaky-settlement")
             }
 
             Divider().overlay(AntigravityTheme.subtleDivider)
@@ -202,6 +204,7 @@ public struct ConversationContextPreviewMenu: View {
                 isDestructive: false,
                 accessibilityId: "menu-action-archive"
             ) {
+                store.archiveCascade("cas-flaky-settlement")
                 onDismiss?()
             }
 
@@ -272,7 +275,7 @@ public struct ConversationContextPreviewMenu: View {
                         .font(.system(size: 15.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                         .lineLimit(1)
-                    Text(swipeTargetArchived ? "Archived · 1h" : "Done · 1h")
+                    Text(swipeTargetArchived ? "Archived · 4h" : "4h")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textMuted)
                 }

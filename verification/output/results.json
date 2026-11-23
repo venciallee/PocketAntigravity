@@ -1,26 +1,38 @@
 {
-  "timestamp": "2026-11-20T17:34:31.089145+00:00",
-  "specVersion": "2.0.0",
+  "timestamp": "2026-11-23T13:17:49.258555+00:00",
+  "specVersion": "2.1.0",
   "methodology": "ESDD (Executable Spec Driven Development)",
+  "mode": "full",
+  "isFull": true,
+  "isRelease": false,
   "overallPassed": true,
   "specInspection": {
     "passed": true,
-    "specVersion": "2.0.0",
-    "swiftFileCount": 61,
-    "matchedSwiftControllers": 13,
+    "specVersion": "2.1.0",
+    "swiftFileCount": 88,
+    "matchedSwiftControllers": 20,
     "stateCount": 13,
     "eventCount": 13,
     "claimCount": 13,
-    "selectorCount": 114,
+    "selectorCount": 116,
     "checks": [
       "Design tokens verified: 10 OLED/Periwinkle color tokens & 5 typography tiers",
-      "All 13 reference UE baselines verified on disk",
-      "100% selector parity: all 114 required data-testid selectors present across UE01..UE13",
+      "All 20 reference UE baselines verified on disk (13 canonical + 7 extended)",
+      "100% selector parity: all 116 required data-testid selectors present across UE01..UE13",
       "State\u00d7Event DAG complete: 13 states and 13 transitions reachable from UE01_AGENTS_HOME",
       "All 13 UE states covered by executable acceptance claims (CLAIM-01..CLAIM-13)",
-      "All 13/13 Swift controllers grounded across 61 Swift files",
+      "All 20/20 Swift controllers grounded across 88 Swift files",
       "Pure Swift 6 AntigravityData isolation verified (zero UIKit/WebKit/AVFoundation imports; Official Cloud Relay + QR Scanner grounded)",
-      "Original AG Orbit AppIcon.appiconset (1024x1024 opaque RGB) & App Store 5.2.2 trademark compliance verified"
+      "Original AG Pocket AppIcon.appiconset (1024x1024 opaque RGB), AGPocket target/bundle ID/agpocket:// scheme & App Store 5.2.2 trademark compliance verified",
+      "Secret hygiene verified: zero hardcoded Google API key literals across source tree",
+      "RPC registration guardrail passed: all 56 Connect-RPC methods registered in HostCapabilityRegistry.swift",
+      "KMP RPC registration guardrail passed: all 54 Connect-RPC methods registered in HostCapabilityRegistry.kt",
+      "Zero silent `try?` mutating RPC calls in AntigravitySessionStore verified",
+      "Zero silent `runCatching` mutating RPC calls in shared/core-domain/ verified",
+      "Forward-compatible enum guardrail passed: all 36 String Codable enums in Models/ are resilient",
+      "KMP forward-compatible enum guardrail passed: all 37 @Serializable enums in shared/core-model/ use resilient serializers",
+      "Swift <-> Companion Bridge enum downgrade parity verified (12 mappings in sync)",
+      "Three-way Swift <-> KMP <-> Companion Bridge enum downgrade parity verified (12 mappings in sync)"
     ],
     "warnings": [],
     "errors": []
@@ -42,7 +54,7 @@
       "id": "TC-01",
       "screen": "UE01_AGENTS_HOME",
       "passed": true,
-      "detail": "Host online dot + 'Needs you 1' filter isolated Fix flaky TestSettlementBatch (0px overflow)"
+      "detail": "New Conversation Home sidebar trigger, host online pill, Needs approval banner & cloud toggle verified (0px overflow)"
     },
     {
       "id": "TC-02",
@@ -54,7 +66,7 @@
       "id": "TC-03",
       "screen": "UE03_CONTEXT_MENU_PIN",
       "passed": true,
-      "detail": "Context preview pills + 6 menu actions + Swipe Pin (#8EB4FF) & Archive verified"
+      "detail": "Context preview pills + 6 menu actions + Swipe Pin (#8DB8FF) & Archive verified"
     },
     {
       "id": "TC-04",
@@ -96,7 +108,7 @@
       "id": "TC-10",
       "screen": "UE09_MODEL_AND_MODE",
       "passed": true,
-      "detail": "Selected Planning + Claude Opus 5.5 [Thinking] + go-reviewer persona"
+      "detail": "Verified zero Planning/Fast cards, Thinking Effort High, Claude Opus 5.5 & 5h/Weekly quota bars"
     },
     {
       "id": "TC-11",
@@ -139,23 +151,23 @@
     {
       "claimId": "CLAIM-01",
       "state": "UE01_AGENTS_HOME",
-      "description": "Agents Home renders Host pill, Search, Filter pills, Pinned & Project-grouped conversations, Liquid Glass Tab Bar, and Compose FAB",
+      "description": "New Conversation Home renders Sidebar toggle, Host switcher pill, Search, Welcome greeting, amber Needs approval banner, and PC-aligned bottom Composer (Project, Branch, Cloud, +, Gemini 4 Neon / Extra High, Default preset, Mic, Send)",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE01_AGENTS_HOME.png",
       "comparison": "verification/output/comparisons/CMP_UE01.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE01_AGENTS_HOME.json",
-      "verifiedSelectors": 10,
-      "verifiedTouchTargets": 6
+      "verifiedSelectors": 12,
+      "verifiedTouchTargets": 5
     },
     {
       "claimId": "CLAIM-02",
       "state": "UE02_DISPLAY_OPTIONS",
-      "description": "Display Options sheet renders Group By, Sort Conversations popover menu, Auto Pin / Archived Only toggles, and Mark All as Read",
+      "description": "Display Options sheet renders Group By Project, Sort Conversations popover menu, Sort Projects, Filter, Display, Auto Pin / Archived Only toggles, and Mark All as Read",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE02_DISPLAY_OPTIONS.png",
       "comparison": "verification/output/comparisons/CMP_UE02.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE02_DISPLAY_OPTIONS.json",
       "verifiedSelectors": 8,
       "verifiedTouchTargets": 7
@@ -163,11 +175,11 @@
     {
       "claimId": "CLAIM-03",
       "state": "UE03_CONTEXT_MENU_PIN",
-      "description": "Context Menu renders rich Plan preview card, Pin/Unread/Rename/Move/Archive/Delete actions, and Swipe Pin/Archive shortcuts",
+      "description": "Context Menu renders rich Plan preview card (Gemini 4 Neon), Pin/Unread/Rename/Move/Archive/Delete actions, and Swipe Pin/Archive shortcuts",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE03_CONTEXT_MENU_PIN.png",
       "comparison": "verification/output/comparisons/CMP_UE03.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE03_CONTEXT_MENU_PIN.json",
       "verifiedSelectors": 8,
       "verifiedTouchTargets": 5
@@ -175,11 +187,11 @@
     {
       "claimId": "CLAIM-04",
       "state": "UE04_PROJECT_DETAIL",
-      "description": "Project Detail renders ledger-svc metadata pills, New Conversation CTA, Active/Archived/Automations tabs, and This Project tools",
+      "description": "Project Detail renders ledger-svc metadata pills (Local \u00b7 MacBook Pro, main \u21912, Working tree clean), New Conversation CTA, Active 4/Archived 2/Automations 1 tabs, clean single-line conversation rows, and wired THIS PROJECT tools (Nightly dependency audit, Project rules & skills, Reveal in Finder)",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE04_PROJECT_DETAIL.png",
       "comparison": "verification/output/comparisons/CMP_UE04.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE04_PROJECT_DETAIL.json",
       "verifiedSelectors": 7,
       "verifiedTouchTargets": 4
@@ -191,7 +203,7 @@
       "passed": true,
       "screenshot": "verification/output/screenshots/UE05_CREATE_PROJECT.png",
       "comparison": "verification/output/comparisons/CMP_UE05.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE05_CREATE_PROJECT.json",
       "verifiedSelectors": 8,
       "verifiedTouchTargets": 6
@@ -199,23 +211,23 @@
     {
       "claimId": "CLAIM-06",
       "state": "UE06_AUTOMATIONS",
-      "description": "Automations hub renders NL quick-create bar, Scheduled cards with Next/Last Run stats, Always On PR triage, and Paused Resume action",
+      "description": "Automations hub (sidebar-navigated without bottom tab bar) renders NL quick-create bar, Scheduled cards with Next/Last Run stats & Run Now, Always On PR triage, Paused Resume action, and navigates to Automation Detail & Edit",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE06_AUTOMATIONS.png",
       "comparison": "verification/output/comparisons/CMP_UE06.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE06_AUTOMATIONS.json",
-      "verifiedSelectors": 9,
-      "verifiedTouchTargets": 4
+      "verifiedSelectors": 8,
+      "verifiedTouchTargets": 3
     },
     {
       "claimId": "CLAIM-07",
       "state": "UE07_CHAT_AND_COMPOSER",
-      "description": "Chat screen renders +128 -14 badge, Thought for 14s, Plan card, 7-segment Task card, Face ID Allow/Deny command card, and Composer with @chip, Mode, Model, Mic, and Send",
+      "description": "Chat screen renders +128 -14 badge, Thought for 14s, Plan card, 7-segment Task card, Face ID Allow/Deny command card, Stop bar, and Composer with @chip, +, Gemini 4 Neon / Extra High, Default permission preset, Mic, and Send",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE07_CHAT_AND_COMPOSER.png",
       "comparison": "verification/output/comparisons/CMP_UE07.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE07_CHAT_AND_COMPOSER.json",
       "verifiedSelectors": 13,
       "verifiedTouchTargets": 3
@@ -223,35 +235,35 @@
     {
       "claimId": "CLAIM-08",
       "state": "UE08_ADD_CONTEXT",
-      "description": "Add Context sheet renders 5 category tiles (Files, Folder, Mentions, Actions, Skills), multi-select rows, and Add to message CTA",
+      "description": "Add Context anchored menu renders Files, Folder, Mentions, Actions, and Drive (Set up), expanding into file/mention picker or / Actions & Skills overlay",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE08_ADD_CONTEXT.png",
       "comparison": "verification/output/comparisons/CMP_UE08.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE08_ADD_CONTEXT.json",
-      "verifiedSelectors": 9,
-      "verifiedTouchTargets": 6
+      "verifiedSelectors": 6,
+      "verifiedTouchTargets": 5
     },
     {
       "claimId": "CLAIM-09",
       "state": "UE09_MODEL_AND_MODE",
-      "description": "Model & Mode sheet renders Planning/Fast cards, Gemini 3.1 Pro / 3.8 Flash / Claude Opus 5.5 / Sonnet 5.5 rows, and Agent persona pills",
+      "description": "Model sheet (no Planning/Fast) renders Orchestrator, Gemini 4 Neon [New] with 4-level Thinking selector (Low/Medium/High/Extra High), Gemini 4 Carbon/Argon/Hydrogen, Claude Opus 5.5, Gemini 3.8 Flash, More models, and 5h/Weekly usage quota bars",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE09_MODEL_AND_MODE.png",
       "comparison": "verification/output/comparisons/CMP_UE09.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE09_MODEL_AND_MODE.json",
-      "verifiedSelectors": 8,
-      "verifiedTouchTargets": 5
+      "verifiedSelectors": 12,
+      "verifiedTouchTargets": 4
     },
     {
       "claimId": "CLAIM-10",
       "state": "UE10_STRUCTURED_QUESTION",
-      "description": "Structured Question card renders 3-step stepper pills, multi-select checkboxes, Something else write-in, Back/Next buttons, and freeform composer",
+      "description": "Structured /plan interview Question card renders 3-step stepper pills, multi-select checkboxes, Something else write-in, Back/Next buttons, and freeform composer",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE10_STRUCTURED_QUESTION.png",
       "comparison": "verification/output/comparisons/CMP_UE10.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE10_STRUCTURED_QUESTION.json",
       "verifiedSelectors": 10,
       "verifiedTouchTargets": 7
@@ -263,7 +275,7 @@
       "passed": true,
       "screenshot": "verification/output/screenshots/UE11_PLAN_REVIEW.png",
       "comparison": "verification/output/comparisons/CMP_UE11.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE11_PLAN_REVIEW.json",
       "verifiedSelectors": 6,
       "verifiedTouchTargets": 2
@@ -271,11 +283,11 @@
     {
       "claimId": "CLAIM-12",
       "state": "UE12_TURN_DIFF_REVIEW",
-      "description": "Turn Diff review renders Turn 1..3/All pills, File 1 of 4 pager, Revert hunk, syntax diff lines, Line 29 comment composer, and Viewed / Revert file / Accept file bar",
+      "description": "Turn Diff review renders Turn 1..3/All pills, File 1 of 4 pager, Revert hunk, single-column line gutter with syntax diff lines, Line 29 comment composer, and Viewed / Revert file / Accept file bar",
       "passed": true,
       "screenshot": "verification/output/screenshots/UE12_TURN_DIFF_REVIEW.png",
       "comparison": "verification/output/comparisons/CMP_UE12.png",
-      "resolutionPx": "1179x2556",
+      "resolutionPx": "1170x2532",
       "axSnapshot": "verification/output/ax_trees/UE12_TURN_DIFF_REVIEW.json",
       "verifiedSelectors": 11,
       "verifiedTouchTargets": 4

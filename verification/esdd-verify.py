@@ -58,12 +58,11 @@ from ui_renderer import render_scene_html
 # Primary interactive controls audited for >=44pt HIG touch target invariant across UE01..UE12
 PRIMARY_TOUCH_TARGETS_BY_STATE = {
     "UE01_AGENTS_HOME": [
+        "[data-testid='btn-open-sidebar']",
         "[data-testid='host-switcher-pill']",
-        "[data-testid='btn-display-options']",
-        "[data-testid='btn-new-project']",
-        "[data-testid='agents-search-input']",
-        "[data-testid='floating-tab-bar']",
-        "[data-testid='fab-compose']",
+        "[data-testid='btn-global-search']",
+        "[data-testid='banner-needs-approval']",
+        "[data-testid='composer-btn-send']",
     ],
     "UE02_DISPLAY_OPTIONS": [
         "[data-testid='sheet-reset-btn']",
@@ -96,10 +95,9 @@ PRIMARY_TOUCH_TARGETS_BY_STATE = {
         "[data-testid='btn-submit-create-project']",
     ],
     "UE06_AUTOMATIONS": [
+        "[data-testid='btn-open-sidebar']",
         "[data-testid='automation-prompt-input']",
         "[data-testid='btn-run-nightly']",
-        "[data-testid='floating-tab-bar']",
-        "[data-testid='fab-add-automation']",
     ],
     "UE07_CHAT_AND_COMPOSER": [
         "[data-testid='card-artifact-plan']",
@@ -107,18 +105,16 @@ PRIMARY_TOUCH_TARGETS_BY_STATE = {
         "[data-testid='btn-command-allow-faceid']",
     ],
     "UE08_ADD_CONTEXT": [
-        "[data-testid='context-search-input']",
         "[data-testid='tile-files']",
-        "[data-testid='tile-skills']",
-        "[data-testid='ctx-row-ratelimit']",
-        "[data-testid='ctx-row-go-testing']",
-        "[data-testid='btn-add-to-message']",
+        "[data-testid='tile-folder']",
+        "[data-testid='tile-mentions']",
+        "[data-testid='tile-actions']",
+        "[data-testid='tile-drive']",
     ],
     "UE09_MODEL_AND_MODE": [
         "[data-testid='btn-model-done']",
-        "[data-testid='mode-card-planning']",
-        "[data-testid='mode-card-fast']",
-        "[data-testid='model-row-gemini-pro']",
+        "[data-testid='model-row-orchestrator']",
+        "[data-testid='model-row-gemini-4-neon']",
         "[data-testid='model-row-claude-opus']",
     ],
     "UE10_STRUCTURED_QUESTION": [
@@ -736,24 +732,25 @@ def run_interactive_e2e_suite(
         assert scene_port is not None
         return f"http://127.0.0.1:{scene_port}/scene/{state_id}?rpcPort={rpc_port}"
 
-    # TC-01: UE01_AGENTS_HOME filter pills & online status
+    # TC-01: UE01_AGENTS_HOME New Conversation Home (Sidebar trigger, Host online, Needs approval banner, Cloud toggle)
     if should_run("TC-01"):
         assert page is not None
-        page.goto(scene_url("UE01_AGENTS_HOME"))
+        page.goto(scene_url("UE01_AGENTS_HOME"), width=390, height=844, scale=3)
         assert page.evaluate("document.querySelector(\"[data-testid='host-switcher-pill']\").dataset.online") == "true"
-        page.click("[data-testid='filter-pill-needs-you']")
-        assert page.evaluate("document.body.dataset.activeFilter") == "needs-you"
-        visible_titles = page.evaluate(
-            "Array.from(document.querySelectorAll('.conv-row')).filter(r => r.style.display !== 'none').map(r => r.dataset.title)"
-        )
-        assert visible_titles == ["Fix flaky TestSettlementBatch"], f"TC-01 filter mismatch: {visible_titles}"
+        assert "Welcome back" in page.text_of("[data-testid='home-greeting-title']")
+        page.click("[data-testid='btn-open-sidebar']")
+        assert page.evaluate("document.body.dataset.sidebarOpened") == "true"
+        page.click("[data-testid='banner-needs-approval']")
+        assert page.evaluate("document.body.dataset.openedApprovalCascade") == "cas-rate-limiter"
+        page.click("[data-testid='composer-cloud-toggle']")
+        assert page.evaluate("document.body.dataset.cloudTarget") == "true"
         assert page.evaluate("window.__AGY_AX_REPORT.overflowPx") == 0
-        cases.append({"id": "TC-01", "screen": "UE01_AGENTS_HOME", "passed": True, "detail": "Host online dot + 'Needs you 1' filter isolated Fix flaky TestSettlementBatch (0px overflow)"})
+        cases.append({"id": "TC-01", "screen": "UE01_AGENTS_HOME", "passed": True, "detail": "New Conversation Home sidebar trigger, host online pill, Needs approval banner & cloud toggle verified (0px overflow)"})
 
     # TC-02: UE02_DISPLAY_OPTIONS inspect Sort popover, toggle Auto Pin, Mark All as Read & Reset
     if should_run("TC-02"):
         assert page is not None
-        page.goto(scene_url("UE02_DISPLAY_OPTIONS"))
+        page.goto(scene_url("UE02_DISPLAY_OPTIONS"), width=390, height=844, scale=3)
         pop_text = page.text_of("[data-testid='sort-popover-menu']")
         assert "Last Updated" in pop_text and "Newest First" in pop_text
         page.click("[data-testid='sort-popover-menu'] .sort-opt[data-sort='Last Updated']")
@@ -768,19 +765,19 @@ def run_interactive_e2e_suite(
     # TC-03: UE03_CONTEXT_MENU_PIN preview card + Pin & Archive swipe actions
     if should_run("TC-03"):
         assert page is not None
-        page.goto(scene_url("UE03_CONTEXT_MENU_PIN"))
+        page.goto(scene_url("UE03_CONTEXT_MENU_PIN"), width=390, height=844, scale=3)
         assert "Implementation Plan" in page.text_of("[data-testid='chip-implementation-plan']")
         assert "Awaiting review" in page.text_of("[data-testid='chip-awaiting-review']")
         page.click("[data-testid='menu-action-pin']")
         page.click("[data-testid='swipe-action-pin']")
         page.click("[data-testid='swipe-action-archive']")
         assert page.evaluate("document.body.dataset.swipePinned === 'true' && document.body.dataset.swipeArchived === 'true'")
-        cases.append({"id": "TC-03", "screen": "UE03_CONTEXT_MENU_PIN", "passed": True, "detail": "Context preview pills + 6 menu actions + Swipe Pin (#8EB4FF) & Archive verified"})
+        cases.append({"id": "TC-03", "screen": "UE03_CONTEXT_MENU_PIN", "passed": True, "detail": "Context preview pills + 6 menu actions + Swipe Pin (#8DB8FF) & Archive verified"})
 
     # TC-04: UE04_PROJECT_DETAIL tabs & New Conversation CTA
     if should_run("TC-04"):
         assert page is not None
-        page.goto(scene_url("UE04_PROJECT_DETAIL"))
+        page.goto(scene_url("UE04_PROJECT_DETAIL"), width=390, height=844, scale=3)
         assert page.text_of("[data-testid='project-hero-title']") == "ledger-svc"
         page.click("[data-testid='project-tab-archived']")
         assert page.evaluate("document.body.dataset.activeProjectTab") == "archived"
@@ -792,7 +789,7 @@ def run_interactive_e2e_suite(
     # TC-05: UE05_CREATE_PROJECT Cloud + GitHub + acme/ledger-svc -> CreateProjectWorkspace RPC
     if should_run("TC-05"):
         assert page is not None
-        page.goto(scene_url("UE05_CREATE_PROJECT"))
+        page.goto(scene_url("UE05_CREATE_PROJECT"), width=390, height=844, scale=3)
         page.click("[data-testid='seg-runs-on-cloud']")
         page.click("[data-testid='source-card-github']")
         page.click("[data-testid='repo-row-ledger-svc']")
@@ -804,7 +801,7 @@ def run_interactive_e2e_suite(
     # TC-06: UE06_AUTOMATIONS NL prompt Create + Run nightly + Resume paused
     if should_run("TC-06"):
         assert page is not None
-        page.goto(scene_url("UE06_AUTOMATIONS"))
+        page.goto(scene_url("UE06_AUTOMATIONS"), width=390, height=844, scale=3)
         page.fill("[data-testid='automation-prompt-input']", "Every weekday at 9, summarize")
         page.click("[data-testid='btn-create-automation-inline']")
         assert "SCHEDULED · 3" in page.text_of("#scheduled-header")
@@ -817,7 +814,7 @@ def run_interactive_e2e_suite(
     # TC-07: UE07_CHAT_AND_COMPOSER +128 -14 badge, 7-segment progress bar & Thought expansion
     if should_run("TC-07"):
         assert page is not None
-        page.goto(scene_url("UE07_CHAT_AND_COMPOSER"))
+        page.goto(scene_url("UE07_CHAT_AND_COMPOSER"), width=390, height=844, scale=3)
         diff_txt = page.text_of("[data-testid='chat-diff-pill']")
         assert "+128" in diff_txt and "-14" in diff_txt
         seg_count = page.evaluate("document.querySelectorAll('[data-testid=\"card-task-progress-7seg\"] .seg-bar').length")
@@ -830,7 +827,7 @@ def run_interactive_e2e_suite(
     if should_run("TC-08"):
         assert page is not None
         if not should_run("TC-07"):
-            page.goto(scene_url("UE07_CHAT_AND_COMPOSER"))
+            page.goto(scene_url("UE07_CHAT_AND_COMPOSER"), width=390, height=844, scale=3)
         page.click("[data-testid='btn-command-allow-faceid']")
         assert page.evaluate("document.body.dataset.commandStatus") == "running"
         assert page.evaluate("window.__AGY_LAST_RPC_RESPONSE && window.__AGY_LAST_RPC_RESPONSE.faceIdVerified") is True
@@ -841,11 +838,11 @@ def run_interactive_e2e_suite(
         assert chip_hidden is True
         cases.append({"id": "TC-08", "screen": "UE07_CHAT_AND_COMPOSER", "passed": True, "detail": "Face ID Allow dispatched signed runCommand RPC (Waiting->Running) & Composer send cleared @ratelimit.go"})
 
-    # TC-09: UE08_ADD_CONTEXT filter tiles, 3 selected items & Add to message
+    # TC-09: UE08_ADD_CONTEXT filter tiles (incl. Drive), 3 selected items & Add to message
     if should_run("TC-09"):
         assert page is not None
-        page.goto(scene_url("UE08_ADD_CONTEXT"))
-        page.click("[data-testid='tile-skills']")
+        page.goto(scene_url("UE08_ADD_CONTEXT"), width=390, height=844, scale=3)
+        page.click("[data-testid='tile-drive']")
         page.click("[data-testid='tile-files']")
         assert page.text_of("#ctx-selected-label") == "3 selected"
         page.click("[data-testid='btn-add-to-message']")
@@ -853,18 +850,17 @@ def run_interactive_e2e_suite(
         assert injected == "ratelimit.go,Idempotency keys for payouts,go-testing"
         cases.append({"id": "TC-09", "screen": "UE08_ADD_CONTEXT", "passed": True, "detail": "Injected ratelimit.go, Idempotency keys for payouts & go-testing chips into Composer"})
 
-    # TC-10: UE09_MODEL_AND_MODE Planning/Fast + Claude Opus 5.5 + go-reviewer
+    # TC-10: UE09_MODEL_AND_MODE Gemini 4 Neon Thinking Effort + Claude Opus 5.5 + 5h/Weekly quotas (no Planning/Fast)
     if should_run("TC-10"):
         assert page is not None
-        page.goto(scene_url("UE09_MODEL_AND_MODE"))
-        page.click("[data-testid='mode-card-fast']")
-        page.click("[data-testid='mode-card-planning']")
+        page.goto(scene_url("UE09_MODEL_AND_MODE"), width=390, height=844, scale=3)
+        assert page.evaluate("document.querySelector(\"[data-testid='mode-card-planning']\") === null") is True
+        page.click("[data-testid='effort-seg-high']")
         page.click("[data-testid='model-row-claude-opus']")
-        page.click("[data-testid='agent-pill-go-reviewer']")
         page.click("[data-testid='btn-model-done']")
-        sel_state = page.evaluate("({mode: document.body.dataset.selectedMode, model: document.body.dataset.selectedModel, agent: document.body.dataset.selectedAgent})")
-        assert sel_state == {"mode": "Planning", "model": "Claude Opus 5.5", "agent": "go-reviewer"}
-        cases.append({"id": "TC-10", "screen": "UE09_MODEL_AND_MODE", "passed": True, "detail": "Selected Planning + Claude Opus 5.5 [Thinking] + go-reviewer persona"})
+        sel_state = page.evaluate("({model: document.body.dataset.selectedModel, effort: document.body.dataset.selectedEffort})")
+        assert sel_state == {"model": "Claude Opus 5.5", "effort": "High"}
+        cases.append({"id": "TC-10", "screen": "UE09_MODEL_AND_MODE", "passed": True, "detail": "Verified zero Planning/Fast cards, Thinking Effort High, Claude Opus 5.5 & 5h/Weekly quota bars"})
 
     # TC-11: UE10_STRUCTURED_QUESTION multi-select + Something else + Next -> 3 Retention -> Submit
     if should_run("TC-11"):
@@ -1318,10 +1314,12 @@ def main():
                                 raise SystemExit(f"Stage 4 Visual/HIG Audit failed on {state_id}: {violations}")
 
                             cmp_path = cmp_dir / f"CMP_UE{idx:02d}.png"
+                            raw_ref = Path(state["referenceUEImage"])
+                            resolved_ref = raw_ref if raw_ref.is_absolute() else (repo_root / raw_ref)
                             build_side_by_side_comparison(
                                 idx_1based=idx,
                                 state_id=state_id,
-                                ref_png_path=Path(state["referenceUEImage"]),
+                                ref_png_path=resolved_ref,
                                 rendered_png_path=png_path,
                                 out_cmp_path=cmp_path,
                                 is_landscape=(vp_w > vp_h),

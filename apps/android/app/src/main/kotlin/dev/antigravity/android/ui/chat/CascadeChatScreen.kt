@@ -26,8 +26,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.AccountTree
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -45,6 +47,7 @@ import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Shield
@@ -119,10 +122,12 @@ private const val ENABLE_SIDE_QUESTION_BTW: Boolean = false
 fun CascadeChatScreen(
     coordinator: AntigravityCoreCoordinator,
     onBack: () -> Unit,
+    onOpenSidebar: () -> Unit = onBack,
     onOpenDiffReview: () -> Unit,
     onOpenPlanReview: () -> Unit,
     onOpenAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
+    onOpenPermissionsPreset: () -> Unit = {},
     onOpenOverview: () -> Unit,
     onOpenSideQuestion: () -> Unit,
     onOpenSwarmBoard: () -> Unit,
@@ -142,44 +147,25 @@ fun CascadeChatScreen(
     val activeSummary = syncState.summaries.firstOrNull { it.cascadeId == activeCascadeId }
         ?: syncState.summaries.firstOrNull()
 
-    val headerTitle = activeSummary?.title ?: "Add rate limiter to /transfers"
+    val rawTitle = activeSummary?.title ?: "Add rate limiter"
+    val headerTitle = if (rawTitle == "Add rate limiter to /transfers") "Add rate limiter" else rawTitle
     val rawHostLabel = activeSummary?.originHostName
         ?: connectionState.activeHost?.hostname
         ?: "MacBook Pro"
     val cleanHostLabel = rawHostLabel.removePrefix("Connecting · ").ifBlank { "Desktop" }
-    val headerSubtitle = buildString {
-        append(activeSummary?.projectSlug ?: "ledger-svc")
-        append(" · ")
-        append(activeSummary?.branchName ?: "main")
-        append(" · ")
-        append(cleanHostLabel)
-    }
+    val headerSubtitle = "${activeSummary?.projectSlug ?: "ledger-svc"} · $cleanHostLabel"
     val totalAdditions = activeSummary?.totalAdditions ?: 128
     val totalDeletions = activeSummary?.totalDeletions ?: 14
 
     val displayItems = chatState.activeDisplayItems
-    val activeWaitingStep = chatState.activeSteps.lastOrNull { it.status == CortexStepStatus.WAITING }
-    val activeTaskStep = chatState.activeSteps.lastOrNull { it.taskBoundary != null }
-
-    val statusText = when {
-        activeWaitingStep != null ->
-            activeTaskStep?.taskBoundary?.taskStatus ?: "Waiting for your approval · Step ${activeWaitingStep.stepIndex} of 7"
-        chatState.activeSteps.any { it.status == CortexStepStatus.IN_PROGRESS } ->
-            "Running · Step ${activeTaskStep?.taskBoundary?.completedCount ?: 4} of ${activeTaskStep?.taskBoundary?.totalCount ?: 7}"
-        !coordinator.isVerificationMode && connectionState.isConnecting ->
-            "Connecting to $cleanHostLabel..."
-        else -> "Ready · All steps up to date"
-    }
-    val statusDotColor = when {
-        activeWaitingStep != null -> colors.statusWaiting
-        chatState.activeSteps.any { it.status == CortexStepStatus.IN_PROGRESS } -> colors.statusRunning
-        !coordinator.isVerificationMode && connectionState.isConnecting -> colors.statusRunning
-        else -> colors.statusDone
-    }
-
     val modelDisplayName = settingsState.selectedModel?.displayName
         ?.replace(" (Thinking)", "")
-        ?: "Gemini 3.1 Pro"
+        ?: "Gemini 4 Neon"
+    val effortLabel = when (settingsState.selectedEffort.displayTitle) {
+        "Extra" -> "Extra High"
+        else -> settingsState.selectedEffort.displayTitle
+    }
+    val permissionLabel = settingsState.activePermissionPreset.displayTitle
 
     Scaffold(
         modifier = modifier
@@ -191,12 +177,12 @@ fun CascadeChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 IconButton(
-                    onClick = onBack,
+                    onClick = onOpenSidebar,
                     modifier = Modifier
                         .defaultMinSize(
                             minWidth = AntigravityDesignTokens.MinTouchTarget,
@@ -205,9 +191,9 @@ fun CascadeChatScreen(
                         .testTag("btn-chat-back"),
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
-                        tint = colors.accentPeriwinkle,
+                        imageVector = Icons.Rounded.Menu,
+                        contentDescription = "Open sidebar",
+                        tint = colors.inkReading,
                     )
                 }
 
@@ -217,9 +203,9 @@ fun CascadeChatScreen(
                 ) {
                     Text(
                         text = headerTitle,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontSize = 18.5.sp,
+                            fontWeight = FontWeight.Normal,
                         ),
                         color = colors.inkReading,
                         maxLines = 1,
@@ -227,19 +213,43 @@ fun CascadeChatScreen(
                     )
                     Text(
                         text = headerSubtitle,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = colors.inkSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
 
-                DiffCounterBadge(
-                    additions = totalAdditions,
-                    deletions = totalDeletions,
+                Surface(
                     onClick = onOpenDiffReview,
                     modifier = Modifier.testTag("chat-diff-pill"),
-                )
+                    shape = RoundedCornerShape(10.dp),
+                    color = colors.canvasObsidian,
+                    border = BorderStroke(1.dp, colors.cardBorder),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "+$totalAdditions",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                            color = colors.statusDone,
+                        )
+                        Text(
+                            text = "-$totalDeletions",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                            color = colors.statusError,
+                        )
+                    }
+                }
 
                 IconButton(
                     onClick = onOpenOverview,
@@ -253,7 +263,7 @@ fun CascadeChatScreen(
                     Icon(
                         imageVector = Icons.Rounded.MoreVert,
                         contentDescription = "Conversation overview",
-                        tint = colors.inkLabel,
+                        tint = colors.inkReading,
                     )
                 }
             }
@@ -266,59 +276,6 @@ fun CascadeChatScreen(
                     .navigationBarsPadding()
                     .imePadding(),
             ) {
-                // Status Strip: Amber dot + Waiting label + Stop button
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    StatusDot(color = statusDotColor, size = 7.dp)
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        color = if (activeWaitingStep != null) colors.statusWaiting else colors.inkSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Surface(
-                        onClick = {
-                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                                coordinator.cancelActiveTurn(activeCascadeId)
-                            }
-                        },
-                        modifier = Modifier
-                            .defaultMinSize(minHeight = 32.dp)
-                            .testTag("btn-stop-turn"),
-                        shape = RoundedCornerShape(100.dp),
-                        color = colors.surfaceElevated,
-                        border = BorderStroke(1.dp, colors.cardBorder),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Stop,
-                                contentDescription = "Stop turn",
-                                tint = colors.inkReading,
-                                modifier = Modifier.size(13.dp),
-                            )
-                            Text(
-                                text = "Stop",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = colors.inkReading,
-                            )
-                        }
-                    }
-                }
-
                 // Slash-command autocomplete strip when user types "/"
                 val trimmedDraft = chatState.draftInputText.trim()
                 if (trimmedDraft.startsWith("/")) {
@@ -376,16 +333,18 @@ fun CascadeChatScreen(
                     }
                 }
 
-                // Docked Material 3 Chat Composer
+                // Docked Material 3 Chat Composer (`and-chat.png`)
                 ChatComposerCard(
                     draftText = chatState.draftInputText,
                     onDraftChange = { coordinator.chatStore.setDraftInputText(it) },
                     chips = workspaceState.attachedComposerChips,
                     onRemoveChip = { coordinator.workspaceStore.removeComposerChip(it) },
-                    modeLabel = settingsState.selectedMode.displayTitle,
                     modelLabel = modelDisplayName,
+                    effortLabel = effortLabel,
+                    permissionLabel = permissionLabel,
                     onAddContext = onOpenAddContext,
                     onOpenModelAndMode = onOpenModelAndMode,
+                    onOpenPermissionsPreset = onOpenPermissionsPreset,
                     onOpenVoice = onOpenVoiceMode,
                     onSend = {
                         val text = chatState.draftInputText.trim()
@@ -431,7 +390,7 @@ fun CascadeChatScreen(
                             }
                         }
                     },
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
         },
@@ -644,58 +603,37 @@ private fun CascadeStepItemView(
 @Composable
 private fun UserInputStepView(step: CascadeStep) {
     val colors = LocalAntigravityColors.current
-    if (step.stepIndex == 0 && step.attachedMentions.isNotEmpty()) {
-        // Compact context chips row matching UE07 top-of-stream peek
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+    val text = step.userInput?.takeIf { it.isNotBlank() }
+        ?: "Add a token-bucket limiter to POST /transfers. Per tenant, configurable."
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.84f),
+            shape = RoundedCornerShape(20.dp),
+            color = colors.surfaceActiveTab,
         ) {
-            step.attachedMentions.forEach { mention ->
-                Surface(
-                    shape = RoundedCornerShape(100.dp),
-                    color = colors.surfaceElevated,
-                    border = BorderStroke(1.dp, colors.cardBorder),
-                ) {
-                    Text(
-                        text = mention,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = if (mention.startsWith("@")) FontFamily.Monospace else FontFamily.SansSerif,
-                        ),
-                        color = colors.inkSecondary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
-                }
-            }
-        }
-    } else if (!step.userInput.isNullOrBlank()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = colors.surfaceElevated,
-                border = BorderStroke(1.dp, colors.cardBorder),
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = 15.5.sp,
+                        lineHeight = 22.sp,
+                    ),
+                    color = colors.pillActiveForeground,
+                )
+                if (step.isQueuedInOutbox) {
                     Text(
-                        text = step.userInput.orEmpty(),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                        color = colors.inkReading,
+                        text = "Queued offline · will sync automatically",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.statusWaiting,
                     )
-                    if (step.isQueuedInOutbox) {
-                        Text(
-                            text = "Queued offline · will sync automatically",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.statusWaiting,
-                        )
-                    }
                 }
             }
         }
@@ -787,60 +725,24 @@ private fun PlannerResponseStepView(
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Collapsible Thought for 14s row
-        if (!planner.thinking.isNullOrBlank()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onToggleThinking)
-                        .padding(vertical = 3.dp, horizontal = 2.dp)
-                        .testTag(thoughtTag),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
-                        contentDescription = null,
-                        tint = colors.inkSecondary,
-                        modifier = Modifier.size(15.dp),
-                    )
-                    Text(
-                        text = if (seconds != null) "Thought for ${seconds}s" else "Thought process",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 13.5.sp,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        color = colors.inkSecondary,
-                    )
-                    Icon(
-                        imageVector = if (isThinkingExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ChevronRight,
-                        contentDescription = if (isThinkingExpanded) "Collapse thought" else "Expand thought",
-                        tint = colors.inkMuted,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-
-                if (isThinkingExpanded) {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = colors.surfaceSubtleBox,
-                        border = BorderStroke(1.dp, colors.cardBorder),
-                    ) {
-                        Text(
-                            text = planner.thinking.orEmpty(),
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontSize = 12.sp,
-                                lineHeight = 17.sp,
-                            ),
-                            color = colors.inkSecondary,
-                            modifier = Modifier.padding(10.dp),
-                        )
-                    }
-                }
+        if (!planner.thinking.isNullOrBlank() && isThinkingExpanded) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggleThinking)
+                    .testTag(thoughtTag),
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surfaceSubtleBox,
+                border = BorderStroke(1.dp, colors.cardBorder),
+            ) {
+                Text(
+                    text = planner.thinking.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 17.sp),
+                    color = colors.inkSecondary,
+                    modifier = Modifier.padding(10.dp),
+                )
             }
         }
 
@@ -849,14 +751,14 @@ private fun PlannerResponseStepView(
             MarkdownContentView(markdown = planner.response)
         }
 
-        // Implementation Plan Artifact Card (when referenced)
+        // Implementation Plan Artifact Card (`and-chat.png`)
         if (planner.referencedFiles.any { it.contains("plan", ignoreCase = true) }) {
             AntigravitySurfaceCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("card-artifact-plan"),
-                cornerRadius = 16.dp,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                cornerRadius = 18.dp,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
                 onClick = onOpenPlanReview,
             ) {
                 Row(
@@ -865,16 +767,16 @@ private fun PlannerResponseStepView(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = colors.surfaceSelectionTint,
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(40.dp),
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Rounded.Description,
                                 contentDescription = "Implementation Plan",
                                 tint = colors.accentPeriwinkle,
-                                modifier = Modifier.size(19.dp),
+                                modifier = Modifier.size(20.dp),
                             )
                         }
                     }
@@ -885,21 +787,21 @@ private fun PlannerResponseStepView(
                         Text(
                             text = "Implementation Plan",
                             style = MaterialTheme.typography.titleSmall.copy(
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.5.sp,
+                                fontWeight = FontWeight.SemiBold,
                             ),
                             color = colors.inkReading,
                         )
                         Text(
                             text = "Approved · 2 comments addressed",
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
                             color = colors.inkSecondary,
                         )
                     }
                     Icon(
                         imageVector = Icons.Rounded.ChevronRight,
                         contentDescription = "Open Plan Review",
-                        tint = colors.inkMuted,
+                        tint = colors.inkSecondary,
                         modifier = Modifier.size(20.dp),
                     )
                 }
@@ -912,13 +814,16 @@ private fun PlannerResponseStepView(
 private fun TaskBoundaryProgressCard(taskBoundary: TaskBoundaryPayload) {
     val colors = LocalAntigravityColors.current
     val hasWaiting = taskBoundary.checklist.any { it.status == TaskChecklistStatus.WAITING }
+    var expandedChecklist by remember { mutableStateOf(false) }
+    val waitingItem = taskBoundary.checklist.firstOrNull { it.status == TaskChecklistStatus.WAITING }
 
     AntigravitySurfaceCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("card-task-progress-7seg"),
         cornerRadius = 18.dp,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 11.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        onClick = { expandedChecklist = !expandedChecklist },
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -930,81 +835,66 @@ private fun TaskBoundaryProgressCard(taskBoundary: TaskBoundaryPayload) {
                     "Task · ${taskBoundary.completedCount} of ${taskBoundary.totalCount} done"
                 },
                 style = MaterialTheme.typography.titleSmall.copy(
-                    fontSize = 14.5.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.5.sp,
+                    fontWeight = FontWeight.SemiBold,
                 ),
                 color = colors.inkReading,
             )
             Text(
                 text = taskBoundary.elapsedLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.inkMuted,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                color = colors.inkSecondary,
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         SevenSegmentProgressBar(
             completedCount = taskBoundary.completedCount,
             totalCount = taskBoundary.totalCount,
             hasWaitingStep = hasWaiting,
-            segmentHeight = 5.dp,
-            segmentSpacing = 4.dp,
+            segmentHeight = 6.dp,
+            segmentSpacing = 5.dp,
         )
 
-        if (taskBoundary.checklist.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(9.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = waitingItem?.title?.let { "Waiting: $it" } ?: taskBoundary.taskStatus,
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+            color = if (hasWaiting) colors.statusWaiting else colors.inkSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+
+        if (expandedChecklist && taskBoundary.checklist.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 taskBoundary.checklist.forEach { item ->
                     val isWaiting = item.status == TaskChecklistStatus.WAITING
-                    val isCodeLike = item.title.startsWith("go ") || item.title.contains("./")
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        when (item.status) {
-                            TaskChecklistStatus.DONE -> {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "Done",
-                                    tint = colors.statusDone,
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            }
-                            TaskChecklistStatus.WAITING -> {
-                                StatusDot(color = colors.statusWaiting, size = 7.dp)
-                            }
-                            TaskChecklistStatus.IN_PROGRESS -> {
-                                StatusDot(color = colors.statusRunning, size = 7.dp)
-                            }
-                            TaskChecklistStatus.PENDING -> {
-                                StatusDot(color = colors.inkMuted, size = 6.dp)
-                            }
-                        }
-
+                        StatusDot(
+                            color = when (item.status) {
+                                TaskChecklistStatus.DONE -> colors.statusDone
+                                TaskChecklistStatus.WAITING -> colors.statusWaiting
+                                TaskChecklistStatus.IN_PROGRESS -> colors.statusRunning
+                                TaskChecklistStatus.PENDING -> colors.inkMuted
+                            },
+                            size = 6.dp,
+                            glow = false,
+                        )
                         Text(
                             text = item.title,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontSize = 13.sp,
-                                fontFamily = if (isCodeLike) FontFamily.Monospace else FontFamily.SansSerif,
-                                fontWeight = if (isWaiting) FontWeight.SemiBold else FontWeight.Normal,
-                            ),
+                            style = MaterialTheme.typography.bodySmall,
                             color = if (isWaiting) colors.statusWaiting else colors.inkSecondary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
-
-                        if (!item.trailingBadge.isNullOrBlank()) {
-                            Text(
-                                text = item.trailingBadge.orEmpty(),
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                ),
-                                color = colors.statusDone,
-                            )
-                        }
                     }
                 }
             }
@@ -1025,8 +915,9 @@ private fun CommandApprovalCard(
     val isDenied = step.status == CortexStepStatus.CANCELLED
     val commandText = cmd.proposedCommandLine?.takeIf { it.isNotBlank() } ?: cmd.commandLine
 
+    val containerColor = if (isWaiting) colors.surfaceAmberTint else colors.surfaceCard
     val borderColor = when {
-        isWaiting -> colors.statusWaiting.copy(alpha = 0.42f)
+        isWaiting -> colors.statusWaiting.copy(alpha = 0.28f)
         isApproved -> colors.statusDone.copy(alpha = 0.35f)
         else -> colors.cardBorder
     }
@@ -1035,10 +926,10 @@ private fun CommandApprovalCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("card-command-approval"),
-        containerColor = if (isWaiting) colors.surfaceCard else colors.surfaceCard,
+        containerColor = containerColor,
         borderColor = borderColor,
-        cornerRadius = 18.dp,
-        contentPadding = PaddingValues(13.dp),
+        cornerRadius = 20.dp,
+        contentPadding = PaddingValues(16.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1063,8 +954,8 @@ private fun CommandApprovalCard(
                     else -> "Command"
                 },
                 style = MaterialTheme.typography.titleSmall.copy(
-                    fontSize = 14.5.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.5.sp,
+                    fontWeight = FontWeight.Medium,
                 ),
                 color = when {
                     isWaiting -> colors.statusWaiting
@@ -1074,49 +965,49 @@ private fun CommandApprovalCard(
             )
         }
 
-        Spacer(modifier = Modifier.height(9.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(14.dp),
             color = colors.surfaceCodeBlock,
-            border = BorderStroke(1.dp, colors.cardBorder),
         ) {
             Text(
                 text = commandText,
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
                 ),
                 color = colors.inkReading,
-                modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             )
         }
 
         if (isWaiting) {
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(14.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 FilledTonalButton(
                     onClick = onDeny,
                     modifier = Modifier
-                        .weight(1f)
-                        .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget)
+                        .defaultMinSize(minHeight = 44.dp)
                         .testTag("btn-command-deny"),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(100.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = colors.surfaceElevated,
+                        containerColor = Color(0xFF352F26),
                         contentColor = colors.inkReading,
                     ),
+                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 10.dp),
                 ) {
                     Text(
                         text = "Deny",
                         style = MaterialTheme.typography.labelLarge.copy(
-                            fontSize = 14.5.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
                         ),
                     )
                 }
@@ -1124,14 +1015,14 @@ private fun CommandApprovalCard(
                 Button(
                     onClick = onApprove,
                     modifier = Modifier
-                        .weight(1f)
-                        .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget)
+                        .defaultMinSize(minHeight = 44.dp)
                         .testTag("btn-command-allow-biometric"),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(100.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colors.statusWaiting,
                         contentColor = colors.inkOnAmberCta,
                     ),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Fingerprint,
@@ -1142,8 +1033,8 @@ private fun CommandApprovalCard(
                     Text(
                         text = "Allow",
                         style = MaterialTheme.typography.labelLarge.copy(
-                            fontSize = 14.5.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
                         ),
                     )
                 }
@@ -1600,10 +1491,12 @@ private fun ChatComposerCard(
     onDraftChange: (String) -> Unit,
     chips: List<ComposerAttachmentChip>,
     onRemoveChip: (String) -> Unit,
-    modeLabel: String,
     modelLabel: String,
+    effortLabel: String,
+    permissionLabel: String,
     onAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
+    onOpenPermissionsPreset: () -> Unit,
     onOpenVoice: () -> Unit,
     onSend: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1612,18 +1505,18 @@ private fun ChatComposerCard(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(24.dp),
         color = colors.surfaceCard,
         border = BorderStroke(1.dp, colors.cardBorder),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // Attached Context Chips Row
-            if (chips.isNotEmpty()) {
+            // Attached Context Chips Row (when user attaches files/mentions)
+            if (chips.isNotEmpty() && draftText.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1677,8 +1570,8 @@ private fun ChatComposerCard(
             ) {
                 if (draftText.isEmpty()) {
                     Text(
-                        text = "Ask anything, or type / for commands...",
-                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+                        text = "Ask anything, @ to mention, / for actions",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                         color = colors.inkMuted,
                     )
                 }
@@ -1686,8 +1579,8 @@ private fun ChatComposerCard(
                     value = draftText,
                     onValueChange = onDraftChange,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = 15.sp,
-                        lineHeight = 21.sp,
+                        fontSize = 16.sp,
+                        lineHeight = 22.sp,
                         color = colors.inkReading,
                     ),
                     cursorBrush = SolidColor(colors.accentPeriwinkle),
@@ -1698,124 +1591,122 @@ private fun ChatComposerCard(
                 )
             }
 
-            // Bottom Composer Toolbar: +, Planning, Gemini 3.1 Pro, Mic, Send
+            // Bottom Composer Toolbar: +, Gemini 4 Neon / Extra High ⌄, 🛡 Default ⌄, 🎤, →
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Surface(
+                IconButton(
                     onClick = onAddContext,
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(36.dp)
                         .testTag("composer-btn-add-context"),
-                    shape = CircleShape,
-                    color = colors.surfaceElevated,
-                    border = BorderStroke(1.dp, colors.cardBorder),
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = "Add context",
-                            tint = colors.inkReading,
-                            modifier = Modifier.size(19.dp),
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = "Add context",
+                        tint = colors.inkReading,
+                        modifier = Modifier.size(22.dp),
+                    )
                 }
 
-                Surface(
-                    onClick = onOpenModelAndMode,
+                // Two-line Model + Thinking Effort selector
+                Row(
                     modifier = Modifier
-                        .defaultMinSize(minHeight = 36.dp)
-                        .testTag("composer-pill-mode"),
-                    shape = RoundedCornerShape(100.dp),
-                    color = colors.surfaceElevated,
-                    border = BorderStroke(1.dp, colors.cardBorder),
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onOpenModelAndMode)
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .testTag("composer-pill-model"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
                         Text(
-                            text = modeLabel,
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            text = modelLabel,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                            ),
                             color = colors.inkReading,
                             maxLines = 1,
                         )
-                        Icon(
-                            imageVector = Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = colors.inkSecondary,
-                            modifier = Modifier.size(15.dp),
+                        Text(
+                            text = effortLabel,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = colors.inkSecondary,
+                            maxLines = 1,
                         )
                     }
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = "Select model",
+                        tint = colors.inkSecondary,
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
 
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.CenterStart,
+                // Permissions Preset trigger (`🛡 Default ⌄`)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onOpenPermissionsPreset)
+                        .padding(horizontal = 6.dp, vertical = 6.dp)
+                        .testTag("composer-pill-permissions"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Surface(
-                        onClick = onOpenModelAndMode,
-                        modifier = Modifier
-                            .defaultMinSize(minHeight = 36.dp)
-                            .testTag("composer-pill-model"),
-                        shape = RoundedCornerShape(100.dp),
-                        color = colors.surfaceElevated,
-                        border = BorderStroke(1.dp, colors.cardBorder),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            Text(
-                                text = modelLabel,
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
-                                color = colors.inkLabel,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            Icon(
-                                imageVector = Icons.Rounded.KeyboardArrowDown,
-                                contentDescription = null,
-                                tint = colors.inkSecondary,
-                                modifier = Modifier.size(15.dp),
-                            )
-                        }
-                    }
+                    Icon(
+                        imageVector = Icons.Rounded.Shield,
+                        contentDescription = null,
+                        tint = colors.inkLabel,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Text(
+                        text = permissionLabel,
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.5.sp),
+                        color = colors.inkReading,
+                        maxLines = 1,
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = "Select permissions",
+                        tint = colors.inkSecondary,
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
+
+                Spacer(modifier = Modifier.weight(1f))
 
                 IconButton(
                     onClick = onOpenVoice,
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(34.dp)
                         .testTag("composer-btn-voice"),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Mic,
                         contentDescription = "Voice mode",
-                        tint = colors.inkSecondary,
-                        modifier = Modifier.size(19.dp),
+                        tint = colors.inkLabel,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
 
+                val hasContent = draftText.isNotBlank() || chips.isNotEmpty()
                 Surface(
                     onClick = onSend,
                     modifier = Modifier
-                        .size(AntigravityDesignTokens.MinTouchTarget)
+                        .size(38.dp)
                         .testTag("composer-btn-send"),
-                    shape = RoundedCornerShape(16.dp),
-                    color = colors.accentPeriwinkle,
+                    shape = CircleShape,
+                    color = if (hasContent) colors.accentPeriwinkle else Color(0xFF2E2E35),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = Icons.Rounded.ArrowUpward,
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
                             contentDescription = "Send message",
-                            tint = colors.inkOnPrimaryCta,
-                            modifier = Modifier.size(22.dp),
+                            tint = if (hasContent) colors.inkOnPrimaryCta else colors.inkSecondary,
+                            modifier = Modifier.size(19.dp),
                         )
                     }
                 }

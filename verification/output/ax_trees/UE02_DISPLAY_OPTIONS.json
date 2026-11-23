@@ -1,9 +1,9 @@
 {
   "stateId": "UE02_DISPLAY_OPTIONS",
-  "viewportWidth": 393,
-  "viewportHeight": 852,
-  "scrollWidth": 393,
-  "scrollHeight": 852,
+  "viewportWidth": 390,
+  "viewportHeight": 844,
+  "scrollWidth": 390,
+  "scrollHeight": 844,
   "overflowPx": 0,
   "elements": {
     "[data-testid='sheet-reset-btn']": {
@@ -16,7 +16,7 @@
     },
     "[data-testid='sheet-done-btn']": {
       "exists": true,
-      "x": 321,
+      "x": 318,
       "y": 192.5,
       "width": 56,
       "height": 44,
@@ -26,7 +26,7 @@
       "exists": true,
       "x": 16,
       "y": 249.5,
-      "width": 361,
+      "width": 358,
       "height": 50,
       "text": "Group By\nProject"
     },
@@ -34,7 +34,7 @@
       "exists": true,
       "x": 16,
       "y": 300.5,
-      "width": 361,
+      "width": 358,
       "height": 50,
       "text": "Sort Conversations\nLast Updated"
     },
@@ -50,7 +50,7 @@
       "exists": true,
       "x": 16,
       "y": 526.5,
-      "width": 361,
+      "width": 358,
       "height": 64,
       "text": "Auto Pin\nPin a conversation when you message it"
     },
@@ -58,7 +58,7 @@
       "exists": true,
       "x": 16,
       "y": 591.5,
-      "width": 361,
+      "width": 358,
       "height": 64,
       "text": "Archived Only\nShow only archived conversations"
     },
@@ -66,7 +66,7 @@
       "exists": true,
       "x": 16,
       "y": 669.5,
-      "width": 361,
+      "width": 358,
       "height": 50,
       "text": "Mark All as Read\n3 unread"
     }

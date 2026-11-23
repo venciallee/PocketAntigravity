@@ -988,7 +988,7 @@ final class AntigravityProtocolTests: XCTestCase {
         let verifyStore = AntigravitySessionStore.makeESDDVerificationStore()
         XCTAssertTrue(verifyStore.isVerificationMode)
         XCTAssertFalse(verifyStore.summaries.isEmpty)
-        XCTAssertEqual(verifyStore.availableModels, CascadeModelConfig.catalog)
+        XCTAssertEqual(verifyStore.availableModels, CascadeModelConfig.liveDefaultCatalog)
     }
 
     func testBinaryProtobufGetStepsRequestAndRealStepDecoding() throws {

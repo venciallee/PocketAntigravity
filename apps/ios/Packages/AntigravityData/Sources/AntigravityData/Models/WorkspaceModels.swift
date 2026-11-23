@@ -12,21 +12,28 @@ public enum PrimaryTab: String, ResilientStringEnum, CaseIterable, Identifiable 
     public static var unknownFallback: PrimaryTab { .agents }
 }
 
-/// Deterministic ESDD verification scene identifiers (`UE01` .. `UE13`).
+/// Deterministic ESDD verification scene identifiers (`UE01` .. `UE15`, 20 aligned boards).
 public enum ESDDVerifySceneCase: String, ResilientStringEnum, CaseIterable, Identifiable {
     case agentsHome = "UE01_AGENTS_HOME"
+    case sidebarDrawer = "UE01B_SIDEBAR_DRAWER"
     case displayOptions = "UE02_DISPLAY_OPTIONS"
     case contextMenuPin = "UE03_CONTEXT_MENU_PIN"
     case projectDetail = "UE04_PROJECT_DETAIL"
     case createProject = "UE05_CREATE_PROJECT"
     case automations = "UE06_AUTOMATIONS"
+    case automationDetail = "UE06B_AUTOMATION_DETAIL"
+    case automationEdit = "UE06C_AUTOMATION_EDIT"
     case chatAndComposer = "UE07_CHAT_AND_COMPOSER"
+    case permissionsPreset = "UE07B_PERMISSIONS_PRESET"
     case addContext = "UE08_ADD_CONTEXT"
+    case slashMenu = "UE08B_SLASH_MENU"
     case modelAndMode = "UE09_MODEL_AND_MODE"
     case structuredQuestion = "UE10_STRUCTURED_QUESTION"
     case planReview = "UE11_PLAN_REVIEW"
     case turnDiffReview = "UE12_TURN_DIFF_REVIEW"
     case liveActivitySpec = "UE13_LIVE_ACTIVITY_SPEC"
+    case rulesAndSkills = "UE14_RULES_AND_SKILLS"
+    case settings = "UE15_SETTINGS"
 
     public var id: String { rawValue }
     public static var unknownFallback: ESDDVerifySceneCase { .agentsHome }

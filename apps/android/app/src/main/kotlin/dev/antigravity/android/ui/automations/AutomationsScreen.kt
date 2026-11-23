@@ -3,37 +3,66 @@ package dev.antigravity.android.ui.automations
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,31 +73,36 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.antigravity.android.core.ui.components.AntigravitySurfaceCard
 import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.antigravityColors
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AutomationItem
+import dev.antigravity.shared.model.AutomationRunStatus
 import dev.antigravity.shared.model.AutomationSectionKind
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
 /**
- * UE06_AUTOMATIONS: Material 3 Automations Hub displaying an inline natural-language quick-create bar
- * alongside SCHEDULED (Next Run / Last Run stat tiles + Run Now), ALWAYS ON, and PAUSED sections.
+ * UE06_AUTOMATIONS (`and-automations.png`): Native Material 3 Automations Hub with
+ * hamburger top bar, filter chips, Create with Prompt card, Scheduled/Always on/Paused sections,
+ * and anchored overflow action menu.
  */
 @Composable
 fun AutomationsScreen(
     coordinator: AntigravityCoreCoordinator,
-    onTapAddFab: () -> Unit = {},
+    onOpenSidebar: () -> Unit = {},
+    onOpenAutomationDetail: (String) -> Unit = {},
+    onEditAutomation: (String) -> Unit = {},
+    initialExpandedMenuAutomationId: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
@@ -77,7 +111,9 @@ fun AutomationsScreen(
 
     var promptInput by rememberSaveable { mutableStateOf("") }
     var sectionFilter by rememberSaveable { mutableStateOf<AutomationSectionKind?>(null) }
-    var filterMenuExpanded by remember { mutableStateOf(false) }
+    var expandedMenuAutomationId by remember(initialExpandedMenuAutomationId) {
+        mutableStateOf(initialExpandedMenuAutomationId)
+    }
 
     val automations = workspaceState.automations
     val scheduledItems = remember(automations) {
@@ -90,303 +126,483 @@ fun AutomationsScreen(
         automations.filter { it.section == AutomationSectionKind.PAUSED }
     }
 
-    val submitQuickCreate: () -> Unit = {
+    fun submitQuickCreate() {
         val text = promptInput.trim()
-        if (text.isNotEmpty()) {
-            promptInput = ""
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                val rpcClient = if (coordinator.isVerificationMode) {
-                    null
-                } else {
-                    coordinator.connectionStore.activeClient()
-                }
-                coordinator.workspaceStore.createAutomationFromPrompt(
-                    client = rpcClient,
-                    prompt = text,
-                )
-            }
+        if (text.isEmpty()) return
+        promptInput = ""
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val rpcClient = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+            coordinator.workspaceStore.createAutomationFromPrompt(client = rpcClient, prompt = text)
         }
     }
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(colors.canvasObsidian)
-            .verticalScroll(rememberScrollState())
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .background(colors.canvasObsidian),
     ) {
-        // 1. Top Bar: "Automations" Title + Filter Icon
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = "Automations",
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    fontSize = 29.sp,
-                    lineHeight = 34.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
-                color = colors.inkReading,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-            )
-
-            Box {
-                Surface(
-                    onClick = { filterMenuExpanded = true },
+            // 1. Top Bar: Hamburger | Automations | Search
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                IconButton(
+                    onClick = onOpenSidebar,
                     modifier = Modifier
                         .size(AntigravityDesignTokens.MinTouchTarget)
-                        .testTag("btn-automations-filter"),
-                    shape = CircleShape,
-                    color = colors.surfacePill,
-                    border = BorderStroke(
-                        width = 1.dp,
-                        color = if (sectionFilter != null) colors.accentPeriwinkle else colors.cardBorder,
-                    ),
+                        .testTag("btn-sidebar"),
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Rounded.FilterList,
-                            contentDescription = "Filter automations",
-                            tint = if (sectionFilter != null) colors.accentPeriwinkle else colors.inkReading,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                DropdownMenu(
-                    expanded = filterMenuExpanded,
-                    onDismissRequest = { filterMenuExpanded = false },
-                    containerColor = colors.surfacePopover,
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("All Automations", color = colors.inkReading) },
-                        trailingIcon = {
-                            if (sectionFilter == null) {
-                                Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.accentPeriwinkle)
-                            }
-                        },
-                        onClick = {
-                            sectionFilter = null
-                            filterMenuExpanded = false
-                        },
-                    )
-                    AutomationSectionKind.entries.forEach { kind ->
-                        DropdownMenuItem(
-                            text = { Text(kind.displayTitle, color = colors.inkReading) },
-                            trailingIcon = {
-                                if (sectionFilter == kind) {
-                                    Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.accentPeriwinkle)
-                                }
-                            },
-                            onClick = {
-                                sectionFilter = kind
-                                filterMenuExpanded = false
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
-        // 2. Inline Natural-Language Quick-Create Row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = promptInput,
-                onValueChange = { promptInput = it },
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("automation-prompt-input"),
-                singleLine = true,
-                placeholder = {
-                    Text(
-                        text = "Every weekday at 9, summarize...",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                        color = colors.inkMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                leadingIcon = {
                     Icon(
-                        imageVector = Icons.Rounded.Bolt,
-                        contentDescription = null,
-                        tint = colors.inkSecondary,
-                        modifier = Modifier.size(18.dp),
+                        imageVector = Icons.Rounded.Menu,
+                        contentDescription = "Open sidebar",
+                        tint = colors.inkReading,
                     )
-                },
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 14.5.sp,
-                    color = colors.inkReading,
-                ),
-                shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = colors.surfaceCard,
-                    unfocusedContainerColor = colors.surfaceCard,
-                    focusedBorderColor = colors.accentPeriwinkle,
-                    unfocusedBorderColor = colors.cardBorder,
-                    cursorColor = colors.accentPeriwinkle,
-                ),
-            )
-
-            FilledTonalButton(
-                onClick = submitQuickCreate,
-                modifier = Modifier
-                    .defaultMinSize(minWidth = 78.dp, minHeight = 52.dp)
-                    .testTag("btn-create-automation-inline"),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = if (promptInput.isNotBlank()) colors.accentPeriwinkle else colors.surfaceBadge,
-                    contentColor = if (promptInput.isNotBlank()) colors.inkOnPrimaryCta else colors.inkReading,
-                ),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            ) {
+                }
                 Text(
-                    text = "Create",
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 1,
+                    text = "Automations",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = 23.sp,
+                        fontWeight = FontWeight.Normal,
+                    ),
+                    color = colors.inkReading,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = {},
+                    modifier = Modifier
+                        .size(AntigravityDesignTokens.MinTouchTarget)
+                        .testTag("btn-automations-search"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = "Search automations",
+                        tint = colors.inkReading,
+                    )
+                }
+            }
+
+            // 2. Single-line FilterChip strip (`All`, `Scheduled 2`, `Always on 1`, `Paused 1`)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                AutomationFilterChip(
+                    label = "All",
+                    selected = sectionFilter == null,
+                    onClick = { sectionFilter = null },
+                    modifier = Modifier.testTag("filter-auto-all"),
+                )
+                AutomationFilterChip(
+                    label = "Scheduled ${scheduledItems.size}",
+                    selected = sectionFilter == AutomationSectionKind.SCHEDULED,
+                    onClick = { sectionFilter = AutomationSectionKind.SCHEDULED },
+                    modifier = Modifier.testTag("filter-auto-scheduled"),
+                )
+                AutomationFilterChip(
+                    label = "Always on ${alwaysOnItems.size}",
+                    selected = sectionFilter == AutomationSectionKind.ALWAYS_ON,
+                    onClick = { sectionFilter = AutomationSectionKind.ALWAYS_ON },
+                    modifier = Modifier.testTag("filter-auto-always-on"),
+                )
+                AutomationFilterChip(
+                    label = "Paused ${pausedItems.size}",
+                    selected = sectionFilter == AutomationSectionKind.PAUSED,
+                    onClick = { sectionFilter = AutomationSectionKind.PAUSED },
+                    modifier = Modifier.testTag("filter-auto-paused"),
                 )
             }
-        }
 
-        // 3. SCHEDULED Section
-        if ((sectionFilter == null || sectionFilter == AutomationSectionKind.SCHEDULED) && scheduledItems.isNotEmpty()) {
-            AutomationSectionHeader(title = "SCHEDULED", count = scheduledItems.size)
-
-            scheduledItems.forEach { item ->
-                val cardTag = when (item.id) {
-                    "auto-nightly-audit" -> "automation-card-nightly"
-                    "auto-weekly-flaky" -> "automation-card-flaky"
-                    else -> "automation-card-${item.id}"
-                }
-                val runTag = when (item.id) {
-                    "auto-nightly-audit" -> "btn-run-nightly"
-                    "auto-weekly-flaky" -> "btn-run-flaky"
-                    else -> "btn-run-${item.id}"
-                }
-                ScheduledAutomationCard(
-                    item = item,
-                    cardTag = cardTag,
-                    runButtonTag = runTag,
-                    onRunNow = {
-                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                            val rpcClient = if (coordinator.isVerificationMode) {
-                                null
-                            } else {
-                                coordinator.connectionStore.activeClient()
-                            }
-                            coordinator.workspaceStore.runAutomationNow(
-                                client = rpcClient,
-                                automationId = item.id,
+            // 3. Create with Prompt card (`and-automations.png`)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("automation-create-card"),
+                shape = RoundedCornerShape(20.dp),
+                color = colors.surfaceCard,
+                border = BorderStroke(1.dp, colors.cardBorder),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "Create with Prompt",
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
+                        color = colors.inkSecondary,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(100.dp),
+                            color = colors.surfaceElevated,
+                        ) {
+                            BasicTextField(
+                                value = promptInput,
+                                onValueChange = { promptInput = it },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 13.dp)
+                                    .testTag("input-automation-prompt"),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 14.5.sp,
+                                    color = colors.inkReading,
+                                ),
+                                cursorBrush = SolidColor(colors.accentPeriwinkle),
+                                decorationBox = { inner ->
+                                    if (promptInput.isEmpty()) {
+                                        Text(
+                                            text = "Every weekday at 9, summarize...",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
+                                            color = colors.inkMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    inner()
+                                },
                             )
                         }
-                    },
-                )
-            }
-        }
 
-        // 4. ALWAYS ON Section
-        if ((sectionFilter == null || sectionFilter == AutomationSectionKind.ALWAYS_ON) && alwaysOnItems.isNotEmpty()) {
-            AutomationSectionHeader(title = "ALWAYS ON", count = alwaysOnItems.size)
-
-            alwaysOnItems.forEach { item ->
-                val cardTag = if (item.id == "auto-pr-triage") {
-                    "automation-card-always-on"
-                } else {
-                    "automation-card-${item.id}"
-                }
-                AlwaysOnAutomationCard(
-                    item = item,
-                    cardTag = cardTag,
-                    onClick = onTapAddFab,
-                )
-            }
-        }
-
-        // 5. PAUSED Section
-        if ((sectionFilter == null || sectionFilter == AutomationSectionKind.PAUSED) && pausedItems.isNotEmpty()) {
-            AutomationSectionHeader(title = "PAUSED", count = pausedItems.size)
-
-            pausedItems.forEach { item ->
-                val resumeTag = if (item.id == "auto-bundle-size") {
-                    "btn-resume-paused"
-                } else {
-                    "btn-resume-${item.id}"
-                }
-                PausedAutomationCard(
-                    item = item,
-                    resumeButtonTag = resumeTag,
-                    onResume = {
-                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                            val rpcClient = if (coordinator.isVerificationMode) {
-                                null
-                            } else {
-                                coordinator.connectionStore.activeClient()
-                            }
-                            coordinator.workspaceStore.resumeAutomation(
-                                client = rpcClient,
-                                automationId = item.id,
+                        Button(
+                            onClick = { submitQuickCreate() },
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 44.dp)
+                                .testTag("btn-create-automation"),
+                            shape = RoundedCornerShape(100.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.accentPeriwinkle,
+                                contentColor = colors.inkOnPrimaryCta,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                text = "Create",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                             )
                         }
-                    },
+                    }
+                }
+            }
+
+            // 4. Scheduled Section
+            if (sectionFilter == null || sectionFilter == AutomationSectionKind.SCHEDULED) {
+                Text(
+                    text = "Scheduled · ${scheduledItems.size}",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
+                    color = colors.accentPeriwinkle,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
+                scheduledItems.forEach { item ->
+                    ScheduledAutomationCard(
+                        item = item,
+                        onOpenDetail = { onOpenAutomationDetail(item.id) },
+                        onOpenOverflow = { expandedMenuAutomationId = item.id },
+                    )
+                }
+            }
+
+            // 5. Always on Section
+            if (sectionFilter == null || sectionFilter == AutomationSectionKind.ALWAYS_ON) {
+                Text(
+                    text = "Always on · ${alwaysOnItems.size}",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
+                    color = colors.accentPeriwinkle,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                alwaysOnItems.forEach { item ->
+                    Surface(
+                        onClick = { onOpenAutomationDetail(item.id) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("automation-card-${item.id}"),
+                        shape = RoundedCornerShape(18.dp),
+                        color = colors.surfaceCard,
+                        border = BorderStroke(1.dp, colors.cardBorder),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = item.title,
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                    color = colors.inkReading,
+                                )
+                                Text(
+                                    text = "${item.scheduleSummary} · ${item.lastRunText}",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
+                                    color = colors.inkSecondary,
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(100.dp),
+                                color = colors.statusDone.copy(alpha = 0.14f),
+                            ) {
+                                Text(
+                                    text = "Listening",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.statusDone,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 6. Paused Section
+            if (sectionFilter == null || sectionFilter == AutomationSectionKind.PAUSED) {
+                Text(
+                    text = "Paused · ${pausedItems.size}",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
+                    color = colors.accentPeriwinkle,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                pausedItems.forEach { item ->
+                    Surface(
+                        onClick = { onOpenAutomationDetail(item.id) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("automation-card-${item.id}"),
+                        shape = RoundedCornerShape(18.dp),
+                        color = colors.surfaceCard,
+                        border = BorderStroke(1.dp, colors.cardBorder),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = item.title,
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                    color = colors.inkReading,
+                                )
+                                Text(
+                                    text = item.scheduleSummary,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
+                                    color = colors.inkSecondary,
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                        val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                                        coordinator.workspaceStore.resumeAutomation(client = rpc, automationId = item.id)
+                                    }
+                                },
+                                modifier = Modifier.testTag("btn-resume-${item.id}"),
+                                shape = RoundedCornerShape(100.dp),
+                                border = BorderStroke(1.dp, colors.cardBorder),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            ) {
+                                Text(
+                                    text = "Resume",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = colors.accentPeriwinkle,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Anchored M3 Overflow Menu (`and-automations.png`: Run Now, Edit Schedule & Prompt, Pause, Restart, Delete)
+        val menuTargetId = expandedMenuAutomationId
+        if (menuTargetId != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable { expandedMenuAutomationId = null },
+            )
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 310.dp, end = 24.dp)
+                    .width(248.dp)
+                    .zIndex(12f)
+                    .testTag("automation-overflow-menu"),
+                shape = RoundedCornerShape(16.dp),
+                color = colors.surfacePopover,
+                border = BorderStroke(1.dp, colors.cardBorder),
+                shadowElevation = 10.dp,
+            ) {
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    OverflowMenuRow(
+                        icon = Icons.Rounded.PlayArrow,
+                        label = "Run Now",
+                        onClick = {
+                            expandedMenuAutomationId = null
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                                coordinator.workspaceStore.runAutomationNow(client = rpc, automationId = menuTargetId)
+                            }
+                        },
+                        modifier = Modifier.testTag("menu-run-now"),
+                    )
+                    OverflowMenuRow(
+                        icon = Icons.Rounded.Edit,
+                        label = "Edit Schedule &\nPrompt",
+                        onClick = {
+                            expandedMenuAutomationId = null
+                            onEditAutomation(menuTargetId)
+                        },
+                        modifier = Modifier.testTag("menu-edit-automation"),
+                    )
+                    OverflowMenuRow(
+                        icon = Icons.Rounded.Pause,
+                        label = "Pause",
+                        onClick = {
+                            expandedMenuAutomationId = null
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                                coordinator.workspaceStore.pauseAutomation(client = rpc, automationId = menuTargetId)
+                            }
+                        },
+                        modifier = Modifier.testTag("menu-pause-automation"),
+                    )
+                    OverflowMenuRow(
+                        icon = Icons.Rounded.Refresh,
+                        label = "Restart",
+                        onClick = {
+                            expandedMenuAutomationId = null
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                                coordinator.workspaceStore.runAutomationNow(client = rpc, automationId = menuTargetId)
+                            }
+                        },
+                        modifier = Modifier.testTag("menu-restart-automation"),
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 6.dp),
+                        color = colors.subtleDivider,
+                    )
+                    OverflowMenuRow(
+                        icon = Icons.Rounded.DeleteOutline,
+                        label = "Delete",
+                        tint = colors.statusError,
+                        onClick = {
+                            expandedMenuAutomationId = null
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                                coordinator.workspaceStore.deleteAutomation(client = rpc, automationId = menuTargetId)
+                            }
+                        },
+                        modifier = Modifier.testTag("menu-delete-automation"),
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun AutomationSectionHeader(
-    title: String,
-    count: Int,
+private fun AutomationFilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
-    Text(
-        text = "$title · $count",
-        style = MaterialTheme.typography.labelSmall.copy(
-            fontFamily = FontFamily.SansSerif,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 0.9.sp,
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        modifier = modifier,
+        label = {
+            Text(
+                text = label,
+                maxLines = 1,
+                softWrap = false,
+            )
+        },
+        leadingIcon = if (selected) {
+            { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+        } else null,
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = colors.surfaceActiveTab,
+            selectedLabelColor = colors.pillActiveForeground,
+            selectedLeadingIconColor = colors.pillActiveForeground,
+            containerColor = colors.canvasObsidian,
+            labelColor = colors.inkReading,
         ),
-        color = colors.inkMuted,
-        modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+        border = FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = selected,
+            borderColor = colors.cardBorder,
+            selectedBorderColor = colors.surfaceActiveTab,
+        ),
     )
 }
 
 @Composable
 private fun ScheduledAutomationCard(
     item: AutomationItem,
-    cardTag: String,
-    runButtonTag: String,
-    onRunNow: () -> Unit,
+    onOpenDetail: () -> Unit,
+    onOpenOverflow: () -> Unit,
 ) {
     val colors = MaterialTheme.antigravityColors
-    AntigravitySurfaceCard(
+    Surface(
+        onClick = onOpenDetail,
         modifier = Modifier
             .fillMaxWidth()
-            .testTag(cardTag),
-        contentPadding = PaddingValues(12.dp),
+            .testTag("automation-card-${item.id}"),
+        shape = RoundedCornerShape(18.dp),
+        color = colors.surfaceCard,
+        border = BorderStroke(1.dp, colors.cardBorder),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(
                         text = item.title,
                         style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 15.5.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
                         ),
                         color = colors.inkReading,
@@ -395,7 +611,7 @@ private fun ScheduledAutomationCard(
                     )
                     Text(
                         text = item.scheduleSummary,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
                         color = colors.inkSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -403,23 +619,19 @@ private fun ScheduledAutomationCard(
                 }
 
                 Surface(
-                    onClick = onRunNow,
+                    onClick = onOpenOverflow,
                     modifier = Modifier
-                        .size(AntigravityDesignTokens.MinTouchTarget)
-                        .testTag(runButtonTag),
+                        .size(38.dp)
+                        .testTag("btn-overflow-${item.id}"),
                     shape = CircleShape,
-                    color = if (item.isRunningNow) colors.statusRunning.copy(alpha = 0.24f) else colors.surfaceSelectionTint,
-                    border = BorderStroke(
-                        width = 1.dp,
-                        color = if (item.isRunningNow) colors.statusRunning else colors.accentPeriwinkle.copy(alpha = 0.25f),
-                    ),
+                    color = colors.surfaceElevated,
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
-                            contentDescription = "Run ${item.title} now",
-                            tint = colors.accentPeriwinkle,
-                            modifier = Modifier.size(20.dp),
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = "Automation actions",
+                            tint = colors.inkReading,
+                            modifier = Modifier.size(19.dp),
                         )
                     }
                 }
@@ -427,91 +639,407 @@ private fun ScheduledAutomationCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
             ) {
-                // NEXT RUN Stat Box
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "NEXT RUN",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, letterSpacing = 0.5.sp),
+                        color = colors.inkMuted,
+                    )
+                    Text(
+                        text = item.nextRunText,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                        color = colors.inkReading,
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "LAST RUN",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, letterSpacing = 0.5.sp),
+                        color = colors.inkMuted,
+                    )
+                    Text(
+                        text = if (item.isRunningNow) "Running now..." else item.lastRunText,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                        color = when {
+                            item.isRunningNow -> colors.statusRunning
+                            item.needsReview -> colors.statusWaiting
+                            else -> colors.statusDone
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverflowMenuRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: Color = MaterialTheme.antigravityColors.inkReading,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(19.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp),
+            color = tint,
+        )
+    }
+}
+
+/**
+ * UE06B_AUTOMATION_DETAIL (`and-automation-detail.png`): Full-screen Automation Detail view
+ * showing status badges, Run now / Pause primary pills, Prompt card, Next run & Runs on metadata,
+ * and Recent runs history with Retry action on failed runs.
+ */
+@Composable
+fun AutomationDetailScreen(
+    coordinator: AntigravityCoreCoordinator,
+    automationId: String = "auto-nightly-audit",
+    onBack: () -> Unit,
+    onEdit: (String) -> Unit,
+    onOpenConversation: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.antigravityColors
+    val workspaceState by coordinator.workspaceStore.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+
+    val automation = remember(workspaceState.automations, automationId) {
+        workspaceState.automations.firstOrNull { it.id == automationId }
+            ?: workspaceState.automations.firstOrNull()
+    }
+    if (automation == null) {
+        Box(modifier = modifier.fillMaxSize().background(colors.canvasObsidian))
+        return
+    }
+    val isPaused = automation.section == AutomationSectionKind.PAUSED
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.canvasObsidian)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 28.dp),
+    ) {
+        // Top App Bar: Back | Title + subtitle | Edit doc icon + Overflow
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .size(AntigravityDesignTokens.MinTouchTarget)
+                    .testTag("btn-back"),
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = colors.inkReading)
+            }
+
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    text = automation.title,
+                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 19.sp, fontWeight = FontWeight.Normal),
+                    color = colors.inkReading,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${automation.projectSlug} · ${automation.modelLabel}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                    color = colors.inkSecondary,
+                )
+            }
+
+            IconButton(
+                onClick = { onEdit(automation.id) },
+                modifier = Modifier
+                    .size(AntigravityDesignTokens.MinTouchTarget)
+                    .testTag("btn-edit-automation"),
+            ) {
+                Icon(Icons.Rounded.Description, contentDescription = "Edit automation", tint = colors.inkReading, modifier = Modifier.size(21.dp))
+            }
+
+            IconButton(
+                onClick = { onEdit(automation.id) },
+                modifier = Modifier.size(AntigravityDesignTokens.MinTouchTarget),
+            ) {
+                Icon(Icons.Rounded.MoreVert, contentDescription = "More options", tint = colors.inkReading)
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // Status pills row: ● Scheduled · Active | Every day · 2:00 AM
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Surface(
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    color = colors.surfaceSubtleBox,
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isPaused) colors.surfaceElevated else Color(0xFF15291E),
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
                     ) {
-                        Text(
-                            text = "NEXT RUN",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = FontFamily.SansSerif,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 0.6.sp,
-                            ),
-                            color = colors.inkMuted,
+                        StatusDot(
+                            color = if (isPaused) colors.inkMuted else colors.statusDone,
+                            size = 7.dp,
+                            glow = false,
                         )
                         Text(
-                            text = item.nextRunText,
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.Medium,
-                            ),
-                            color = colors.inkReading,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            text = if (isPaused) "Paused" else "Scheduled · Active",
+                            style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
+                            color = if (isPaused) colors.inkSecondary else colors.statusDone,
                         )
                     }
                 }
 
-                // LAST RUN Stat Box
-                val isAmber = item.needsReview && !item.isRunningNow
                 Surface(
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isAmber) colors.surfaceAmberTint else colors.surfaceSubtleBox,
-                    border = if (isAmber) BorderStroke(1.dp, colors.statusWaiting.copy(alpha = 0.28f)) else null,
+                    shape = RoundedCornerShape(10.dp),
+                    color = colors.canvasObsidian,
+                    border = BorderStroke(1.dp, colors.cardBorder),
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
+                    Text(
+                        text = automation.repeatsLabel,
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
+                        color = colors.inkReading,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    )
+                }
+            }
+
+            // Primary Dual Pill CTAs: Run now | Pause/Resume
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Button(
+                    onClick = {
+                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                            val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                            coordinator.workspaceStore.runAutomationNow(client = rpc, automationId = automation.id)
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("btn-automation-run-now"),
+                    shape = RoundedCornerShape(100.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.accentPeriwinkle,
+                        contentColor = colors.inkOnPrimaryCta,
+                    ),
+                ) {
+                    Text(
+                        text = if (automation.isRunningNow) "Running..." else "Run now",
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                            val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                            if (isPaused) {
+                                coordinator.workspaceStore.resumeAutomation(client = rpc, automationId = automation.id)
+                            } else {
+                                coordinator.workspaceStore.pauseAutomation(client = rpc, automationId = automation.id)
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("btn-automation-pause-resume"),
+                    shape = RoundedCornerShape(100.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.surfaceActiveTab,
+                        contentColor = colors.pillActiveForeground,
+                    ),
+                ) {
+                    Text(
+                        text = if (isPaused) "Resume" else "Pause",
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
+                    )
+                }
+            }
+
+            // Prompt Card
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("automation-prompt-card"),
+                shape = RoundedCornerShape(18.dp),
+                color = colors.surfaceCard,
+                border = BorderStroke(1.dp, colors.cardBorder),
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "Prompt",
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
+                        color = colors.accentPeriwinkle,
+                    )
+                    Text(
+                        text = automation.prompt,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 22.sp),
+                        color = colors.inkReading,
+                    )
+                }
+            }
+
+            // Schedule metadata rows: Next run + Runs on
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Icon(Icons.Rounded.Schedule, contentDescription = null, tint = colors.inkLabel, modifier = Modifier.size(21.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Next run", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
                         Text(
-                            text = "LAST RUN",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = FontFamily.SansSerif,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 0.6.sp,
-                            ),
-                            color = if (isAmber) colors.statusWaiting else colors.inkMuted,
+                            text = "Tonight, ${automation.timeLabel} (${automation.timezoneLabel})",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
+                            color = colors.inkSecondary,
                         )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            if (!isAmber && !item.isRunningNow) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Icon(Icons.Rounded.Computer, contentDescription = null, tint = colors.inkLabel, modifier = Modifier.size(21.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Runs on", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
+                        Text(
+                            text = "MacBook Pro · new conversation per run",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
+                            color = colors.inkSecondary,
+                        )
+                    }
+                }
+            }
+
+            // Recent runs header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Recent runs",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
+                    color = colors.accentPeriwinkle,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = "Each run opens a conversation",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                    color = colors.inkSecondary,
+                )
+            }
+
+            // Recent run rows
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                automation.recentRuns.forEach { run ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onOpenConversation(automation.lastRunCascadeId ?: "cas-upgrade-go")
+                            }
+                            .testTag("automation-run-${run.id}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Box(modifier = Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+                            when (run.status) {
+                                AutomationRunStatus.SUCCEEDED -> Icon(
+                                    Icons.Rounded.Check,
                                     contentDescription = null,
                                     tint = colors.statusDone,
-                                    modifier = Modifier.size(13.dp),
+                                    modifier = Modifier.size(20.dp),
                                 )
-                            } else if (item.isRunningNow) {
-                                StatusDot(color = colors.statusRunning, size = 6.dp, glow = true)
+                                AutomationRunStatus.NEEDS_REVIEW -> StatusDot(color = colors.statusWaiting, size = 10.dp, glow = false)
+                                AutomationRunStatus.FAILED -> Icon(
+                                    Icons.Rounded.Close,
+                                    contentDescription = null,
+                                    tint = colors.statusError,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                AutomationRunStatus.RUNNING -> StatusDot(color = colors.statusRunning, size = 10.dp, glow = true)
                             }
+                        }
+
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                text = item.lastRunText,
-                                style = MaterialTheme.typography.titleSmall.copy(
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                ),
-                                color = when {
-                                    isAmber -> colors.statusWaiting
-                                    item.isRunningNow -> colors.statusRunning
+                                text = run.timestampLabel,
+                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp),
+                                color = when (run.status) {
+                                    AutomationRunStatus.NEEDS_REVIEW -> colors.statusWaiting
+                                    AutomationRunStatus.FAILED -> colors.statusError
                                     else -> colors.inkReading
                                 },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                             )
+                            Text(
+                                text = run.summary,
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
+                                color = colors.inkSecondary,
+                            )
+                        }
+
+                        if (run.canRetry) {
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                        val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                                        coordinator.workspaceStore.retryAutomationRun(
+                                            client = rpc,
+                                            automationId = automation.id,
+                                            runId = run.id,
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.testTag("btn-retry-${run.id}"),
+                                shape = RoundedCornerShape(100.dp),
+                                border = BorderStroke(1.dp, colors.cardBorder),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                            ) {
+                                Text(
+                                    text = "Retry",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = colors.accentPeriwinkle,
+                                )
+                            }
                         }
                     }
                 }
@@ -520,123 +1048,323 @@ private fun ScheduledAutomationCard(
     }
 }
 
+/**
+ * UE06C_AUTOMATION_EDIT (`and-automation-edit.png`): Full-screen Material 3 Edit Automation
+ * dialog with Name/Prompt/Project OutlinedTextFields, Trigger SegmentedButton + Repeat FilterChips,
+ * Time row, Model SegmentedButton, unattended footer, and Delete automation button.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun AlwaysOnAutomationCard(
-    item: AutomationItem,
-    cardTag: String,
-    onClick: () -> Unit,
+fun AutomationEditScreen(
+    coordinator: AntigravityCoreCoordinator,
+    automationId: String = "auto-nightly-audit",
+    onDismiss: () -> Unit,
+    onDeleted: () -> Unit = onDismiss,
+    modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
-    AntigravitySurfaceCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(cardTag),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 11.dp),
-        onClick = onClick,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            StatusDot(
-                color = colors.statusDone,
-                size = 9.dp,
-                glow = true,
-            )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                    color = colors.inkReading,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = item.scheduleSummary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.inkSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = item.lastRunText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.inkLabel,
-                    maxLines = 1,
-                )
-            }
-            Icon(
-                imageVector = Icons.Rounded.ChevronRight,
-                contentDescription = null,
-                tint = colors.inkMuted,
-                modifier = Modifier.size(18.dp),
-            )
-        }
+    val workspaceState by coordinator.workspaceStore.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+
+    val automation = remember(workspaceState.automations, automationId) {
+        workspaceState.automations.firstOrNull { it.id == automationId }
+            ?: workspaceState.automations.firstOrNull()
     }
-}
 
-@Composable
-private fun PausedAutomationCard(
-    item: AutomationItem,
-    resumeButtonTag: String,
-    onResume: () -> Unit,
-) {
-    val colors = MaterialTheme.antigravityColors
-    AntigravitySurfaceCard(
-        modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+    var name by remember(automationId) { mutableStateOf(automation?.title ?: "Nightly dependency audit") }
+    var prompt by remember(automationId) {
+        mutableStateOf(
+            automation?.prompt
+                ?: "Check go.mod for outdated or vulnerable modules. Open a PR for patch bumps only and summarize the rest.",
+        )
+    }
+    var projectSlug by remember(automationId) { mutableStateOf(automation?.projectSlug ?: "ledger-svc") }
+    var projectMenuExpanded by remember { mutableStateOf(false) }
+    var isScheduleTrigger by remember(automationId) {
+        mutableStateOf(automation?.section != AutomationSectionKind.ALWAYS_ON)
+    }
+    var repeatCadence by remember(automationId) { mutableStateOf("Every day") }
+    var timeLabel by remember(automationId) { mutableStateOf(automation?.timeLabel ?: "2:00 AM") }
+    var modelChoice by remember(automationId) { mutableStateOf(automation?.modelLabel ?: "Flash") }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.canvasObsidian)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
     ) {
+        // Top Header: X | Edit automation | [Save]
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .size(AntigravityDesignTokens.MinTouchTarget)
+                    .testTag("btn-close-edit-automation"),
             ) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
+                Icon(Icons.Rounded.Close, contentDescription = "Close", tint = colors.inkReading)
+            }
+
+            Text(
+                text = "Edit automation",
+                style = MaterialTheme.typography.headlineSmall.copy(fontSize = 21.sp, fontWeight = FontWeight.Normal),
+                color = colors.inkReading,
+                modifier = Modifier.weight(1f),
+            )
+
+            Button(
+                onClick = {
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                        coordinator.workspaceStore.updateAutomation(
+                            client = rpc,
+                            automationId = automationId,
+                            title = name,
+                            prompt = prompt,
+                            projectSlug = projectSlug,
+                            section = if (isScheduleTrigger) AutomationSectionKind.SCHEDULED else AutomationSectionKind.ALWAYS_ON,
+                            repeatsLabel = repeatCadence,
+                            timeLabel = timeLabel,
+                            modelLabel = modelChoice,
+                        )
+                    }
+                    onDismiss()
+                },
+                modifier = Modifier
+                    .defaultMinSize(minHeight = 42.dp)
+                    .testTag("btn-save-automation"),
+                shape = RoundedCornerShape(100.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.accentPeriwinkle,
+                    contentColor = colors.inkOnPrimaryCta,
+                ),
+            ) {
+                Text("Save", style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold))
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 6.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Name") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("input-edit-automation-name"),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.inkReading),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = colors.accentPeriwinkle,
+                    unfocusedBorderColor = colors.cardBorder,
+                    focusedLabelColor = colors.accentPeriwinkle,
+                    unfocusedLabelColor = colors.inkSecondary,
+                ),
+            )
+
+            OutlinedTextField(
+                value = prompt,
+                onValueChange = { prompt = it },
+                label = { Text("Prompt") },
+                minLines = 3,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("input-edit-automation-prompt"),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.inkReading, lineHeight = 22.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = colors.accentPeriwinkle,
+                    unfocusedBorderColor = colors.accentPeriwinkle,
+                    focusedLabelColor = colors.accentPeriwinkle,
+                    unfocusedLabelColor = colors.accentPeriwinkle,
+                ),
+            )
+
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = projectSlug,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Project") },
+                    leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null, tint = colors.inkSecondary, modifier = Modifier.size(18.dp)) },
+                    trailingIcon = { Icon(Icons.Rounded.ArrowDropDown, contentDescription = null, tint = colors.inkSecondary) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.inkReading),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.accentPeriwinkle,
+                        unfocusedBorderColor = colors.cardBorder,
+                        focusedLabelColor = colors.accentPeriwinkle,
+                        unfocusedLabelColor = colors.inkSecondary,
                     ),
-                    color = colors.inkSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
+                Box(modifier = Modifier.matchParentSize().clickable { projectMenuExpanded = true })
+                DropdownMenu(
+                    expanded = projectMenuExpanded,
+                    onDismissRequest = { projectMenuExpanded = false },
+                    containerColor = colors.surfacePopover,
+                ) {
+                    listOf("ledger-svc", "web-console").forEach { slug ->
+                        DropdownMenuItem(
+                            text = { Text(slug, color = colors.inkReading) },
+                            onClick = {
+                                projectSlug = slug
+                                projectMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = "Trigger",
+                style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                color = colors.accentPeriwinkle,
+            )
+
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = isScheduleTrigger,
+                    onClick = { isScheduleTrigger = true },
+                    shape = SegmentedButtonDefaults.itemShape(0, 2),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = colors.surfaceActiveTab,
+                        activeContentColor = colors.pillActiveForeground,
+                        inactiveContainerColor = colors.canvasObsidian,
+                        inactiveContentColor = colors.inkReading,
+                        activeBorderColor = colors.cardBorder,
+                        inactiveBorderColor = colors.cardBorder,
+                    ),
+                ) { Text("Schedule") }
+
+                SegmentedButton(
+                    selected = !isScheduleTrigger,
+                    onClick = { isScheduleTrigger = false },
+                    shape = SegmentedButtonDefaults.itemShape(1, 2),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = colors.surfaceActiveTab,
+                        activeContentColor = colors.pillActiveForeground,
+                        inactiveContainerColor = colors.canvasObsidian,
+                        inactiveContentColor = colors.inkReading,
+                        activeBorderColor = colors.cardBorder,
+                        inactiveBorderColor = colors.cardBorder,
+                    ),
+                ) { Text("Always on") }
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                listOf("Every hour", "Every day", "Weekdays", "Every week").forEach { option ->
+                    val selected = repeatCadence == option
+                    FilterChip(
+                        selected = selected,
+                        onClick = { repeatCadence = option },
+                        label = { Text(option) },
+                        leadingIcon = if (selected) {
+                            { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        } else null,
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = colors.surfaceActiveTab,
+                            selectedLabelColor = colors.pillActiveForeground,
+                            selectedLeadingIconColor = colors.pillActiveForeground,
+                            containerColor = colors.canvasObsidian,
+                            labelColor = colors.inkReading,
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = selected,
+                            borderColor = colors.cardBorder,
+                            selectedBorderColor = colors.surfaceActiveTab,
+                        ),
+                    )
+                }
+            }
+
+            // Time row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        timeLabel = if (timeLabel == "2:00 AM") "9:00 AM" else "2:00 AM"
+                    }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Icon(Icons.Rounded.Schedule, contentDescription = null, tint = colors.inkLabel, modifier = Modifier.size(21.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Time", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
+                    Text(
+                        text = "${automation?.timezoneLabel ?: "GMT+8:00"} · from this phone",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                        color = colors.inkSecondary,
+                    )
+                }
                 Text(
-                    text = item.scheduleSummary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.inkMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    text = timeLabel,
+                    style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+                    color = colors.inkReading,
                 )
             }
 
-            FilledTonalButton(
-                onClick = onResume,
-                modifier = Modifier
-                    .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget)
-                    .testTag(resumeButtonTag),
-                shape = RoundedCornerShape(AntigravityDesignTokens.PillCornerRadius),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = colors.surfaceBadge,
-                    contentColor = colors.inkReading,
-                ),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+            Text(
+                text = "Model",
+                style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                color = colors.accentPeriwinkle,
+            )
+
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                val choices = listOf("Flash Lite", "Flash", "Pro")
+                choices.forEachIndexed { idx, label ->
+                    SegmentedButton(
+                        selected = modelChoice == label,
+                        onClick = { modelChoice = label },
+                        shape = SegmentedButtonDefaults.itemShape(idx, choices.size),
+                        colors = SegmentedButtonDefaults.colors(
+                            activeContainerColor = colors.surfaceActiveTab,
+                            activeContentColor = colors.pillActiveForeground,
+                            inactiveContainerColor = colors.canvasObsidian,
+                            inactiveContentColor = colors.inkReading,
+                            activeBorderColor = colors.cardBorder,
+                            inactiveBorderColor = colors.cardBorder,
+                        ),
+                    ) { Text(label) }
+                }
+            }
+
+            Text(
+                text = "Runs unattended: anything that needs approval is denied automatically and the run shows up as Needs review.",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 19.sp),
+                color = colors.inkSecondary,
+            )
+
+            TextButton(
+                onClick = {
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
+                        coordinator.workspaceStore.deleteAutomation(client = rpc, automationId = automationId)
+                    }
+                    onDeleted()
+                },
+                modifier = Modifier.testTag("btn-delete-automation"),
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp),
             ) {
                 Text(
-                    text = "Resume",
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 1,
+                    text = "Delete automation",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                    color = colors.statusError,
                 )
             }
         }

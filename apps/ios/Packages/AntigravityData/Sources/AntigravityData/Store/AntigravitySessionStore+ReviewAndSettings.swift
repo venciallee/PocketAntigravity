@@ -166,8 +166,9 @@ extension AntigravitySessionStore {
             if summaries[idx].isUnread {
                 targetsToSync.append((summaries[idx].cascadeId, summaries[idx].originInstanceUuid))
             }
+            let viewedAt = max(now, summaries[idx].updatedAt)
             summaries[idx].isUnread = false
-            summaries[idx].lastUserViewTime = now
+            summaries[idx].lastUserViewTime = viewedAt
             if hasPairedBackend || isLiveBackendConnected {
                 summaries[idx].statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
                     status: summaries[idx].status,
@@ -175,7 +176,7 @@ extension AntigravitySessionStore {
                     isUnread: false
                 )
             }
-            locallyViewedAtByCascadeId[summaries[idx].cascadeId] = now
+            locallyViewedAtByCascadeId[summaries[idx].cascadeId] = viewedAt
         }
         let snapshot = summaries
         let storeRef = projectionStore
@@ -519,6 +520,11 @@ extension AntigravitySessionStore {
         hasModifiedAppearanceModeInSession = true
         appearancePreferences.appearanceMode = mode
         preferencesStore.set(mode.rawValue, forKey: Self.appearanceModeDefaultsKey)
+        saveAppearancePreferences()
+    }
+
+    public func setAppLanguage(_ language: AppLanguage) {
+        appearancePreferences.language = language
         saveAppearancePreferences()
     }
 

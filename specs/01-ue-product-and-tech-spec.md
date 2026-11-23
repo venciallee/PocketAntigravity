@@ -1,73 +1,63 @@
-# Antigravity iOS App — Product Requirements & Native Swift 6 Technical Architecture (v2.0 UE Aligned)
+# Antigravity iOS App — Product Requirements & Native Swift 6 Technical Architecture (v2.1 UE & Official v2.34 Aligned)
 
 ## 1. Product Overview & Design System Alignment
 
-Based on the 13 official Antigravity iOS UE specifications, **Antigravity iOS** provides a zero-compromise native mobile experience synchronized seamlessly across **Local Desktop Hosts (`MacBook Pro` via Remote Control Connect-RPC)** and **Cloud VMs (`Cloud` autonomous sandboxes)**.
+Aligned with the official Google Antigravity 2.0 App (`v2.34.0`) and the canonical iOS UE boards under `docs/ue/ios/`, **AG Pocket (iOS)** delivers a zero-compromise native mobile companion ("Watch · Approve · Direct") synchronized across **Local Desktop Hosts (`MacBook Pro` via Remote Control Cloud Relay / LAN Connect-RPC)** and **Cloud VMs (`Cloud` autonomous sandboxes)**.
+
+See [`specs/04-ue-official-docs-conflict-audit.md`](04-ue-official-docs-conflict-audit.md) for the authoritative resolution of all legacy spec conflicts against live Google Antigravity documentation.
 
 ### 1.1 Visual & Interaction Design Tokens
-- **Canvas & Surfaces**:
-  - Background Canvas: `#090A0D` (Pure OLED Matte Obsidian)
-  - Grouped Card Surface: `#141519` (`18pt` continuous corner radius, `1px` `rgba(255,255,255,0.08)` border)
-  - Elevated Sheet / Context Menu: `#1D1F26` / `#25272F` (`28pt` sheet corner radius with top grabber)
+- **Canvas & Surfaces (Neutral Matte Obsidian)**:
+  - Background Canvas: `#0B0B0C` (Pure OLED Neutral Obsidian)
+  - Grouped Card / Composer Shell: `#141416` (`18–26pt` continuous corner radius, `1px` `#222226` / `rgba(255,255,255,0.08)` border)
+  - Elevated Input / Sheet Surface: `#1D1D20` / `#1A1A1D` (`28–34pt` sheet corner radius with top grabber)
+  - Popover / Grouped Row Card: `#26262B`
 - **Brand & Semantic Colors**:
-  - **Primary Brand CTA (`accentPeriwinkle`)**: `#8EB4FF` with `#0A0E17` dark bold label ink (used for primary buttons, active borders, selected checkboxes, and detached bottom-right `56×56pt` circular FABs)
-  - **Active Filter / Stepper Pill**: Pure White `#FFFFFF` fill with `#090A0D` bold text
-  - **Running (`运行中`)**: `#7DA7FF` (spinning progress arc or dot)
-  - **Needs You / Awaiting Approval (`等你处理`)**: `#EBB365` Warm Amber (pulsing halo dot, amber-tinted approval card, and solid `#EBB365` Face ID `Allow` CTA)
-  - **Done / Additions (`完成`)**: `#57C88A` Emerald (`+128`, `42 passed`, `NEW`)
+  - **Primary Brand CTA (`accentPeriwinkle`)**: `#8DB8FF` with `#0A0E17` dark bold label ink
+  - **Active Pill / Stepper**: Pure White `#FFFFFF` fill with `#0B0B0C` bold text
+  - **Running (`运行中`)**: `#7DA7FF` (spinning progress arc)
+  - **Needs You / Awaiting Approval (`等你处理`)**: `#F2B866` Warm Amber (dot, amber-tinted approval card `#1E1A14`, and solid `#F2B866` Face ID `Allow` CTA)
+  - **Done / Additions (`完成`)**: `#6FD8A6` Emerald (`+128`, `42 passed`, `NEW`)
   - **Deletions / Destructive**: `#F07167` Coral (`-14`, `Delete`)
-- **Global Bottom Navigation Chrome**:
-  - Floating Liquid Glass 3-tab capsule (`Agents` | `Automations` | `Settings`) on the left + detached `56×56pt` Periwinkle `#8EB4FF` circular action FAB (`✏️` on Agents, `+` on Automations) on the right.
+- **Global Navigation Architecture (PC-Aligned Sidebar Drawer + New Conversation Home)**:
+  - Root screen (`UE01`) is **New Conversation Home** (`Welcome back, Alex. Where should we pick up?`, top bar with Sidebar button, Host Switcher pill, Search button; amber `Needs approval` quick-jump banner; PC-isomorphic bottom Composer).
+  - Left slide-over **Sidebar Drawer (`UE01B`)** mirrors Antigravity Desktop's sidebar: `+ New Conversation`, `Automations`, `Customizations`, `Pinned`, `Projects` (with Display Options filter & New Project `+` icon buttons), collapsible local/cloud project groups with single-line conversation rows (amber dot / blue unread dot / spinning arc / relative time), and bottom `Settings`.
 
 ---
 
-## 2. Functional Requirements Across All 13 UE Screens
+## 2. Functional Requirements Across Core (`UE01`–`UE13`) & Extended (`UE01B`, `UE06B/C`, `UE07B`, `UE08B`, `UE14`, `UE15`) Screens
 
-| Screen ID | UE Screen Name | Core Product Requirements | Connect-RPC / Data Binding |
+| Screen ID | UE Board | Core Product Requirements | Connect-RPC / Data Binding |
 | :--- | :--- | :--- | :--- |
-| **`UE01`** | **Agents 首页** | Host switcher (`MacBook Pro` / `Cloud`), Display Options button, New Project button, Search bar, Filter pills (`All`, `Running 2`, `Needs you 1`, `Unread 3`), `PINNED` section, collapsible Project groups (`ledger-svc`, `web-console`), Floating Tab Bar + Compose FAB | `JetboxSubscribeToSummaries` + `GetWorkspaceInfos` + `LocalProjectionStore` |
-| **`UE02`** | **Display Options** | `Reset` / `Done` header, `Group By` (`Project`/`Host`/`None`), `Sort Conversations` (`Last Updated`/`Date Created`/`Title` + `Newest First`/`Oldest First` pull-down menu), `Sort Projects`, `Filter`, `Display`, `Auto Pin` toggle, `Archived Only` toggle, `Mark All as Read (3 unread)` | Persisted `AgentDisplayOptions` state driving `AntigravitySessionStore` sorting/grouping |
-| **`UE03`** | **长按菜单 & Pin** | Rich Long-Press preview card (`Fix flaky TestSettlementBatch`, full message summary, `Implementation Plan` + `Awaiting review` chips), Context Menu (`Pin`, `Mark as Unread`, `Rename`, `Move to Project`, `Archive`, `Delete`), and left-swipe `Pin` + `Archive` actions | `PinCascade`, `RenameCascade`, `MoveCascadeToWorkspace`, `ArchiveCascade`, `DeleteCascade` |
-| **`UE04`** | **项目页 (`ledger-svc`)** | `< Agents` back nav, `~/code/ledger-svc` path, metadata pills (`Local · MacBook Pro`, `main`, `5 conversations`), `New Conversation in Project` CTA, `Active 3 / Archived 2 / Automations 1` underline tabs, conversation list, and `THIS PROJECT` (`Nightly dependency audit`, `Reveal in Finder on Mac`, `Project rules & skills (4)`) | `StartCascade` scoped to `workspaceUri` + `OpenWorkspaceInFinder` RPC |
-| **`UE05`** | **Create New Project** | `RUNS ON` segmented picker (`MacBook Pro` vs `Cloud`), `SOURCE` cards (`GitHub repository` vs `Drive folder`), repo search + list (`acme/ledger-svc`, `acme/web-console`, `acme/design-tokens`), `Branch & worktree` (`main · New worktree`), `Name` (`ledger-svc-cloud`), `Create Project` CTA | `CreateProjectWorkspace` (local worktree or cloud VM provisioning) |
-| **`UE06`** | **Automations** | NL quick-create bar (`Every weekday at 9, summarize` + `Create`), `SCHEDULED · 2` cards (`Nightly dependency audit`, `Weekly flaky-test report`) with `▶` Run Now & `NEXT RUN` / `LAST RUN` stat boxes, `ALWAYS ON · 1` (`Triage new pull requests`), `PAUSED · 1` (`Bundle size watch` + `Resume`), Floating Tab Bar + `+` FAB | `ListAutomations`, `CreateAutomation`, `TriggerAutomationNow`, `SetAutomationPaused` |
-| **`UE07`** | **消息列表与输入框** | Top bar with `<`, title + `ledger-svc · main · MacBook Pro`, `+128 -14` diff pill; `Thought for 14s ›` collapsible row; Embedded `Implementation Plan` card; `Task · 4 of 7 done` (`2m 41s`) 7-segment progress card with checklist; Inline amber `Run this command?` card (`vegeta attack...`) with `Deny` and biometric Face ID (`LAContext`) `Allow`; Status bar `Waiting for your approval · Step 5 of 7` + `Stop`; Composer with `@ratelimit.go ×` chip, multi-line text, `+`, `Planning ⌄`, `Gemini 3.1 Pro ⌄`, `🎤`, and `↑` Send | `GetCascadeTrajectorySteps` (5-byte Connect stream + binary Protobuf >600 steps), `HandleCascadeUserInteraction` (`runCommand` + Face ID), `SendUserCascadeMessage`, `CancelCascadeInvocation` |
-| **`UE08`** | **Add Context** | Search bar, 5 category tiles (`Files`, `Folder`, `Mentions`, `Actions`, `Skills`), `FILES & FOLDERS` (`ratelimit.go`, `load/`), `MENTIONS` (`Idempotency keys for payouts`, `Terminal · last test run`), `ACTIONS & SKILLS` (`/boost`, `go-testing`), bottom `3 selected` + `Add to message` CTA | Attaches structured `ContextItem` chips to `ChatComposerView` |
-| **`UE09`** | **Model & Mode** | `Planning` vs `Fast` cards, `MODEL` picker (`Gemini 3.1 Pro`, `Gemini 3.8 Flash`, `Claude Opus 5.5 [Thinking]`, `Claude Sonnet 5.5 [Thinking]`), and `AGENT` persona pills (`Default`, `go-reviewer`, `release-captain`) | Updates `CascadeModelConfig` (`modelId`, `mode`, `agentPersona`) for next turn |
-| **`UE10`** | **结构化多选问答** | Multi-question stepper pills (`✓ 1 Storage`, `2 Actions`, `3 Retention`), `Question 2 of 3 · Select all that apply`, checkbox cards (`Account freeze / unfreeze`, `Limit changes`, `Manual ledger adjustments`, `Role & permission changes`), dashed `Something else...` write-in, `Back` / `Next` buttons, and bottom `Reply in your own words` composer | `HandleCascadeUserInteraction` (`askQuestion` oneof with multi-step answers or freeform text) |
-| **`UE11`** | **Implementation Plan 审阅** | `[💬 2]` badge, amber paused banner (`Agent is paused until you review. Long-press any text to comment.`), rendered Markdown with `MODIFY`/`NEW` badges, inline pending comment card (`WL You Pending`), text-selection `[💬 Comment | Copy]` callout, and `Proceed` / `Send 2 comments` bar | `GetArtifactSnapshots` + `HandleCascadeUserInteraction` (`filePermission` / plan review comments) |
-| **`UE12`** | **Turn Diff 行级审查** | `Accept all` button, `Turn 1` / `Turn 2` / `Turn 3 · latest` / `All` selector pills, `middleware/ratelimit.go (File 1 of 4 · +96 -4)` pager, `Revert hunk`, syntax-highlighted diff with word-level emphasis, selected Line 29 inline comment composer (`Add to review` / `Send to agent`), and `Viewed` checkbox + `Revert file` + `Accept file` | `GetTurnDiff` + `RevertDiffHunk` + `SendDiffReviewComments` |
-| **`UE13`** | **灵动岛 & Live Activity** | 7 WidgetKit states: Compact Running (`4/7`), Compact Waiting (`Approve`), Minimal Ring, Compact Done (`+128 -14`), Expanded Running (`Stop`/`Open`), Expanded Waiting (`Deny` + Face ID `Allow`), and Lock Screen Multi-Agent aggregation card (`2 running · 1 needs you`) | `ActivityKit` + `ApproveWaitingStepIntent` (`AppIntent` + `LAContext` Face ID signature) |
+| **`UE01`** | `Main.png` | **New Conversation Home**: Sidebar button, Host switcher pill (`● MacBook Pro ⌄`), Search button, centered greeting, amber `Needs approval · Add rate limiter to /transfers ›` card, PC-isomorphic bottom Composer (`📁 ledger-svc ⌄`, `🌿 Repo default ⌄`, `☁️`, `+`, `Gemini 4 Neon / Extra High ⌄`, `🛡 Default ⌄`, `🎤`, `→`) | `JetboxSubscribeToSummaries` + `StartCascade` + `SendUserCascadeMessage` |
+| **`UE01B`** | `ios-drawer.png` | **Sidebar Drawer**: `+ New Conversation`, `Automations`, `Customizations`, `Pinned` (`Release checklist v2.3`), `Projects` (Display Options + New Project buttons), `ledger-svc` & cloud `acme/web-console` groups with single-line rows & status indicators, bottom `Settings` | `GetWorkspaceInfos` + `LocalProjectionStore` |
+| **`UE02`** | `ios-display-options.png` | **Display Options**: `Reset` / `Done`, `Group By` (`Project`/`Host`/`None`), `Sort Conversations` (`Last Updated`/`Date Created`/`Title` + `Newest First`/`Oldest First`), `Sort Projects` (`Custom Order`), `Filter` (`All conversations`), `Display` (`Comfortable · Previews`), `Auto Pin` & `Archived Only` toggles, `Mark All as Read (3 unread)` | Persisted `AgentDisplayOptions` driving sidebar sorting/grouping/filtering |
+| **`UE03`** | `ios-pin-menu.png` | **Long-Press Context Preview & Swipe**: Preview card (`Fix flaky TestSettlementBatch`, `ledger-svc · Gemini 4 Neon · 8m`, `Implementation Plan` + `Awaiting review`), 6 actions (`Pin`, `Mark as Unread`, `Rename`, `Move to Project`, `Archive`, `Delete`), left-swipe `Pin` (`#8DB8FF`) + `Archive` | `PinCascade`, `RenameCascade`, `MoveCascadeToWorkspace`, `ArchiveCascade`, `DeleteCascade` |
+| **`UE04`** | `ios-project-detail.png` | **Project Detail (`ledger-svc`)**: `< Projects`, `⋯`, `~/code/ledger-svc`, pills (`Local · MacBook Pro`, `main ↑2`, `Working tree clean`), `New Conversation in Project` CTA, `Active 4 / Archived 2 / Automations 1` underline tabs, single-line rows, `THIS PROJECT` (`Nightly dependency audit` → Detail, `Project rules & skills 4 ›` → Rules & Skills, `Reveal in Finder on Mac`) | `StartCascade` scoped to `workspaceUri` + `OpenWorkspaceInFinder` |
+| **`UE05`** | `ios-new-project.png` | **Create New Project**: `RUNS ON` (`MacBook Pro` vs `Cloud`), `SOURCE` (`GitHub repository` vs `Drive folder`), repo search + list (`acme/ledger-svc`, `acme/web-console`, `acme/design-tokens`), `Branch & worktree`, `Name`, `Create Project` CTA | `CreateProjectWorkspace` |
+| **`UE06`** | `ios-automations.png` | **Automations Hub** (Sidebar-navigated, no bottom tab bar/FAB): Sidebar + Filter buttons, NL create bar (`Every weekday at 9, summarize` + `Create`), `SCHEDULED · 2` with `▶` & `NEXT RUN`/`LAST RUN`, `ALWAYS ON · 1`, `PAUSED · 1` (`Resume`) | `ListAutomations`, `CreateAutomation`, `TriggerAutomationNow`, `SetAutomationPaused` |
+| **`UE06B/C`** | `ios-automation-detail.png`, `ios-automation-edit.png` | **Automation Detail & Edit**: Status badge, `Run Now` / `Pause`, `PROMPT`, Trigger/Repeats/Next run, `RECENT RUNS` (Succeeded / Needs review / Failed + `Retry`), `Edit` → `Edit Schedule & Prompt` form (`Name`, `Prompt`, `Project`, `Trigger`, `Repeats`, `Time`, `Model`, `Delete Automation`) | `ManageSidecar` (`RUN_NOW`, `UPDATE`, `DISABLE`, `DELETE`) |
+| **`UE07`** | `ios-chat.png` | **Chat & Composer**: Top bar (`Sidebar`, title + `ledger-svc · main · MacBook Pro`, `+128 -14`, `⋯`), `Thought for 14s ›`, `Implementation Plan` card, `Task · 4 of 7 done (2m 41s)` 7-segment progress card, Amber `Run this command?` card (`Deny` + Face ID `Allow`), status bar (`Waiting for your approval · Step 5 of 7` + `Stop`), Composer (`@ratelimit.go ×`, `+`, `Gemini 4 Neon / Extra High ⌄`, `🛡 Default ⌄`, `🎤`, `→`) | `GetCascadeTrajectorySteps`, `HandleCascadeUserInteraction`, `SendUserCascadeMessage`, `CancelCascadeInvocation` |
+| **`UE07B`** | `ios-preset.png` | **Permissions Preset Popover**: Anchored above `🛡 Default ⌄`: `Request Review`, `Default ✓`, `Auto`, `Turbo`, footer `Default for new turns: Settings > Permissions ›` | `SetConversationPermissionPreset` |
+| **`UE08`** | `ios-add-context.png` | **Add Context Menu**: Anchored above `+`: `Files`, `Folder`, `Mentions`, `Actions`, `Drive [Set up]` (selecting Files/Folder/Mentions opens multi-select attachment picker; selecting Actions opens `/`) | Attaches `ContextItem` chips to `ChatComposerView` |
+| **`UE08B`** | `ios-slash.png` | **`/` Actions & Skills Overlay**: `Actions` (`/plan`, `/goal`, `/schedule`, `/automation`, feature-flagged `/btw`) + `Skills` (`/go-testing`, `/api-review`) — zero deprecated Workflows | `SlashCommandItem` + workspace/global `Skills` |
+| **`UE09`** | `ios-model.png` | **Model Picker** (No Planning/Fast): `Orchestrator (Neon plans · Hydrogen executes ›)`, `Gemini 4 Neon [New] ✓` with inline 4-level thinking segmented control (`Low` / `Medium` / `High` / `Extra High`), `Gemini 4 Carbon`, `Gemini 4 Argon`, `Gemini 4 Hydrogen`, `Claude Opus 5.5`, `Gemini 3.8 Flash`, `More models ›`, `Five Hour Limit Remaining` + `View Usage` & `Weekly Limit Remaining` bars | `GetModelCatalog` + `CascadeModelConfig` (`modelId`, `thinkingEffort`) |
+| **`UE10`** | `ios-ask.png` | **`/plan` Interview Structured Question**: `ledger-svc · /plan interview · Gemini 4 Neon`, 3-step pills (`✓ 1 Storage`, `2 Actions`, `3 Retention`), multi-select checkbox cards, `Something else...`, `Back` / centered `Next`, bottom `Reply in your own words` composer | `HandleCascadeUserInteraction` (`askQuestion`) |
+| **`UE11`** | `ios-plan-review.png` | **Implementation Plan Review**: `[💬 2]` badge, amber paused banner, rendered Markdown with `MODIFY`/`NEW` badges, inline pending comment (`WL You Pending`), selection `[💬 Comment | Copy]` callout, `Proceed` / `Send 2 comments` bar | `GetArtifactSnapshots` + `HandleCascadeUserInteraction` |
+| **`UE12`** | `ios-diff.png` | **Turn Diff Review**: `Accept all`, `Turn 1..3/All` pills, `middleware/ratelimit.go (File 1 of 4 · +96 -4)` pager, `Revert hunk`, single-column line gutter with syntax diff + word emphasis, Line 29 inline comment composer (`Add to review` / `Send to agent`), `Viewed` + `Revert file` + `Accept file` | `GetTurnDiff` + `RevertDiffHunk` + `SendDiffReviewComments` |
+| **`UE13`** | `live-activity.png` | **Dynamic Island & Live Activity**: 7 WidgetKit states (Compact Running/Waiting/Done, Minimal Ring, Expanded Running/Waiting Face ID, Lock Screen Multi-Agent card) | `ActivityKit` + `ApproveWaitingStepIntent` |
+| **`UE14`** | `ios-customizations.png` | **Rules & Skills (Lightweight Customizations)**: `< ledger-svc`, `Loaded every turn · 6.2k tokens` stacked bar (Rules/Skills/Plugins), segmented tabs (`Skills 5 | Rules 4 | Plugins 2 | Agents 1`), `Global`/`Workspace`/`Plugin` badges, `PLUGINS IN THIS PROJECT` toggles (`Firebase`, `Datadog`), desktop-editing footer | `FetchCustomizationsCatalog` + `TogglePlugin` |
+| **`UE15`** | `ios-settings.png`, `ios-settings-more.png` | **Settings**: Connected host card + `Scan New QR`, `Available hosts` (`Refresh`), `Appearance` (`System`/`Dark`/`Light` + `Obsidian`/`Nord`/`Everforest`), `Language` (`English` / `简体中文`), `Permissions` (4 presets), `Notifications` (`Approval & Completion Alerts`, `Quiet on Manual Stop`), `Sign Out & Disconnect Host`, `About AG Pocket` | `AppAppearancePreferences` + `ConnectionDomainStore` |
 
 ---
 
 ## 3. Normative Swift 6 Public API Contract (Shared Across Modules)
 
-To enable parallel engineering across `Packages/AntigravityData`, `iOS/`, `Shared/`, and `Extensions/`, all modules adhere to the following public types in `AntigravityData`:
-
 1. **Top-Level Navigation & Scene Enumeration**:
-   - `public enum PrimaryTab: String, CaseIterable, Sendable { case agents, automations, settings }`
-   - `public enum ESDDVerifySceneCase: String, CaseIterable, Sendable`:
-     - `.agentsHome = "UE01_AGENTS_HOME"`
-     - `.displayOptions = "UE02_DISPLAY_OPTIONS"`
-     - `.contextMenuPin = "UE03_CONTEXT_MENU_PIN"`
-     - `.projectDetail = "UE04_PROJECT_DETAIL"`
-     - `.createProject = "UE05_CREATE_PROJECT"`
-     - `.automations = "UE06_AUTOMATIONS"`
-     - `.chatAndComposer = "UE07_CHAT_AND_COMPOSER"`
-     - `.addContext = "UE08_ADD_CONTEXT"`
-     - `.modelAndMode = "UE09_MODEL_AND_MODE"`
-     - `.structuredQuestion = "UE10_STRUCTURED_QUESTION"`
-     - `.planReview = "UE11_PLAN_REVIEW"`
-     - `.turnDiffReview = "UE12_TURN_DIFF_REVIEW"`
-     - `.liveActivitySpec = "UE13_LIVE_ACTIVITY_SPEC"`
-2. **Core Domain Models (`Packages/AntigravityData/Sources/AntigravityData/Models/`)**:
-   - `RemoteHostInstance`, `ProjectWorkspace`, `NewProjectDraft` (`runsOn: ProjectRuntimeTarget`, `source: ProjectSourceKind`, `selectedRepo: GitHubRepoItem?`, `branchWorktree: String`, `projectName: String`)
-   - `AgentDisplayOptions` (`groupBy`, `sortBy`, `sortAscending`, `autoPinOnMessage`, `archivedOnly`)
-   - `AutomationItem` (`id`, `title`, `projectSlug`, `scheduleLabel`, `modelBadge`, `category: AutomationCategory`, `nextRunLabel`, `lastRunLabel`, `needsReview`)
-   - `ContextCandidateItem` (`id`, `category: ContextCategory`, `title`, `subtitle`, `isSelected`)
-   - `CascadeModelConfig` (`modelId`, `displayName`, `subtitle`, `supportsThinkingBadge`, `requiresProBadge`, `mode: CascadeExecutionMode`, `agentPersona: String`)
-   - `StructuredQuestionStep` & `StructuredQuestionWizard` (multi-step `1 Storage`, `2 Actions`, `3 Retention` with `selectedOptions: Set<String>` and `customWriteIn: String`)
-   - `PlanInlineComment` & `DiffLineReviewComment`
-3. **Central Coordinator (`AntigravitySessionStore`)**:
-   - `@MainActor @Observable public final class AntigravitySessionStore` exposing state and mutation methods for all 13 UE screens and deterministic `makeESDDVerificationStore()` fixture matching the exact UE sample data (`ledger-svc`, `web-console`, `Add rate limiter to /transfers`, `Fix flaky TestSettlementBatch`, `Upgrade to Go 1.25`, `Nightly dependency audit`, `vegeta attack`, `middleware/ratelimit.go`, etc.).
+   - `ESDDVerifySceneCase` preserves all 13 canonical cases (`UE01_AGENTS_HOME` .. `UE13_LIVE_ACTIVITY_SPEC`) plus extended deterministic scenes (`UE01B_SIDEBAR_DRAWER`, `UE06B_AUTOMATION_DETAIL`, `UE06C_AUTOMATION_EDIT`, `UE07B_PERMISSIONS_PRESET`, `UE08B_SLASH_MENU`, `UE14_RULES_AND_SKILLS`, `UE15_SETTINGS`) routable via `--ui-verify` and `agpocket://verify/<case>`.
+2. **Core Domain Models (`Packages/AntigravityData/Sources/AntigravityData/Models/` & `shared/core-model/`)**:
+   - `AppLanguage` (`english`, `zhHans`) added to `AppAppearancePreferences`.
+   - `CascadeModelConfig` default model = `MODEL_GOOGLE_GEMINI_4_NEON` (`Gemini 4 Neon`, `ThinkingEffortLevel.extra` / `Extra High`).
+   - `AutomationRunRecord` & automation edit/delete/restart mutations on `WorkspaceAndAutomationStore` and `AntigravitySessionStore`.
+   - `ContextCandidateCategory` includes `.drive` alongside `.files`, `.folder`, `.mentions`, `.actions` (and `.skills` retained for backward compatibility).
+   - `CustomizationsCatalog` exposes token budget metrics (`loadedTokensLabel = "6.2k tokens"`) and live plugin toggle state.

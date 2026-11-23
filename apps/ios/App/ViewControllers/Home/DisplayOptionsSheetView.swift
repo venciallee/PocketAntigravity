@@ -66,11 +66,11 @@ public struct DisplayOptionsSheetView: View {
 
     public var body: some View {
         ZStack(alignment: .bottom) {
-            // Dimmed Agents backdrop matching UE02 reference composition
+            // Dimmed Sidebar Projects backdrop matching UE02 reference composition (`ios-display-options.png`)
             VStack(alignment: .leading, spacing: 0) {
-                Text("Agents")
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(AntigravityTheme.textPrimary.opacity(0.24))
+                Text("Projects")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.textSecondary.opacity(0.45))
                     .padding(.leading, 18)
                     .padding(.top, 56)
                 Spacer()

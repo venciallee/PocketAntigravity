@@ -159,9 +159,52 @@ class ExtendedDomainStoresTest {
         }
         assertTrue(settings.state.value.appearance.useDynamicColor)
 
-        // Configure scene helper routes cleanly across all 13 ESDD scenes
+        // Configure scene helper routes cleanly across all 20 ESDD scenes
+        assertEquals(20, EsddVerifySceneCase.entries.size)
         for (scene in EsddVerifySceneCase.entries) {
             EsddVerificationFixtures.configureCoordinatorForVerifyScene(coordinator, scene)
         }
+    }
+
+    @Test
+    fun ueV21AutomationDetailEditRetryDeleteAndLanguageDefaultsWork() = runTest {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        val ws = coordinator.workspaceStore
+        val settings = coordinator.settingsStore
+
+        assertEquals("MODEL_GOOGLE_GEMINI_4_NEON", settings.state.value.selectedModelId)
+        assertEquals(ThinkingEffortLevel.EXTRA, settings.state.value.selectedEffort)
+        assertEquals("6.2k tokens", settings.state.value.customizations.loadedTokensLabel)
+        assertEquals(5, settings.state.value.customizations.skills.size)
+        assertEquals(4, settings.state.value.customizations.rules.size)
+
+        // Language toggle
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ENGLISH, settings.state.value.appearance.language)
+        settings.setAppLanguage(dev.antigravity.shared.model.AppLanguage.ZH_HANS)
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ZH_HANS, settings.state.value.appearance.language)
+
+        // Automation Detail / Edit / Retry / Delete
+        ws.selectAutomation("auto-nightly-audit")
+        assertEquals("auto-nightly-audit", ws.state.value.selectedAutomationId)
+        val nightly = ws.state.value.automations.first { it.id == "auto-nightly-audit" }
+        assertTrue(nightly.recentRuns.size >= 3)
+        ws.retryAutomationRun(client = null, automationId = "auto-nightly-audit", runId = "run-3")
+        assertTrue(ws.state.value.automations.first { it.id == "auto-nightly-audit" }.isRunningNow)
+        ws.updateAutomation(
+            client = null,
+            automationId = "auto-nightly-audit",
+            title = "Nightly security & dependency audit",
+            prompt = "Run govulncheck and open a PR for high CVEs.",
+            projectSlug = "ledger-svc",
+            section = dev.antigravity.shared.model.AutomationSectionKind.SCHEDULED,
+            repeatsLabel = "Weekdays",
+            timeLabel = "03:00",
+            modelLabel = "Gemini 4 Neon",
+        )
+        val updated = ws.state.value.automations.first { it.id == "auto-nightly-audit" }
+        assertEquals("Nightly security & dependency audit", updated.title)
+        assertEquals("Weekdays · 03:00", updated.repeatsLabel)
+        ws.deleteAutomation(client = null, automationId = "auto-bundle-size")
+        assertFalse(ws.state.value.automations.any { it.id == "auto-bundle-size" })
     }
 }

@@ -154,8 +154,8 @@ public struct StructuredQuestionCardView: View {
     private var topNavigationBar: some View {
         let navTitle = (!store.isVerificationMode ? store.activeSummary?.title : nil) ?? "Audit log for admin actions"
         let navSub = !store.isVerificationMode
-            ? "\(store.activeSummary?.projectSlug ?? "workspace") · \(store.selectedModelConfig.mode.rawValue) · \(store.selectedModelConfig.displayName)"
-            : "ledger-svc · Planning · Gemini 3.1 Pro"
+            ? "\(store.activeSummary?.projectSlug ?? "workspace") · /plan interview · \(store.selectedModelConfig.displayName)"
+            : "ledger-svc · /plan interview · Gemini 4 Neon"
 
         return HStack(spacing: 8) {
             Button {

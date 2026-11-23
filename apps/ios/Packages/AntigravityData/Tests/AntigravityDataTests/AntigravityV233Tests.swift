@@ -642,4 +642,45 @@ final class AntigravityV233Tests: XCTestCase {
             AppAppearanceMode.system.rawValue
         )
     }
+
+    // MARK: - TC-25: UE v2.1 20-Scene Alignment, Automation Detail/Retry, Rules & Skills, Language
+
+    @MainActor
+    func testTC25_UeV21Alignment20ScenesAutomationDetailAndLanguagePreferences() async {
+        XCTAssertEqual(ESDDVerifySceneCase.allCases.count, 20)
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        XCTAssertEqual(store.hosts.count, 3)
+        XCTAssertEqual(store.selectedModelConfig.displayName, "Gemini 4 Neon")
+        XCTAssertEqual(store.selectedModelConfig.effort, .extra)
+        XCTAssertEqual(store.customizations.loadedTokensLabel, "6.2k tokens")
+        XCTAssertEqual(store.customizations.skills.count, 5)
+        XCTAssertEqual(store.customizations.rules.count, 4)
+
+        // Sidebar, Automation Detail, Edit, Retry, Delete
+        store.configureForVerifyScene(.sidebarDrawer)
+        XCTAssertTrue(store.isSidebarPresented)
+
+        store.openAutomationDetail("auto-nightly-audit")
+        XCTAssertEqual(store.activeRoute, .automationDetail("auto-nightly-audit"))
+        XCTAssertEqual(store.selectedAutomation?.recentRuns.count, 3)
+
+        store.retryAutomationRun(automationId: "auto-nightly-audit", runId: "run-4")
+        XCTAssertTrue(store.selectedAutomation?.isRunningNow == true)
+
+        let updated = await store.updateAutomation(
+            automationId: "auto-nightly-audit",
+            displayName: "Nightly security audit",
+            prompt: "Run govulncheck and open a PR for high CVEs.",
+            cronExpression: "CRON_TZ=UTC 0 3 * * 1-5",
+            projectSlug: "ledger-svc",
+            modelArg: "Gemini 4 Neon"
+        )
+        XCTAssertTrue(updated)
+        XCTAssertEqual(store.selectedAutomation?.title, "Nightly security audit")
+
+        // Language preference switch
+        XCTAssertEqual(store.appearancePreferences.language, .english)
+        store.setAppLanguage(.zhHans)
+        XCTAssertEqual(store.appearancePreferences.language, .zhHans)
+    }
 }

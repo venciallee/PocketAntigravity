@@ -1,5 +1,5 @@
 {
-  "specVersion": "1.0.0",
+  "specVersion": "2.1.0",
   "project": "PocketAntigravity-Android",
   "targetPlatform": {
     "os": "Android 10+ (API 29..36)",
@@ -11,15 +11,15 @@
   },
   "designTokens": {
     "colors": {
-      "canvasObsidian": "#090A0D",
-      "surfaceContainer": "#141519",
-      "surfaceContainerHigh": "#1D1F26",
-      "surfaceContainerHighest": "#25272F",
-      "accentPeriwinkle": "#8EB4FF",
+      "canvasObsidian": "#111113",
+      "surfaceContainer": "#1B1B1E",
+      "surfaceContainerHigh": "#212125",
+      "surfaceContainerHighest": "#26262B",
+      "accentPeriwinkle": "#8DB8FF",
       "inkOnPrimaryCTA": "#0A0E17",
       "statusRunning": "#7DA7FF",
-      "statusWaiting": "#EBB365",
-      "statusDone": "#57C88A",
+      "statusWaiting": "#F2B866",
+      "statusDone": "#6FD8A6",
       "statusError": "#F07167"
     },
     "typographyTiers": ["Reading", "Evidence", "Process", "Metadata", "Chrome"]
@@ -27,30 +27,33 @@
   "states": [
     {
       "id": "UE01_AGENTS_HOME",
-      "title": "Agents Home (Material 3 Conversation & Project Hub)",
-      "iosReferencePng": "verification/output/screenshots/UE01_AGENTS_HOME.png",
+      "title": "New Conversation Home (Material 3 Greeting, Needs Approval Card & Composer)",
+      "androidReferencePng": "docs/ue/android/and-new.png",
+      "iosReferencePng": "docs/ue/ios/Main.png",
       "composeScreen": "AgentsHomeScreen",
       "requiredTestTags": [
+        "btn-open-sidebar",
         "host-switcher-pill",
-        "btn-display-options",
-        "btn-new-project",
-        "agents-search-input",
-        "filter-pill-all",
-        "filter-pill-needs-you",
-        "pinned-section-card",
-        "project-group-ledger-svc",
-        "bottom-nav-bar",
-        "fab-compose"
+        "btn-global-search",
+        "home-greeting-title",
+        "banner-needs-approval",
+        "composer-project-pill",
+        "composer-branch-pill",
+        "composer-cloud-toggle",
+        "composer-btn-add-context",
+        "composer-pill-model",
+        "composer-pill-preset",
+        "composer-btn-send"
       ]
     },
     {
       "id": "UE02_DISPLAY_OPTIONS",
       "title": "Display Options & Sort Bottom Sheet",
-      "iosReferencePng": "verification/output/screenshots/UE02_DISPLAY_OPTIONS.png",
+      "androidReferencePng": "docs/ue/android/and-display-options.png",
+      "iosReferencePng": "docs/ue/ios/ios-display-options.png",
       "composeScreen": "DisplayOptionsSheet",
       "requiredTestTags": [
         "sheet-reset-btn",
-        "sheet-done-btn",
         "row-group-by",
         "row-sort-conversations",
         "sort-options-menu",
@@ -61,24 +64,26 @@
     },
     {
       "id": "UE03_CONTEXT_MENU_PIN",
-      "title": "Long-Press Context Preview Sheet & Swipe Pin/Archive",
-      "iosReferencePng": "verification/output/screenshots/UE03_CONTEXT_MENU_PIN.png",
+      "title": "Long-Press Conversation Action Bottom Sheet",
+      "androidReferencePng": "docs/ue/android/and-context-menu.png",
+      "iosReferencePng": "docs/ue/ios/ios-pin-menu.png",
       "composeScreen": "ConversationContextSheet",
       "requiredTestTags": [
         "context-preview-card",
-        "chip-implementation-plan",
-        "chip-awaiting-review",
         "menu-action-pin",
         "menu-action-unread",
-        "menu-action-delete",
-        "swipe-action-pin",
-        "swipe-action-archive"
+        "menu-action-rename",
+        "menu-action-move",
+        "menu-action-export",
+        "menu-action-archive",
+        "menu-action-delete"
       ]
     },
     {
       "id": "UE04_PROJECT_DETAIL",
-      "title": "Project Page & New Conversation in Project",
-      "iosReferencePng": "verification/output/screenshots/UE04_PROJECT_DETAIL.png",
+      "title": "Project Detail Page & Extended FAB",
+      "androidReferencePng": "docs/ue/android/and-project.png",
+      "iosReferencePng": "docs/ue/ios/ios-project-detail.png",
       "composeScreen": "ProjectDetailScreen",
       "requiredTestTags": [
         "btn-back-agents",
@@ -93,7 +98,8 @@
     {
       "id": "UE05_CREATE_PROJECT",
       "title": "Create New Project Full-Screen Dialog",
-      "iosReferencePng": "verification/output/screenshots/UE05_CREATE_PROJECT.png",
+      "androidReferencePng": "docs/ue/android/and-new-project.png",
+      "iosReferencePng": "docs/ue/ios/ios-new-project.png",
       "composeScreen": "CreateProjectDialog",
       "requiredTestTags": [
         "btn-cancel-project",
@@ -108,88 +114,87 @@
     },
     {
       "id": "UE06_AUTOMATIONS",
-      "title": "Automations (Scheduled, Always On, Paused)",
-      "iosReferencePng": "verification/output/screenshots/UE06_AUTOMATIONS.png",
+      "title": "Automations (Filter Chips, Create with Prompt & Overflow Menu)",
+      "androidReferencePng": "docs/ue/android/and-automations.png",
+      "iosReferencePng": "docs/ue/ios/ios-automations.png",
       "composeScreen": "AutomationsScreen",
       "requiredTestTags": [
+        "btn-open-sidebar",
+        "automation-filter-all",
         "automation-prompt-input",
         "btn-create-automation-inline",
         "automation-card-nightly",
-        "btn-run-nightly",
         "automation-card-flaky",
         "automation-card-always-on",
-        "btn-resume-paused",
-        "bottom-nav-bar",
-        "fab-add-automation"
+        "btn-resume-paused"
       ]
     },
     {
       "id": "UE07_CHAT_AND_COMPOSER",
-      "title": "Cascade Chat, 7-Segment Task Card, Biometric Gate & Composer",
-      "iosReferencePng": "verification/output/screenshots/UE07_CHAT_AND_COMPOSER.png",
+      "title": "Cascade Chat, 7-Segment Task Card, Biometric Gate & PC-Aligned Composer",
+      "androidReferencePng": "docs/ue/android/and-chat.png",
+      "iosReferencePng": "docs/ue/ios/ios-chat.png",
       "composeScreen": "CascadeChatScreen",
       "requiredTestTags": [
         "chat-diff-pill",
-        "row-thought-14s",
         "card-artifact-plan",
         "card-task-progress-7seg",
         "card-command-approval",
         "btn-command-deny",
         "btn-command-allow-biometric",
-        "btn-stop-turn",
-        "composer-chip-ratelimit",
         "composer-btn-add-context",
-        "composer-pill-mode",
         "composer-pill-model",
+        "composer-pill-preset",
         "composer-btn-send"
       ]
     },
     {
       "id": "UE08_ADD_CONTEXT",
-      "title": "Add Context Bottom Sheet",
-      "iosReferencePng": "verification/output/screenshots/UE08_ADD_CONTEXT.png",
+      "title": "Add Context Anchored Menu (Files, Folder, Mentions, Actions, Drive)",
+      "androidReferencePng": "docs/ue/android/and-add-context.png",
+      "iosReferencePng": "docs/ue/ios/ios-add-context.png",
       "composeScreen": "AddContextSheet",
       "requiredTestTags": [
-        "context-search-input",
+        "add-context-menu",
         "tile-files",
         "tile-folder",
         "tile-mentions",
         "tile-actions",
-        "tile-skills",
-        "ctx-row-ratelimit",
-        "ctx-row-go-testing",
-        "btn-add-to-message"
+        "tile-drive"
       ]
     },
     {
       "id": "UE09_MODEL_AND_MODE",
-      "title": "Model, Mode, Effort & Custom Agent Picker",
-      "iosReferencePng": "verification/output/screenshots/UE09_MODEL_AND_MODE.png",
+      "title": "Model, Orchestrator, 4-Level Thinking Effort & Usage Quota Sheet",
+      "androidReferencePng": "docs/ue/android/and-model.png",
+      "iosReferencePng": "docs/ue/ios/ios-model.png",
       "composeScreen": "ModelAndModeSheet",
       "requiredTestTags": [
         "btn-model-done",
-        "mode-card-planning",
-        "mode-card-fast",
-        "model-row-gemini-pro",
-        "model-row-gemini-flash",
+        "model-row-orchestrator",
+        "model-row-gemini-4-neon",
+        "effort-seg-low",
+        "effort-seg-medium",
+        "effort-seg-high",
+        "effort-seg-extra",
+        "model-row-gemini-4-carbon",
         "model-row-claude-opus",
-        "agent-pill-default",
-        "agent-pill-go-reviewer"
+        "model-row-gemini-flash",
+        "model-quota-5h",
+        "model-quota-weekly"
       ]
     },
     {
       "id": "UE10_STRUCTURED_QUESTION",
-      "title": "Interactive Multi-Step Multi-Select Question Card",
-      "iosReferencePng": "verification/output/screenshots/UE10_STRUCTURED_QUESTION.png",
+      "title": "Interactive /plan Interview Multi-Step Multi-Select Question Card",
+      "androidReferencePng": "docs/ue/android/and-ask.png",
+      "iosReferencePng": "docs/ue/ios/ios-ask.png",
       "composeScreen": "StructuredQuestionScreen",
       "requiredTestTags": [
-        "q-step-1-storage",
-        "q-step-2-actions",
-        "q-step-3-retention",
+        "q-step-progress",
         "q-opt-freeze",
         "q-opt-limit",
         "q-opt-role",
-        "q-input-something-else",
         "q-btn-back",
         "q-btn-next",
         "composer-freeform-reply"
@@ -198,21 +203,23 @@
     {
       "id": "UE11_PLAN_REVIEW",
       "title": "Implementation Plan Review & Selection Commenting",
-      "iosReferencePng": "verification/output/screenshots/UE11_PLAN_REVIEW.png",
+      "androidReferencePng": "docs/ue/android/and-plan-review.png",
+      "iosReferencePng": "docs/ue/ios/ios-plan-review.png",
       "composeScreen": "ImplementationPlanReviewScreen",
       "requiredTestTags": [
         "plan-comments-badge",
         "plan-paused-banner",
         "plan-pending-comment-card",
-        "selection-callout-comment",
-        "btn-plan-proceed",
-        "btn-plan-send-comments"
+        "btn-plan-comment",
+        "btn-plan-send-comments",
+        "btn-plan-proceed"
       ]
     },
     {
       "id": "UE12_TURN_DIFF_REVIEW",
-      "title": "Turn Diff Line-Level Review & Git VCS Workbench",
-      "iosReferencePng": "verification/output/screenshots/UE12_TURN_DIFF_REVIEW.png",
+      "title": "Turn Diff Line-Level Review (Single-Column Gutter) & Comment Composer",
+      "androidReferencePng": "docs/ue/android/and-diff.png",
+      "iosReferencePng": "docs/ue/ios/ios-diff.png",
       "composeScreen": "TurnDiffReviewScreen",
       "requiredTestTags": [
         "btn-accept-all-diffs",
@@ -230,19 +237,74 @@
     },
     {
       "id": "UE13_LIVE_ACTIVITY_SPEC",
-      "title": "Android 16 Live Updates (Status Chip / ProgressStyle) & Glance Multi-Agent Spec",
-      "iosReferencePng": "verification/output/screenshots/UE13_LIVE_ACTIVITY_SPEC.png",
+      "title": "Android 16 Live Update Notification Shade (ProgressStyle, Biometric Approval & Multi-Agent)",
+      "androidReferencePng": "docs/ue/android/and-live-update.png",
+      "iosReferencePng": "docs/ue/ios/live-activity.png",
       "composeScreen": "AndroidLiveUpdatesSpecGallery",
-      "viewportOverrideDp": { "width": 800, "height": 500 },
       "requiredTestTags": [
-        "lu-chip-running",
-        "lu-chip-waiting",
-        "lu-minimal-badge",
-        "lu-chip-done",
-        "lu-expanded-running",
-        "lu-expanded-waiting",
-        "lu-lockscreen-multi-agent"
+        "lu-card-running",
+        "lu-btn-stop",
+        "lu-btn-open",
+        "lu-card-waiting",
+        "lu-btn-deny",
+        "lu-btn-allow",
+        "lu-card-cloud",
+        "lu-card-done",
+        "lu-btn-review",
+        "lu-btn-manage",
+        "lu-btn-clear-all"
       ]
+    }
+  ],
+  "extendedScreens": [
+    {
+      "id": "UE01B_SIDEBAR_DRAWER",
+      "title": "Material 3 Modal Navigation Drawer (Aligned with PC Sidebar)",
+      "androidReferencePng": "docs/ue/android/and-home.png",
+      "iosReferencePng": "docs/ue/ios/ios-drawer.png",
+      "composeScreen": "AgentsSidebarDrawerContent"
+    },
+    {
+      "id": "UE06B_AUTOMATION_DETAIL",
+      "title": "Automation Detail & Recent Runs History",
+      "androidReferencePng": "docs/ue/android/and-automation-detail.png",
+      "iosReferencePng": "docs/ue/ios/ios-automation-detail.png",
+      "composeScreen": "AutomationDetailScreen"
+    },
+    {
+      "id": "UE06C_AUTOMATION_EDIT",
+      "title": "Edit Automation Full-Screen Dialog",
+      "androidReferencePng": "docs/ue/android/and-automation-edit.png",
+      "iosReferencePng": "docs/ue/ios/ios-automation-edit.png",
+      "composeScreen": "AutomationEditDialog"
+    },
+    {
+      "id": "UE07B_PERMISSIONS_PRESET",
+      "title": "Per-Conversation Permissions Preset Menu",
+      "androidReferencePng": "docs/ue/android/and-preset.png",
+      "iosReferencePng": "docs/ue/ios/ios-preset.png",
+      "composeScreen": "PermissionsPresetOverlay"
+    },
+    {
+      "id": "UE08B_SLASH_MENU",
+      "title": "/ Actions & Skills Overlay",
+      "androidReferencePng": "docs/ue/android/and-slash.png",
+      "iosReferencePng": "docs/ue/ios/ios-slash.png",
+      "composeScreen": "SlashCommandOverlay"
+    },
+    {
+      "id": "UE14_RULES_AND_SKILLS",
+      "title": "Project Rules & Skills (Lightweight Customizations & Plugin Switches)",
+      "androidReferencePng": "docs/ue/android/and-customizations.png",
+      "iosReferencePng": "docs/ue/ios/ios-customizations.png",
+      "composeScreen": "ProjectRulesAndSkillsScreen"
+    },
+    {
+      "id": "UE15_SETTINGS",
+      "title": "Settings (Connection, Hosts, Appearance, Theme, Dynamic Color, Language)",
+      "androidReferencePng": "docs/ue/android/and-settings.png",
+      "iosReferencePng": "docs/ue/ios/ios-settings.png",
+      "composeScreen": "SettingsAndCustomizationsScreen"
     }
   ]
 }

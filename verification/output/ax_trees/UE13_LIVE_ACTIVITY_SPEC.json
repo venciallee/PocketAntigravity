@@ -41,25 +41,25 @@
     "[data-testid='di-expanded-running']": {
       "exists": true,
       "x": 37,
-      "y": 283,
-      "width": 205.4,
-      "height": 110,
+      "y": 281,
+      "width": 216.2,
+      "height": 114,
       "text": "Add rate limiter to /transfers\nledger-svc \u00b7 MacBook Pro\n2:41\ngo test ./internal/...\nStop\nOpen"
     },
     "[data-testid='di-expanded-waiting']": {
       "exists": true,
-      "x": 278.4,
-      "y": 282,
+      "x": 289.2,
+      "y": 279.5,
       "width": 253.2,
-      "height": 112,
+      "height": 117,
       "text": "Run this command?\nAdd rate limiter \u00b7 step 5 of 7\nvegeta attack -rate=2000/s -duration=30s\nDeny\nAllow"
     },
     "[data-testid='lockscreen-multi-agent-card']": {
       "exists": true,
-      "x": 567.6,
-      "y": 319,
-      "width": 211.8,
-      "height": 94,
+      "x": 578.4,
+      "y": 310,
+      "width": 225.5,
+      "height": 103,
       "text": "Agents \u00b7 2 running \u00b7 1 needs you\nAdd rate limiter to /transfers\nApprove: vegeta attack...\nReview\nDark mode for settings page\nCloud \u00b7 step 2 "
     }
   }

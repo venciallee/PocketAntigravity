@@ -15,6 +15,7 @@ Supports the full Connect-RPC & Binary Protobuf E2E surface for PocketAntigravit
    tests (`TC-01`..`TC-16`) can dispatch live `fetch()` RPCs directly from the UI.
 """
 import json
+import socketserver
 import struct
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -183,8 +184,23 @@ class MockServerState:
             self.rpc_log.append({"method": method, "payload": payload})
 
 
+class _FastThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that skips socket.getfqdn() in server_bind() to avoid 5s+ macOS reverse-DNS stalls on 127.0.0.1."""
+
+    allow_reuse_address = True
+
+    def server_bind(self):
+        # Call TCPServer.server_bind directly to skip HTTPServer's blocking socket.getfqdn(host)
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
+
+
 class LiveMockServer:
-    def __init__(self):
+    def __init__(self, host: str = "127.0.0.1", port: int = 0):
+        self._bind_host = host
+        self._bind_port = port
         self.state = MockServerState()
         outer_state = self.state
 
@@ -1251,7 +1267,7 @@ class LiveMockServer:
 
         bind_host = getattr(self, "_bind_host", "127.0.0.1")
         bind_port = getattr(self, "_bind_port", 0)
-        self.server = ThreadingHTTPServer((bind_host, bind_port), Handler)
+        self.server = _FastThreadingHTTPServer((bind_host, bind_port), Handler)
         self.port = self.server.server_port
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -1273,12 +1289,7 @@ if __name__ == "__main__":
     parser.add_argument("--csrf", default="")
     args = parser.parse_args()
 
-    srv = LiveMockServer()
-    if args.port and srv.port != args.port:
-        srv.server.server_close()
-        srv.server = ThreadingHTTPServer((args.host, args.port), srv.server.RequestHandlerClass)
-        srv.port = srv.server.server_port
-        srv.thread = threading.Thread(target=srv.server.serve_forever, daemon=True)
+    srv = LiveMockServer(host=args.host, port=args.port)
     print(f"MockLanguageServer listening on http://{args.host}:{srv.port}", flush=True)
     try:
         srv.server.serve_forever()

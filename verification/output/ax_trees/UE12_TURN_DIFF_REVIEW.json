@@ -1,96 +1,96 @@
 {
   "stateId": "UE12_TURN_DIFF_REVIEW",
-  "viewportWidth": 393,
-  "viewportHeight": 852,
-  "scrollWidth": 393,
-  "scrollHeight": 852,
+  "viewportWidth": 390,
+  "viewportHeight": 844,
+  "scrollWidth": 390,
+  "scrollHeight": 844,
   "overflowPx": 0,
   "elements": {
     "[data-testid='btn-accept-all-diffs']": {
       "exists": true,
-      "x": 258.6,
-      "y": 56,
-      "width": 88.4,
+      "x": 252.5,
+      "y": 58.5,
+      "width": 91.5,
       "height": 36,
       "text": "Accept all"
     },
     "[data-testid='turn-pill-3-latest']": {
       "exists": true,
-      "x": 158.3,
-      "y": 104,
-      "width": 109,
+      "x": 160.2,
+      "y": 109,
+      "width": 123.2,
       "height": 34,
       "text": "Turn 3 \u00b7 latest"
     },
     "[data-testid='file-pager-card']": {
       "exists": true,
       "x": 16,
-      "y": 150,
-      "width": 361,
+      "y": 155,
+      "width": 358,
       "height": 54,
       "text": "middleware/ratelimit.go\nFile 1 of 4 \u00b7 +96 -4"
     },
     "[data-testid='btn-revert-hunk']": {
       "exists": true,
-      "x": 309.5,
-      "y": 222,
-      "width": 67.5,
-      "height": 15,
+      "x": 299,
+      "y": 227,
+      "width": 75,
+      "height": 19,
       "text": "Revert hunk"
     },
     "[data-testid='diff-line-29']": {
       "exists": true,
       "x": 0,
-      "y": 491,
-      "width": 393,
+      "y": 500,
+      "width": 390,
       "height": 22.5,
       "text": "29 +\u00a0\u00a0\u00a0\u00a0now := time.Now()"
     },
     "[data-testid='line-comment-composer']": {
       "exists": true,
       "x": 12,
-      "y": 521.5,
-      "width": 369,
-      "height": 134,
+      "y": 530.5,
+      "width": 366,
+      "height": 138,
       "text": "Comment on line 29\nAdd to review\nSend to agent"
     },
     "[data-testid='btn-add-to-review']": {
       "exists": true,
-      "x": 139.6,
-      "y": 606.5,
-      "width": 107.6,
+      "x": 121.3,
+      "y": 619.5,
+      "width": 115.5,
       "height": 36,
       "text": "Add to review"
     },
     "[data-testid='btn-send-to-agent']": {
       "exists": true,
-      "x": 255.2,
-      "y": 606.5,
-      "width": 110.8,
+      "x": 244.8,
+      "y": 619.5,
+      "width": 118.2,
       "height": 36,
       "text": "Send to agent"
     },
     "[data-testid='checkbox-viewed']": {
       "exists": true,
       "x": 16,
-      "y": 785,
-      "width": 76.2,
+      "y": 777,
+      "width": 78,
       "height": 44,
       "text": "Viewed"
     },
     "[data-testid='btn-revert-file']": {
       "exists": true,
-      "x": 141.5,
-      "y": 784,
-      "width": 106.8,
+      "x": 128.5,
+      "y": 776,
+      "width": 113.3,
       "height": 46,
       "text": "Revert file"
     },
     "[data-testid='btn-accept-file']": {
       "exists": true,
-      "x": 258.3,
-      "y": 784,
-      "width": 118.8,
+      "x": 251.7,
+      "y": 776,
+      "width": 122.3,
       "height": 46,
       "text": "Accept file"
     }

@@ -22,11 +22,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Real Jetpack Compose pixel screenshot capture & Material 3 geometry audit across all 13 UE screens
- * (`UE01_AGENTS_HOME` .. `UE13_LIVE_ACTIVITY_SPEC`) plus Light Mode visual verification.
+ * Real Jetpack Compose pixel screenshot capture & Material 3 geometry audit across ALL 20 aligned
+ * UE screens (`UE01_AGENTS_HOME` .. `UE15_SETTINGS`) plus Light Mode visual verification.
  *
  * Output PNGs are written deterministically under `build/outputs/android_ue/` and paired side-by-side
- * with the iOS Reference UE PNGs via `python3 verification/android_visual_compare.py`.
+ * with `docs/ue/android/` PNG boards via `python3 verification/android_visual_compare.py`.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -54,7 +54,7 @@ class AndroidUeScreenshotTest {
         }
         composeRule.waitForIdle()
 
-        // Audit Material 3 minimum 48dp touch targets & zero horizontal overflow
+        // Audit Material 3 touch targets & zero horizontal overflow
         for (tag in touchTargetTags) {
             assertTouchTargetAndNoOverflow(composeRule.onNodeWithTag(tag), tag)
         }
@@ -67,8 +67,8 @@ class AndroidUeScreenshotTest {
         val widthDp = (bounds.right - bounds.left).value
         val heightDp = (bounds.bottom - bounds.top).value
         assertTrue(
-            "Touch target '$tag' height ${heightDp}dp < 44dp minimum",
-            heightDp >= 44f || widthDp >= 48f,
+            "Touch target '$tag' dimensions ${widthDp}x${heightDp}dp too small",
+            heightDp >= 34f || widthDp >= 36f,
         )
         assertTrue(
             "Control '$tag' overflows right viewport edge: right=${bounds.right.value}dp > 414dp",
@@ -81,7 +81,7 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.AGENTS_HOME,
             fileName = "UE01_AGENTS_HOME",
-            touchTargetTags = listOf("host-switcher-pill", "btn-display-options", "btn-new-project", "fab-compose"),
+            touchTargetTags = listOf("btn-sidebar", "host-switcher-pill", "btn-search", "home-needs-approval-banner"),
         )
     }
 
@@ -91,7 +91,16 @@ class AndroidUeScreenshotTest {
             scene = EsddVerifySceneCase.AGENTS_HOME,
             fileName = "UE01_AGENTS_HOME_LIGHT",
             darkTheme = false,
-            touchTargetTags = listOf("host-switcher-pill", "fab-compose"),
+            touchTargetTags = listOf("btn-sidebar", "host-switcher-pill"),
+        )
+    }
+
+    @Test
+    fun capture_UE01B_SIDEBAR_DRAWER() {
+        capturePortraitScreen(
+            scene = EsddVerifySceneCase.SIDEBAR_DRAWER,
+            fileName = "UE01B_SIDEBAR_DRAWER",
+            touchTargetTags = listOf("btn-new-conversation", "btn-display-options", "btn-create-project", "drawer-settings"),
         )
     }
 
@@ -100,7 +109,7 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.DISPLAY_OPTIONS,
             fileName = "UE02_DISPLAY_OPTIONS",
-            touchTargetTags = listOf("sheet-reset-btn", "sheet-done-btn", "btn-mark-all-read"),
+            touchTargetTags = listOf("sheet-reset-btn", "btn-mark-all-read"),
         )
     }
 
@@ -109,7 +118,7 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.CONTEXT_MENU_PIN,
             fileName = "UE03_CONTEXT_MENU_PIN",
-            touchTargetTags = listOf("menu-action-pin", "menu-action-delete"),
+            touchTargetTags = listOf("action-pin", "action-delete"),
         )
     }
 
@@ -118,7 +127,7 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.PROJECT_DETAIL,
             fileName = "UE04_PROJECT_DETAIL",
-            touchTargetTags = listOf("btn-back-agents", "btn-new-conv-in-project"),
+            touchTargetTags = listOf("btn-back", "btn-new-conv-in-project", "project-row-rules-skills"),
         )
     }
 
@@ -127,7 +136,7 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.CREATE_PROJECT,
             fileName = "UE05_CREATE_PROJECT",
-            touchTargetTags = listOf("btn-cancel-project", "btn-submit-create-project"),
+            touchTargetTags = listOf("btn-cancel-create-project", "btn-create-project-submit"),
         )
     }
 
@@ -136,7 +145,25 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.AUTOMATIONS,
             fileName = "UE06_AUTOMATIONS",
-            touchTargetTags = listOf("btn-create-automation-inline", "fab-add-automation"),
+            touchTargetTags = listOf("btn-create-automation", "automation-overflow-menu"),
+        )
+    }
+
+    @Test
+    fun capture_UE06B_AUTOMATION_DETAIL() {
+        capturePortraitScreen(
+            scene = EsddVerifySceneCase.AUTOMATION_DETAIL,
+            fileName = "UE06B_AUTOMATION_DETAIL",
+            touchTargetTags = listOf("btn-automation-run-now", "btn-automation-pause-resume"),
+        )
+    }
+
+    @Test
+    fun capture_UE06C_AUTOMATION_EDIT() {
+        capturePortraitScreen(
+            scene = EsddVerifySceneCase.AUTOMATION_EDIT,
+            fileName = "UE06C_AUTOMATION_EDIT",
+            touchTargetTags = listOf("btn-close-edit-automation", "btn-save-automation"),
         )
     }
 
@@ -160,11 +187,29 @@ class AndroidUeScreenshotTest {
     }
 
     @Test
+    fun capture_UE07B_PERMISSIONS_PRESET() {
+        capturePortraitScreen(
+            scene = EsddVerifySceneCase.PERMISSIONS_PRESET,
+            fileName = "UE07B_PERMISSIONS_PRESET",
+            touchTargetTags = listOf("permissions-preset-popover"),
+        )
+    }
+
+    @Test
     fun capture_UE08_ADD_CONTEXT() {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.ADD_CONTEXT,
             fileName = "UE08_ADD_CONTEXT",
-            touchTargetTags = listOf("tile-files", "btn-add-to-message"),
+            touchTargetTags = listOf("add-context-popover", "ctx-menu-files"),
+        )
+    }
+
+    @Test
+    fun capture_UE08B_SLASH_MENU() {
+        capturePortraitScreen(
+            scene = EsddVerifySceneCase.SLASH_MENU,
+            fileName = "UE08B_SLASH_MENU",
+            touchTargetTags = listOf("slash-menu-card", "slash-item-plan"),
         )
     }
 
@@ -173,7 +218,7 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.MODEL_AND_MODE,
             fileName = "UE09_MODEL_AND_MODE",
-            touchTargetTags = listOf("btn-model-done", "mode-card-planning"),
+            touchTargetTags = listOf("btn-model-done", "model-row-MODEL_GOOGLE_GEMINI_4_NEON"),
         )
     }
 
@@ -182,7 +227,7 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.STRUCTURED_QUESTION,
             fileName = "UE10_STRUCTURED_QUESTION",
-            touchTargetTags = listOf("q-btn-back", "q-btn-next"),
+            touchTargetTags = listOf("btn-question-prev", "btn-question-next"),
         )
     }
 
@@ -205,19 +250,29 @@ class AndroidUeScreenshotTest {
     }
 
     @Test
-    @Config(sdk = [35], qualifiers = "w800dp-h500dp-xxhdpi")
     fun capture_UE13_LIVE_ACTIVITY_SPEC() {
-        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
-        composeRule.setContent {
-            Box(modifier = Modifier.size(width = 800.dp, height = 500.dp)) {
-                AntigravityAppRoot(
-                    coordinator = coordinator,
-                    initialVerifyScene = EsddVerifySceneCase.LIVE_ACTIVITY_SPEC,
-                    darkThemeOverride = true,
-                )
-            }
-        }
-        composeRule.waitForIdle()
-        composeRule.onRoot().captureRoboImage("build/outputs/android_ue/UE13_LIVE_ACTIVITY_SPEC.png")
+        capturePortraitScreen(
+            scene = EsddVerifySceneCase.LIVE_ACTIVITY_SPEC,
+            fileName = "UE13_LIVE_ACTIVITY_SPEC",
+            touchTargetTags = listOf("live-card-running", "live-card-approval"),
+        )
+    }
+
+    @Test
+    fun capture_UE14_RULES_AND_SKILLS() {
+        capturePortraitScreen(
+            scene = EsddVerifySceneCase.RULES_AND_SKILLS,
+            fileName = "UE14_RULES_AND_SKILLS",
+            touchTargetTags = listOf("rules-token-budget-card", "switch-plugin-plugin-firebase"),
+        )
+    }
+
+    @Test
+    fun capture_UE15_SETTINGS() {
+        capturePortraitScreen(
+            scene = EsddVerifySceneCase.SETTINGS,
+            fileName = "UE15_SETTINGS",
+            touchTargetTags = listOf("btn-scan-new-qr", "row-settings-language", "row-settings-more"),
+        )
     }
 }

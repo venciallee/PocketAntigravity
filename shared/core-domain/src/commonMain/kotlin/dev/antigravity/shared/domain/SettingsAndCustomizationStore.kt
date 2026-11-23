@@ -21,18 +21,18 @@ import kotlinx.coroutines.flow.update
 public data class SettingsState(
     public val models: List<CascadeModelConfig> = CascadeModelConfig.liveDefaultCatalog,
     public val selectedMode: CascadeExecutionMode = CascadeExecutionMode.PLANNING,
-    public val selectedModelId: String = "MODEL_GOOGLE_GEMINI_3_1_PRO",
-    public val selectedEffort: ThinkingEffortLevel = ThinkingEffortLevel.HIGH,
+    public val selectedModelId: String = "MODEL_GOOGLE_GEMINI_4_NEON",
+    public val selectedEffort: ThinkingEffortLevel = ThinkingEffortLevel.EXTRA,
     public val selectedAgentPersona: String = "Default",
     public val availableAgentPersonas: List<String> = listOf("Default", "go-reviewer", "release-captain"),
     public val quota: ModelUsageQuota = ModelUsageQuota(
         planTierLabel = "Google AI Pro",
-        usedPercent = 18.0,
-        refreshCountdownLabel = "Resets in 3h 42m",
+        usedPercent = 28.0,
+        refreshCountdownLabel = "resets 3:40 PM",
         creditsRemaining = 820,
         isQuotaWarning = false,
-        geminiWeeklyRemaining = 0.85,
-        geminiFiveHourRemaining = 0.92,
+        geminiWeeklyRemaining = 0.48,
+        geminiFiveHourRemaining = 0.72,
         partnerWeeklyRemaining = 0.72,
         partnerFiveHourRemaining = 0.84,
         aiCreditOveragesEnabled = false,
@@ -276,6 +276,10 @@ public class SettingsAndCustomizationStore(
 
     public fun updateAppearance(transform: (AppAppearancePreferences) -> AppAppearancePreferences) {
         _state.update { it.copy(appearance = transform(it.appearance)) }
+    }
+
+    public fun setAppLanguage(language: dev.antigravity.shared.model.AppLanguage) {
+        _state.update { it.copy(appearance = it.appearance.copy(language = language)) }
     }
 
     public fun clearCapabilityError() {
