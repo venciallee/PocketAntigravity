@@ -1,6 +1,6 @@
 # Platform Support & Feature Status (`AG Pocket` / `PocketAntigravity`)
 
-> **Last updated**: Post-PR `#39` (Native iOS + Native Android Jetpack Compose + Full KMP Shared Core Parity on `main`).
+> **Last updated**: Post-PR `#45` + Apple Watch (`watchOS 11+`) Companion implementation (`feat/apple-watch-companion`).
 >
 > This document summarizes **which platforms are supported**, **what capabilities are implemented on each platform**, **what is automatically verified in CI**, and **what remains on the roadmap**.
 
@@ -9,7 +9,7 @@
 | Badge | Meaning |
 | :---: | :--- |
 | ✅ | **Implemented & CI-Verified** — Built, wired end-to-end, and validated by automated unit/E2E/visual tests in GitHub Actions. |
-| 🚧 | **Core & UI Ready / Hardware Wiring Next** — Compose UI, KMP state, and protocol transport are implemented; final on-device OS hardware hook (e.g., CameraX / WebView OAuth sheet / live mic capture) is the next follow-up. |
+| 🚧 | **Implemented / Simulator CI or Hardware QA Next** — Core UI, state, protocol sync, and local ESDD verification are implemented; final macOS Simulator CI / physical-device hardware QA or OS hook is the next step. |
 | 🧭 | **Planned** — Not yet started; tracked on the roadmap. |
 
 ---
@@ -18,8 +18,8 @@
 
 | Target | Min / Target OS | Tech Stack | Status | Key Highlights |
 | :--- | :--- | :--- | :---: | :--- |
-| **iOS App** (`apps/ios/`) | **iOS 18.0+** (Xcode 16+ / Swift 6) | SwiftUI + UIKit + SKIE (`AntigravityShared.xcframework`) + Pure-Swift `AntigravityData` | ✅ | All 13 UE screens (`UE01`–`UE13`), Floating Liquid Glass shell, Dynamic Island & Lock Screen Live Activities, Share Extension (<30 MB), Face ID approval gate, live Camera QR scanner, WebView Google Cloud Relay sign-in, native `SFSpeechRecognizer` voice input, Frame-0 instant launch. |
-| **Apple Watch App** (`apps/ios/Watch/`) | **watchOS 11.0+** (Xcode 16+ / Swift 6) | Native SwiftUI + `WatchConnectivity` + `WKNotificationScene` + Handoff + `AntigravityData` | ✅ | All 8 Watch companion screens (`W01`–`W08`): Sessions list (`Agents`), Online Devices switcher (`Devices`), Chat stream, Walkthrough artifact summary, Compact & Intent-Grouped (`WORTH A LOOK` + `GROUPED`) Changed Files, Voice Input with waveform & watchOS Double Tap to send, and Actionable Approval Notifications (`Allow` / `Deny` / `Reply by voice`). |
+| **iOS App** (`apps/ios/`) | **iOS 18.0+** (Xcode 16+ / Swift 6) | SwiftUI + UIKit + SKIE (`AntigravityShared.xcframework`) + Pure-Swift `AntigravityData` | ✅ | All 13 UE screens (`UE01`–`UE13`), Floating Liquid Glass shell, Dynamic Island & Lock Screen Live Activities, Share Extension (<30 MB), Face ID approval gate, live Camera QR scanner, WebView Google Cloud Relay sign-in, native `SFSpeechRecognizer` voice input, Frame-0 instant launch, and `WatchConnectivityBridge` + Handoff. |
+| **Apple Watch App** (`apps/ios/Watch/`) | **watchOS 11.0+** (Xcode 16+ / Swift 6) | Native SwiftUI + `WatchConnectivity` + `WKNotificationScene` + `LocalAuthentication` (Wrist Detection) + Handoff + `AntigravityData` | 🚧 | Focused on **3 wrist jobs: glance status, approve, and dispatch voice tasks**. All 8 OLED screens (`W01`–`W08`): `Agents` home (top-left device switcher, top-right voice new task), `Devices` switcher, `Chat Stream`, `Artifact Summary` (title + `≤ 3` key points + single Double-Tap CTA `See changes` / `Proceed`), `Changed Files` (no source code; `≤ 5` files & zero risk items → `Accept all`, otherwise `WORTH A LOOK` + intent-grouped `GROUPED` clusters → `iPhone` Handoff), `Voice Input`, and interactive Long-Look `Approval Notification`. Enforces watchOS `LAPolicy.deviceOwnerAuthenticationWithWristDetection` on all approvals (`Allow`/`Proceed`/`Accept all`). 14/14 Watch ESDD E2E & unit/XCUITest specs complete; macOS Watch Simulator CI & physical watch field QA next. |
 | **Android App** (`apps/android/`) | **Android 10–16** (`minSdk 29`, `compileSdk 36`, `targetSdk 36`) | Kotlin 2.1.21 + Jetpack Compose (`BOM 2025.10.00`) + Material 3 (`1.4.0`) + Adaptive `NavigationSuiteScaffold` | ✅ | 3-module architecture (`core-ui`, `core-platform`, `app`) consuming KMP `shared/` directly. All 13 UE screens (`UE01`–`UE13`) adapted idiomatically to Material 3, Android 16 `NotificationCompat.ProgressStyle` Live Updates + Android 10–15 Foreground Service fallback, Jetpack Glance home widget, `BiometricPrompt`, Tink + Keystore encryption, Material You Dynamic Color opt-in, native Share receiver. |
 | **KMP Shared Core** (`shared/`) | JVM 21 · Android API 29+ · iOS 18+ (`arm64` / Simulator) | Kotlin Multiplatform (`core-model`, `core-protocol`, `core-markdown`, `core-domain`, `umbrella`) + Ktor + SKIE | ✅ | Single shared source of truth for Connect-RPC (5-byte streaming), Binary-first Protobuf + adaptive JSON fallback, Cloud Relay (`SAPISIDHASH`), 7 `StateFlow` domain stores, `DurableOutbox`, `HostCapabilityRegistry`, `ProtocolCompatibilityEngine`, streaming Markdown AST, and deterministic ESDD fixtures. |
 | **Antigravity Host Targets** | Desktop PC · Antigravity Cloud (`v1/...`) · Optional LAN Companion Bridge | Official Cloud Relay (`ApiService/ProxyCommand` & `StreamProxyCommand`) · Direct LAN / Tailscale TLS | ✅ | Bidirectional compatibility across older & newer Desktop versions (`v2.20` .. `v2.33+` and future versions) via per-host capability negotiation, negative caching, resilient enums, and automatic unknown-field stripping/downgrading. |
@@ -110,7 +110,7 @@ All workflows use impact-scoped routing via [`verification/e2e_impact_planner.py
 
 | Workflow | Runner | What It Verifies |
 | :--- | :--- | :--- |
-| [`.github/workflows/macos-xcode-verify.yml`](../.github/workflows/macos-xcode-verify.yml) | `ubuntu-latest` + `macos-26` | Spec-DAG & 8-check compat guardrails, Swift 6 `AntigravityData` XCTest, Live Connect-RPC + v2.33 + 3-version Compat Matrix, SKIE `AntigravityShared.xcframework`, real iOS Simulator XCUITest (6 flows), Live App RPC handshake & 13 native Simulator screenshots. |
+| [`.github/workflows/macos-xcode-verify.yml`](../.github/workflows/macos-xcode-verify.yml) | `ubuntu-latest` + `macos-26` | Spec-DAG (iOS + Watch Stage W1) & 8-check compat guardrails, Swift 6 `AntigravityData` XCTest (incl. `WatchCompanionTests`), Live Connect-RPC + v2.33 + 3-version Compat Matrix, SKIE `AntigravityShared.xcframework`, real iOS Simulator XCUITest (6 flows), Live App RPC handshake & 13 native iOS Simulator screenshots, plus real Apple Watch Series 10 Simulator build / `AGPocketWatchUITests` / 8-screen capture via `watchos-simulator-runner.py` when Watch files change. |
 | [`.github/workflows/android-verify.yml`](../.github/workflows/android-verify.yml) | `ubuntu-latest` (with `/dev/kvm`) | Android Gradle `assembleDebug` + `lintDebug` (0 errors), JVM unit tests + 18 Compose interactive E2E tests (`ATC-01`..`ATC-18`), Roborazzi 13-screen + Light Mode capture & 48dp/0px-overflow audit, iOS↔Android visual comparison generation, and **KVM hardware-accelerated API 35 Pixel 6 Emulator** instrumented E2E (`connectedDebugAndroidTest`). |
 | [`.github/workflows/kmp-verify.yml`](../.github/workflows/kmp-verify.yml) | `ubuntu-latest` + `macos-26` | KMP JVM common tests + live mock LanguageServer E2E (Linux), plus KMP iOS Simulator tests & `AntigravityShared.xcframework` build (macOS). |
 | [`.github/workflows/cr-agent.yml`](../.github/workflows/cr-agent.yml) & [`zizmor.yml`](../.github/workflows/zizmor.yml) | `ubuntu-latest` | Semgrep OSS security rules, deterministic security gate, Gemini CLI client/security review, advisory runtime hygiene (`verify_advisory_hygiene.py`), and GitHub Actions supply-chain hardening. |
@@ -119,12 +119,15 @@ All workflows use impact-scoped routing via [`verification/e2e_impact_planner.py
 
 ## 5. Known Gaps & Next Roadmap
 
-1. **Android On-Device Hardware Hooks** (UI, WebView Cloud Relay Sign-In & KMP transport already in place):
+1. **Apple Watch Companion (`AGPocketWatch`, `watchOS 11+`) — Final CI & Physical Hardware QA** *(Specs `specs/watch/`, all 8 SwiftUI views `W01`–`W08`, `WatchWristUnlockGuard`, `WatchConnectivityBridge`, `WatchCompanionTests`, `AGPocketWatchUITests`, and 14/14 headless `416×496 @2x` ESDD E2E already implemented)*:
+   - **macOS Watch Simulator CI**: Complete real Xcode 26 `watchsimulator` + `watchOS` arm64 build, `AGPocketWatchUITests`, and native Series 10 Simulator 8-screen visual verification once merged via GitHub Actions `macos-26`.
+   - **Physical Apple Watch Field Testing**: Validate `WatchConnectivity` latency over Bluetooth/Wi-Fi, Double Tap primary action feel, `LAPolicy.deviceOwnerAuthenticationWithWristDetection` off-wrist locking, Long-Look notifications, and Handoff to iPhone on paired hardware.
+2. **Android On-Device Hardware Hooks** (UI, WebView Cloud Relay Sign-In & KMP transport already in place):
    - **CameraX / ML Kit QR Scanner**: In-app live camera viewfinder for scanning Antigravity Desktop Remote Control QR codes directly inside Android (system camera deep links + manual link dialog already work).
    - **Android Live Voice Capture**: Wire `android.speech.SpeechRecognizer` / `AudioRecord` into `VoiceModeSheet` for hands-free live dictation and Gemini Live turns.
-2. **Real Physical Device Field Testing**:
+3. **Real Physical Device Field Testing**:
    - End-to-end validation of Android 16 promoted Live Updates chips on physical Pixel hardware, foldables/tablets, and background Wi-Fi ↔ 5G network handoffs across both iPhone and Android devices.
-3. **Release Packaging & Distribution**:
-   - Automated signed release pipelines for iOS (TestFlight / `.ipa`) and Android (signed `.apk` / `.aab` / Play Store).
-4. **Localization (i18n) & Ongoing Upstream Sync**:
+4. **Release Packaging & Distribution**:
+   - Automated signed release pipelines for iOS + Apple Watch (TestFlight / `.ipa`) and Android (signed `.apk` / `.aab` / Play Store).
+5. **Localization (i18n) & Ongoing Upstream Sync**:
    - Multi-language UI strings (English / Chinese / Japanese, etc.) and continuous tracking of new upstream Google Antigravity Desktop `LanguageServerService` step types, artifact formats, and interaction gates.
