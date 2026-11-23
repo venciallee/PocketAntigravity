@@ -15,14 +15,28 @@ import dev.antigravity.shared.model.RequestedInteraction
 import dev.antigravity.shared.model.RunCommandInteractionSpec
 import dev.antigravity.shared.model.RunCommandPayload
 import dev.antigravity.shared.platform.NetworkReachabilityStatus
+import dev.antigravity.shared.protocol.AntigravityKmpRpcClient
+import dev.antigravity.shared.protocol.AntigravityRpcError
 import dev.antigravity.shared.protocol.BackendHandshakeResult
 import dev.antigravity.shared.protocol.ConnectionLifecyclePhase
 import dev.antigravity.shared.protocol.JsonStepAndSummaryDecoder
 import dev.antigravity.shared.protocol.RelayInstanceInfo
 import dev.antigravity.shared.protocol.RelayInstanceStatus
+import dev.antigravity.shared.protocol.platformTransportEngineName
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import okio.ByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -275,5 +289,121 @@ class CoreDomainStoreTest {
             ),
         )
         assertEquals(1, coordinator.syncState.value.summaries.count { it.isUnread })
+    }
+
+    @Test
+    fun testCloudRelayTimeoutSurfacesStageDiagnosticBreadcrumb() = runTest {
+        withContext(Dispatchers.Default) {
+            val hangingEngine = MockEngine { _ ->
+                delay(5_000L)
+                respond("", HttpStatusCode.OK)
+            }
+            val coordinator = AntigravityCoreCoordinator(
+                scope = this,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(hangingEngine),
+                    )
+                },
+            )
+            coordinator.connectionStore.handshakeHardTimeoutMs = 350L
+
+            val err = assertFailsWith<AntigravityRpcError.HttpError> {
+                coordinator.connectCloudRelay(
+                    relayUrlString = "https://antigravity.google/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
+                    sessionCookie = "SAPISID=secret_cookie_value; SID=sid_value",
+                    relayApiKey = "AI" + "zaSyDIAGTEST0000000000000000000000000",
+                    startSummaryStream = false,
+                )
+            }
+            val expectedEngine = "engine=${platformTransportEngineName()}"
+            assertEquals(504, err.statusCode)
+            assertTrue(err.body.contains(expectedEngine), "Expected engine tag in timeout error: ${err.body}")
+            assertTrue(err.body.contains("origin=antigravity.google.com"), "Expected canonical origin in timeout error: ${err.body}")
+            assertTrue(err.body.contains("trace="), "Expected stage trace in timeout error: ${err.body}")
+            assertFalse(err.body.contains("secret_cookie_value"), "Timeout error must never leak raw cookie values")
+            assertTrue(coordinator.lastHandshakeDiagnostic().contains(expectedEngine))
+        }
+    }
+
+    @Test
+    fun testCoordinatorHydratesConversationsInBackgroundWhenInitialHandshakeDefersSync() = runTest {
+        withContext(Dispatchers.Default) {
+            val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            val validKey = "AI" + "zaSyDEFERREDSYNC000000000000000000000"
+            var proxyCallCount = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$rawUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        proxyCallCount += 1
+                        val jsonPayload = if (proxyCallCount <= 2) {
+                            // Simulate empty initial snapshot during handshake (e.g. deferred sync)
+                            """{"workspaces":[],"trajectorySummaries":{}}"""
+                        } else {
+                            // Subsequent background hydration returns real conversations
+                            """{"workspaces":[{"workspaceUri":"file:///Users/dev/payments","displayName":"payments"}],"trajectorySummaries":{"cas-bg-1":{"summary":"Background Hydrated Chat","stepCount":6,"status":"CORTEX_STEP_STATUS_DONE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/payments"}]}}}"""
+                        }
+                        val b64 = ByteString.of(*jsonPayload.encodeToByteArray()).base64()
+                        respond(
+                            content = """["$b64",[["content-type","application/json"]]]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                scope = this,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+
+            val handshake = coordinator.connectCloudRelay(
+                relayUrlString = "https://antigravity.google.com/r/$rawUuid",
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                startSummaryStream = false,
+            )
+            assertEquals("MacBook Pro", handshake.resolvedHostname)
+
+            // Wait briefly for the deferred background sync launched by onHandshakeSucceeded to populate summaries.
+            var hydrated = false
+            for (i in 0 until 40) {
+                if (coordinator.syncState.value.summaries.any { it.cascadeId == "cas-bg-1" }) {
+                    hydrated = true
+                    break
+                }
+                delay(50L)
+            }
+            assertTrue(hydrated, "Background hydration must populate summaries when initial handshake returned empty")
+        }
     }
 }

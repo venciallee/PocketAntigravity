@@ -657,10 +657,14 @@ fun AntigravityAppRoot(
                         targetRelayUrl = route.targetRelayUrl,
                         onAuthenticated = { captured ->
                             currentRoute = AppRoute.Pairing
+                            val effectiveUrl = RemoteHostInstance.resolveEffectiveRelayTarget(
+                                scannedInput = route.targetRelayUrl,
+                                webViewFinalUrl = captured.finalUrl,
+                            )
                             scope.launch {
                                 val result = runCatching {
                                     coordinator.connectCloudRelay(
-                                        relayUrlString = route.targetRelayUrl,
+                                        relayUrlString = effectiveUrl,
                                         sessionCookie = captured.cookieHeader,
                                         authUser = captured.authUser,
                                         relayApiKey = captured.relayApiKey,

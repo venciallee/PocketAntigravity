@@ -346,6 +346,7 @@ public object SapisidHashGenerator {
         val headers = linkedMapOf(
             "Content-Type" to "application/json+protobuf",
             "Accept" to "*/*",
+            "User-Agent" to MOBILE_REMOTE_USER_AGENT,
             "X-User-Agent" to "grpc-web-javascript/0.1",
             "X-Goog-AuthUser" to authUser.ifEmpty { "0" },
             "Origin" to normalizedOrigin,
@@ -383,7 +384,18 @@ public object SapisidHashGenerator {
         val afterScheme = trimmed.substring(schemeEnd + 3)
         val authority = afterScheme.substringBefore('/').substringBefore('?').substringBefore('#').lowercase()
         if (authority.isEmpty()) return DEFAULT_ORIGIN
-        return "$scheme://$authority"
+        val hostPart = if (authority.startsWith("[")) authority else authority.substringBefore(':')
+        val portSuffix = if (!authority.startsWith("[") && authority.contains(':')) {
+            ":" + authority.substringAfter(':')
+        } else {
+            ""
+        }
+        val canonicalHost = when {
+            hostPart == "antigravity.google" || hostPart == "www.antigravity.google" -> "antigravity.google.com"
+            hostPart.endsWith(".antigravity.google") -> hostPart.removeSuffix(".antigravity.google") + ".antigravity.google.com"
+            else -> hostPart
+        }
+        return "$scheme://$canonicalHost$portSuffix"
     }
 
     public fun sha1Hex(input: String): String =

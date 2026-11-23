@@ -17,6 +17,8 @@ import javax.net.ssl.X509TrustManager
 
 public actual fun currentTimeMillis(): Long = System.currentTimeMillis()
 
+public actual fun platformTransportEngineName(): String = "KMP-OkHttp"
+
 internal actual fun createPlatformHttpClient(
     endpointHost: String,
     config: TlsEngineConfig,

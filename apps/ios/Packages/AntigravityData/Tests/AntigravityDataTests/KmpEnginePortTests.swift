@@ -18,6 +18,7 @@ private final class LockedCounter: @unchecked Sendable {
 
 private actor RecordingKmpEngineDouble: AntigravityKmpEnginePort {
     nonisolated var engineName: String { "RecordingKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=RecordingKmpEngineDouble trace=mock" }
 
     var directLanCalls: [(endpoint: String, csrf: String, hostName: String)] = []
     var cloudRelayCalls: [(relayURL: String, cookie: String)] = []
@@ -300,6 +301,27 @@ final class KmpEnginePortTests: XCTestCase {
     }
 
     @MainActor
+    func testCloudRelayHandshakeWithEmptyInitialSummariesTriggersDeferredBackgroundRefresh() async throws {
+        let engine = RecordingKmpEngineDouble()
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+
+        let connected = await store.connectCloudRelay(
+            relayURLString: "https://antigravity.google/r/uuid-golden-star-v2",
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyTESTKMPDEFER000000000000000000000",
+            hostName: "golden-star"
+        )
+        XCTAssertTrue(connected)
+        XCTAssertTrue(store.isLiveBackendConnected)
+
+        for _ in 0..<25 where (await engine.refreshCalls) == 0 {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let refreshes = await engine.refreshCalls
+        XCTAssertGreaterThanOrEqual(refreshes, 1, "Empty initial handshake must trigger deferred background refresh")
+    }
+
+    @MainActor
     func testKmpSummaryStreamPreservesMarkAllReadAndTriggersActiveChatSync() async throws {
         let engine = StreamingKmpEngineDouble()
         let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
@@ -388,6 +410,7 @@ private final class StreamHub: @unchecked Sendable {
 
 private actor StreamingKmpEngineDouble: AntigravityKmpEnginePort {
     nonisolated var engineName: String { "StreamingKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=StreamingKmpEngineDouble trace=mock" }
     private let hub = StreamHub()
     var syncStepsCalls: [String] = []
 

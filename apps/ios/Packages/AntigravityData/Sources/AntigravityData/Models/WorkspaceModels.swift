@@ -688,6 +688,34 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
         return false
     }
 
+    /// Canonicalizes Google's vanity relay domain (`antigravity.google`) to the Boq API origin (`antigravity.google.com`)
+    /// so `SAPISIDHASH` origin signing and `/$rpc` requests match Google's `.google.com` session cookies.
+    public static func canonicalRelayHost(_ rawHost: String) -> String {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if host == "antigravity.google" || host == "www.antigravity.google" {
+            return "antigravity.google.com"
+        }
+        if host.hasSuffix(".antigravity.google") {
+            return String(host.dropLast(".antigravity.google".count)) + ".antigravity.google.com"
+        }
+        return host
+    }
+
+    private static func canonicalizeRelayURLString(_ rawURL: String) -> String {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              var components = URLComponents(string: trimmed),
+              let rawHost = components.host else {
+            return trimmed
+        }
+        let canonical = canonicalRelayHost(rawHost)
+        guard canonical.caseInsensitiveCompare(rawHost) != .orderedSame else {
+            return trimmed
+        }
+        components.host = canonical
+        return components.string ?? trimmed
+    }
+
     /// Selects the best Cloud Relay target URL after `WKWebView` sign-in completes, preserving
     /// resolved shortlink destinations while never dropping an explicit scanned `instanceId`.
     public static func resolveEffectiveRelayTarget(
@@ -702,20 +730,31 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
 
         if let finalTarget, !finalTarget.instanceId.isEmpty {
             if scannedTarget == nil || scannedTarget?.instanceId.isEmpty == true || scannedTarget?.requiresRedirectResolution == true {
-                return trimmedFinal
+                return canonicalizeRelayURLString(trimmedFinal)
             }
         }
         if !trimmedScanned.isEmpty {
             if let scannedTarget, !scannedTarget.requiresRedirectResolution {
-                return trimmedScanned
+                let scannedLower = trimmedScanned.lowercased()
+                let usesShortGoogleTld = scannedLower.contains("://antigravity.google/")
+                    || scannedLower.hasSuffix("://antigravity.google")
+                    || scannedLower.hasPrefix("antigravity.google/")
+                    || scannedLower == "antigravity.google"
+                if usesShortGoogleTld,
+                   let finalTarget,
+                   finalTarget.relayOrigin.caseInsensitiveCompare("https://antigravity.google.com") == .orderedSame,
+                   (finalTarget.instanceId == scannedTarget.instanceId || !finalTarget.instanceId.isEmpty) {
+                    return canonicalizeRelayURLString(trimmedFinal)
+                }
+                return canonicalizeRelayURLString(trimmedScanned)
             }
             if !trimmedFinal.isEmpty {
-                return trimmedFinal
+                return canonicalizeRelayURLString(trimmedFinal)
             }
-            return trimmedScanned
+            return canonicalizeRelayURLString(trimmedScanned)
         }
         if !trimmedFinal.isEmpty {
-            return trimmedFinal
+            return canonicalizeRelayURLString(trimmedFinal)
         }
         return "https://antigravity.google.com"
     }
@@ -924,11 +963,12 @@ public struct RemoteHostInstance: Codable, Sendable, Equatable, Identifiable {
         }
 
         let extracted = extractMetadata(parts: parts, queryItems: comps.queryItems, fragment: comps.fragment)
+        let canonicalHost = canonicalRelayHost(host)
         let origin: String
         if let port = comps.port {
-            origin = "\(scheme)://\(host):\(port)"
+            origin = "\(scheme)://\(canonicalHost):\(port)"
         } else {
-            origin = "\(scheme)://\(host)"
+            origin = "\(scheme)://\(canonicalHost)"
         }
 
         return ParsedRemoteControlTarget(

@@ -442,7 +442,7 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
     })();
     """
 
-    private static let apiKeyInspectScriptSource = """
+    private static let apiKeyInspectScriptSource = #"""
     (function() {
       try {
         if (typeof window.__agApiServiceKey === 'string' && window.__agApiServiceKey.length >= 8) {
@@ -452,13 +452,42 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         if (meta && meta.getAttribute('content')) {
           return meta.getAttribute('content');
         }
+        var keyPattern = new RegExp("^AI" + "za[0-9A-Za-z_-]{35}$");
+        var wiz = window.WIZ_global_data;
+        if (wiz && typeof wiz === 'object') {
+          var priorityKeys = ['WIu0Nc', 'QrtxK', 'P10xbc', 'apiKey', 'api_key', 'webApiKey'];
+          for (var i = 0; i < priorityKeys.length; i++) {
+            var val = wiz[priorityKeys[i]];
+            if (typeof val === 'string' && keyPattern.test(val.trim())) {
+              return val.trim();
+            }
+          }
+          var allKeys = Object.keys(wiz);
+          for (var j = 0; j < allKeys.length; j++) {
+            var candidate = wiz[allKeys[j]];
+            if (typeof candidate === 'string' && keyPattern.test(candidate.trim())) {
+              return candidate.trim();
+            }
+          }
+        }
         if (typeof window.__agCapturedRelayApiKey === 'string' && window.__agCapturedRelayApiKey.length >= 8) {
           return window.__agCapturedRelayApiKey;
+        }
+        var inlinePattern = new RegExp("(?:x-goog-api-key|WIu0Nc|QrtxK|P10xbc|apiKey)[\"']?\\s*[:=]\\s*[\"'](AI" + "za[0-9A-Za-z_-]{35})[\"']", "i");
+        var scripts = document.scripts || [];
+        for (var s = 0; s < scripts.length && s < 24; s++) {
+          var text = scripts[s] && scripts[s].textContent ? scripts[s].textContent : '';
+          if (text.length > 0 && text.length < 250000) {
+            var m = text.match(inlinePattern);
+            if (m && m[1]) {
+              return m[1];
+            }
+          }
         }
       } catch (_) {}
       return '';
     })();
-    """
+    """#
 
     private let initialURL: URL
     private let clearExistingSession: Bool
