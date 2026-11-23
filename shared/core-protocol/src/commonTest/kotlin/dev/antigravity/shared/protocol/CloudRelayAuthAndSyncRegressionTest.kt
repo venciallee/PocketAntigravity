@@ -513,4 +513,142 @@ class CloudRelayAuthAndSyncRegressionTest {
             assertTrue(!diag.contains(validKey), "Diagnostic must never leak full API key: $diag")
         }
     }
+
+    @Test
+    fun testResolveCloudRelayInstanceFailsFastOnPrimary504WithoutProbingFallbackAuthUsers() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyFAILFAST5040000000000000000000000"
+            val secretCookie = "SECRET_SAPISID_SHOULD_NOT_LEAK_504"
+            val probedAuthUsers = mutableListOf<String?>()
+
+            val engine = MockEngine { request ->
+                if (request.url.encodedPath.endsWith("/ListInstances")) {
+                    probedAuthUsers.add(request.headers["X-Goog-AuthUser"])
+                    respond(
+                        content = "Gateway Timeout",
+                        status = HttpStatusCode.GatewayTimeout,
+                        headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                    )
+                } else {
+                    respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = "lt74xt6l0m-golden-star",
+                hostname = "Antigravity Desktop",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/lt74xt6l0m-golden-star",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=$secretCookie; SID=sid_504",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val err = assertFailsWith<AntigravityRpcError.HttpError> {
+                client.resolveCloudRelayInstance(allowCrossHostFallback = true)
+            }
+            assertEquals(504, err.statusCode)
+            assertEquals(
+                listOf<String?>("0"),
+                probedAuthUsers,
+                "Primary HTTP 504 must fail fast instead of burning timeout probing authUser=1..4",
+            )
+            val diag = client.currentHandshakeDiagnostic()
+            assertTrue(diag.contains("resolve:failFast"), "Expected resolve:failFast trace in diagnostic: $diag")
+            assertTrue(!diag.contains(secretCookie), "Diagnostic must never leak secret cookie value: $diag")
+            assertTrue(!diag.contains(validKey), "Diagnostic must never leak API key value: $diag")
+        }
+    }
+
+    @Test
+    fun testResolveCloudRelayInstanceThrows404NotUnauthorizedWhenHttp200ReturnsEmptyInstances() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyEMPTY200KEY0000000000000000000000"
+
+            val engine = MockEngine { request ->
+                if (request.url.encodedPath.endsWith("/ListInstances")) {
+                    respond(
+                        content = ")]}'\n[[],5]",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                } else {
+                    respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = "golden-star",
+                hostname = "Antigravity Desktop",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/golden-star",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val err = assertFailsWith<AntigravityRpcError.HttpError> {
+                client.resolveCloudRelayInstance(allowCrossHostFallback = true)
+            }
+            assertEquals(
+                404,
+                err.statusCode,
+                "Empty HTTP 200 ListInstances must throw actionable 404 instead of Unauthorized login loop",
+            )
+        }
+    }
+
+    @Test
+    fun testVerifyConnectionCompletesEvenWhenInitialProxyCommandFailsWith504() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyPROXY504OK00000000000000000000000"
+            val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$rawUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        respond(
+                            content = "Gateway Timeout",
+                            status = HttpStatusCode.GatewayTimeout,
+                            headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = rawUuid,
+                hostname = "Antigravity Desktop",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$rawUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val handshake = client.verifyConnection(allowCrossHostFallback = true)
+            assertEquals("MacBook Pro", handshake.resolvedHostname)
+            assertEquals(rawUuid, handshake.resolvedInstanceUuid)
+            assertTrue(handshake.isSelectedHostOnline)
+            assertTrue(handshake.summaries.isEmpty())
+        }
+    }
 }

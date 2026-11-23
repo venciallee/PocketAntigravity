@@ -94,14 +94,20 @@ public struct AntigravityWelcomeView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 64)
                 } else {
+                    let hasRelayRetryAction = !store.lastScannedRelayURL.isEmpty && (
+                        store.connectionStatusText.contains("Expired")
+                            || !(store.connectionErrorText ?? "").isEmpty
+                    )
+
                     if let errorText = store.connectionErrorText, !errorText.isEmpty {
-                        HStack(spacing: 8) {
+                        HStack(alignment: .top, spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(AntigravityTheme.statusError)
+                                .padding(.top, 2)
                             Text(errorText)
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(AntigravityTheme.statusError)
-                                .lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -109,10 +115,10 @@ public struct AntigravityWelcomeView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
 
-                    if store.connectionStatusText.contains("Expired"), !store.lastScannedRelayURL.isEmpty {
+                    if hasRelayRetryAction {
                         Button {
                             pendingRelayURL = store.lastScannedRelayURL
-                            shouldClearGoogleCookiesOnSignIn = true
+                            shouldClearGoogleCookiesOnSignIn = store.connectionStatusText.contains("Expired")
                             isShowingGoogleSignIn = true
                         } label: {
                             HStack(spacing: 9) {
@@ -142,7 +148,7 @@ public struct AntigravityWelcomeView: View {
                                 .font(.system(size: 16.5, weight: .semibold))
                         }
                         .foregroundStyle(
-                            store.connectionStatusText.contains("Expired") && !store.lastScannedRelayURL.isEmpty
+                            hasRelayRetryAction
                                 ? AntigravityTheme.textPrimary
                                 : AntigravityTheme.inkOnPrimaryCTA
                         )
@@ -150,7 +156,7 @@ public struct AntigravityWelcomeView: View {
                         .background(
                             Capsule()
                                 .fill(
-                                    store.connectionStatusText.contains("Expired") && !store.lastScannedRelayURL.isEmpty
+                                    hasRelayRetryAction
                                         ? AntigravityTheme.surfacePill
                                         : AntigravityTheme.accentPeriwinkle
                                 )
@@ -158,7 +164,7 @@ public struct AntigravityWelcomeView: View {
                         .overlay(
                             Capsule()
                                 .strokeBorder(
-                                    store.connectionStatusText.contains("Expired") && !store.lastScannedRelayURL.isEmpty
+                                    hasRelayRetryAction
                                         ? AntigravityTheme.cardBorder
                                         : Color.clear,
                                     lineWidth: 1

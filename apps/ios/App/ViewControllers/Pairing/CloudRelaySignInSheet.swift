@@ -4,6 +4,9 @@ import AntigravityData
 import WebKit
 import UIKit
 #endif
+#if canImport(os)
+import os
+#endif
 
 /// Extracts or clears Google Cloud Relay session cookies (`SAPISID`, `__Secure-1PAPISID`, `__Secure-3PAPISID`, `SID`, etc.)
 /// from `WKWebsiteDataStore.default()`, strictly scoped to `antigravity.google.com` per RFC 6265.
@@ -22,16 +25,10 @@ public enum CloudRelayCookieExtractor {
                 expiresDate: cookie.expiresDate
             )
         }
-        let normalizedTargetHost: String = {
-            let clean = targetHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if clean == "antigravity.google" || clean.hasSuffix(".antigravity.google") {
-                return "antigravity.google.com"
-            }
-            return clean.isEmpty ? "antigravity.google.com" : clean
-        }()
+        let normalizedTargetHost = RemoteHostInstance.canonicalRelayHost(targetHost)
         return SAPISIDHashGenerator.buildCookieHeader(
             from: descriptors,
-            forHost: normalizedTargetHost
+            forHost: normalizedTargetHost.isEmpty ? "antigravity.google.com" : normalizedTargetHost
         )
         #else
         return nil
@@ -73,6 +70,10 @@ public struct CloudRelaySignInSheet: View {
     @State private var isLoadingPage: Bool = true
     @State private var detectedCookiesReady: Bool = false
     @State private var detectedRelayApiKey: String? = nil
+    @State private var loadErrorText: String? = nil
+    @State private var statusHintText: String = "Sign in with your Google account to pair Remote Control."
+    @State private var reloadTrigger: Int = 0
+    @State private var resetCookiesTrigger: Int = 0
 
     public init(
         targetRelayURLString: String,
@@ -94,7 +95,8 @@ public struct CloudRelaySignInSheet: View {
     private var initialURL: URL {
         let trimmed = targetRelayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         if let parsed = RemoteHostInstance.parseRemoteControlTarget(trimmed) {
-            if let orig = parsed.originalURLString,
+            if parsed.requiresRedirectResolution,
+               let orig = parsed.originalURLString,
                let origURL = URL(string: orig),
                let scheme = origURL.scheme?.lowercased(),
                (scheme == "https" || scheme == "http") {
@@ -179,11 +181,51 @@ public struct CloudRelaySignInSheet: View {
                     .tint(AntigravityTheme.accentPeriwinkle)
             }
 
+            if let loadErrorText, !loadErrorText.isEmpty {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.statusWaiting)
+                    Text(loadErrorText)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Retry") {
+                        self.loadErrorText = nil
+                        self.isLoadingPage = true
+                        self.reloadTrigger &+= 1
+                    }
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    .buttonStyle(.plain)
+
+                    Button("Reset Cookies") {
+                        self.loadErrorText = nil
+                        self.isLoadingPage = true
+                        self.resetCookiesTrigger &+= 1
+                    }
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(AntigravityTheme.statusWaiting.opacity(0.14))
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(AntigravityTheme.statusWaiting.opacity(0.32))
+                        .frame(height: 1)
+                }
+            }
+
             #if canImport(WebKit) && canImport(UIKit)
             CloudRelayWebViewRepresentable(
                 initialURL: initialURL,
                 clearExistingSession: clearExistingSession,
-                onStateChange: { hostStr, fullURLStr, loading, cookiesReady, apiKey in
+                reloadTrigger: reloadTrigger,
+                resetCookiesTrigger: resetCookiesTrigger,
+                onStateChange: { hostStr, fullURLStr, loading, cookiesReady, apiKey, errorText, statusHint in
                     if let hostStr {
                         currentURLDisplay = hostStr
                     }
@@ -194,6 +236,10 @@ public struct CloudRelaySignInSheet: View {
                     detectedCookiesReady = cookiesReady
                     if let apiKey, !apiKey.isEmpty {
                         detectedRelayApiKey = apiKey
+                    }
+                    loadErrorText = errorText
+                    if let statusHint, !statusHint.isEmpty {
+                        statusHintText = statusHint
                     }
                 },
                 onAutoCapturedSession: { cookieHeader, finalURL, authUser, apiKey in
@@ -209,6 +255,33 @@ public struct CloudRelaySignInSheet: View {
                 Spacer()
             }
             #endif
+
+            // Bottom subtle status hint bar (matches Android parity)
+            HStack(spacing: 8) {
+                Text(statusHintText)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(AntigravityTheme.textSecondary)
+                    .lineLimit(2)
+                Spacer(minLength: 4)
+                Button {
+                    self.loadErrorText = nil
+                    self.isLoadingPage = true
+                    self.resetCookiesTrigger &+= 1
+                } label: {
+                    Text("Reset Cookies")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(AntigravityTheme.surfaceCard)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(AntigravityTheme.subtleDivider)
+                    .frame(height: 1)
+            }
         }
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
     }
@@ -218,8 +291,14 @@ public struct CloudRelaySignInSheet: View {
 private struct CloudRelayWebViewRepresentable: UIViewControllerRepresentable {
     let initialURL: URL
     let clearExistingSession: Bool
-    let onStateChange: (String?, String?, Bool, Bool, String?) -> Void
+    let reloadTrigger: Int
+    let resetCookiesTrigger: Int
+    let onStateChange: (String?, String?, Bool, Bool, String?, String?, String?) -> Void
     let onAutoCapturedSession: (String, String?, String?, String?) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(reloadTrigger: reloadTrigger, resetCookiesTrigger: resetCookiesTrigger)
+    }
 
     func makeUIViewController(context: Context) -> CloudRelayWebAuthViewController {
         let vc = CloudRelayWebAuthViewController(
@@ -231,7 +310,26 @@ private struct CloudRelayWebViewRepresentable: UIViewControllerRepresentable {
         return vc
     }
 
-    func updateUIViewController(_ uiViewController: CloudRelayWebAuthViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: CloudRelayWebAuthViewController, context: Context) {
+        if context.coordinator.reloadTrigger != reloadTrigger {
+            context.coordinator.reloadTrigger = reloadTrigger
+            uiViewController.reloadCurrentOrInitialPage()
+        }
+        if context.coordinator.resetCookiesTrigger != resetCookiesTrigger {
+            context.coordinator.resetCookiesTrigger = resetCookiesTrigger
+            uiViewController.clearCookiesAndReload()
+        }
+    }
+
+    final class Coordinator {
+        var reloadTrigger: Int
+        var resetCookiesTrigger: Int
+
+        init(reloadTrigger: Int, resetCookiesTrigger: Int) {
+            self.reloadTrigger = reloadTrigger
+            self.resetCookiesTrigger = resetCookiesTrigger
+        }
+    }
 }
 
 @MainActor
@@ -259,6 +357,25 @@ private final class WeakRelayScriptMessageHandler: NSObject, WKScriptMessageHand
 
 @MainActor
 private final class CloudRelayWebAuthViewController: UIViewController, WKNavigationDelegate, WKHTTPCookieStoreObserver {
+    #if canImport(os)
+    private static let logger = Logger(
+        subsystem: "com.thousandtimes.agpocket",
+        category: "CloudRelaySignIn"
+    )
+    #endif
+
+    private static func log(_ message: String) {
+        #if canImport(os)
+        logger.notice("\(message, privacy: .public)")
+        #endif
+    }
+
+    private enum FallbackTimerMode {
+        case none
+        case loadingCeiling
+        case postLoadGrace
+        case apiKeyVerifyGrace
+    }
     private static let apiKeyMessageHandlerName = "antigravityRelayApiKey"
     private static let apiKeyCaptureUserScriptSource = """
     (function() {
@@ -491,7 +608,7 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
 
     private let initialURL: URL
     private let clearExistingSession: Bool
-    var onStateChange: ((String?, String?, Bool, Bool, String?) -> Void)?
+    var onStateChange: ((String?, String?, Bool, Bool, String?, String?, String?) -> Void)?
     var onAutoCapturedSession: ((String, String?, String?, String?) -> Void)?
 
     private var webView: WKWebView!
@@ -502,7 +619,9 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
     private var fallbackRelayApiKey: String?
     private var capturedApiServiceAuthUser: String?
     private var didObserveApiServiceSuccess = false
+    private var lastLoadErrorText: String?
     private var pendingCompletionFallbackTask: Task<Void, Never>?
+    private var pendingFallbackMode: FallbackTimerMode = .none
 
     private var bestCapturedRelayApiKey: String? {
         verifiedApiServiceKey ?? fallbackRelayApiKey
@@ -546,6 +665,7 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         view.addSubview(wv)
         self.webView = wv
 
+        Self.log("SignIn sheet open host=\(initialURL.host ?? "unknown") clearCookies=\(clearExistingSession)")
         if clearExistingSession {
             isReadyForAutoCapture = false
             Task { @MainActor [weak self] in
@@ -570,12 +690,54 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        pendingCompletionFallbackTask?.cancel()
-        pendingCompletionFallbackTask = nil
+        cancelPendingFallbackTimer()
         if isObservingCookieStore {
             webView.configuration.websiteDataStore.httpCookieStore.remove(self)
             isObservingCookieStore = false
         }
+    }
+
+    func reloadCurrentOrInitialPage() {
+        lastLoadErrorText = nil
+        cancelPendingFallbackTimer()
+        if let current = webView?.url {
+            webView.load(URLRequest(url: current))
+        } else {
+            webView?.load(URLRequest(url: initialURL))
+        }
+    }
+
+    func clearCookiesAndReload() {
+        lastLoadErrorText = nil
+        didCompleteCapture = false
+        verifiedApiServiceKey = nil
+        fallbackRelayApiKey = nil
+        capturedApiServiceAuthUser = nil
+        didObserveApiServiceSuccess = false
+        cancelPendingFallbackTimer()
+        isReadyForAutoCapture = false
+        onStateChange?(
+            initialURL.host,
+            initialURL.absoluteString,
+            true,
+            false,
+            nil,
+            nil,
+            "Clearing Google cookies..."
+        )
+        Task { @MainActor [weak self] in
+            await CloudRelayCookieExtractor.clearGoogleCookies()
+            guard let self else { return }
+            Self.log("Cleared Google cookies for fresh sign-in")
+            self.isReadyForAutoCapture = true
+            self.webView.load(URLRequest(url: self.initialURL))
+        }
+    }
+
+    private func cancelPendingFallbackTimer() {
+        pendingCompletionFallbackTask?.cancel()
+        pendingCompletionFallbackTask = nil
+        pendingFallbackMode = .none
     }
 
     nonisolated func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
@@ -585,33 +747,60 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        pendingCompletionFallbackTask?.cancel()
-        pendingCompletionFallbackTask = nil
+        cancelPendingFallbackTimer()
+        lastLoadErrorText = nil
+        let host = webView.url?.host ?? initialURL.host
+        Self.log("WebView navigation started host=\(host ?? "unknown")")
         onStateChange?(
-            webView.url?.host ?? initialURL.host,
+            host,
             webView.url?.absoluteString,
             true,
             false,
-            bestCapturedRelayApiKey
+            bestCapturedRelayApiKey,
+            nil,
+            "Loading \(host ?? "Google Sign-In")..."
         )
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        lastLoadErrorText = nil
+        Self.log("WebView didFinish host=\(webView.url?.host ?? "unknown")")
         Task { @MainActor [weak self] in
-            await self?.evaluateSessionReadiness(autoFinishIfOnRelayHost: true)
+            guard let self else { return }
+            let liveHost = self.webView.url?.host?.lowercased() ?? ""
+            if RemoteHostInstance.isAntigravityRelayHost(liveHost) {
+                _ = await self.extractWebApiKeyFromWebView()
+            }
+            await self.evaluateSessionReadiness(autoFinishIfOnRelayHost: true)
         }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor [weak self] in
-            await self?.evaluateSessionReadiness(autoFinishIfOnRelayHost: true)
-        }
+        handleNavigationFailure(error)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor [weak self] in
-            await self?.evaluateSessionReadiness(autoFinishIfOnRelayHost: true)
+        handleNavigationFailure(error)
+    }
+
+    private func handleNavigationFailure(_ error: Error) {
+        let nsError = error as NSError
+        // Ignore benign redirect/cancellation codes (`NSURLErrorCancelled` -999, WebKit Frame Load Interrupted 102)
+        if nsError.code == NSURLErrorCancelled
+            || (nsError.domain == "WebKitErrorDomain" && nsError.code == 102) {
+            return
         }
+        Self.log("WebView navigation error domain=\(nsError.domain) code=\(nsError.code) host=\(webView.url?.host ?? initialURL.host ?? "unknown")")
+        lastLoadErrorText = "Failed to load page (\(nsError.code)): \(nsError.localizedDescription)"
+        onStateChange?(
+            webView.url?.host ?? initialURL.host,
+            webView.url?.absoluteString,
+            false,
+            false,
+            bestCapturedRelayApiKey,
+            lastLoadErrorText,
+            "Check Google / VPN reachability or tap Retry."
+        )
     }
 
     func recordInterceptedRelaySignal(kind: String, apiKey: String?, authUser: String?) {
@@ -632,17 +821,20 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
                 }
             }
         }
+        Self.log(
+            "Intercepted JS signal kind=\(kind) keyLen=\(bestCapturedRelayApiKey?.count ?? 0) authUser=\(capturedApiServiceAuthUser ?? "none")"
+        )
         if kind == "apiServiceVerified" {
             didObserveApiServiceSuccess = true
-        }
-        if kind == "apiServiceVerified" || kind == "apiServiceKey" {
-            pendingCompletionFallbackTask?.cancel()
-            pendingCompletionFallbackTask = nil
+            cancelPendingFallbackTimer()
             Task { @MainActor [weak self] in
                 // Allow WKHTTPCookieStore a brief tick to flush Set-Cookie from the verified response
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 await self?.evaluateSessionReadiness(autoFinishIfOnRelayHost: true)
             }
+        } else if kind == "apiServiceKey" {
+            // Wait up to 1.2s for the companion `apiServiceVerified` 2xx response before finishing
+            scheduleFallbackTimer(mode: .apiKeyVerifyGrace, delayNanoseconds: 1_200_000_000)
         }
     }
 
@@ -658,19 +850,52 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         let extracted = SAPISIDHashGenerator.extractWebApiKey(from: trimmed) ?? trimmed
         if fallbackRelayApiKey == nil {
             fallbackRelayApiKey = extracted
+            Self.log("Extracted DOM fallback API key len=\(extracted.count)")
         }
         return verifiedApiServiceKey ?? extracted
     }
 
-    private func completeCapture(cookieHeader: String, currentURL: URL?) {
+    private func completeCapture(cookieHeader: String, currentURL: URL?, reason: String) {
         guard !didCompleteCapture else { return }
         didCompleteCapture = true
-        pendingCompletionFallbackTask?.cancel()
-        pendingCompletionFallbackTask = nil
+        cancelPendingFallbackTimer()
         let finalURLStr = currentURL?.absoluteString
         let parsed = finalURLStr.flatMap { RemoteHostInstance.parseRemoteControlTarget($0) }
         let resolvedAuthUser = capturedApiServiceAuthUser ?? parsed?.authUser
+        let ckSummary = SAPISIDHashGenerator.summarizeCookieNames(cookieHeader)
+        let keySource = verifiedApiServiceKey != nil ? "verified" : (fallbackRelayApiKey != nil ? "dom-fallback" : "none")
+        Self.log(
+            "Completing WebView capture reason=\(reason) host=\(currentURL?.host ?? "unknown") authUser=\(resolvedAuthUser ?? "auto") key=\(keySource)(\(bestCapturedRelayApiKey?.count ?? 0)) ck=\(ckSummary)"
+        )
         onAutoCapturedSession?(cookieHeader, finalURLStr, resolvedAuthUser, bestCapturedRelayApiKey)
+    }
+
+    private func scheduleFallbackTimer(mode: FallbackTimerMode, delayNanoseconds: UInt64) {
+        if pendingFallbackMode == mode && pendingCompletionFallbackTask != nil {
+            return
+        }
+        cancelPendingFallbackTimer()
+        pendingFallbackMode = mode
+        pendingCompletionFallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard let self, !Task.isCancelled, !self.didCompleteCapture else { return }
+            let liveURL = self.webView.url
+            let liveHost = liveURL?.host?.lowercased() ?? ""
+            guard RemoteHostInstance.isAntigravityRelayHost(liveHost) else {
+                self.cancelPendingFallbackTimer()
+                return
+            }
+            _ = await self.extractWebApiKeyFromWebView()
+            guard let latestCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: liveHost) else {
+                self.cancelPendingFallbackTimer()
+                return
+            }
+            self.completeCapture(
+                cookieHeader: latestCookie,
+                currentURL: liveURL,
+                reason: "timer-\(mode)"
+            )
+        }
     }
 
     private func evaluateSessionReadiness(autoFinishIfOnRelayHost: Bool) async {
@@ -682,39 +907,58 @@ private final class CloudRelayWebAuthViewController: UIViewController, WKNavigat
         let targetHost = host.isEmpty ? (initialURL.host ?? "antigravity.google.com") : host
         let cookieHeader = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: targetHost)
         let hasCookies = (cookieHeader != nil)
+        let hint: String = {
+            if !hasCookies {
+                return isOnAntigravityRelay
+                    ? "Sign in with your Google account to pair Remote Control."
+                    : "Complete Google Sign-In — you will return to Antigravity automatically."
+            }
+            if !isOnAntigravityRelay {
+                return "Finishing Google Sign-In redirect..."
+            }
+            if didObserveApiServiceSuccess {
+                return "Google session verified — pairing host..."
+            }
+            return webView.isLoading
+                ? "Loading Antigravity Remote Control & verifying session..."
+                : "Google session detected — capturing Cloud Relay API key..."
+        }()
         onStateChange?(
             currentURL?.host ?? initialURL.host,
             currentURL?.absoluteString,
             webView.isLoading,
             hasCookies,
-            bestCapturedRelayApiKey
+            bestCapturedRelayApiKey,
+            lastLoadErrorText,
+            hint
         )
 
         guard autoFinishIfOnRelayHost && isOnAntigravityRelay, let cookieHeader else {
             return
         }
 
-        // Fast verified path: antigravity.google.com itself issued an ApiService RPC carrying X-Goog-Api-Key
-        // (and completed Google's OSID redirect bounce).
-        if didObserveApiServiceSuccess || verifiedApiServiceKey != nil {
-            completeCapture(cookieHeader: cookieHeader, currentURL: currentURL)
+        // Fast verified path: antigravity.google.com itself received a 2xx ApiService RPC response.
+        if didObserveApiServiceSuccess {
+            completeCapture(cookieHeader: cookieHeader, currentURL: currentURL, reason: "apiServiceVerified")
             return
         }
 
-        if pendingCompletionFallbackTask == nil {
-            // Wait up to 3.5s on the relay host so Google's passive `osid=1` redirect or SPA ApiService/ListInstances
-            // XHR can fire, without hanging indefinitely if a third-party analytics/font subresource keeps isLoading=true.
-            pendingCompletionFallbackTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 3_500_000_000)
-                guard let self, !Task.isCancelled, !self.didCompleteCapture else { return }
-                let liveHost = self.webView.url?.host?.lowercased() ?? ""
-                guard RemoteHostInstance.isAntigravityRelayHost(liveHost) else {
-                    self.pendingCompletionFallbackTask = nil
-                    return
-                }
-                _ = await self.extractWebApiKeyFromWebView()
-                let latestCookie = await CloudRelayCookieExtractor.readGoogleCookieHeader(forHost: liveHost) ?? cookieHeader
-                self.completeCapture(cookieHeader: latestCookie, currentURL: self.webView.url ?? currentURL)
+        if verifiedApiServiceKey != nil {
+            scheduleFallbackTimer(mode: .apiKeyVerifyGrace, delayNanoseconds: 1_200_000_000)
+            return
+        }
+
+        if webView.isLoading {
+            // While the relay page / Google `osid=1` redirect is actively loading over VPN, do NOT
+            // dismiss prematurely at 3.5s — keep a 10s safety ceiling in case an analytics subresource hangs.
+            if pendingFallbackMode == .none {
+                scheduleFallbackTimer(mode: .loadingCeiling, delayNanoseconds: 10_000_000_000)
+            }
+        } else {
+            // Page finished loading on the relay host: allow 4.5s for the SPA to fire ApiService/ListInstances
+            // (and run DOM WIZ_global_data extraction before falling back).
+            if pendingFallbackMode != .postLoadGrace {
+                scheduleFallbackTimer(mode: .postLoadGrace, delayNanoseconds: 4_500_000_000)
             }
         }
     }

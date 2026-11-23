@@ -174,9 +174,25 @@ class DesignSystemAndPlatformUnitTest {
 
         val normalized = dev.antigravity.android.ui.pairing.normalizeRelayStartUrl("https://antigravity.google/r/test-id")
         assertEquals("https://antigravity.google.com/r/test-id", normalized)
+        val normalizedSubdomain = dev.antigravity.android.ui.pairing.normalizeRelayStartUrl("https://staging.antigravity.google/r/test-id")
+        assertEquals("https://staging.antigravity.google.com/r/test-id", normalizedSubdomain)
         assertTrue(dev.antigravity.android.ui.pairing.isRelayHostUrl("https://antigravity.google.com/r/test-id"))
         assertTrue(dev.antigravity.android.ui.pairing.isRelayHostUrl("https://antigravity.google/r/test-id"))
         assertFalse(dev.antigravity.android.ui.pairing.isRelayHostUrl("https://accounts.google.com/signin"))
+
+        val captured = dev.antigravity.android.ui.pairing.CloudRelayCapturedSession(
+            cookieHeader = "SAPISID=test; SID=test",
+            relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            authUser = "0",
+            finalUrl = "https://antigravity.google.com/r/test-id",
+        )
+        assertEquals(
+            "https://antigravity.google.com/r/test-id",
+            dev.antigravity.shared.model.RemoteHostInstance.resolveEffectiveRelayTarget(
+                scannedInput = "https://antigravity.google/r/test-id",
+                webViewFinalUrl = captured.finalUrl,
+            ),
+        )
 
         val sanitizedUa = dev.antigravity.android.ui.pairing.sanitizeGoogleOAuthUserAgent(
             "Mozilla/5.0 (Linux; Android 15; Pixel 9; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Mobile Safari/537.36",

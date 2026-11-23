@@ -46,6 +46,7 @@ internal actual fun createPlatformHttpClient(
                 timeoutIntervalForResource = maxOf(25.0, (config.requestTimeoutMs * 2) / 1000.0)
                 HTTPShouldSetCookies = false
                 HTTPCookieStorage = null
+                URLCache = null
                 if (config.bypassProxyForLocalHosts && isLocalHost) {
                     connectionProxyDictionary = emptyMap<Any?, Any>()
                 }
