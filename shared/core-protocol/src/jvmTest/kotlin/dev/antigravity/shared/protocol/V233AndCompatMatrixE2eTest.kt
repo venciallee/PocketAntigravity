@@ -9,7 +9,6 @@ import dev.antigravity.shared.model.RemoteConnectionChannel
 import dev.antigravity.shared.model.RemoteHostInstance
 import kotlinx.coroutines.test.runTest
 import java.io.File
-import java.net.ServerSocket
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -21,8 +20,6 @@ import kotlin.test.assertTrue
  */
 class V233AndCompatMatrixE2eTest {
 
-    private fun allocateFreePort(): Int = ServerSocket(0).use { it.localPort }
-
     private fun locateRepoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
@@ -32,40 +29,46 @@ class V233AndCompatMatrixE2eTest {
         error("Could not locate verification/mock_language_server.py from ${System.getProperty("user.dir")}")
     }
 
-    private fun startMockServer(port: Int, csrf: String): Process {
+    private data class RunningMockServer(val process: Process, val port: Int)
+
+    private fun startMockServer(): RunningMockServer {
         val repoRoot = locateRepoRoot()
-        val script = File(repoRoot, "verification/mock_language_server.py")
-        val process = ProcessBuilder(
-            "python3",
-            script.absolutePath,
-            "--host",
-            "127.0.0.1",
-            "--port",
-            port.toString(),
-            "--csrf",
-            csrf,
-        )
+        val bootstrap = """
+            import sys, time
+            sys.path.insert(0, 'verification')
+            from mock_language_server import LiveMockServer
+            with LiveMockServer() as srv:
+                print(srv.port, flush=True)
+                while True:
+                    time.sleep(0.5)
+        """.trimIndent()
+        val process = ProcessBuilder("python3", "-u", "-c", bootstrap)
             .directory(repoRoot)
             .redirectErrorStream(true)
             .start()
 
-        val deadline = System.currentTimeMillis() + 10_000L
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                java.net.Socket("127.0.0.1", port).use { return process }
-            } catch (_: Throwable) {
-                Thread.sleep(100)
-            }
+        val reader = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream))
+        val firstLine = reader.readLine()?.trim()
+        val port = firstLine?.toIntOrNull()
+        if (port == null || port <= 0) {
+            val remainder = buildString {
+                if (firstLine != null) appendLine(firstLine)
+                while (reader.ready()) {
+                    appendLine(reader.readLine())
+                }
+            }.trim()
+            process.destroyForcibly()
+            error("mock_language_server.py failed to start cleanly; output=$remainder")
         }
-        process.destroyForcibly()
-        error("mock_language_server.py failed to start on port $port")
+        return RunningMockServer(process, port)
     }
 
     @Test
     fun fullV233RpcSurfacePassesAgainstMockLanguageServer() = runTest {
-        val port = allocateFreePort()
         val csrf = "kmp-v233-test-csrf"
-        val proc = startMockServer(port, csrf)
+        val mock = startMockServer()
+        val proc = mock.process
+        val port = mock.port
         try {
             val host = RemoteHostInstance(
                 instanceId = "local-mock-v233",
@@ -161,9 +164,10 @@ class V233AndCompatMatrixE2eTest {
 
     @Test
     fun legacyHostNegativeCachesUnimplementedRpcsWithoutCrashingCoreChat() = runTest {
-        val port = allocateFreePort()
         val csrf = "kmp-legacy-csrf"
-        val proc = startMockServer(port, csrf)
+        val mock = startMockServer()
+        val proc = mock.process
+        val port = mock.port
         try {
             val host = RemoteHostInstance(
                 instanceId = "legacy-mock-host",
