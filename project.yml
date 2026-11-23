@@ -73,6 +73,11 @@ targets:
           - CFBundleURLName: com.thousandtimes.agpocket.deeplink
             CFBundleURLSchemes:
               - agpocket
+    preBuildScripts:
+      - name: Verify KMP XCFramework Freshness
+        basedOnDependencyAnalysis: false
+        script: |
+          bash "${SRCROOT}/scripts/sync-xcode.sh" --verify-kmp-for-xcode "${PROJECT_FILE_PATH}"
     settings:
       base:
         PRODUCT_NAME: AGPocket
@@ -80,6 +85,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "AG Pocket"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_DEBUG_DYLIB: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         MARKETING_VERSION: "2.0.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"

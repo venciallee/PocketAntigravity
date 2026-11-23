@@ -227,6 +227,9 @@ public class AntigravityCoreCoordinator(
         connectionStore.cancelPendingConnectionAttempt()
     }
 
+    public fun lastHandshakeDiagnostic(): String =
+        connectionStore.currentHandshakeDiagnostic()
+
     /**
      * Creates an optimistic local conversation draft without prematurely firing `startConversation`
      * while the initial backend handshake is still connecting. The first `sendMessage(..., isOptimisticDraft = true)`
@@ -641,6 +644,23 @@ public class AntigravityCoreCoordinator(
         if (client != null && handshake.isSelectedHostOnline) {
             if (startSummaryStream) {
                 conversationSyncStore.startSummarySubscriptionStream(client, host)
+            }
+            if (handshake.summaries.isEmpty() && handshake.workspaces.isEmpty()) {
+                val activeScope = connectionStore.state.value.selectedHostScope
+                scope.launch {
+                    try {
+                        conversationSyncStore.refreshWorkspacesAndSummaries(
+                            client = client,
+                            host = host,
+                            hostScope = activeScope,
+                            skipRelayListRefresh = true,
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        // Best-effort deferred hydration after fast handshake; UI stays connected and pull-to-refresh can retry.
+                    }
+                }
             }
             scope.launch {
                 try {

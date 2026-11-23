@@ -32,24 +32,28 @@ REQUIRE_KMP=0
 CLEAN_PROJECT=0
 INSTALL_HOOKS=0
 SELF_TEST=0
+VERIFY_KMP_FOR_XCODE=0
+VERIFY_XCODEPROJ_ARG=""
 
 usage() {
   cat <<'EOF'
 Usage: bash scripts/sync-xcode.sh [options]
 
 Options:
-  --open           Open PocketAntigravity.xcodeproj in Xcode after syncing
-  --clean          Remove existing PocketAntigravity.xcodeproj and DerivedData before regenerating
-  --rebuild-kmp    Force rebuild of shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
-  --swift-only     Skip Gradle KMP XCFramework build and generate a pure-Swift Xcode project
-  --require-kmp    Fail instead of falling back to --swift-only if JDK/Gradle cannot build the XCFramework
-  --install-hooks  Configure git core.hooksPath=.githooks to auto-sync after git pull / checkout
-  --self-test      Run offline self-tests (safe on Linux and macOS)
-  -h, --help       Show this help message
+  --open                         Open PocketAntigravity.xcodeproj in Xcode after syncing
+  --clean                        Remove existing PocketAntigravity.xcodeproj and DerivedData before regenerating
+  --rebuild-kmp                  Force rebuild of shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
+  --swift-only                   Skip Gradle KMP XCFramework build and generate a pure-Swift Xcode project
+  --require-kmp                  Fail instead of falling back to --swift-only if JDK/Gradle cannot build the XCFramework
+  --install-hooks                Configure git core.hooksPath=.githooks to auto-sync after git pull / checkout
+  --verify-kmp-for-xcode [path]  Xcode pre-build guardrail: fail fast if a linked KMP XCFramework is STALE
+  --self-test                    Run offline self-tests (safe on Linux and macOS)
+  -h, --help                     Show this help message
 EOF
 }
 
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+  arg="$1"
   case "$arg" in
     --open) OPEN_XCODE=1 ;;
     --rebuild-kmp) REBUILD_KMP=1 ;;
@@ -58,6 +62,13 @@ for arg in "$@"; do
     --clean) CLEAN_PROJECT=1 ;;
     --install-hooks) INSTALL_HOOKS=1 ;;
     --self-test) SELF_TEST=1 ;;
+    --verify-kmp-for-xcode)
+      VERIFY_KMP_FOR_XCODE=1
+      if [[ $# -ge 2 && "$2" != -* ]]; then
+        VERIFY_XCODEPROJ_ARG="$2"
+        shift
+      fi
+      ;;
     -h|--help)
       usage
       exit 0
@@ -68,6 +79,7 @@ for arg in "$@"; do
       exit 2
       ;;
   esac
+  shift
 done
 
 detect_stale_pbxproj() {
@@ -387,6 +399,52 @@ for path in targets:
 PY
 }
 
+decide_kmp_xcf_fallback() {
+  local xcf_state="$1"
+  local require_kmp="$2"
+  local rebuild_kmp="$3"
+  if [[ "$xcf_state" == "FRESH" && "$rebuild_kmp" -eq 0 ]]; then
+    echo "REUSE_KMP"
+    return 0
+  fi
+  if [[ "$require_kmp" -eq 1 ]]; then
+    echo "FAIL"
+    return 0
+  fi
+  echo "SWIFT_ONLY"
+}
+
+verify_kmp_for_xcode_build() {
+  local repo_root="$1"
+  local xcf_dir="$2"
+  local xcodeproj_path="$3"
+
+  if [[ "${CI:-}" == "true" || "${SKIP_KMP_FRESHNESS_CHECK:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  local pbxproj=""
+  if [[ -n "$xcodeproj_path" && -f "$xcodeproj_path/project.pbxproj" ]]; then
+    pbxproj="$xcodeproj_path/project.pbxproj"
+  elif [[ -f "$repo_root/PocketAntigravity.xcodeproj/project.pbxproj" ]]; then
+    pbxproj="$repo_root/PocketAntigravity.xcodeproj/project.pbxproj"
+  fi
+
+  if [[ -n "$pbxproj" ]] && ! grep -q "AntigravityShared\.xcframework" "$pbxproj" 2>/dev/null; then
+    # Pure-Swift mode (`--swift-only`): KMP XCFramework is not linked.
+    return 0
+  fi
+
+  local status
+  status="$(check_kmp_xcframework_freshness "$repo_root" "$xcf_dir")"
+  if [[ "$status" == "FRESH" ]]; then
+    return 0
+  fi
+
+  echo "error: AntigravityShared.xcframework is ${status} (out of sync with Kotlin sources in shared/). Run 'bash scripts/sync-xcode.sh --rebuild-kmp' (or 'bash scripts/sync-xcode.sh --swift-only' if JDK 17/21 is unavailable) so Xcode does not link stale KMP networking code." >&2
+  return 1
+}
+
 run_self_test() {
   echo "=== Running sync-xcode.sh offline self-tests ==="
   SELF_TEST_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agy-sync-xcode-test.XXXXXX")"
@@ -494,12 +552,63 @@ assert "umbrella" in os.listdir(repo / "shared"), f"Expected lowercase 'umbrella
 assert "debug" in os.listdir(repo / "shared" / "umbrella" / "build" / "XCFrameworks"), "Expected lowercase 'debug'"
 PY
 
+  # 6. Never reuse a STALE KMP XCFramework when JDK/Gradle is unavailable
+  [[ "$(decide_kmp_xcf_fallback "STALE" 0 0)" == "SWIFT_ONLY" ]] || {
+    echo "[FAIL] Expected SWIFT_ONLY fallback when XCFramework is STALE without --require-kmp" >&2
+    exit 1
+  }
+  [[ "$(decide_kmp_xcf_fallback "STALE" 1 0)" == "FAIL" ]] || {
+    echo "[FAIL] Expected FAIL when XCFramework is STALE with --require-kmp" >&2
+    exit 1
+  }
+  [[ "$(decide_kmp_xcf_fallback "FRESH" 0 0)" == "REUSE_KMP" ]] || {
+    echo "[FAIL] Expected REUSE_KMP when XCFramework is FRESH" >&2
+    exit 1
+  }
+  [[ "$(decide_kmp_xcf_fallback "FRESH" 0 1)" == "SWIFT_ONLY" ]] || {
+    echo "[FAIL] Expected SWIFT_ONLY when forced --rebuild-kmp fails without --require-kmp" >&2
+    exit 1
+  }
+
+  # 7. Xcode pre-build freshness guardrail catches STALE linked XCF & skips pure-Swift projects
+  local fake_kmp_proj="$tmp_dir/Linked.xcodeproj"
+  local fake_swift_proj="$tmp_dir/SwiftOnly.xcodeproj"
+  mkdir -p "$fake_kmp_proj" "$fake_swift_proj"
+  echo "path = shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework;" >"$fake_kmp_proj/project.pbxproj"
+  echo "relativePath = apps/ios/Packages/AntigravityData;" >"$fake_swift_proj/project.pbxproj"
+
+  # fake_repo currently has a STALE XCFramework from test #4
+  if CI="" SKIP_KMP_FRESHNESS_CHECK=0 verify_kmp_for_xcode_build "$fake_repo" "$fake_xcf" "$fake_kmp_proj" 2>/dev/null; then
+    echo "[FAIL] Expected verify_kmp_for_xcode_build to reject STALE linked XCFramework" >&2
+    exit 1
+  fi
+  if ! CI="" SKIP_KMP_FRESHNESS_CHECK=0 verify_kmp_for_xcode_build "$fake_repo" "$fake_xcf" "$fake_swift_proj"; then
+    echo "[FAIL] Expected verify_kmp_for_xcode_build to pass for --swift-only project" >&2
+    exit 1
+  fi
+  # Make XCFramework FRESH again -> linked project must pass
+  python3 - "$fake_repo/shared/core-model/Foo.kt" "$fake_xcf/Info.plist" <<'PY'
+import os, sys, time
+now = time.time()
+os.utime(sys.argv[1], (now - 10, now - 10))
+os.utime(sys.argv[2], (now, now))
+PY
+  if ! CI="" SKIP_KMP_FRESHNESS_CHECK=0 verify_kmp_for_xcode_build "$fake_repo" "$fake_xcf" "$fake_kmp_proj"; then
+    echo "[FAIL] Expected verify_kmp_for_xcode_build to pass when linked XCFramework is FRESH" >&2
+    exit 1
+  fi
+
   echo "[PASS] sync-xcode.sh self-tests passed!"
 }
 
 if [[ "$SELF_TEST" -eq 1 ]]; then
   run_self_test
   exit 0
+fi
+
+if [[ "$VERIFY_KMP_FOR_XCODE" -eq 1 ]]; then
+  verify_kmp_for_xcode_build "$ROOT_DIR" "$XCF_PATH" "$VERIFY_XCODEPROJ_ARG"
+  exit $?
 fi
 
 if [[ "$INSTALL_HOOKS" -eq 1 ]]; then
@@ -568,34 +677,48 @@ else
       chmod +x "$ROOT_DIR/gradlew"
       if JAVA_HOME="$FOUND_JAVA" PATH="$FOUND_JAVA/bin:$PATH" \
         "$ROOT_DIR/gradlew" :shared:umbrella:assembleAntigravitySharedDebugXCFramework --no-daemon; then
-        if [[ "$(check_kmp_xcframework_freshness "$ROOT_DIR" "$XCF_PATH")" == "FRESH" || -f "$XCF_PATH/Info.plist" ]]; then
+        POST_BUILD_STATE="$(check_kmp_xcframework_freshness "$ROOT_DIR" "$XCF_PATH")"
+        if [[ "$POST_BUILD_STATE" == "FRESH" ]]; then
           USE_KMP_XCF=1
           echo "[+] KMP AntigravityShared.xcframework ready: $XCF_REL"
+        else
+          echo "[!] Post-build AntigravityShared.xcframework status is ${POST_BUILD_STATE}; refusing to link stale binary." >&2
+          if [[ "$REQUIRE_KMP" -eq 1 ]]; then
+            exit 1
+          fi
+          USE_KMP_XCF=0
         fi
       else
         echo "[!] Gradle build for AntigravityShared.xcframework failed." >&2
-        if [[ "$REQUIRE_KMP" -eq 1 ]]; then
+        FALLBACK_DECISION="$(decide_kmp_xcf_fallback "$XCF_STATE" "$REQUIRE_KMP" "$REBUILD_KMP")"
+        if [[ "$FALLBACK_DECISION" == "FAIL" ]]; then
           exit 1
-        fi
-        if [[ -f "$XCF_PATH/Info.plist" ]]; then
-          echo "[!] Reusing existing AntigravityShared.xcframework on disk."
+        elif [[ "$FALLBACK_DECISION" == "REUSE_KMP" ]]; then
+          echo "[!] Reusing up-to-date (FRESH) AntigravityShared.xcframework on disk."
           USE_KMP_XCF=1
         else
-          echo "[!] Falling back to pure-Swift Xcode project (AntigravityData fallback via #if canImport(AntigravityShared))."
+          echo "[!] Refusing to reuse ${XCF_STATE} AntigravityShared.xcframework (would ship stale KMP networking code!)."
+          echo "[!] Falling back cleanly to pure-Swift Xcode project (latest AntigravityData engine via #if canImport(AntigravityShared))."
           USE_KMP_XCF=0
         fi
       fi
     else
-      if [[ -f "$XCF_PATH/Info.plist" && "$REBUILD_KMP" -eq 0 ]]; then
-        echo "[!] JDK 17/21 not found; reusing existing AntigravityShared.xcframework on disk."
+      FALLBACK_DECISION="$(decide_kmp_xcf_fallback "$XCF_STATE" "$REQUIRE_KMP" "$REBUILD_KMP")"
+      if [[ "$FALLBACK_DECISION" == "REUSE_KMP" ]]; then
+        echo "[!] JDK 17/21 not found; reusing up-to-date (FRESH) AntigravityShared.xcframework on disk."
         USE_KMP_XCF=1
-      elif [[ "$REQUIRE_KMP" -eq 1 ]]; then
-        echo "[!] JDK 17 or 21 is required to build KMP AntigravityShared.xcframework." >&2
+      elif [[ "$FALLBACK_DECISION" == "FAIL" ]]; then
+        echo "[!] JDK 17 or 21 is required to build KMP AntigravityShared.xcframework (current state: ${XCF_STATE})." >&2
         echo "    Install with: brew install openjdk@21" >&2
         exit 1
       else
-        echo "[!] JDK 17/21 not detected on this Mac; generating pure-Swift Xcode project (AntigravityData fallback)."
-        echo "    To enable the KMP Shared Core XCFramework later, run: brew install openjdk@21 && bash scripts/sync-xcode.sh --rebuild-kmp"
+        if [[ "$XCF_STATE" == "STALE" || "$XCF_STATE" == "INCOMPLETE" || "$XCF_STATE" == "INVALID" ]]; then
+          echo "[!] JDK 17/21 not found and on-disk AntigravityShared.xcframework is ${XCF_STATE} — refusing to link stale KMP binary!"
+          echo "    Switching Xcode project to latest pure-Swift AntigravityData engine instead."
+        else
+          echo "[!] JDK 17/21 not detected on this Mac; generating pure-Swift Xcode project (AntigravityData fallback)."
+        fi
+        echo "    To rebuild and enable the KMP Shared Core XCFramework later, run: brew install openjdk@21 && bash scripts/sync-xcode.sh --rebuild-kmp"
         USE_KMP_XCF=0
       fi
     fi

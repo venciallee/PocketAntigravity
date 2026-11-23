@@ -14,13 +14,13 @@ extension AntigravityRPCClient {
         guard let url = URL(string: urlString) else {
             throw AntigravityRPCError.invalidEndpoint
         }
-        func performRequest(apiKey: String?) async throws -> (Data, HTTPURLResponse) {
+        let listStart = Date()
+        let primaryTimeout = timeoutInterval ?? 7.0
+        func performRequest(apiKey: String?, attemptTimeout: TimeInterval = primaryTimeout) async throws -> (Data, HTTPURLResponse) {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.cachePolicy = .reloadIgnoringLocalCacheData
-            if let timeoutInterval {
-                request.timeoutInterval = timeoutInterval
-            }
+            request.timeoutInterval = attemptTimeout
             SAPISIDHashGenerator.applyApiServiceHeaders(
                 to: &request,
                 cookieHeader: sessionCookie ?? "",
@@ -39,7 +39,15 @@ extension AntigravityRPCClient {
 
         var activeApiKey = await resolveRelayApiKey()
         var triedKeys = Set<String>([activeApiKey ?? ""])
-        var (data, http) = try await performRequest(apiKey: activeApiKey)
+        handshakeDiagBox.record("list(u=\(activeAuthUser)):req")
+        var (data, http): (Data, HTTPURLResponse)
+        do {
+            (data, http) = try await performRequest(apiKey: activeApiKey)
+        } catch {
+            handshakeDiagBox.record("list(u=\(activeAuthUser)):err")
+            throw error
+        }
+        handshakeDiagBox.record("list(u=\(activeAuthUser)):http\(http.statusCode)")
 
         if http.statusCode == 400 || http.statusCode == 403 {
             let unwrapped = CloudRelayJSPBCodec.unwrapGoogleRPCBody(data, responseHeaders: http.allHeaderFields)
@@ -60,15 +68,19 @@ extension AntigravityRPCClient {
                 }
                 var rotationAttempts = 0
                 for candidateKey in candidates {
-                    if rotationAttempts >= 3 { break }
+                    if rotationAttempts >= 2 { break }
+                    if Date().timeIntervalSince(listStart) >= 11.0 { break }
                     guard !candidateKey.isEmpty, triedKeys.insert(candidateKey).inserted else { continue }
                     rotationAttempts += 1
-                    let retry = try await performRequest(apiKey: candidateKey)
+                    handshakeDiagBox.record("list(u=\(activeAuthUser)):rot\(rotationAttempts)")
+                    let retry = try await performRequest(apiKey: candidateKey, attemptTimeout: min(primaryTimeout, 3.5))
                     data = retry.0
                     http = retry.1
                     activeApiKey = candidateKey
+                    handshakeDiagBox.record("list(u=\(activeAuthUser)):rot\(rotationAttempts)_http\(http.statusCode)")
                     if (200..<300).contains(http.statusCode) {
                         relayApiKey = candidateKey
+                        handshakeDiagBox.setKeySource("rotated(len=\(candidateKey.count))")
                         if !SAPISIDHashGenerator.isLoopbackOrigin(originStr) {
                             await KeychainStore.shared.saveRelayWebApiKey(candidateKey, forOrigin: originStr)
                         }
@@ -86,7 +98,9 @@ extension AntigravityRPCClient {
             let text = String(data: unwrapped, encoding: .utf8)
                 ?? String(data: data, encoding: .utf8)
                 ?? "Google session expired or unauthorized"
-            throw AntigravityRPCError.unauthorized("HTTP \(http.statusCode) [ListInstances]: \(text)")
+            let keyLen = activeApiKey?.isEmpty == false ? "len:\(activeApiKey!.count)" : "none"
+            let ck = SAPISIDHashGenerator.summarizeCookieNames(sessionCookie ?? "")
+            throw AntigravityRPCError.unauthorized("HTTP \(http.statusCode) [ListInstances u=\(activeAuthUser) key=\(keyLen) ck=\(ck)]: \(text)")
         }
         guard (200..<300).contains(http.statusCode) else {
             let text = String(data: data, encoding: .utf8) ?? ""
@@ -181,63 +195,107 @@ extension AntigravityRPCClient {
         var bestReachableFallback: (selected: RelayInstanceInfo, instances: [RelayInstanceInfo], authUser: String)? = nil
         var bestOfflineMatch: (selected: RelayInstanceInfo, instances: [RelayInstanceInfo], authUser: String)? = nil
         var anySucceededCall = false
+        var primaryError: Error? = nil
         var lastError: Error? = nil
 
-        for (userIdx, candidateUser) in candidateAuthUsers.enumerated() {
-            do {
-                let perUserTimeout = userIdx == 0 ? timeoutInterval : min(timeoutInterval ?? 6.0, 5.0)
-                let instances = try await listRelayInstances(
-                    authUserOverride: candidateUser,
-                    timeoutInterval: perUserTimeout
-                )
-                anySucceededCall = true
-                if instances.isEmpty {
-                    continue
+        func evaluateCandidate(
+            candidateUser: String,
+            instances: [RelayInstanceInfo]
+        ) -> (selected: RelayInstanceInfo, allInstances: [RelayInstanceInfo], matchedAuthUser: String)? {
+            anySucceededCall = true
+            if instances.isEmpty { return nil }
+            if firstNonEmptyResult == nil {
+                firstNonEmptyResult = (instances, candidateUser)
+            }
+            if !isWildcardTarget {
+                if let exactOnline = instances.first(where: { $0.matches(identifier: rawTarget) && $0.status.isReachable }) {
+                    self.authUser = candidateUser
+                    self.resolvedInstanceUuid = exactOnline.uuid
+                    self.cachedRelayInstances = instances
+                    return (exactOnline, instances, candidateUser)
                 }
-                if firstNonEmptyResult == nil {
-                    firstNonEmptyResult = (instances, candidateUser)
+                if let familyOnline = instances.first(where: { $0.sameHostFamily(as: rawTarget) && $0.status.isReachable }) {
+                    self.authUser = candidateUser
+                    self.resolvedInstanceUuid = familyOnline.uuid
+                    self.cachedRelayInstances = instances
+                    return (familyOnline, instances, candidateUser)
                 }
+                let exactTargetMatch = instances.first(where: { $0.matches(identifier: rawTarget) })
+                if bestOfflineMatch == nil,
+                   let offlineMatch = exactTargetMatch ?? instances.first(where: { $0.sameHostFamily(as: rawTarget) }) {
+                    bestOfflineMatch = (offlineMatch, instances, candidateUser)
+                }
+                if bestReachableFallback == nil,
+                   let anyOnline = instances.first(where: \.status.isReachable) {
+                    bestReachableFallback = (anyOnline, instances, candidateUser)
+                }
+            } else if let online = instances.first(where: \.status.isReachable) {
+                self.authUser = candidateUser
+                self.resolvedInstanceUuid = online.uuid
+                self.cachedRelayInstances = instances
+                return (online, instances, candidateUser)
+            }
+            return nil
+        }
 
-                if !isWildcardTarget {
-                    // 1. Exact UUID or window slug match that is currently ONLINE (`isReachable`)
-                    if let exactOnline = instances.first(where: { $0.matches(identifier: rawTarget) && $0.status.isReachable }) {
-                        self.authUser = candidateUser
-                        self.resolvedInstanceUuid = exactOnline.uuid
-                        self.cachedRelayInstances = instances
-                        return (exactOnline, instances, candidateUser)
+        // 1. Probe primary authUser first (fastest single-RTT happy path + primes API key discovery once).
+        let primaryUser = candidateAuthUsers[0]
+        var stopFallbacks = false
+        do {
+            let primaryTimeout = min(timeoutInterval ?? 7.0, 7.0)
+            let primaryInstances = try await listRelayInstances(
+                authUserOverride: primaryUser,
+                timeoutInterval: primaryTimeout
+            )
+            if let matched = evaluateCandidate(candidateUser: primaryUser, instances: primaryInstances) {
+                handshakeDiagBox.record("resolve:ok(u=\(primaryUser),n=\(primaryInstances.count))")
+                return matched
+            }
+            if !isWildcardTarget && primaryInstances.contains(where: { $0.matches(identifier: rawTarget) }) {
+                stopFallbacks = true
+            }
+        } catch {
+            primaryError = error
+            lastError = error
+        }
+
+        // 2. Probe remaining multi-login slots IN PARALLEL with a tight 4.5s timeout instead of 4 sequential retries.
+        let fallbackUsers = stopFallbacks ? [] : Array(candidateAuthUsers.dropFirst())
+        if !fallbackUsers.isEmpty {
+            handshakeDiagBox.record("resolve:fallback(\(fallbackUsers.joined(separator: ",")))")
+            let fallbackTimeout = min(timeoutInterval ?? 4.5, 4.5)
+            var outcomesByIndex: [(Int, String, Result<[RelayInstanceInfo], Error>)] = []
+            await withTaskGroup(of: (Int, String, Result<[RelayInstanceInfo], Error>).self) { group in
+                for (idx, candidateUser) in fallbackUsers.enumerated() {
+                    group.addTask {
+                        do {
+                            let list = try await self.listRelayInstances(
+                                authUserOverride: candidateUser,
+                                timeoutInterval: fallbackTimeout
+                            )
+                            return (idx, candidateUser, .success(list))
+                        } catch {
+                            return (idx, candidateUser, .failure(error))
+                        }
                     }
-                    // 2. Peer window on the SAME Mac (`huangjiafandemac-mini-local-...`) that is currently ONLINE
-                    if let familyOnline = instances.first(where: { $0.sameHostFamily(as: rawTarget) && $0.status.isReachable }) {
-                        self.authUser = candidateUser
-                        self.resolvedInstanceUuid = familyOnline.uuid
-                        self.cachedRelayInstances = instances
-                        return (familyOnline, instances, candidateUser)
+                }
+                for await outcome in group {
+                    outcomesByIndex.append(outcome)
+                }
+            }
+            for (_, candidateUser, result) in outcomesByIndex.sorted(by: { $0.0 < $1.0 }) {
+                switch result {
+                case .success(let instances):
+                    if let matched = evaluateCandidate(candidateUser: candidateUser, instances: instances) {
+                        handshakeDiagBox.record("resolve:ok(u=\(candidateUser),n=\(instances.count))")
+                        return matched
                     }
-                    // 3. Record offline match on the target device and optional cross-host fallback
-                    let exactTargetMatch = instances.first(where: { $0.matches(identifier: rawTarget) })
-                    if bestOfflineMatch == nil,
-                       let offlineMatch = exactTargetMatch ?? instances.first(where: { $0.sameHostFamily(as: rawTarget) }) {
-                        bestOfflineMatch = (offlineMatch, instances, candidateUser)
-                    }
-                    if bestReachableFallback == nil,
-                       let anyOnline = instances.first(where: \.status.isReachable) {
-                        bestReachableFallback = (anyOnline, instances, candidateUser)
-                    }
-                    // The exact target UUID/slug belongs to this Google account (just currently offline);
-                    // avoid wasting up to 4 extra sequential ListInstances round-trips on authUser 1..4.
-                    if exactTargetMatch != nil {
+                    if !isWildcardTarget && instances.contains(where: { $0.matches(identifier: rawTarget) }) {
                         break
                     }
-                } else if let online = instances.first(where: \.status.isReachable) {
-                    self.authUser = candidateUser
-                    self.resolvedInstanceUuid = online.uuid
-                    self.cachedRelayInstances = instances
-                    return (online, instances, candidateUser)
-                }
-            } catch {
-                lastError = error
-                if explicitAuthUser != nil && candidateUser == explicitAuthUser {
-                    continue
+                case .failure(let error):
+                    if primaryError == nil { primaryError = error }
+                    lastError = error
                 }
             }
         }
@@ -246,6 +304,7 @@ extension AntigravityRPCClient {
             self.authUser = offline.authUser
             self.resolvedInstanceUuid = offline.selected.uuid
             self.cachedRelayInstances = offline.instances
+            handshakeDiagBox.record("resolve:offlineMatch(u=\(offline.authUser))")
             return (offline.selected, offline.instances, offline.authUser)
         }
 
@@ -253,6 +312,7 @@ extension AntigravityRPCClient {
             self.authUser = reachable.authUser
             self.resolvedInstanceUuid = reachable.selected.uuid
             self.cachedRelayInstances = reachable.instances
+            handshakeDiagBox.record("resolve:crossHost(u=\(reachable.authUser))")
             return (reachable.selected, reachable.instances, reachable.authUser)
         }
 
@@ -260,6 +320,7 @@ extension AntigravityRPCClient {
             self.authUser = offline.authUser
             self.resolvedInstanceUuid = offline.selected.uuid
             self.cachedRelayInstances = offline.instances
+            handshakeDiagBox.record("resolve:offline(u=\(offline.authUser))")
             return (offline.selected, offline.instances, offline.authUser)
         }
 
@@ -273,6 +334,7 @@ extension AntigravityRPCClient {
             self.authUser = existing.authUser
             self.resolvedInstanceUuid = rawTarget
             self.cachedRelayInstances = existing.instances
+            handshakeDiagBox.record("resolve:targetOffline")
             return (syntheticOffline, existing.instances, existing.authUser)
         }
 
@@ -281,6 +343,7 @@ extension AntigravityRPCClient {
             self.authUser = fallback.authUser
             self.resolvedInstanceUuid = chosen.uuid
             self.cachedRelayInstances = fallback.instances
+            handshakeDiagBox.record("resolve:firstNonEmpty(u=\(fallback.authUser))")
             return (chosen, fallback.instances, fallback.authUser)
         }
 
@@ -295,11 +358,13 @@ extension AntigravityRPCClient {
             )
             self.resolvedInstanceUuid = rawTarget
             self.cachedRelayInstances = [directInfo]
+            handshakeDiagBox.record("resolve:directUuid")
             return (directInfo, [directInfo], authUser)
         }
 
-        if let lastError {
-            throw lastError
+        handshakeDiagBox.record("resolve:failed")
+        if let err = primaryError ?? lastError {
+            throw err
         }
         throw AntigravityRPCError.unauthorized(
             "No online Antigravity Desktop instances found for this Google account. Ensure Remote Control is enabled on your Mac/PC."
@@ -333,8 +398,10 @@ extension AntigravityRPCClient {
         timeoutInterval: TimeInterval = 4.0,
         allowCrossHostFallback: Bool = true
     ) async throws -> BackendHandshakeResult {
+        handshakeDiagBox.reset()
+        handshakeDiagBox.record("verify:start")
         let start = Date()
-        let effectiveTimeout = (channel == .cloudRelay) ? max(timeoutInterval, 15.0) : timeoutInterval
+        let effectiveTimeout = (channel == .cloudRelay) ? max(timeoutInterval, 7.0) : timeoutInterval
         var resolvedName: String? = nil
         var selectedUuid: String? = resolvedInstanceUuid
         var isSelectedHostOnline = true
@@ -356,13 +423,75 @@ extension AntigravityRPCClient {
             self.resolvedInstanceUuid = resolution.selected.uuid
         }
 
-        let federated = try await fetchFederatedWorkspacesAndSummaries(
-            timeoutInterval: effectiveTimeout,
-            skipRelayListRefresh: channel == .cloudRelay && !allRelayInstances.isEmpty,
-            targetInstanceUuid: (channel == .cloudRelay && !allowCrossHostFallback && isSelectedHostOnline) ? selectedUuid : nil,
-            includeLocal: (channel != .cloudRelay) || isSelectedHostOnline || allowCrossHostFallback,
-            includeCloud: true
+        let federated: (
+            workspaces: [WorkspaceInfo],
+            summaries: [CascadeSummary],
+            cloudProjects: [ProjectWorkspace],
+            cloudWarmingUp: Bool,
+            availableRelayInstances: [RelayInstanceInfo],
+            succeededInstanceUuids: Set<String>,
+            cloudSucceeded: Bool
         )
+        if channel == .cloudRelay {
+            let resolveElapsed = max(0.0, Date().timeIntervalSince(start))
+            let initialSyncBudget = min(6.5, max(2.5, 17.0 - resolveElapsed))
+            let capturedInstances = allRelayInstances
+            let targetUuidForSync = (!allowCrossHostFallback && isSelectedHostOnline) ? selectedUuid : nil
+            let includeLocalForSync = isSelectedHostOnline || allowCrossHostFallback
+            handshakeDiagBox.record("sync:start(\(Int(initialSyncBudget * 1000))ms)")
+            let softResult = try await withThrowingTaskGroup(of: (
+                workspaces: [WorkspaceInfo],
+                summaries: [CascadeSummary],
+                cloudProjects: [ProjectWorkspace],
+                cloudWarmingUp: Bool,
+                availableRelayInstances: [RelayInstanceInfo],
+                succeededInstanceUuids: Set<String>,
+                cloudSucceeded: Bool
+            )?.self) { group in
+                group.addTask {
+                    do {
+                        return try await self.fetchFederatedWorkspacesAndSummaries(
+                            timeoutInterval: initialSyncBudget,
+                            skipRelayListRefresh: !capturedInstances.isEmpty,
+                            targetInstanceUuid: targetUuidForSync,
+                            includeLocal: includeLocalForSync,
+                            includeCloud: true,
+                            includeJetboxSnapshot: false
+                        )
+                    } catch let err as AntigravityRPCError {
+                        if case .unauthorized = err { throw err }
+                        return nil
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        return nil
+                    }
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(initialSyncBudget * 1_000_000_000))
+                    return nil
+                }
+                let first = try await group.next() ?? nil
+                group.cancelAll()
+                return first
+            }
+            if let softResult {
+                handshakeDiagBox.record("sync:ok(sum=\(softResult.summaries.count),ws=\(softResult.workspaces.count))")
+                federated = softResult
+            } else {
+                handshakeDiagBox.record("sync:deferred")
+                federated = ([], [], [], false, allRelayInstances, [], false)
+            }
+        } else {
+            federated = try await fetchFederatedWorkspacesAndSummaries(
+                timeoutInterval: effectiveTimeout,
+                skipRelayListRefresh: false,
+                targetInstanceUuid: nil,
+                includeLocal: true,
+                includeCloud: true,
+                includeJetboxSnapshot: false
+            )
+        }
         if let selectedUuid, channel == .cloudRelay {
             self.resolvedInstanceUuid = selectedUuid
         }
@@ -380,6 +509,7 @@ extension AntigravityRPCClient {
             return activeProfile.reportedVersion ?? ""
         }()
         let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
+        handshakeDiagBox.record("verify:done")
         return BackendHandshakeResult(
             latencyMs: elapsedMs,
             workspaces: federated.workspaces,
@@ -596,7 +726,8 @@ extension AntigravityRPCClient {
         skipRelayListRefresh: Bool = false,
         targetInstanceUuid: String? = nil,
         includeLocal: Bool = true,
-        includeCloud: Bool = true
+        includeCloud: Bool = true,
+        includeJetboxSnapshot: Bool = true
     ) async throws -> (
         workspaces: [WorkspaceInfo],
         summaries: [CascadeSummary],
@@ -688,7 +819,8 @@ extension AntigravityRPCClient {
             async let cloudOutcomeTask: (summaries: [CascadeSummary], succeeded: Bool) = shouldFetchCloud
                 ? self.fetchCloudSummariesAcrossInstances(
                     candidates: orderedCloudCandidates,
-                    timeoutInterval: timeoutInterval
+                    timeoutInterval: timeoutInterval,
+                    includeJetboxSnapshot: includeJetboxSnapshot
                 )
                 : ([], false)
 
@@ -707,12 +839,14 @@ extension AntigravityRPCClient {
                                 originHostName: inst.name,
                                 timeoutInterval: timeoutInterval
                             )
-                            async let jbLocalTask = self.fetchJetboxSummariesSnapshot(
-                                cloud: false,
-                                instanceUuidOverride: inst.uuid,
-                                originHostName: inst.name,
-                                snapshotTimeout: 2.0
-                            )
+                            async let jbLocalTask: [CascadeSummary] = includeJetboxSnapshot
+                                ? self.fetchJetboxSummariesSnapshot(
+                                    cloud: false,
+                                    instanceUuidOverride: inst.uuid,
+                                    originHostName: inst.name,
+                                    snapshotTimeout: 2.0
+                                )
+                                : []
 
                             let wsOutcome = await wsOutcomeTask
                             let memResult = try? await memTask
@@ -819,7 +953,7 @@ extension AntigravityRPCClient {
             // Direct LAN / Companion / Mock server mode
             async let workspacesTask = getWorkspaceInfosOptional(timeoutInterval: timeoutInterval)
             async let summariesTask = getAllCascadeTrajectories(timeoutInterval: timeoutInterval)
-            async let cloudSummariesTask: [CascadeSummary] = includeCloud
+            async let cloudSummariesTask: [CascadeSummary] = (includeCloud && includeJetboxSnapshot)
                 ? self.fetchJetboxSummariesSnapshot(
                     cloud: true,
                     originHostName: "Antigravity",
@@ -1143,16 +1277,19 @@ extension AntigravityRPCClient {
 
     internal func fetchCloudSummariesAcrossInstances(
         candidates: [RelayInstanceInfo],
-        timeoutInterval: TimeInterval?
+        timeoutInterval: TimeInterval?,
+        includeJetboxSnapshot: Bool = true
     ) async -> (summaries: [CascadeSummary], succeeded: Bool) {
         let cloudProjectsSnapshot = self.cachedCloudProjectsById
         for inst in candidates {
-            async let jbTask = fetchJetboxSummariesSnapshot(
-                cloud: true,
-                instanceUuidOverride: inst.uuid,
-                originHostName: "Antigravity",
-                snapshotTimeout: 2.5
-            )
+            async let jbTask: [CascadeSummary] = includeJetboxSnapshot
+                ? fetchJetboxSummariesSnapshot(
+                    cloud: true,
+                    instanceUuidOverride: inst.uuid,
+                    originHostName: "Antigravity",
+                    snapshotTimeout: 2.5
+                )
+                : []
             async let unaryTask = getAllCascadeTrajectoriesCloud(
                 instanceUuidOverride: inst.uuid,
                 timeoutInterval: timeoutInterval ?? 8.0

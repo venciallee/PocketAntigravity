@@ -35,6 +35,62 @@ public actor AntigravityRPCClient {
     internal var capabilityProfilesByHost: [String: HostCapabilityProfile] = [:]
     internal let urlSession: URLSession
     internal let streamingURLSession: URLSession
+    internal let handshakeDiagBox: HandshakeDiagnosticBox
+
+    internal final class HandshakeDiagnosticBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var startTime: Date = Date()
+        private var keySource: String
+        private var events: [String] = []
+        private let originHost: String
+        private let cookieSummary: String
+
+        init(originHost: String, cookieHeader: String, initialApiKey: String?) {
+            self.originHost = originHost
+            self.cookieSummary = SAPISIDHashGenerator.summarizeCookieNames(cookieHeader)
+            if let key = initialApiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+                self.keySource = "provided(\(key.count))"
+            } else {
+                self.keySource = "none"
+            }
+        }
+
+        func reset() {
+            lock.lock()
+            startTime = Date()
+            events.removeAll(keepingCapacity: true)
+            lock.unlock()
+        }
+
+        func setKeySource(_ source: String) {
+            lock.lock()
+            keySource = source
+            lock.unlock()
+        }
+
+        func record(_ event: String) {
+            lock.lock()
+            let elapsedMs = max(0, Int(Date().timeIntervalSince(startTime) * 1000.0))
+            if events.count >= 16 {
+                events.removeFirst()
+            }
+            events.append("\(event)@\(elapsedMs)ms")
+            lock.unlock()
+        }
+
+        func snapshot() -> String {
+            lock.lock()
+            let trace = events.isEmpty ? "init" : events.joined(separator: "->")
+            let ks = keySource
+            lock.unlock()
+            return "engine=Swift-URLSession origin=\(originHost) key=\(ks) ck=\(cookieSummary) trace=\(trace)"
+        }
+    }
+
+    /// Zero-secret stage-by-stage handshake diagnostic breadcrumb (safe to read synchronously from any thread).
+    nonisolated public func currentHandshakeDiagnostic() -> String {
+        handshakeDiagBox.snapshot()
+    }
 
     public struct LiveModelCatalogResult: Sendable, Equatable {
         public let models: [CascadeModelConfig]
@@ -75,19 +131,26 @@ public actor AntigravityRPCClient {
         self.channel = host.channel
         self.endpointURL = host.endpointURL
         let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(host.endpointURL.absoluteString)
-        self.relayOriginURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin)
+        let originURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin)
             ?? host.endpointURL
+        self.relayOriginURL = originURL
         let extractedId = parsedTarget?.instanceId.isEmpty == false ? parsedTarget!.instanceId : host.instanceId
         self.targetInstanceIdentifier = extractedId
         self.resolvedInstanceUuid = resolvedInstanceUuid
         let trimmedRelayKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.relayApiKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
+        let effectiveInitialKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
             ?? SAPISIDHashGenerator.configuredRelayWebApiKeyOverride()
+        self.relayApiKey = effectiveInitialKey
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         self.explicitAuthUser = effectiveAuthUser
         self.authUser = effectiveAuthUser ?? "0"
         self.csrfToken = csrfToken
         self.sessionCookie = sessionCookie
+        self.handshakeDiagBox = HandshakeDiagnosticBox(
+            originHost: originURL.host ?? originURL.absoluteString,
+            cookieHeader: sessionCookie ?? "",
+            initialApiKey: effectiveInitialKey
+        )
         if let urlSession {
             self.urlSession = urlSession
             self.streamingURLSession = urlSession
@@ -123,17 +186,24 @@ public actor AntigravityRPCClient {
         let isRelay = parsedTarget != nil && (csrfToken == nil || csrfToken?.isEmpty == true) && (sessionCookie?.isEmpty == false)
         self.channel = isRelay ? .cloudRelay : .directHost
         self.endpointURL = baseURL
-        self.relayOriginURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin) ?? baseURL
+        let originURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin) ?? baseURL
+        self.relayOriginURL = originURL
         self.targetInstanceIdentifier = parsedTarget?.instanceId ?? ""
         self.resolvedInstanceUuid = resolvedInstanceUuid
         let trimmedRelayKey = relayApiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.relayApiKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
+        let effectiveInitialKey = (trimmedRelayKey?.isEmpty == false ? trimmedRelayKey : nil)
             ?? SAPISIDHashGenerator.configuredRelayWebApiKeyOverride()
+        self.relayApiKey = effectiveInitialKey
         let effectiveAuthUser = authUser ?? parsedTarget?.authUser
         self.explicitAuthUser = effectiveAuthUser
         self.authUser = effectiveAuthUser ?? "0"
         self.csrfToken = csrfToken
         self.sessionCookie = sessionCookie
+        self.handshakeDiagBox = HandshakeDiagnosticBox(
+            originHost: originURL.host ?? originURL.absoluteString,
+            cookieHeader: sessionCookie ?? "",
+            initialApiKey: effectiveInitialKey
+        )
         if let urlSession {
             self.urlSession = urlSession
             self.streamingURLSession = urlSession
@@ -316,7 +386,13 @@ public actor AntigravityRPCClient {
             }
         }
 
+        let discoveryStart = Date()
+        handshakeDiagBox.record("discoverKey:start")
+
         for (pageIdx, pageURL) in candidatePages.enumerated() {
+            if Date().timeIntervalSince(discoveryStart) >= 5.5 {
+                break
+            }
             if pageIdx > 0 && (!collectedKeys.isEmpty || !scriptURLsToInspect.isEmpty) {
                 break
             }
@@ -325,7 +401,7 @@ public actor AntigravityRPCClient {
                 originStr: originStr,
                 includeSessionCookie: pageURL.host?.lowercased() == originHost
             )
-            pageReq.timeoutInterval = pageIdx == 0 ? 4.5 : 3.5
+            pageReq.timeoutInterval = pageIdx == 0 ? 3.0 : 2.5
             guard let (data, response) = try? await urlSession.data(for: pageReq),
                   let http = response as? HTTPURLResponse,
                   (200..<400).contains(http.statusCode) else {
@@ -365,15 +441,16 @@ public actor AntigravityRPCClient {
             }
         }
 
-        if collectedKeys.count < 3 && !scriptURLsToInspect.isEmpty {
+        if collectedKeys.count < 3 && !scriptURLsToInspect.isEmpty && Date().timeIntervalSince(discoveryStart) < 5.5 {
             let session = urlSession
+            let remainingScriptTimeout = max(1.5, min(3.0, 6.0 - Date().timeIntervalSince(discoveryStart)))
             let indexedRequests: [(Int, URLRequest)] = scriptURLsToInspect.prefix(6).enumerated().map { idx, scriptURL in
                 var scriptReq = makeBootstrapGetRequest(
                     for: scriptURL,
                     originStr: originStr,
                     includeSessionCookie: scriptURL.host?.lowercased() == originHost
                 )
-                scriptReq.timeoutInterval = 4.5
+                scriptReq.timeoutInterval = remainingScriptTimeout
                 return (idx, scriptReq)
             }
             var orderedResults: [(Int, [String])] = []
@@ -408,7 +485,11 @@ public actor AntigravityRPCClient {
         didRunOriginApiKeyDiscovery = true
         if !collectedKeys.isEmpty {
             discoveredRelayApiKeyCandidates = collectedKeys
+            if relayApiKey == nil {
+                handshakeDiagBox.setKeySource("discovered(n=\(collectedKeys.count),len=\(collectedKeys[0].count))")
+            }
         }
+        handshakeDiagBox.record("discoverKey:n=\(collectedKeys.count)")
         return collectedKeys
     }
 
