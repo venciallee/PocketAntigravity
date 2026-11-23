@@ -31,6 +31,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import okio.ByteString
@@ -338,7 +340,9 @@ class CoreDomainStoreTest {
         withContext(Dispatchers.Default) {
             val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
             val validKey = "AI" + "zaSyDEFERREDSYNC000000000000000000000"
-            var proxyCallCount = 0
+            val counterMutex = kotlinx.coroutines.sync.Mutex()
+            var trajectoriesCalls = 0
+            var workspacesCalls = 0
 
             val engine = MockEngine { request ->
                 val path = request.url.encodedPath
@@ -351,13 +355,32 @@ class CoreDomainStoreTest {
                         )
                     }
                     path.endsWith("/ProxyCommand") -> {
-                        proxyCallCount += 1
-                        val jsonPayload = if (proxyCallCount <= 2) {
-                            // Simulate empty initial snapshot during handshake (e.g. deferred sync)
-                            """{"workspaces":[],"trajectorySummaries":{}}"""
-                        } else {
-                            // Subsequent background hydration returns real conversations
-                            """{"workspaces":[{"workspaceUri":"file:///Users/dev/payments","displayName":"payments"}],"trajectorySummaries":{"cas-bg-1":{"summary":"Background Hydrated Chat","stepCount":6,"status":"CORTEX_STEP_STATUS_DONE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/payments"}]}}}"""
+                        val reqText = (request.body as? io.ktor.http.content.OutgoingContent.ByteArrayContent)
+                            ?.bytes()
+                            ?.decodeToString()
+                            .orEmpty()
+                        val jsonPayload = counterMutex.withLock {
+                            when {
+                                reqText.contains("GetWorkspaceInfos") -> {
+                                    workspacesCalls += 1
+                                    if (workspacesCalls <= 1) {
+                                        """{"workspaces":[]}"""
+                                    } else {
+                                        """{"workspaces":[{"workspaceUri":"file:///Users/dev/payments","displayName":"payments"}]}"""
+                                    }
+                                }
+                                reqText.contains("GetAllCascadeTrajectories") -> {
+                                    trajectoriesCalls += 1
+                                    // Initial handshake invokes cloud + local GetAllCascadeTrajectories concurrently;
+                                    // return empty for both so background hydration must populate cas-bg-1.
+                                    if (trajectoriesCalls <= 2) {
+                                        """{"trajectorySummaries":{}}"""
+                                    } else {
+                                        """{"trajectorySummaries":{"cas-bg-1":{"summary":"Background Hydrated Chat","stepCount":6,"status":"CORTEX_STEP_STATUS_DONE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/payments"}]}}}"""
+                                    }
+                                }
+                                else -> """{}"""
+                            }
                         }
                         val b64 = ByteString.of(*jsonPayload.encodeToByteArray()).base64()
                         respond(
@@ -393,10 +416,11 @@ class CoreDomainStoreTest {
                 startSummaryStream = false,
             )
             assertEquals("MacBook Pro", handshake.resolvedHostname)
+            assertTrue(handshake.summaries.isEmpty(), "Initial handshake should simulate deferred empty summaries")
 
             // Wait briefly for the deferred background sync launched by onHandshakeSucceeded to populate summaries.
             var hydrated = false
-            for (i in 0 until 40) {
+            for (i in 0 until 60) {
                 if (coordinator.syncState.value.summaries.any { it.cascadeId == "cas-bg-1" }) {
                     hydrated = true
                     break

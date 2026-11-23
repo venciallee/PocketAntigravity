@@ -127,6 +127,9 @@ public struct CascadeChatViewController: View {
                         if isStaticESDDFixtureView {
                             VStack(alignment: .leading, spacing: 9) {
                                 staticRateLimiterShowcaseBody
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id("chat-bottom-anchor")
                             }
                         } else if store.displayItems.isEmpty {
                             VStack(alignment: .leading, spacing: 9) {
@@ -196,7 +199,14 @@ public struct CascadeChatViewController: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {
-                    guard !isStaticESDDFixtureView, !store.displayItems.isEmpty else { return }
+                    if isStaticESDDFixtureView {
+                        scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                        DispatchQueue.main.async {
+                            scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                        }
+                        return
+                    }
+                    guard !store.displayItems.isEmpty else { return }
                     if let waiting = store.pendingWaitingStep {
                         scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
                     } else {

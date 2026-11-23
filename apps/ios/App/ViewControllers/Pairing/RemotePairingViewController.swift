@@ -65,8 +65,8 @@ public struct RemotePairingViewController: View {
                 || (store.connectionErrorText?.lowercased().contains("unauthorized") ?? false))
 
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .center) {
                         Text("Settings")
                             .font(.system(size: 32, weight: .bold))
@@ -98,7 +98,7 @@ public struct RemotePairingViewController: View {
                 // 1. Primary Connection Hero Card (`ios-settings.png`)
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .fill(AntigravityTheme.surfaceCard)
-                    .frame(minHeight: 196)
+                    .frame(minHeight: 176)
                     .overlay(
                         RoundedRectangle(cornerRadius: 24, style: .continuous)
                             .strokeBorder(
@@ -402,7 +402,7 @@ public struct RemotePairingViewController: View {
                                     }
                                 }
                                 .padding(.horizontal, 14)
-                                .padding(.vertical, 13)
+                                .padding(.vertical, 10.5)
                                 .background(AntigravityTheme.surfaceCard)
                                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                 .overlay(

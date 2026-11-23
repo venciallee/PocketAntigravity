@@ -37,7 +37,7 @@ public struct CustomizationsSettingsView: View {
 
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 topBackBar
                 titleHeader
                 tokenBudgetCard
@@ -49,8 +49,8 @@ public struct CustomizationsSettingsView: View {
                 desktopOnlyFootnote
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 28)
+            .padding(.top, 2)
+            .padding(.bottom, 20)
         }
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
         .accessibilityElement(children: .contain)
@@ -236,7 +236,7 @@ public struct CustomizationsSettingsView: View {
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 9.5)
                     .accessibilityIdentifier("skill-row-\(skill.name)")
 
                     if idx < catalog.skills.count - 1 {
@@ -345,7 +345,7 @@ public struct CustomizationsSettingsView: View {
     // MARK: - PLUGINS IN THIS PROJECT
 
     private var pluginsInProjectSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             Text("PLUGINS IN THIS PROJECT")
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
@@ -356,25 +356,28 @@ public struct CustomizationsSettingsView: View {
             VStack(spacing: 0) {
                 ForEach(Array(catalog.plugins.enumerated()), id: \.element.id) { idx, plugin in
                     let hasError = (plugin.mcpStartupError != nil) || plugin.description.lowercased().contains("api key")
-                    HStack(spacing: 12) {
+                    HStack(spacing: 9) {
                         Image(systemName: "puzzlepiece.extension")
-                            .font(.system(size: 14.5, weight: .medium))
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textSecondary)
-                            .frame(width: 22)
+                            .frame(width: 20)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(plugin.name)
-                                .font(.system(size: 15.5, weight: .semibold))
+                                .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
                             Text(plugin.mcpStartupError ?? plugin.description)
-                                .font(.system(size: 13))
+                                .font(.system(size: 12.5))
                                 .foregroundStyle(hasError ? AntigravityTheme.statusError : AntigravityTheme.textSecondary)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.84)
                         }
+                        .layoutPriority(1)
 
-                        Spacer(minLength: 6)
+                        Spacer(minLength: 4)
 
                         scopeBadge(plugin.scope)
+                            .fixedSize(horizontal: true, vertical: false)
 
                         Toggle(
                             "",
@@ -389,14 +392,14 @@ public struct CustomizationsSettingsView: View {
                         .tint(AntigravityTheme.statusDone)
                         .accessibilityIdentifier("switch-plugin-\(plugin.id)")
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                     .accessibilityIdentifier("plugin-row-\(plugin.id)")
 
                     if idx < catalog.plugins.count - 1 {
                         Divider()
                             .overlay(AntigravityTheme.subtleDivider)
-                            .padding(.leading, 48)
+                            .padding(.leading, 42)
                     }
                 }
             }
@@ -414,9 +417,9 @@ public struct CustomizationsSettingsView: View {
     private func scopeBadge(_ scope: String) -> some View {
         let isGlobal = scope.caseInsensitiveCompare("Global") == .orderedSame
         return Text(scope)
-            .font(.system(size: 11.5, weight: .semibold))
+            .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(isGlobal ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.textSecondary)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -426,9 +429,9 @@ public struct CustomizationsSettingsView: View {
 
     private var desktopOnlyFootnote: some View {
         Text("Phone can view and switch plugins on or off. Installing from Marketplace, editing rules or SKILL.md, and entering API keys stay in Antigravity Desktop → Customizations.")
-            .font(.system(size: 13, weight: .regular))
-            .lineSpacing(3)
+            .font(.system(size: 12.5, weight: .regular))
+            .lineSpacing(2.5)
             .foregroundStyle(AntigravityTheme.textSecondary)
-            .padding(.top, 4)
+            .padding(.top, 2)
     }
 }
