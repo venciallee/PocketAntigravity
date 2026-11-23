@@ -1,5 +1,6 @@
 package dev.antigravity.android.ui
 
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -539,11 +540,17 @@ fun AntigravityAppRoot(
                     CloudRelaySignInScreen(
                         targetRelayUrl = route.targetRelayUrl,
                         onAuthenticated = { captured ->
-                            currentRoute = AppRoute.Pairing
                             val effectiveUrl = RemoteHostInstance.resolveEffectiveRelayTarget(
                                 scannedInput = route.targetRelayUrl,
                                 webViewFinalUrl = captured.finalUrl,
                             )
+                            val ckSummary = SapisidHashGenerator.summarizeCookieNames(captured.cookieHeader)
+                            val keySummary = captured.relayApiKey?.let { "len:${it.length}" } ?: "none"
+                            Log.i(
+                                "CloudRelay",
+                                "Android handshake start target=$effectiveUrl authUser=${captured.authUser ?: "auto"} key=$keySummary ck=$ckSummary",
+                            )
+                            currentRoute = AppRoute.Pairing
                             scope.launch {
                                 val result = runCatching {
                                     coordinator.connectCloudRelay(
@@ -554,7 +561,17 @@ fun AntigravityAppRoot(
                                     )
                                 }
                                 if (result.isSuccess) {
+                                    val hs = result.getOrNull()
+                                    Log.i(
+                                        "CloudRelay",
+                                        "Android handshake OK host=${hs?.resolvedHostname} instances=${hs?.availableRelayInstances?.size} latencyMs=${hs?.latencyMs}",
+                                    )
                                     navigateTo(AppRoute.RootTab(PrimaryTab.AGENTS))
+                                } else {
+                                    Log.w(
+                                        "CloudRelay",
+                                        "Android handshake failed: ${result.exceptionOrNull()?.message}",
+                                    )
                                 }
                             }
                         },

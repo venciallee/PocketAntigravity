@@ -953,6 +953,13 @@ public class AntigravityKmpRpcClient(
         } catch (e: Throwable) {
             primaryError = e
             lastError = e
+            // Fail fast on network/timeout errors: probing authUser=1..4 cannot fix an unreachable relay/VPN.
+            val isTransportOrTimeout = (e is AntigravityRpcError.HttpError && (e.statusCode == 504 || e.statusCode == -1)) ||
+                (e !is AntigravityRpcError)
+            if (isTransportOrTimeout) {
+                recordHandshakeTrace("resolve:failFast(u=$primaryUser)")
+                stopFallbacks = true
+            }
         }
 
         // 2. If primary authUser did not return a reachable match, probe remaining multi-login slots IN PARALLEL
@@ -1032,6 +1039,13 @@ public class AntigravityKmpRpcClient(
             updateRelayCache(auth, rawTarget, listOf(direct))
             recordHandshakeTrace("resolve:directUuid")
             return RelayResolutionResult(direct, listOf(direct), auth)
+        }
+        if (anySucceededCall && primaryError == null && lastError == null) {
+            recordHandshakeTrace("resolve:empty200")
+            throw AntigravityRpcError.HttpError(
+                404,
+                "Signed in to Google, but no online Antigravity Desktop instances were found on this account. Enable Remote Control in Antigravity Desktop and verify both devices use the same Google account.",
+            )
         }
         recordHandshakeTrace("resolve:failed")
         throw primaryError ?: lastError ?: AntigravityRpcError.Unauthorized("No reachable Cloud Relay instance resolved")

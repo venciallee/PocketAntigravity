@@ -26,11 +26,14 @@ import dev.antigravity.shared.protocol.platformTransportEngineName
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import okio.ByteString
@@ -274,7 +277,9 @@ class CoreDomainStoreTest {
         withContext(Dispatchers.Default) {
             val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
             val validKey = "AI" + "zaSyDEFERREDSYNC000000000000000000000"
-            var proxyCallCount = 0
+            val countMutex = Mutex()
+            var workspaceCalls = 0
+            var trajectoryCalls = 0
 
             val engine = MockEngine { request ->
                 val path = request.url.encodedPath
@@ -287,13 +292,28 @@ class CoreDomainStoreTest {
                         )
                     }
                     path.endsWith("/ProxyCommand") -> {
-                        proxyCallCount += 1
-                        val jsonPayload = if (proxyCallCount <= 2) {
-                            // Simulate empty initial snapshot during handshake (e.g. deferred sync)
-                            """{"workspaces":[],"trajectorySummaries":{}}"""
-                        } else {
-                            // Subsequent background hydration returns real conversations
-                            """{"workspaces":[{"workspaceUri":"file:///Users/dev/payments","displayName":"payments"}],"trajectorySummaries":{"cas-bg-1":{"summary":"Background Hydrated Chat","stepCount":6,"status":"CORTEX_STEP_STATUS_DONE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/payments"}]}}}"""
+                        val bodyText = runCatching { request.body.toByteArray().decodeToString() }.getOrDefault("")
+                        val jsonPayload = countMutex.withLock {
+                            when {
+                                bodyText.contains("GetWorkspaceInfos") -> {
+                                    workspaceCalls += 1
+                                    if (workspaceCalls <= 1) {
+                                        """{"workspaces":[]}"""
+                                    } else {
+                                        """{"workspaces":[{"workspaceUri":"file:///Users/dev/payments","displayName":"payments"}]}"""
+                                    }
+                                }
+                                bodyText.contains("GetAllCascadeTrajectories") -> {
+                                    trajectoryCalls += 1
+                                    if (trajectoryCalls <= 2) {
+                                        // Calls 1 & 2 are the initial handshake's local + cloud trajectory fetches
+                                        """{"trajectorySummaries":{}}"""
+                                    } else {
+                                        """{"trajectorySummaries":{"cas-bg-1":{"summary":"Background Hydrated Chat","stepCount":6,"status":"CORTEX_STEP_STATUS_DONE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/payments"}]}}}"""
+                                    }
+                                }
+                                else -> """{"projects":[]}"""
+                            }
                         }
                         val b64 = ByteString.of(*jsonPayload.encodeToByteArray()).base64()
                         respond(
@@ -329,10 +349,11 @@ class CoreDomainStoreTest {
                 startSummaryStream = false,
             )
             assertEquals("MacBook Pro", handshake.resolvedHostname)
+            assertTrue(handshake.summaries.isEmpty(), "Initial handshake must simulate deferred empty summaries")
 
-            // Wait briefly for the deferred background sync launched by onHandshakeSucceeded to populate summaries.
+            // Wait for the deferred background sync launched by onHandshakeSucceeded to populate summaries.
             var hydrated = false
-            for (i in 0 until 40) {
+            for (i in 0 until 80) {
                 if (coordinator.syncState.value.summaries.any { it.cascadeId == "cas-bg-1" }) {
                     hydrated = true
                     break

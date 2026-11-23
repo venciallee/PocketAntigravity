@@ -4234,6 +4234,133 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertFalse(diag.contains("secret_sapisid_val"))
         XCTAssertFalse(diag.contains(testKey))
     }
+
+    func testSwiftResolveCloudRelayInstanceFailsFastOnPrimary504AndHidesSecretCookieValues() async {
+        let validKey = "AI" + "zaSySWIFTFAILFAST00000000000000000000"
+        let secretCookie = "SWIFT_SECRET_SAPISID_VALUE_504"
+        let probedAuthUsers = AtomicTestString("")
+
+        MockRelayURLProtocol.state.setResponder { urlString, authUser, _ in
+            if urlString.contains("/ListInstances") {
+                let prev = probedAuthUsers.get()
+                let next = prev.isEmpty ? (authUser ?? "nil") : "\(prev),\(authUser ?? "nil")"
+                probedAuthUsers.set(next)
+                return (504, ["Content-Type": "text/plain"], Data("Gateway Timeout".utf8))
+            }
+            return (404, [:], Data())
+        }
+        defer { MockRelayURLProtocol.state.setResponder(nil) }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: config)
+
+        let host = RemoteHostInstance(
+            instanceId: "lt74xt6l0m-golden-star",
+            hostname: "Antigravity Desktop",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/lt74xt6l0m-golden-star")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=\(secretCookie); SID=sid_504",
+            relayApiKey: validKey,
+            urlSession: mockSession
+        )
+
+        do {
+            _ = try await client.resolveCloudRelayInstance(allowCrossHostFallback: true)
+            XCTFail("Expected HTTP 504 fail-fast error")
+        } catch let AntigravityRPCError.httpError(statusCode, _) {
+            XCTAssertEqual(statusCode, 504)
+        } catch {
+            XCTFail("Unexpected error type: \(error)")
+        }
+
+        XCTAssertEqual(
+            probedAuthUsers.get(),
+            "0",
+            "Primary HTTP 504 must fail fast instead of burning timeout probing authUser=1..4"
+        )
+        let diag = client.currentHandshakeDiagnostic()
+        XCTAssertTrue(diag.contains("resolve:failFast"), "Expected resolve:failFast trace in diagnostic: \(diag)")
+        XCTAssertFalse(diag.contains(secretCookie), "Diagnostic must never leak raw cookie values")
+        XCTAssertFalse(diag.contains(validKey), "Diagnostic must never leak full API key")
+    }
+
+    func testSwiftResolveCloudRelayEmptyHttp200Throws404AndVerifyConnectionSurvivesSlowProxyCommand() async throws {
+        let validKey = "AI" + "zaSySWIFTEMPTY20000000000000000000000"
+        let rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+
+        // 1. Empty HTTP 200 ListInstances on a short slug must throw actionable HTTP 404 (not Unauthorized)
+        MockRelayURLProtocol.state.setResponder { urlString, _, _ in
+            if urlString.contains("/ListInstances") {
+                return (200, ["Content-Type": "application/json+protobuf"], Data(")]}'\n[[],5]".utf8))
+            }
+            return (404, [:], Data())
+        }
+        defer { MockRelayURLProtocol.state.setResponder(nil) }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: config)
+
+        let emptyHost = RemoteHostInstance(
+            instanceId: "golden-star",
+            hostname: "Antigravity Desktop",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/golden-star")!,
+            isOnline: true
+        )
+        let emptyClient = AntigravityRPCClient(
+            host: emptyHost,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: validKey,
+            urlSession: mockSession
+        )
+
+        do {
+            _ = try await emptyClient.resolveCloudRelayInstance(allowCrossHostFallback: true)
+            XCTFail("Expected HTTP 404 when ListInstances returns empty array")
+        } catch let AntigravityRPCError.httpError(statusCode, _) {
+            XCTAssertEqual(statusCode, 404)
+        } catch {
+            XCTFail("Expected AntigravityRPCError.httpError(404), got \(error)")
+        }
+
+        // 2. verifyConnection succeeds even when initial ProxyCommand fails with HTTP 504
+        MockRelayURLProtocol.state.setResponder { urlString, _, _ in
+            if urlString.contains("/ListInstances") {
+                let payload = ")]}'\n[[[\"\(rawUuid)\",[\"MacBook Pro\",\"2.33.0\",1],1,[1740000000,0]]],5]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(payload.utf8))
+            }
+            if urlString.contains("/ProxyCommand") {
+                return (504, ["Content-Type": "text/plain"], Data("Gateway Timeout".utf8))
+            }
+            return (404, [:], Data())
+        }
+
+        let onlineHost = RemoteHostInstance(
+            instanceId: rawUuid,
+            hostname: "Antigravity Desktop",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(rawUuid)")!,
+            isOnline: true
+        )
+        let onlineClient = AntigravityRPCClient(
+            host: onlineHost,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: validKey,
+            urlSession: mockSession
+        )
+
+        let handshake = try await onlineClient.verifyConnection(allowCrossHostFallback: true)
+        XCTAssertEqual(handshake.resolvedHostname, "MacBook Pro")
+        XCTAssertEqual(handshake.resolvedInstanceUuid, rawUuid)
+        XCTAssertTrue(handshake.isSelectedHostOnline)
+        XCTAssertTrue(handshake.summaries.isEmpty)
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {

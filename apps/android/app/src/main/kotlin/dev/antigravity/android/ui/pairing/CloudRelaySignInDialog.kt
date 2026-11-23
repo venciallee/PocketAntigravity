@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -69,6 +70,7 @@ import dev.antigravity.android.core.platform.CloudRelayCookieBridge
 import dev.antigravity.android.core.ui.components.AntigravitySurfaceCard
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.protocol.SapisidHashGenerator
 
 /**
@@ -88,7 +90,7 @@ data class CloudRelayCapturedSession(
  * - Injects a `fetch`/`XMLHttpRequest` interceptor capturing the exact `ApiService` `X-Goog-Api-Key`,
  *   `X-Goog-AuthUser`, and `?key=` query parameter while ignoring unrelated telemetry hosts.
  * - Normalizes `antigravity.google` -> `antigravity.google.com` for cookie extraction.
- * - Applies a 3.5s fallback capture timer on the relay host so slow subresources never stall login.
+ * - Applies two-phase capture timers (10s loading ceiling + 4.5s post-load grace) so slow VPN loads never dismiss early or stall login.
  * - Surfaces navigation errors with Retry and Reset Cookies actions instead of hanging silently.
  */
 @SuppressLint("SetJavaScriptEnabled")
@@ -337,15 +339,16 @@ fun CloudRelaySignInScreen(
                                 isLoading = true
                                 loadErrorText = null
                                 view?.evaluateJavascript(ANDROID_API_KEY_CAPTURE_JS, null)
+                                val liveHost = runCatching { Uri.parse(url.orEmpty()).host }
+                                    .getOrNull()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: targetHost
+                                Log.i(CLOUD_RELAY_SIGNIN_LOG_TAG, "WebView onPageStarted host=$liveHost")
                                 if (isRelayHostUrl(url)) {
-                                    stateHolder.scheduleFallbackCapture(
-                                        liveHost = runCatching { Uri.parse(url.orEmpty()).host }
-                                            .getOrNull()
-                                            ?.takeIf { it.isNotBlank() }
-                                            ?: targetHost,
+                                    stateHolder.scheduleLoadingSafetyCapture(
+                                        liveHost = liveHost,
                                         webView = view,
                                         handler = mainHandler,
-                                        delayMs = 4_500L,
                                     )
                                 } else {
                                     stateHolder.cancelPendingTimers(mainHandler)
@@ -360,16 +363,16 @@ fun CloudRelaySignInScreen(
                                 }
                                 isLoading = false
                                 view?.evaluateJavascript(ANDROID_API_KEY_CAPTURE_JS, null)
+                                val liveHost = runCatching { Uri.parse(url.orEmpty()).host }
+                                    .getOrNull()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: targetHost
+                                Log.i(CLOUD_RELAY_SIGNIN_LOG_TAG, "WebView onPageFinished host=$liveHost")
                                 if (isRelayHostUrl(url)) {
-                                    val liveHost = runCatching { Uri.parse(url.orEmpty()).host }
-                                        .getOrNull()
-                                        ?.takeIf { it.isNotBlank() }
-                                        ?: targetHost
-                                    stateHolder.tryAutoCaptureIfSignedIn(
+                                    stateHolder.onRelayPageFinished(
                                         liveHost = liveHost,
                                         webView = view,
                                         handler = mainHandler,
-                                        allowImmediateWithoutKey = false,
                                     )
                                 }
                             }
@@ -383,6 +386,10 @@ fun CloudRelaySignInScreen(
                                 if (request?.isForMainFrame == true) {
                                     isLoading = false
                                     loadErrorText = "Failed to load sign-in page: ${error?.description ?: "Network error"}"
+                                    Log.w(
+                                        CLOUD_RELAY_SIGNIN_LOG_TAG,
+                                        "WebView onReceivedError code=${error?.errorCode} desc=${error?.description}",
+                                    )
                                 }
                             }
                         }
@@ -591,9 +598,11 @@ internal fun normalizeRelayStartUrl(rawUrl: String): String {
     val trimmed = rawUrl.trim()
     if (trimmed.isEmpty()) return SapisidHashGenerator.DEFAULT_ORIGIN
     val parsed = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return SapisidHashGenerator.DEFAULT_ORIGIN
-    val host = parsed.host?.lowercase().orEmpty()
-    if (host == "antigravity.google") {
-        return trimmed.replaceFirst("antigravity.google", "antigravity.google.com", ignoreCase = true)
+    val host = parsed.host?.trim().orEmpty()
+    if (host.isEmpty()) return trimmed
+    val canonicalHost = RemoteHostInstance.canonicalRelayHost(host)
+    if (!canonicalHost.equals(host, ignoreCase = true)) {
+        return trimmed.replaceFirst(host, canonicalHost, ignoreCase = true)
     }
     return trimmed
 }
@@ -629,11 +638,20 @@ private class CloudRelayWebCaptureState(
     private val onStatus: (String) -> Unit,
     private val onAuthenticated: (CloudRelayCapturedSession) -> Unit,
 ) {
+    private enum class TimerMode {
+        NONE,
+        LOADING_CEILING,
+        POST_LOAD_GRACE,
+        API_KEY_VERIFY_GRACE,
+    }
+
     private var didComplete: Boolean = false
+    private var didObserveApiServiceSuccess: Boolean = false
     private var verifiedApiKey: String? = null
     private var candidateApiKey: String? = null
     private var capturedAuthUser: String? = null
     private var latestUrl: String? = null
+    private var pendingTimerMode: TimerMode = TimerMode.NONE
     private var pendingFallbackRunnable: Runnable? = null
     private var pendingInspectTimeoutRunnable: Runnable? = null
 
@@ -644,10 +662,12 @@ private class CloudRelayWebCaptureState(
 
     fun resetForRetry() {
         didComplete = false
+        didObserveApiServiceSuccess = false
         verifiedApiKey = null
         candidateApiKey = null
         capturedAuthUser = null
         latestUrl = null
+        pendingTimerMode = TimerMode.NONE
     }
 
     fun cancelPendingTimers(handler: Handler) {
@@ -655,6 +675,7 @@ private class CloudRelayWebCaptureState(
         pendingFallbackRunnable = null
         pendingInspectTimeoutRunnable?.let { handler.removeCallbacks(it) }
         pendingInspectTimeoutRunnable = null
+        pendingTimerMode = TimerMode.NONE
     }
 
     fun onJsSignal(
@@ -671,18 +692,56 @@ private class CloudRelayWebCaptureState(
         if (cleanUser != null) {
             capturedAuthUser = cleanUser
         }
+        Log.i(
+            CLOUD_RELAY_SIGNIN_LOG_TAG,
+            "JS signal kind=$kind hasKey=${cleanKey != null} authUser=${cleanUser ?: "auto"}",
+        )
         when (kind) {
-            "apiServiceVerified", "apiServiceKey" -> {
+            "apiServiceVerified" -> {
+                didObserveApiServiceSuccess = true
                 if (cleanKey != null) {
                     verifiedApiKey = cleanKey
                     candidateApiKey = cleanKey
                 }
-                if (kind == "apiServiceVerified" || verifiedApiKey != null) {
+                // Brief 150ms flush window so Android CookieManager commits any Set-Cookie headers
+                // before extracting cookies and dismissing the WebView.
+                cancelPendingTimers(handler)
+                onStatus("Google session verified — pairing host...")
+                val flushRunnable = Runnable {
                     tryAutoCaptureIfSignedIn(
                         liveHost = liveHost,
                         webView = webView,
                         handler = handler,
-                        allowImmediateWithoutKey = false,
+                        allowImmediateWithoutKey = true,
+                        reason = "apiServiceVerified",
+                    )
+                }
+                pendingFallbackRunnable = flushRunnable
+                handler.postDelayed(flushRunnable, COOKIE_FLUSH_DELAY_MS)
+            }
+
+            "apiServiceKey" -> {
+                if (cleanKey != null) {
+                    verifiedApiKey = cleanKey
+                    candidateApiKey = cleanKey
+                }
+                if (didObserveApiServiceSuccess) {
+                    tryAutoCaptureIfSignedIn(
+                        liveHost = liveHost,
+                        webView = webView,
+                        handler = handler,
+                        allowImmediateWithoutKey = true,
+                        reason = "apiServiceKeyAfterVerified",
+                    )
+                } else {
+                    onStatus("Google session detected — verifying Cloud Relay key...")
+                    scheduleCaptureTimer(
+                        mode = TimerMode.API_KEY_VERIFY_GRACE,
+                        delayMs = API_KEY_VERIFY_GRACE_DELAY_MS,
+                        liveHost = liveHost,
+                        webView = webView,
+                        handler = handler,
+                        reason = "apiKeyVerifyGrace",
                     )
                 }
             }
@@ -695,20 +754,93 @@ private class CloudRelayWebCaptureState(
         }
     }
 
-    fun scheduleFallbackCapture(
+    /**
+     * Phase 1 timer: while the relay page is still loading over a slow VPN, allow up to 10s
+     * before falling back so we never dismiss the WebView prematurely before Google sets cookies
+     * or finishes the initial `ApiService` request.
+     */
+    fun scheduleLoadingSafetyCapture(
         liveHost: String,
         webView: WebView?,
         handler: Handler,
-        delayMs: Long = FALLBACK_CAPTURE_DELAY_MS,
+    ) {
+        if (didComplete || pendingTimerMode != TimerMode.NONE) return
+        scheduleCaptureTimer(
+            mode = TimerMode.LOADING_CEILING,
+            delayMs = LOADING_SAFETY_CAPTURE_DELAY_MS,
+            liveHost = liveHost,
+            webView = webView,
+            handler = handler,
+            reason = "loadingCeiling",
+        )
+    }
+
+    /**
+     * Phase 2 timer: once the relay page finishes loading, complete immediately if `ApiService`
+     * already succeeded, wait a short 1.2s grace if we already saw the key header, or give the
+     * SPA 4.5s to fire its initial `ListInstances` call before DOM inspection fallback.
+     */
+    fun onRelayPageFinished(
+        liveHost: String,
+        webView: WebView?,
+        handler: Handler,
     ) {
         if (didComplete) return
-        pendingFallbackRunnable?.let { handler.removeCallbacks(it) }
-        val runnable = Runnable {
+        if (didObserveApiServiceSuccess) {
             tryAutoCaptureIfSignedIn(
                 liveHost = liveHost,
                 webView = webView,
                 handler = handler,
                 allowImmediateWithoutKey = true,
+                reason = "pageFinishedVerified",
+            )
+            return
+        }
+        val hasCookies = CloudRelayCookieBridge.extractSessionCookieHeaderForHost(liveHost) != null ||
+            CloudRelayCookieBridge.extractSessionCookieHeaderForHost(targetHost) != null
+        if (hasCookies) {
+            onStatus("Google session detected — capturing Cloud Relay API key...")
+        }
+        if (verifiedApiKey != null) {
+            scheduleCaptureTimer(
+                mode = TimerMode.API_KEY_VERIFY_GRACE,
+                delayMs = API_KEY_VERIFY_GRACE_DELAY_MS,
+                liveHost = liveHost,
+                webView = webView,
+                handler = handler,
+                reason = "pageFinishedKeyGrace",
+            )
+        } else if (pendingTimerMode != TimerMode.POST_LOAD_GRACE) {
+            scheduleCaptureTimer(
+                mode = TimerMode.POST_LOAD_GRACE,
+                delayMs = POST_LOAD_FALLBACK_CAPTURE_DELAY_MS,
+                liveHost = liveHost,
+                webView = webView,
+                handler = handler,
+                reason = "postLoadGrace",
+            )
+        }
+    }
+
+    private fun scheduleCaptureTimer(
+        mode: TimerMode,
+        delayMs: Long,
+        liveHost: String,
+        webView: WebView?,
+        handler: Handler,
+        reason: String,
+    ) {
+        if (didComplete) return
+        pendingFallbackRunnable?.let { handler.removeCallbacks(it) }
+        pendingTimerMode = mode
+        val runnable = Runnable {
+            pendingTimerMode = TimerMode.NONE
+            tryAutoCaptureIfSignedIn(
+                liveHost = liveHost,
+                webView = webView,
+                handler = handler,
+                allowImmediateWithoutKey = true,
+                reason = reason,
             )
         }
         pendingFallbackRunnable = runnable
@@ -720,6 +852,7 @@ private class CloudRelayWebCaptureState(
         webView: WebView?,
         handler: Handler,
         allowImmediateWithoutKey: Boolean,
+        reason: String = "auto",
     ) {
         if (didComplete) return
         val cookieHeader = CloudRelayCookieBridge.extractSessionCookieHeaderForHost(liveHost)
@@ -727,13 +860,20 @@ private class CloudRelayWebCaptureState(
             ?: return
 
         val verified = verifiedApiKey
-        if (verified != null) {
-            completeCapture(cookieHeader, verified, handler)
+        if (verified != null && (didObserveApiServiceSuccess || allowImmediateWithoutKey)) {
+            completeCapture(cookieHeader, verified, "verified", reason, handler)
         } else if (allowImmediateWithoutKey) {
-            completeCaptureWithDomInspection(cookieHeader, webView, handler)
+            completeCaptureWithDomInspection(cookieHeader, webView, reason, handler)
         } else {
             onStatus("Google session detected — capturing Cloud Relay API key...")
-            scheduleFallbackCapture(liveHost, webView, handler)
+            scheduleCaptureTimer(
+                mode = TimerMode.POST_LOAD_GRACE,
+                delayMs = POST_LOAD_FALLBACK_CAPTURE_DELAY_MS,
+                liveHost = liveHost,
+                webView = webView,
+                handler = handler,
+                reason = "fallbackAfterCookie",
+            )
         }
     }
 
@@ -744,9 +884,9 @@ private class CloudRelayWebCaptureState(
             ?: return false
         val verified = verifiedApiKey
         if (verified != null) {
-            completeCapture(cookieHeader, verified, handler)
+            completeCapture(cookieHeader, verified, "verified", "manual", handler)
         } else {
-            completeCaptureWithDomInspection(cookieHeader, webView, handler)
+            completeCaptureWithDomInspection(cookieHeader, webView, "manual", handler)
         }
         return true
     }
@@ -754,16 +894,29 @@ private class CloudRelayWebCaptureState(
     private fun completeCaptureWithDomInspection(
         cookieHeader: String,
         webView: WebView?,
+        reason: String,
         handler: Handler,
     ) {
         if (didComplete) return
         if (webView == null) {
-            completeCapture(cookieHeader, verifiedApiKey ?: candidateApiKey, handler)
+            val fallbackKey = verifiedApiKey ?: candidateApiKey
+            val keySource = when {
+                verifiedApiKey != null -> "verified"
+                candidateApiKey != null -> "candidate"
+                else -> "none"
+            }
+            completeCapture(cookieHeader, fallbackKey, keySource, reason, handler)
             return
         }
         pendingInspectTimeoutRunnable?.let { handler.removeCallbacks(it) }
         val timeoutRunnable = Runnable {
-            completeCapture(cookieHeader, verifiedApiKey ?: candidateApiKey, handler)
+            val fallbackKey = verifiedApiKey ?: candidateApiKey
+            val keySource = when {
+                verifiedApiKey != null -> "verified"
+                candidateApiKey != null -> "candidate"
+                else -> "none"
+            }
+            completeCapture(cookieHeader, fallbackKey, keySource, "$reason+inspectTimeout", handler)
         }
         pendingInspectTimeoutRunnable = timeoutRunnable
         handler.postDelayed(timeoutRunnable, DOM_INSPECT_TIMEOUT_MS)
@@ -774,22 +927,49 @@ private class CloudRelayWebCaptureState(
                     if (inspectedKey != null && verifiedApiKey == null) {
                         candidateApiKey = inspectedKey
                     }
+                    val resolvedKey = verifiedApiKey ?: inspectedKey ?: candidateApiKey
+                    val keySource = when {
+                        verifiedApiKey != null -> "verified"
+                        inspectedKey != null -> "dom"
+                        candidateApiKey != null -> "candidate"
+                        else -> "none"
+                    }
                     completeCapture(
                         cookieHeader = cookieHeader,
-                        apiKey = verifiedApiKey ?: inspectedKey ?: candidateApiKey,
+                        apiKey = resolvedKey,
+                        keySource = keySource,
+                        reason = reason,
                         handler = handler,
                     )
                 }
             }
         }.onFailure {
-            completeCapture(cookieHeader, verifiedApiKey ?: candidateApiKey, handler)
+            val fallbackKey = verifiedApiKey ?: candidateApiKey
+            val keySource = when {
+                verifiedApiKey != null -> "verified"
+                candidateApiKey != null -> "candidate"
+                else -> "none"
+            }
+            completeCapture(cookieHeader, fallbackKey, keySource, "$reason+inspectErr", handler)
         }
     }
 
-    private fun completeCapture(cookieHeader: String, apiKey: String?, handler: Handler) {
+    private fun completeCapture(
+        cookieHeader: String,
+        apiKey: String?,
+        keySource: String,
+        reason: String,
+        handler: Handler,
+    ) {
         if (didComplete) return
         didComplete = true
         cancelPendingTimers(handler)
+        val ckSummary = SapisidHashGenerator.summarizeCookieNames(cookieHeader)
+        val keyDesc = apiKey?.let { "$keySource(len=${it.length})" } ?: "none"
+        Log.i(
+            CLOUD_RELAY_SIGNIN_LOG_TAG,
+            "Capture complete reason=$reason authUser=${capturedAuthUser ?: "auto"} key=$keyDesc ck=$ckSummary",
+        )
         onStatus("Google session verified — pairing host...")
         onAuthenticated(
             CloudRelayCapturedSession(
@@ -802,11 +982,15 @@ private class CloudRelayWebCaptureState(
     }
 
     companion object {
-        private const val FALLBACK_CAPTURE_DELAY_MS = 3_500L
+        private const val LOADING_SAFETY_CAPTURE_DELAY_MS = 10_000L
+        private const val POST_LOAD_FALLBACK_CAPTURE_DELAY_MS = 4_500L
+        private const val API_KEY_VERIFY_GRACE_DELAY_MS = 1_200L
+        private const val COOKIE_FLUSH_DELAY_MS = 150L
         private const val DOM_INSPECT_TIMEOUT_MS = 600L
     }
 }
 
+private const val CLOUD_RELAY_SIGNIN_LOG_TAG = "CloudRelaySignIn"
 private const val ANDROID_JS_BRIDGE_NAME = "__agAndroidBridge"
 
 internal const val ANDROID_API_KEY_INSPECT_JS = """

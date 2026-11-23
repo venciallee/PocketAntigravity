@@ -237,6 +237,7 @@ public actor AntigravityRPCClient {
         config.timeoutIntervalForResource = resourceTimeout
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
+        config.urlCache = nil
         let host = (endpointURL.host ?? "").lowercased()
         let isLocalOrPrivateHost =
             host == "localhost" ||
@@ -333,7 +334,11 @@ public actor AntigravityRPCClient {
     ) -> URLRequest {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         req.timeoutInterval = 8
+        #if os(iOS) || os(macOS)
+        req.assumesHTTP3Capable = false
+        #endif
         req.setValue("text/html,application/xhtml+xml,application/javascript,*/*;q=0.8", forHTTPHeaderField: "Accept")
         req.setValue(SAPISIDHashGenerator.mobileRemoteUserAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("\(originStr)/", forHTTPHeaderField: "Referer")
@@ -976,9 +981,13 @@ public actor AntigravityRPCClient {
             let activeApiKey = await resolveRelayApiKey()
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
+            request.cachePolicy = .reloadIgnoringLocalCacheData
             if let timeoutInterval {
                 request.timeoutInterval = timeoutInterval
             }
+            #if os(iOS) || os(macOS)
+            request.assumesHTTP3Capable = false
+            #endif
             SAPISIDHashGenerator.applyApiServiceHeaders(
                 to: &request,
                 cookieHeader: currentCookie,

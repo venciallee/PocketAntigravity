@@ -21,6 +21,9 @@ extension AntigravityRPCClient {
             request.httpMethod = "POST"
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.timeoutInterval = attemptTimeout
+            #if os(iOS) || os(macOS)
+            request.assumesHTTP3Capable = false
+            #endif
             SAPISIDHashGenerator.applyApiServiceHeaders(
                 to: &request,
                 cookieHeader: sessionCookie ?? "",
@@ -162,6 +165,16 @@ extension AntigravityRPCClient {
             || trimmed == "macbook-pro-local"
     }
 
+    internal static func isTransportOrTimeoutFailure(_ error: Error) -> Bool {
+        if error is URLError {
+            return true
+        }
+        if case let AntigravityRPCError.httpError(code, _) = error {
+            return code == 504 || code == -1
+        }
+        return !(error is AntigravityRPCError)
+    }
+
     /// Returns the latest Cloud Relay instance list observed from `ApiService/ListInstances`.
     public func currentCachedRelayInstances() -> [RelayInstanceInfo] {
         cachedRelayInstances
@@ -254,9 +267,16 @@ extension AntigravityRPCClient {
             if !isWildcardTarget && primaryInstances.contains(where: { $0.matches(identifier: rawTarget) }) {
                 stopFallbacks = true
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             primaryError = error
             lastError = error
+            // Fail fast on network/timeout errors: probing authUser=1..4 cannot fix an unreachable relay/VPN.
+            if Self.isTransportOrTimeoutFailure(error) {
+                handshakeDiagBox.record("resolve:failFast(u=\(primaryUser))")
+                stopFallbacks = true
+            }
         }
 
         // 2. Probe remaining multi-login slots IN PARALLEL with a tight 4.5s timeout instead of 4 sequential retries.
@@ -294,6 +314,9 @@ extension AntigravityRPCClient {
                         break
                     }
                 case .failure(let error):
+                    if error is CancellationError {
+                        throw error
+                    }
                     if primaryError == nil { primaryError = error }
                     lastError = error
                 }
@@ -360,6 +383,14 @@ extension AntigravityRPCClient {
             self.cachedRelayInstances = [directInfo]
             handshakeDiagBox.record("resolve:directUuid")
             return (directInfo, [directInfo], authUser)
+        }
+
+        if anySucceededCall && primaryError == nil && lastError == nil {
+            handshakeDiagBox.record("resolve:empty200")
+            throw AntigravityRPCError.httpError(
+                statusCode: 404,
+                body: "Signed in to Google, but no online Antigravity Desktop instances were found on this account. Enable Remote Control in Antigravity Desktop and verify both devices use the same Google account."
+            )
         }
 
         handshakeDiagBox.record("resolve:failed")
