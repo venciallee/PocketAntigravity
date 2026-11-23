@@ -115,6 +115,8 @@ All workflows use impact-scoped routing via [`verification/e2e_impact_planner.py
 | [`.github/workflows/kmp-verify.yml`](../.github/workflows/kmp-verify.yml) | `ubuntu-latest` + `macos-26` | KMP JVM common tests + live mock LanguageServer E2E (Linux), plus KMP iOS Simulator tests & `AntigravityShared.xcframework` build (macOS). |
 | [`.github/workflows/cr-agent.yml`](../.github/workflows/cr-agent.yml) & [`zizmor.yml`](../.github/workflows/zizmor.yml) | `ubuntu-latest` | Semgrep OSS security rules, deterministic security gate, Gemini CLI client/security review, advisory runtime hygiene (`verify_advisory_hygiene.py`), and GitHub Actions supply-chain hardening. |
 
+For exact file locations of every iOS, Android (Gradle `src/test` & `src/androidTest`), and KMP test suite, see [`tests/README.md`](../tests/README.md).
+
 ---
 
 ## 5. Known Gaps & Next Roadmap

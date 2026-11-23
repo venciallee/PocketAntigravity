@@ -104,7 +104,9 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 │   │   └── Packages/
 │   │       └── AntigravityData/    #   Pure Swift 6 store, Watch models/triage engine, port protocols & extension-safe RPC package
 │   └── android/                    # Native Kotlin + Jetpack Compose Material 3 client (Android 10–16)
-│       ├── app/                    #   13 UE screens + v2.33 sheets, FGS Live Updates, Glance widget, E2E & Roborazzi tests
+│       ├── app/                    #   13 UE screens + v2.33 sheets, FGS Live Updates, Glance widget
+│       │   ├── src/test/           #     Compose interactive E2E (ATC-01..18), Roborazzi 13-screen & unit tests
+│       │   └── src/androidTest/    #     Android KVM Emulator instrumented E2E (standard Gradle layout)
 │       ├── core-ui/                #   Material 3 theme (Dark/Light/Material You), SemanticIcon mapper & Markdown components
 │       ├── core-platform/          #   AndroidLiveUpdateBuilder, BiometricPrompt, Tink+Keystore SecretStore & OS adapters
 │       └── README.md               #   Android build, Roborazzi visual QA & KVM Emulator E2E guide
@@ -116,7 +118,8 @@ The codebase follows a strict **three-layer architecture** designed to keep plat
 │   └── umbrella/                   #   SKIE facade exporting AntigravityShared.xcframework & JVM/Android
 ├── tests/
 │   ├── ios-ui/                     # Native iOS XCUITest interactive tap & flow suite (AGPocketUITests)
-│   └── watchos-ui/                 # Native watchOS XCUITest suite (AGPocketWatchUITests, WTC-01..WTC-14)
+│   ├── watchos-ui/                 # Native watchOS XCUITest suite (AGPocketWatchUITests, WTC-01..WTC-14)
+│   └── README.md                   # Cross-platform test & E2E directory map (iOS, Watch, Android Gradle layout & KMP)
 ├── project.yml                     # Root XcodeGen spec assembling iOS, Watch (`AGPocketWatch`), Extensions & UI tests
 ├── docs/                           # Platform feature matrix (PLATFORM_STATUS.md), architecture SVGs & upstream snapshots
 ├── scripts/                        # Unified verify CLI, Xcode sync, icon renderer & upstream doc-sync automation
