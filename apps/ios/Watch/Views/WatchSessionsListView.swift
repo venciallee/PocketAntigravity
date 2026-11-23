@@ -13,30 +13,32 @@ public struct WatchSessionsListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 topActionBar
-                    .padding(.horizontal, 10)
-                    .padding(.top, 6)
+                    .padding(.horizontal, 8)
+                    .padding(.top, WatchTheme.topSafeInsetWithRightChrome)
 
                 headerTitleRow
-                    .padding(.horizontal, 10)
-                    .padding(.top, 6)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
+                    .padding(.bottom, 5)
 
                 if store.snapshot.sessions.isEmpty {
                     emptyStateCard
                         .padding(.horizontal, WatchTheme.horizontalInset)
                 } else {
-                    VStack(spacing: 6) {
+                    VStack(spacing: 5) {
                         ForEach(store.snapshot.sessions) { session in
                             sessionRowCard(session)
                         }
                     }
                     .padding(.horizontal, WatchTheme.horizontalInset)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 16)
                 }
             }
         }
+        .contentMargins(.vertical, 0, for: .scrollContent)
         .background(WatchTheme.canvas.ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
+        .toolbar(.hidden, for: .automatic)
     }
 
     private var topActionBar: some View {
@@ -47,17 +49,17 @@ public struct WatchSessionsListView: View {
             } label: {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: store.snapshot.activeDeviceKind.sfSymbolName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(WatchTheme.inkPrimary)
                         .frame(width: WatchTheme.topChromeDiameter, height: WatchTheme.topChromeDiameter)
                         .background(Circle().fill(WatchTheme.topChromeCircle))
 
                     Circle()
                         .fill(store.snapshot.activeDeviceOnline ? WatchTheme.emerald : WatchTheme.inkMuted)
-                        .frame(width: 10, height: 10)
+                        .frame(width: 9, height: 9)
                         .overlay(
                             Circle()
-                                .stroke(WatchTheme.canvas, lineWidth: 1.6)
+                                .stroke(WatchTheme.canvas, lineWidth: 1.5)
                         )
                         .offset(x: 1, y: -1)
                 }
@@ -72,7 +74,7 @@ public struct WatchSessionsListView: View {
                 foreground: WatchTheme.inkOnPeriwinkle,
                 background: WatchTheme.accentPeriwinkle,
                 diameter: WatchTheme.topChromeDiameter,
-                iconSize: 15,
+                iconSize: 13.5,
                 accessibilityId: "watch.home.voiceButton"
             ) {
                 store.openNewVoiceTask()
@@ -83,7 +85,7 @@ public struct WatchSessionsListView: View {
     private var headerTitleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("Agents")
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(WatchTheme.inkPrimary)
             Spacer(minLength: 4)
             Button {
@@ -91,7 +93,7 @@ public struct WatchSessionsListView: View {
                 store.navigationPath.append(.devices)
             } label: {
                 Text(store.snapshot.activeDeviceName)
-                    .font(.system(size: 12.5, weight: .regular))
+                    .font(.system(size: 11.5, weight: .regular))
                     .foregroundStyle(WatchTheme.inkSecondary)
                     .lineLimit(1)
             }
@@ -105,14 +107,14 @@ public struct WatchSessionsListView: View {
             WatchHaptics.click()
             store.navigationPath.append(.chat(cascadeId: session.cascadeId))
         } label: {
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: 7) {
                 leadingIndicator(for: session)
-                    .frame(width: 16, height: 18, alignment: .center)
+                    .frame(width: 15, height: 17, alignment: .center)
                     .padding(.top, 1)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1.5) {
                     Text(session.title)
-                        .font(.system(size: 14.5, weight: .semibold))
+                        .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(WatchTheme.inkPrimary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -123,8 +125,8 @@ public struct WatchSessionsListView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: WatchTheme.cardCornerRadius, style: .continuous)

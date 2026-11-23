@@ -35,11 +35,11 @@ public struct WatchChangedFilesView: View {
     public var body: some View {
         ZStack(alignment: showsCompactAcceptBar ? .bottom : .bottomTrailing) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     WatchNavigationHeader(title: "Changes", onBack: onBack)
 
                     statsHeaderLine
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 8)
                         .padding(.bottom, 2)
 
                     if changes.isGroupedMode || !changes.worthALookFiles.isEmpty {
@@ -50,6 +50,7 @@ public struct WatchChangedFilesView: View {
                 }
                 .padding(.bottom, 54)
             }
+            .contentMargins(.vertical, 0, for: .scrollContent)
             .background(WatchTheme.canvas.ignoresSafeArea())
 
             if showsCompactAcceptBar {
@@ -58,8 +59,10 @@ public struct WatchChangedFilesView: View {
                 floatingPhoneHandoffButton
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
         .navigationBarBackButtonHidden(true)
-        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .automatic)
         .onAppear {
             store.advertiseHandoff(cascadeId: cascadeId, target: .changes)
         }
@@ -76,14 +79,14 @@ public struct WatchChangedFilesView: View {
             + Text("-\(changes.totalDeletions)")
                 .foregroundStyle(WatchTheme.coralRed)
         )
-        .font(.system(size: 13, weight: .regular))
+        .font(.system(size: 12, weight: .regular))
         .lineLimit(1)
     }
 
     // MARK: - W05 Compact Mode (<= 5 files AND zero risk items)
 
     private var compactChangesContent: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4.5) {
             ForEach(changes.compactFiles) { file in
                 compactFileCard(file)
             }
@@ -92,40 +95,41 @@ public struct WatchChangedFilesView: View {
     }
 
     private func compactFileCard(_ file: WatchChangedFileItem) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6.5) {
             fileStatusBadge(file.statusLetter)
 
-            VStack(alignment: .leading, spacing: 1.5) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(file.displayName)
-                    .font(.system(size: 13.5, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 12.2, weight: .semibold, design: .monospaced))
                     .foregroundStyle(WatchTheme.inkPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
                 Text(file.summary)
-                    .font(.system(size: 11.5, weight: .regular))
+                    .font(.system(size: 10.8, weight: .regular))
                     .foregroundStyle(WatchTheme.inkSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
 
-            Spacer(minLength: 4)
-
-            VStack(alignment: .trailing, spacing: 1) {
+            VStack(alignment: .trailing, spacing: 0.5) {
                 if file.additions > 0 {
                     Text("+\(file.additions)")
-                        .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                        .font(.system(size: 10.8, weight: .regular, design: .monospaced))
                         .foregroundStyle(WatchTheme.emerald)
                 }
                 if file.deletions > 0 {
                     Text("-\(file.deletions)")
-                        .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                        .font(.system(size: 10.8, weight: .regular, design: .monospaced))
                         .foregroundStyle(WatchTheme.coralRed)
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8.5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: WatchTheme.cardCornerRadius, style: .continuous)
@@ -135,13 +139,13 @@ public struct WatchChangedFilesView: View {
     }
 
     private var compactBottomActionBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             WatchCircleChromeButton(
                 systemName: "iphone",
                 foreground: WatchTheme.inkPrimary,
                 background: WatchTheme.elevatedButton,
                 diameter: WatchTheme.bottomControlHeight,
-                iconSize: 15,
+                iconSize: 14,
                 accessibilityId: "watch.changes.openOnPhone"
             ) {
                 store.openOnPhone(cascadeId: cascadeId, target: .changes)
@@ -153,10 +157,10 @@ public struct WatchChangedFilesView: View {
                 HStack(spacing: 5) {
                     if isAccepted {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: 12.5, weight: .bold))
                     }
                     Text(isAccepted ? "Accepted" : "Accept all")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13.5, weight: .semibold))
                 }
                 .foregroundStyle(WatchTheme.inkOnPeriwinkle)
                 .frame(maxWidth: .infinity)
@@ -169,12 +173,12 @@ public struct WatchChangedFilesView: View {
             .watchPrimaryDoubleTap(enabled: !isAccepted)
             .accessibilityIdentifier("watch.changes.acceptAll")
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        .padding(.bottom, WatchTheme.bottomBezelInset)
         .background(
             LinearGradient(
-                colors: [WatchTheme.canvas.opacity(0.0), WatchTheme.canvas.opacity(0.88), WatchTheme.canvas],
+                colors: [WatchTheme.canvas.opacity(0.0), WatchTheme.canvas.opacity(0.92), WatchTheme.canvas],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -185,16 +189,16 @@ public struct WatchChangedFilesView: View {
     // MARK: - W06 Intent-Grouped Triage Mode (> 5 files OR any risk item)
 
     private var groupedChangesContent: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4.5) {
             if !changes.worthALookFiles.isEmpty {
                 Text("WORTH A LOOK · \(changes.worthALookFiles.count)")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 10.5, weight: .bold))
                     .tracking(0.6)
                     .foregroundStyle(WatchTheme.amber)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 3)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 1)
 
-                VStack(spacing: 6) {
+                VStack(spacing: 4.5) {
                     ForEach(changes.worthALookFiles) { file in
                         worthALookCard(file)
                     }
@@ -204,13 +208,13 @@ public struct WatchChangedFilesView: View {
 
             if !changes.intentGroups.isEmpty {
                 Text("GROUPED · \(changes.groupedFileCount)")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 10.5, weight: .bold))
                     .tracking(0.6)
                     .foregroundStyle(WatchTheme.inkMuted)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 5)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
 
-                VStack(spacing: 6) {
+                VStack(spacing: 4.5) {
                     ForEach(changes.intentGroups) { group in
                         intentGroupCard(group)
                     }
@@ -221,26 +225,26 @@ public struct WatchChangedFilesView: View {
     }
 
     private func worthALookCard(_ file: WatchChangedFileItem) -> some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 7) {
             fileStatusBadge(file.statusLetter)
 
-            VStack(alignment: .leading, spacing: 1.5) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(file.displayName)
-                    .font(.system(size: 13.5, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 12.2, weight: .semibold, design: .monospaced))
                     .foregroundStyle(WatchTheme.inkPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
                 Text(file.summary)
-                    .font(.system(size: 12, weight: .regular))
+                    .font(.system(size: 11.2, weight: .regular))
                     .foregroundStyle(WatchTheme.amberSubtitle)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6.5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: WatchTheme.cardCornerRadius, style: .continuous)
@@ -259,26 +263,26 @@ public struct WatchChangedFilesView: View {
                 expandedGroupIds.insert(group.id)
             }
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 9) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 7) {
                     Text("\(group.count)")
-                        .font(.system(size: 11.5, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(WatchTheme.inkPrimary)
-                        .frame(width: 22, height: 22)
+                        .frame(width: 20, height: 20)
                         .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            RoundedRectangle(cornerRadius: 5.5, style: .continuous)
                                 .fill(WatchTheme.countTile)
                         )
 
-                    VStack(alignment: .leading, spacing: 1.5) {
+                    VStack(alignment: .leading, spacing: 1) {
                         Text(group.title)
-                            .font(.system(size: 13.5, weight: .semibold))
+                            .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(WatchTheme.inkPrimary)
                             .lineLimit(1)
                             .truncationMode(.tail)
 
                         Text(group.subtitle)
-                            .font(.system(size: 11.5, weight: .regular))
+                            .font(.system(size: 11, weight: .regular))
                             .foregroundStyle(WatchTheme.inkSecondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -301,11 +305,11 @@ public struct WatchChangedFilesView: View {
                                 .foregroundStyle(WatchTheme.accentPeriwinkle)
                         }
                     }
-                    .padding(.leading, 31)
+                    .padding(.leading, 27)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6.5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: WatchTheme.cardCornerRadius, style: .continuous)
@@ -322,19 +326,19 @@ public struct WatchChangedFilesView: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "iphone")
-                    .font(.system(size: 13.5, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                 Text("iPhone")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13.5, weight: .semibold))
             }
             .foregroundStyle(WatchTheme.inkOnPeriwinkle)
-            .padding(.horizontal, 15)
+            .padding(.horizontal, 14)
             .frame(height: WatchTheme.bottomControlHeight)
             .background(Capsule().fill(WatchTheme.accentPeriwinkle))
         }
         .buttonStyle(.plain)
         .watchPrimaryDoubleTap()
-        .padding(.trailing, 10)
-        .padding(.bottom, 8)
+        .padding(.trailing, 8)
+        .padding(.bottom, WatchTheme.bottomBezelInset)
         .accessibilityIdentifier("watch.changes.handoffIPhone")
     }
 
@@ -351,11 +355,11 @@ public struct WatchChangedFilesView: View {
         }()
 
         return Text(status.rawValue)
-            .font(.system(size: 11.5, weight: .bold))
+            .font(.system(size: 11, weight: .bold))
             .foregroundStyle(colors.fg)
-            .frame(width: 20, height: 20)
+            .frame(width: 19, height: 19)
             .background(
-                RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(colors.bg)
             )
     }

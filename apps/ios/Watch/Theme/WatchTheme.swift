@@ -46,10 +46,13 @@ public enum WatchTheme {
     public static let inkSubtlePill = hex(0xC2C2CA)
 
     // MARK: - Geometry Constants (46mm 208×248pt baseline, responsive across 40mm–49mm)
-    public static let horizontalInset: CGFloat = 8
-    public static let topChromeDiameter: CGFloat = 34
-    public static let bottomControlHeight: CGFloat = 38
-    public static let cardCornerRadius: CGFloat = 16
+    public static let horizontalInset: CGFloat = 6
+    public static let topChromeDiameter: CGFloat = 30
+    public static let bottomControlHeight: CGFloat = 34
+    public static let cardCornerRadius: CGFloat = 14
+    public static let topSafeInsetCompact: CGFloat = 22
+    public static let topSafeInsetWithRightChrome: CGFloat = 34
+    public static let bottomBezelInset: CGFloat = 12
 }
 
 // MARK: - watchOS Haptics Helper
@@ -88,7 +91,7 @@ public struct WatchCircleChromeButton: View {
     public var foreground: Color = WatchTheme.inkPrimary
     public var background: Color = WatchTheme.topChromeCircle
     public var diameter: CGFloat = WatchTheme.topChromeDiameter
-    public var iconSize: CGFloat = 14
+    public var iconSize: CGFloat = 13.5
     public var accessibilityId: String? = nil
     public var action: () -> Void
 
@@ -114,22 +117,23 @@ public struct WatchNavigationHeader: View {
     public var onBack: () -> Void
 
     public var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             WatchCircleChromeButton(
                 systemName: "chevron.left",
                 accessibilityId: "watch.nav.back",
                 action: onBack
             )
             Text(title)
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(WatchTheme.inkPrimary)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
+        .padding(.leading, 8)
+        .padding(.trailing, 46)
+        .padding(.top, WatchTheme.topSafeInsetCompact)
+        .padding(.bottom, 2)
     }
 }
 

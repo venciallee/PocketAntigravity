@@ -22,10 +22,10 @@ public struct WatchChatStreamView: View {
     public var body: some View {
         ZStack(alignment: .bottomTrailing) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     WatchNavigationHeader(title: session.title, onBack: onBack)
 
-                    VStack(alignment: .leading, spacing: 9) {
+                    VStack(alignment: .leading, spacing: 6.5) {
                         statusLine
 
                         if let approval = session.pendingApproval, session.status == .waitingApproval {
@@ -45,27 +45,30 @@ public struct WatchChatStreamView: View {
                         }
                     }
                     .padding(.horizontal, WatchTheme.horizontalInset)
-                    .padding(.bottom, 44)
+                    .padding(.bottom, 48)
                 }
             }
+            .contentMargins(.vertical, 0, for: .scrollContent)
             .background(WatchTheme.canvas.ignoresSafeArea())
 
-            // Floating Voice Reply FAB (`#8DB8FF` bottom-right)
+            // Floating Voice Reply FAB (`#8DB8FF` bottom-right bezel)
             WatchCircleChromeButton(
                 systemName: "mic",
                 foreground: WatchTheme.inkOnPeriwinkle,
                 background: WatchTheme.accentPeriwinkle,
-                diameter: 38,
-                iconSize: 16,
+                diameter: 34,
+                iconSize: 15,
                 accessibilityId: "watch.chat.voiceFab"
             ) {
                 store.openVoiceInput(for: session.cascadeId)
             }
-            .padding(.trailing, 10)
-            .padding(.bottom, 8)
+            .padding(.trailing, 8)
+            .padding(.bottom, WatchTheme.bottomBezelInset)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
         .navigationBarBackButtonHidden(true)
-        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .automatic)
         .onAppear {
             store.advertiseHandoff(cascadeId: session.cascadeId, target: .chat)
         }
@@ -98,7 +101,7 @@ public struct WatchChatStreamView: View {
             }
 
             Text(session.chatHeaderStatusText)
-                .font(.system(size: 12.5, weight: .regular))
+                .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(session.status == .waitingApproval ? WatchTheme.amber : WatchTheme.accentPeriwinkle)
                 .lineLimit(1)
         }
@@ -122,8 +125,8 @@ public struct WatchChatStreamView: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(WatchTheme.inkOnAmber.opacity(0.75))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(WatchTheme.amber)
@@ -137,30 +140,30 @@ public struct WatchChatStreamView: View {
     private func messageRow(_ message: WatchChatBubbleItem) -> some View {
         if message.isUser {
             HStack {
-                Spacer(minLength: 12)
-                HStack(spacing: 5) {
+                Spacer(minLength: 4)
+                HStack(spacing: 4) {
                     if message.isVoiceInput {
                         Image(systemName: "mic")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(WatchTheme.inkSecondary)
                     }
                     Text(message.text)
-                        .font(.system(size: 13.5, weight: .regular))
+                        .font(.system(size: 12, weight: .regular))
                         .foregroundStyle(WatchTheme.inkPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.horizontal, 8.5)
+                .padding(.vertical, 5.5)
                 .background(
-                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .fill(WatchTheme.elevatedButton)
                 )
             }
         } else {
             Text(message.text)
-                .font(.system(size: 14, weight: .regular))
+                .font(.system(size: 12.8, weight: .regular))
                 .foregroundStyle(WatchTheme.inkPrimary)
-                .lineSpacing(1.5)
+                .lineSpacing(1.2)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 2)
         }
@@ -171,23 +174,23 @@ public struct WatchChatStreamView: View {
             WatchHaptics.click()
             store.navigationPath.append(.artifact(cascadeId: session.cascadeId))
         } label: {
-            HStack(spacing: 9) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 7.5, style: .continuous)
                     .fill(WatchTheme.iconTileBlue)
-                    .frame(width: 26, height: 26)
+                    .frame(width: 24, height: 24)
                     .overlay(
                         Image(systemName: "doc.text")
-                            .font(.system(size: 12.5, weight: .medium))
+                            .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(WatchTheme.accentPeriwinkle)
                     )
 
-                VStack(alignment: .leading, spacing: 1.5) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text(artifact.title)
-                        .font(.system(size: 14.5, weight: .semibold))
+                        .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(WatchTheme.inkPrimary)
                         .lineLimit(1)
                     Text(artifact.pointsCountLabel)
-                        .font(.system(size: 12, weight: .regular))
+                        .font(.system(size: 11.5, weight: .regular))
                         .foregroundStyle(WatchTheme.inkSecondary)
                         .lineLimit(1)
                 }
@@ -195,11 +198,11 @@ public struct WatchChatStreamView: View {
                 Spacer(minLength: 4)
 
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(WatchTheme.inkMuted)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: WatchTheme.cardCornerRadius, style: .continuous)
@@ -223,10 +226,10 @@ public struct WatchChatStreamView: View {
                 + Text(" · \(changes.totalFiles) \(changes.totalFiles == 1 ? "file" : "files")")
                     .foregroundStyle(WatchTheme.inkSecondary)
             )
-            .font(.system(size: 12.5, weight: .regular))
+            .font(.system(size: 11.8, weight: .regular))
             .lineLimit(1)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6.5)
             .background(
                 Capsule()
                     .fill(WatchTheme.card)

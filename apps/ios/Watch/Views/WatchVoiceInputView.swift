@@ -31,8 +31,8 @@ public struct WatchVoiceInputView: View {
                 )
                 Spacer()
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, 8)
+            .padding(.top, WatchTheme.topSafeInsetCompact)
 
             Button {
                 WatchHaptics.click()
@@ -40,46 +40,47 @@ public struct WatchVoiceInputView: View {
             } label: {
                 HStack(spacing: 4) {
                     Text("To: \(targetTitle)")
-                        .font(.system(size: 12, weight: .regular))
+                        .font(.system(size: 11.8, weight: .regular))
                         .foregroundStyle(WatchTheme.inkSubtlePill)
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(WatchTheme.inkSecondary)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4.5)
                 .background(Capsule().fill(WatchTheme.card))
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, 8)
+            .padding(.top, 5)
             .accessibilityIdentifier("watch.voice.targetSelector")
 
             transcriptArea
-                .padding(.horizontal, 10)
-                .padding(.top, 9)
+                .padding(.horizontal, 8)
+                .padding(.top, 8)
 
             Spacer(minLength: 4)
 
             waveformView
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
+                .padding(.vertical, 3)
 
             Text("Double tap to send")
-                .font(.system(size: 11.5, weight: .regular))
+                .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(WatchTheme.inkMuted)
                 .frame(maxWidth: .infinity)
-                .padding(.top, 3)
-                .padding(.bottom, 8)
+                .padding(.top, 2)
+                .padding(.bottom, 7)
 
             bottomControlsBar
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 8)
+                .padding(.bottom, WatchTheme.bottomBezelInset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(WatchTheme.canvas.ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
+        .toolbar(.hidden, for: .automatic)
     }
 
     @ViewBuilder
@@ -91,9 +92,10 @@ public struct WatchVoiceInputView: View {
                 + Text(store.voicePartialWord)
                     .foregroundStyle(WatchTheme.inkMuted)
             )
-            .font(.system(size: 15, weight: .bold))
+            .font(.system(size: 14.5, weight: .bold))
             .lineSpacing(1.5)
             .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("watch.voice.transcript")
         } else {
@@ -108,7 +110,7 @@ public struct WatchVoiceInputView: View {
                     }
                 )
             )
-            .font(.system(size: 15, weight: .semibold))
+            .font(.system(size: 14.5, weight: .semibold))
             .foregroundStyle(WatchTheme.inkPrimary)
             .accessibilityIdentifier("watch.voice.dictationField")
         }

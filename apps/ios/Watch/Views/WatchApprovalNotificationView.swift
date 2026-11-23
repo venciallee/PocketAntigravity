@@ -31,55 +31,56 @@ public struct WatchApprovalNotificationView: View {
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 7) {
+                HStack(spacing: 6) {
                     WatchBrandGlyphView()
                     Text("Agents · \(approval.relativeTimeLabel)")
-                        .font(.system(size: 13, weight: .regular))
+                        .font(.system(size: 12, weight: .regular))
                         .foregroundStyle(WatchTheme.inkSecondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .padding(.top, 8)
+                .padding(.top, WatchTheme.topSafeInsetCompact)
 
                 Text(approval.promptTitle)
-                    .font(.system(size: 16.5, weight: .bold))
+                    .font(.system(size: 15.5, weight: .bold))
                     .foregroundStyle(WatchTheme.amber)
-                    .padding(.top, 8)
+                    .padding(.top, 5.5)
                     .accessibilityIdentifier("watch.approval.title")
 
                 Text(approval.contextSubtitle)
-                    .font(.system(size: 12.5, weight: .regular))
+                    .font(.system(size: 11.5, weight: .regular))
                     .foregroundStyle(WatchTheme.inkSecondary)
                     .lineLimit(1)
-                    .padding(.top, 2)
+                    .padding(.top, 1.5)
 
                 Text(approval.commandLine)
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .font(.system(size: 11.2, weight: .regular, design: .monospaced))
                     .foregroundStyle(WatchTheme.inkBody)
-                    .lineSpacing(1.8)
+                    .lineSpacing(1.4)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                     .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(WatchTheme.card)
                     )
-                    .padding(.top, 7)
+                    .padding(.top, 5.5)
                     .accessibilityIdentifier("watch.approval.command")
 
-                VStack(spacing: 7) {
+                VStack(spacing: 5.5) {
                     Button {
                         onAllow()
                     } label: {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 5) {
                             Image(systemName: "hand.tap")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(.system(size: 13, weight: .semibold))
                             Text("Allow")
-                                .font(.system(size: 15, weight: .bold))
+                                .font(.system(size: 14, weight: .bold))
                         }
                         .foregroundStyle(WatchTheme.inkOnAmber)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 39)
+                        .frame(height: 34)
                         .background(Capsule().fill(WatchTheme.amber))
                     }
                     .buttonStyle(.plain)
@@ -90,10 +91,10 @@ public struct WatchApprovalNotificationView: View {
                         onDeny()
                     } label: {
                         Text("Deny")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(WatchTheme.inkPrimary)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 39)
+                            .frame(height: 34)
                             .background(Capsule().fill(WatchTheme.elevatedButton))
                     }
                     .buttonStyle(.plain)
@@ -103,22 +104,24 @@ public struct WatchApprovalNotificationView: View {
                         onReplyByVoice()
                     } label: {
                         Text("Reply by voice")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(WatchTheme.inkPrimary)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 39)
+                            .frame(height: 34)
                             .background(Capsule().fill(WatchTheme.elevatedButton))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("watch.approval.replyByVoice")
                 }
-                .padding(.top, 9)
-                .padding(.bottom, 6)
+                .padding(.top, 7)
+                .padding(.bottom, 12)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
         }
+        .contentMargins(.vertical, 0, for: .scrollContent)
         .background(WatchTheme.canvas.ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
+        .toolbar(.hidden, for: .automatic)
     }
 }
 

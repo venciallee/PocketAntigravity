@@ -220,7 +220,6 @@ jobs:
             -project PocketAntigravity.xcodeproj \
             -scheme AGPocket \
             -configuration Debug \
-            -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath .build/DerivedDataDeviceCI \
             CODE_SIGNING_ALLOWED=NO \
