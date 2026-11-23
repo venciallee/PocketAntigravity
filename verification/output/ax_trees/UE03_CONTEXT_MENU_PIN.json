@@ -1,32 +1,32 @@
 {
   "stateId": "UE03_CONTEXT_MENU_PIN",
-  "viewportWidth": 393,
-  "viewportHeight": 852,
-  "scrollWidth": 393,
-  "scrollHeight": 852,
+  "viewportWidth": 390,
+  "viewportHeight": 844,
+  "scrollWidth": 390,
+  "scrollHeight": 844,
   "overflowPx": 0,
   "elements": {
     "[data-testid='context-preview-card']": {
       "exists": true,
       "x": 16,
       "y": 198,
-      "width": 361,
-      "height": 219,
+      "width": 358,
+      "height": 228,
       "text": "Fix flaky TestSettlementBatch\nledger-svc \u00b7 Gemini 3.1 Pro \u00b7 8m\n\nThe flake comes from a shared fake clock across parallel subtests in settlem"
     },
     "[data-testid='chip-implementation-plan']": {
       "exists": true,
       "x": 35,
-      "y": 366,
-      "width": 165.9,
+      "y": 375,
+      "width": 173.1,
       "height": 32,
       "text": "Implementation Plan"
     },
     "[data-testid='chip-awaiting-review']": {
       "exists": true,
-      "x": 208.9,
-      "y": 366,
-      "width": 116.5,
+      "x": 216.1,
+      "y": 375,
+      "width": 126.6,
       "height": 32,
       "text": "Awaiting review"
     },
@@ -56,16 +56,16 @@
     },
     "[data-testid='swipe-action-pin']": {
       "exists": true,
-      "x": 224,
-      "y": 749,
+      "x": 221,
+      "y": 751,
       "width": 76,
       "height": 62,
       "text": "Pin"
     },
     "[data-testid='swipe-action-archive']": {
       "exists": true,
-      "x": 300,
-      "y": 749,
+      "x": 297,
+      "y": 751,
       "width": 76,
       "height": 62,
       "text": "Archive"

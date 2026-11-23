@@ -591,55 +591,57 @@ final class AntigravityInteractiveUITests: XCTestCase {
         )
         server.setHandshakePaused(false)
 
-        // 1. Verify live Desktop sessions load on Agents Home, 2x2 four-dot loading indicator is present, and synthetic probe / 0-step placeholder are filtered out
-        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        // 1. Open Sidebar Drawer (`UE01B`) and verify live Desktop + Cloud sessions load, running indicator is present, and synthetic probe / 0-step placeholder are filtered out
+        let sidebarButton = app.buttons["btn-sidebar"]
+        XCTAssertTrue(
+            sidebarButton.waitForExistence(timeout: 8),
+            "New Conversation Home must render left sidebar trigger btn-sidebar"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["home-hero-greeting"].firstMatch.waitForExistence(timeout: 5),
+            "New Conversation Home must render hero greeting"
+        )
+        attachScreenshot(named: "01_Live_Agents_Home")
+
+        sidebarButton.tap()
+        let reviewRow = app.buttons["drawer-conv-cid-slardar-review"]
         XCTAssertTrue(
             reviewRow.waitForExistence(timeout: 12),
-            "Live Desktop conversation row 'Slardar Tag Code Review' must render as a tappable Button on Agents Home"
+            "Live Desktop conversation row 'Slardar Tag Code Review' must render inside Sidebar Drawer"
         )
-        let archResearchRow = app.buttons["conv-row-cid-arch-research"]
+        let archResearchRow = app.buttons["drawer-conv-cid-arch-research"]
         XCTAssertTrue(
             archResearchRow.waitForExistence(timeout: 6),
-            "Cloud project conversation 'Antigravity iOS App Architecture Research' must render on Agents Home"
+            "Cloud project conversation 'Antigravity iOS App Architecture Research' must render inside Sidebar Drawer"
         )
         let iosCloudHeader = app.buttons["project-header-iOSAntigravity"]
         XCTAssertTrue(
             iosCloudHeader.waitForExistence(timeout: 5),
-            "Cloud VM project header 'iOSAntigravity' must render on Agents Home"
-        )
-        XCTAssertTrue(
-            waitForTextContaining("Cloud · venciallee/iOSAntigravity · main", in: app, timeout: 5),
-            "Cloud-opened iOSAntigravity must display 'Cloud · venciallee/iOSAntigravity · main' instead of 'Local'"
-        )
-        XCTAssertTrue(
-            waitForTextContaining("Local · MacBook-Pro-Live · main", in: app, timeout: 5),
-            "Local Mac project slardar_app_ai must display 'Local · MacBook-Pro-Live · main' while host is online"
+            "Cloud VM project header 'iOSAntigravity' must render inside Sidebar Drawer"
         )
         let fourDotIndicator = app.descendants(matching: .any)["loading-four-dots-cid-arch-research"].firstMatch
         XCTAssertTrue(
             fourDotIndicator.waitForExistence(timeout: 5),
-            "Running conversation row MUST render the authentic Antigravity 2x2 four-dot loading indicator"
+            "Running conversation row MUST render the active running indicator"
         )
         XCTAssertFalse(
-            app.buttons["conv-row-cid-blank-placeholder"].exists,
-            "Unused 0-step Desktop tab placeholders must not appear on Agents Home"
+            app.buttons["drawer-conv-cid-blank-placeholder"].exists,
+            "Unused 0-step Desktop tab placeholders must not appear in Sidebar Drawer"
         )
         XCTAssertFalse(
-            app.buttons["conv-row-cid-synthetic-probe"].exists,
+            app.buttons["drawer-conv-cid-synthetic-probe"].exists,
             "Synthetic 'iOS Connect-RPC Handshake' probe sessions must be filtered out"
         )
-        attachScreenshot(named: "01_Live_Agents_Home")
+        attachScreenshot(named: "01b_Live_Sidebar_Drawer")
 
         // 2. REAL TAP on conversation row -> MUST open CascadeChatViewController and load steps
         reviewRow.tap()
 
-        let backToSessionsButton = app.buttons["btn-back-sessions"]
-        XCTAssertTrue(
-            backToSessionsButton.waitForExistence(timeout: 6),
-            "Tapping a conversation row on Agents Home MUST navigate to CascadeChatViewController"
-        )
         let navTitle = app.descendants(matching: .any)["chat-nav-title"].firstMatch
-        XCTAssertTrue(navTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            navTitle.waitForExistence(timeout: 6),
+            "Tapping a conversation row in Sidebar Drawer MUST navigate to CascadeChatViewController"
+        )
         XCTAssertTrue(navTitle.label.contains("Slardar Tag Code Review"))
 
         XCTAssertTrue(
@@ -690,32 +692,34 @@ final class AntigravityInteractiveUITests: XCTestCase {
         attachScreenshot(named: "02_Opened_Live_Conversation_Detail")
     }
 
-    /// Domain: Project Detail (`UE04`) + Navigation Stack + Native iOS Left-Edge Swipe-Back (`interactivePopGestureRecognizer`).
+    /// Domain: Project Detail (`UE04`) + Rules & Skills (`UE14`) + Navigation Stack + Native iOS Left-Edge Swipe-Back (`interactivePopGestureRecognizer`).
     func testProjectDetailNavigationAndEdgeSwipeBack() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
         let app = launchLiveApp(serverPort: server.port)
 
-        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        let sidebarButton = app.buttons["btn-sidebar"]
+        XCTAssertTrue(sidebarButton.waitForExistence(timeout: 10))
+        sidebarButton.tap()
+
+        let reviewRow = app.buttons["drawer-conv-cid-slardar-review"]
         XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
 
-        // 1. Open Conversation from Agents Home -> edge-swipe right -> must pop back to Agents Home
+        // 1. Open Conversation from Sidebar -> edge-swipe right -> must pop back to Home
         reviewRow.tap()
-        let backToSessionsButton = app.buttons["btn-back-sessions"]
-        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 6))
+        let chatNavTitle = app.descendants(matching: .any)["chat-nav-title"].firstMatch
+        XCTAssertTrue(chatNavTitle.waitForExistence(timeout: 6))
 
         performEdgeSwipeBack(in: app)
+        let heroGreeting = app.descendants(matching: .any)["home-hero-greeting"].firstMatch
         XCTAssertTrue(
-            reviewRow.waitForExistence(timeout: 5),
-            "Swiping from the left edge on Conversation must pop back to Agents Home"
-        )
-        XCTAssertFalse(
-            backToSessionsButton.exists,
-            "Conversation screen must be popped after completing edge-swipe back"
+            heroGreeting.waitForExistence(timeout: 5),
+            "Swiping from the left edge on Conversation must pop back to New Conversation Home"
         )
 
-        // 2. Open Project Detail -> tap conversation row -> verify NOTIFY_USER -> button back navigation
+        // 2. Open Sidebar -> Open Project Detail -> verify Rules & Skills (`UE14`) -> open conversation -> back navigation
+        sidebarButton.tap()
         let projectHeader = app.buttons["project-header-slardar_app_ai"]
         XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
         projectHeader.tap()
@@ -731,9 +735,10 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertTrue(projectConvRow.waitForExistence(timeout: 5))
         projectConvRow.tap()
 
+        let backToSessionsButton = app.buttons["btn-back-sessions"]
         XCTAssertTrue(
             backToSessionsButton.waitForExistence(timeout: 5),
-            "Tapping a conversation row inside ProjectDetailViewController must open CascadeChatViewController"
+            "Tapping a conversation row inside ProjectDetailViewController must open CascadeChatViewController with back button"
         )
         XCTAssertTrue(app.descendants(matching: .any)["chat-nav-title"].firstMatch.label.contains("Slardar App AI 埋点梳理"))
         XCTAssertTrue(
@@ -741,13 +746,15 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "CORTEX_STEP_TYPE_NOTIFY_USER content must render in CascadeChatViewController"
         )
 
-        // Back button from project-launched chat returns to ProjectDetail, then back to Agents Home
+        // Back button from project-launched chat returns to ProjectDetail, then back to Home
         backToSessionsButton.tap()
         XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
         backToAgentsButton.tap()
-        XCTAssertTrue(reviewRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(heroGreeting.waitForExistence(timeout: 5))
 
-        // 3. Re-enter Project Detail -> Conversation -> edge-swipe back to Project Detail -> edge-swipe back to Agents Home
+        // 3. Re-enter Project Detail via Sidebar -> Conversation -> edge-swipe back to Project Detail -> edge-swipe back to Home
+        sidebarButton.tap()
+        XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
         projectHeader.tap()
         XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
         projectConvRow.tap()
@@ -761,53 +768,53 @@ final class AntigravityInteractiveUITests: XCTestCase {
 
         performEdgeSwipeBack(in: app)
         XCTAssertTrue(
-            reviewRow.waitForExistence(timeout: 5),
-            "Edge-swipe back from Project Detail must pop back to Agents Home"
+            heroGreeting.waitForExistence(timeout: 5),
+            "Edge-swipe back from Project Detail must pop back to Home"
         )
     }
 
-    /// Domain: Host Reachability / Offline Recovery + Settings Copyright & App Store 5.2.2 Attribution.
+    /// Domain: Host Reachability / Offline Recovery + Settings (`UE15`) Copyright & Language.
     func testOfflineHostRecoveryAndSettingsAttribution() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
         let app = launchLiveApp(serverPort: server.port)
 
-        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
-        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+        let hostPill = app.buttons["host-switcher-pill"]
+        XCTAssertTrue(hostPill.waitForExistence(timeout: 12))
         XCTAssertTrue(
-            waitForTextContaining("Local · MacBook-Pro-Live · main", in: app, timeout: 6),
-            "Initial online host subtitle must display Local · MacBook-Pro-Live · main"
+            waitForTextContaining("MacBook-Pro-Live", in: app, timeout: 6),
+            "Initial online host pill must display MacBook-Pro-Live"
         )
 
-        // 1. Simulate Desktop / Bridge going offline -> verify top pill & local project subtitle show Offline while Cloud stays Cloud, then auto-recover!
+        // 1. Simulate Desktop / Bridge going offline -> verify top pill shows Offline, then auto-recover!
         server.setSimulatedOffline(true)
         XCTAssertTrue(
             waitForTextContaining("MacBook-Pro-Live · Offline", in: app, timeout: 18),
             "Top host switcher pill must transition to '<hostname> · Offline' when Desktop goes offline"
         )
-        XCTAssertTrue(
-            waitForTextContaining("Offline · MacBook-Pro-Live · main", in: app, timeout: 6),
-            "Local Mac project subtitle must transition to 'Offline · <hostname> · main' when Desktop goes offline"
-        )
-        XCTAssertTrue(
-            waitForTextContaining("Cloud · venciallee/iOSAntigravity · main", in: app, timeout: 4),
-            "Cloud project subtitle must remain 'Cloud · venciallee/iOSAntigravity · main' even when local Mac is offline"
-        )
-        XCTAssertTrue(reviewRow.exists, "Previously synced sessions must remain browsable while host is offline")
         attachScreenshot(named: "03b_Offline_Host_And_Cloud_Project")
 
         server.setSimulatedOffline(false)
         XCTAssertTrue(
-            waitForTextContaining("Local · MacBook-Pro-Live · main", in: app, timeout: 18),
+            waitForTextContaining("MacBook-Pro-Live", in: app, timeout: 18),
             "App must automatically reconnect and restore online status when Desktop returns"
         )
 
-        // 2. Open Settings tab -> verify in-app App Icon & Google LLC Copyright / Trademark attribution card
-        let settingsTab = app.buttons["tab-item-settings"]
-        XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
-        settingsTab.tap()
+        // 2. Open Sidebar -> Settings (`UE15`) -> verify Copyright / Trademark attribution & Language switcher
+        let sidebarButton = app.buttons["btn-sidebar"]
+        XCTAssertTrue(sidebarButton.waitForExistence(timeout: 5))
+        sidebarButton.tap()
+        let settingsNav = app.buttons["drawer-nav-settings"]
+        XCTAssertTrue(settingsNav.waitForExistence(timeout: 5))
+        settingsNav.tap()
+
+        let langZhButton = app.buttons["btn-lang-zh-Hans"]
+        scrollUntilHittable(langZhButton, in: app, maxSwipes: 4)
+        XCTAssertTrue(langZhButton.waitForExistence(timeout: 5), "Settings must render Language switcher")
+
         let copyrightCard = app.descendants(matching: .any)["card-about-copyright"].firstMatch
+        scrollUntilHittable(copyrightCard, in: app, maxSwipes: 8)
         XCTAssertTrue(
             copyrightCard.waitForExistence(timeout: 5),
             "Settings screen must render card-about-copyright"
@@ -818,23 +825,24 @@ final class AntigravityInteractiveUITests: XCTestCase {
         )
     }
 
-    /// Domain: Automations (`UE06`) — 'Create with Prompt' unsent draft flow & '+ New' entry points.
+    /// Domain: Automations (`UE06`) — 'Create with Prompt' unsent draft flow & '+ New' entry points via Sidebar Drawer.
     func testAutomationsCreateWithPromptDraftFlow() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
         let app = launchLiveApp(serverPort: server.port)
 
-        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
-        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+        let sidebarButton = app.buttons["btn-sidebar"]
+        XCTAssertTrue(sidebarButton.waitForExistence(timeout: 12))
+        sidebarButton.tap()
 
-        let automationsTab = app.buttons["tab-item-automations"]
-        XCTAssertTrue(automationsTab.waitForExistence(timeout: 5))
-        automationsTab.tap()
+        let automationsNav = app.buttons["drawer-nav-automations"]
+        XCTAssertTrue(automationsNav.waitForExistence(timeout: 5))
+        automationsNav.tap()
 
         let createWithPromptButton = app.buttons["btn-empty-agent-automation"]
         XCTAssertTrue(
-            createWithPromptButton.waitForExistence(timeout: 5),
+            createWithPromptButton.waitForExistence(timeout: 6),
             "Automations empty state must render 'Create with Prompt' button"
         )
         XCTAssertTrue(
@@ -852,11 +860,6 @@ final class AntigravityInteractiveUITests: XCTestCase {
         )
 
         createWithPromptButton.tap()
-        let backToSessionsButton = app.buttons["btn-back-sessions"]
-        XCTAssertTrue(
-            backToSessionsButton.waitForExistence(timeout: 5),
-            "Tapping Create with Prompt must open the draft composer view"
-        )
         let workflowChip = app.buttons["composer-workflow-chip"]
         XCTAssertTrue(
             workflowChip.waitForExistence(timeout: 5),
@@ -877,65 +880,47 @@ final class AntigravityInteractiveUITests: XCTestCase {
         )
         attachScreenshot(named: "03d_Automations_CreateWithPrompt_Draft")
 
-        backToSessionsButton.tap()
+        performEdgeSwipeBack(in: app)
         XCTAssertTrue(
             createWithPromptButton.waitForExistence(timeout: 5),
             "Navigating back from an unsent Create with Prompt draft must return cleanly to Automations"
         )
     }
 
-    /// Domain: Compose FAB + ChatComposerView (`UE07`) -> Live `StartCascade` + `SendUserCascadeMessage` round-trip.
+    /// Domain: New Conversation Home (`UE01`) + Unified ChatComposerView (`UE07`) -> Live `StartCascade` + `SendUserCascadeMessage` round-trip.
     func testComposeFABStartCascadeAndStreamedReply() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
         let app = launchLiveApp(serverPort: server.port)
 
-        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
-        XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
+        let heroGreeting = app.descendants(matching: .any)["home-hero-greeting"].firstMatch
+        XCTAssertTrue(heroGreeting.waitForExistence(timeout: 12))
 
-        let composeFAB = app.buttons["fab-compose"]
-        XCTAssertTrue(composeFAB.waitForExistence(timeout: 5))
-        composeFAB.tap()
-
-        let backToSessionsButton = app.buttons["btn-back-sessions"]
-        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 5))
-
-        // 1. Verify cluttered legacy quick-control pills & duplicate shield button are removed in live mode
-        XCTAssertFalse(app.descendants(matching: .any)["composer-permission-preset"].firstMatch.exists, "Legacy permission pill strip must not appear")
+        // 1. Verify legacy Planning/Fast pill & /btw clutter are completely absent from the unified composer
+        XCTAssertFalse(app.descendants(matching: .any)["composer-pill-mode"].firstMatch.exists, "Legacy Planning/Fast pill must not appear")
         XCTAssertFalse(app.descendants(matching: .any)["composer-btn-btw"].firstMatch.exists, "Legacy /btw pill must not appear above input")
         XCTAssertFalse(app.descendants(matching: .any)["composer-btn-attach-file"].firstMatch.exists, "Legacy Attach pill must not appear above input")
-        XCTAssertFalse(app.descendants(matching: .any)["composer-btn-permissions"].firstMatch.exists, "Duplicate permissions shield button must not appear in toolbar")
 
-        // 2. Verify Claude-inspired 4-control idle state: `+`, Model+Effort pill, `mic`, and adaptive Voice Mode circle
+        // 2. Verify unified UE v2.1 composer controls: `+`, Model+Effort, `🛡 Default`, `mic`, `→`
         XCTAssertTrue(app.descendants(matching: .any)["composer-btn-add-context"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["composer-pill-model"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["composer-pill-permissions"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["composer-btn-mic"].waitForExistence(timeout: 5))
-        let voiceModeButton = app.buttons["composer-btn-voice-mode"]
-        XCTAssertTrue(
-            voiceModeButton.waitForExistence(timeout: 5),
-            "Primary action circle must show Voice Mode when composer draft is empty"
-        )
-        XCTAssertFalse(
-            app.buttons["composer-btn-send"].exists,
-            "Send button must stay hidden until the user types or attaches context"
-        )
+        let sendButton = app.buttons["composer-btn-send"]
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
+        XCTAssertFalse(sendButton.isEnabled, "Send button must stay disabled when draft text is empty")
         attachScreenshot(named: "04a_Live_Composer_Idle_Claude_Style")
 
-        // 3. Typing morphs primary action circle from Voice Mode -> Send
+        // 3. Typing enables Send button and dispatches StartCascade + SendUserCascadeMessage
         let composerInput = app.descendants(matching: .any)["composer-text-input"].firstMatch
         XCTAssertTrue(composerInput.waitForExistence(timeout: 5))
         composerInput.tap()
         composerInput.typeText("Verify live Simulator tap and send")
 
-        let sendButton = app.buttons["composer-btn-send"]
         XCTAssertTrue(
-            sendButton.waitForExistence(timeout: 5),
-            "Typing into the composer must morph the primary action circle into Send"
-        )
-        XCTAssertFalse(
-            voiceModeButton.exists,
-            "Voice Mode button must morph into Send while draft text is non-empty"
+            sendButton.waitForExistence(timeout: 5) && sendButton.isEnabled,
+            "Typing into the composer must enable the Send button"
         )
         attachScreenshot(named: "04b_Live_Composer_Typing_Send_Morph")
         sendButton.tap()
@@ -944,41 +929,31 @@ final class AntigravityInteractiveUITests: XCTestCase {
             waitForTextContaining("收到来自 iOS 真模拟器的实时指令", in: app, timeout: 8),
             "Sending a message in Composer must dispatch StartCascade + SendUserCascadeMessage and render streamed reply"
         )
-        XCTAssertTrue(
-            voiceModeButton.waitForExistence(timeout: 8),
-            "Clearing draft after send & reply completion must restore the Voice Mode primary circle"
-        )
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
     }
 
-    /// Domain: Flattened 1st-level Settings (Appearance `System`/`Dark`/`Light`, Default Permissions 4 presets,
-    /// Local Notifications toggles), lightweight Chat Permissions sheet sync, Agents Home (`UE01`), and Cascade Chat (`UE07`).
+    /// Domain: Flattened Settings (`UE15`: Appearance `System`/`Dark`/`Light`, Default Permissions 4 presets,
+    /// Notifications toggles), lightweight Chat Permissions sync, and Customizations (`UE14`).
     func testAppearanceModeSwitchingLightAndDarkInSettingsAndChat() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
         let app = launchLiveApp(serverPort: server.port)
 
-        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
-        XCTAssertTrue(
-            reviewRow.waitForExistence(timeout: 12),
-            "Agents Home must load live Desktop sessions before opening Settings"
-        )
+        let sidebarButton = app.buttons["btn-sidebar"]
+        XCTAssertTrue(sidebarButton.waitForExistence(timeout: 12))
 
-        // 1. Open Settings tab and verify 1st-level Appearance Mode controls exist (and bloated 2nd-level Customizations button is gone)
-        let settingsTab = app.buttons["tab-item-settings"]
-        XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
-        settingsTab.tap()
+        // 1. Open Sidebar -> Settings (`UE15`) and verify Appearance Mode controls exist
+        sidebarButton.tap()
+        let settingsNav = app.buttons["drawer-nav-settings"]
+        XCTAssertTrue(settingsNav.waitForExistence(timeout: 5))
+        settingsNav.tap()
 
         let appearanceCard = app.descendants(matching: .any)["card-appearance-mode"].firstMatch
-        scrollUntilHittable(appearanceCard, in: app, avoidBottomInset: 110)
+        scrollUntilHittable(appearanceCard, in: app, avoidBottomInset: 40)
         XCTAssertTrue(
             appearanceCard.waitForExistence(timeout: 6),
-            "1st-level Settings must render card-appearance-mode"
-        )
-        XCTAssertFalse(
-            app.buttons["btn-open-customizations-settings"].exists,
-            "Bloated 2nd-level Customizations entry button must be removed from 1st-level Settings"
+            "Settings must render card-appearance-mode"
         )
 
         let systemButton = app.buttons["appearance-mode-system"]
@@ -988,78 +963,75 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertTrue(darkButton.waitForExistence(timeout: 5), "appearance-mode-dark must exist in Settings")
         XCTAssertTrue(lightButton.waitForExistence(timeout: 5), "appearance-mode-light must exist in Settings")
 
-        // 2. Switch to Light Mode in 1st-level Settings
-        scrollUntilHittable(lightButton, in: app, avoidBottomInset: 110)
+        // 2. Switch to Light Mode in Settings
+        scrollUntilHittable(lightButton, in: app, avoidBottomInset: 40)
         lightButton.tap()
         XCTAssertTrue(
             waitForAppearanceOptionSelected(lightButton, timeout: 4),
-            "Tapping appearance-mode-light must select Light Mode in 1st-level Settings"
+            "Tapping appearance-mode-light must select Light Mode in Settings"
         )
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         attachScreenshot(named: "06a_Settings_Light_Mode")
 
-        // 3. Verify flattened 1st-level Default Permissions (4 presets) and select Auto
+        // 3. Verify Default Permissions (4 presets) and select Auto
         let permissionsAutoButton = app.buttons["settings-permission-auto"]
-        scrollUntilHittable(permissionsAutoButton, in: app, maxSwipes: 6, avoidBottomInset: 110)
+        scrollUntilHittable(permissionsAutoButton, in: app, maxSwipes: 6, avoidBottomInset: 40)
         XCTAssertTrue(
             permissionsAutoButton.waitForExistence(timeout: 5),
-            "1st-level Settings must render flattened settings-permission-auto row"
+            "Settings must render settings-permission-auto row"
         )
         permissionsAutoButton.tap()
         XCTAssertTrue(
             waitForAppearanceOptionSelected(permissionsAutoButton, timeout: 4),
-            "Tapping settings-permission-auto must select Auto in 1st-level Settings"
+            "Tapping settings-permission-auto must select Auto in Settings"
         )
 
-        // 4. Verify flattened 1st-level Notifications card renders both real switches
+        // 4. Verify Notifications card renders both real switches
         let notificationsToggle = app.descendants(matching: .any)["toggle-notifications-enabled"].firstMatch
-        scrollUntilHittable(notificationsToggle, in: app, maxSwipes: 6, avoidBottomInset: 110)
+        scrollUntilHittable(notificationsToggle, in: app, maxSwipes: 6, avoidBottomInset: 40)
         XCTAssertTrue(
             notificationsToggle.waitForExistence(timeout: 5),
-            "1st-level Settings must render toggle-notifications-enabled"
+            "Settings must render toggle-notifications-enabled"
         )
         XCTAssertTrue(
             app.descendants(matching: .any)["toggle-notifications-suppress-manual-stop"].firstMatch.waitForExistence(timeout: 4),
-            "1st-level Settings must render toggle-notifications-suppress-manual-stop"
+            "Settings must render toggle-notifications-suppress-manual-stop"
         )
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         attachScreenshot(named: "06b_Settings_Permissions_And_Notifications")
 
-        // 5. Switch to Dark Mode and back to Light Mode in 1st-level Settings
-        scrollUntilHittable(darkButton, in: app, maxSwipes: 6, avoidBottomInset: 110)
+        // 5. Switch to Dark Mode and back to Light Mode
+        scrollUntilHittable(darkButton, in: app, maxSwipes: 6, avoidBottomInset: 40)
         darkButton.tap()
         XCTAssertTrue(
             waitForAppearanceOptionSelected(darkButton, timeout: 4),
-            "Tapping appearance-mode-dark must select Dark Mode in 1st-level Settings"
+            "Tapping appearance-mode-dark must select Dark Mode in Settings"
         )
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         attachScreenshot(named: "06c_Settings_Dark_Mode")
 
-        scrollUntilHittable(lightButton, in: app, avoidBottomInset: 110)
+        scrollUntilHittable(lightButton, in: app, avoidBottomInset: 40)
         lightButton.tap()
         XCTAssertTrue(
             waitForAppearanceOptionSelected(lightButton, timeout: 4),
             "Tapping appearance-mode-light must switch back to Light Mode"
         )
 
-        // 6. Verify Agents Home + Cascade Chat rendering in Light Mode and Permissions sync
-        let agentsTab = app.buttons["tab-item-agents"]
-        XCTAssertTrue(agentsTab.waitForExistence(timeout: 5))
-        agentsTab.tap()
+        // 6. Close Settings -> Open Sidebar -> Open Cascade Chat in Light Mode and verify Permissions sync
+        let closeSettingsBtn = app.buttons["btn-settings-close"]
+        scrollUntilHittable(closeSettingsBtn, in: app, maxSwipes: 6)
+        XCTAssertTrue(closeSettingsBtn.waitForExistence(timeout: 5))
+        closeSettingsBtn.tap()
 
-        XCTAssertTrue(
-            reviewRow.waitForExistence(timeout: 6),
-            "Agents Home must render conversation rows cleanly in Light Mode"
-        )
+        XCTAssertTrue(sidebarButton.waitForExistence(timeout: 5))
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         attachScreenshot(named: "06d_AgentsHome_Light_Mode")
 
+        sidebarButton.tap()
+        let reviewRow = app.buttons["drawer-conv-cid-slardar-review"]
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 6))
         reviewRow.tap()
-        let backToSessionsButton = app.buttons["btn-back-sessions"]
-        XCTAssertTrue(
-            backToSessionsButton.waitForExistence(timeout: 6),
-            "Tapping conversation row in Light Mode must open CascadeChatViewController"
-        )
+
         XCTAssertTrue(
             waitForTextContaining("已完成 Slardar Tag 模块审查", in: app, timeout: 6),
             "Cascade Chat messages must render cleanly in Light Mode"
@@ -1067,40 +1039,31 @@ final class AntigravityInteractiveUITests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         attachScreenshot(named: "06e_CascadeChat_Light_Mode")
 
-        // 7. Open lightweight Permissions sheet from Chat overflow menu and verify Auto synced from 1st-level Settings
-        let chatMoreButton = app.buttons["btn-chat-more"]
-        XCTAssertTrue(chatMoreButton.waitForExistence(timeout: 5), "Cascade Chat must render btn-chat-more")
-        chatMoreButton.tap()
-
-        let chatPermissionsMenuItem = app.buttons["Permissions"].firstMatch
-        XCTAssertTrue(
-            chatPermissionsMenuItem.waitForExistence(timeout: 5),
-            "Chat overflow menu must offer lightweight Permissions item"
-        )
-        chatPermissionsMenuItem.tap()
+        // 7. Open Permissions sheet from composer shield pill and verify Auto synced from Settings
+        let composerPermPill = app.buttons["composer-pill-permissions"]
+        XCTAssertTrue(composerPermPill.waitForExistence(timeout: 5), "Cascade Chat must render composer-pill-permissions")
+        composerPermPill.tap()
 
         let chatAutoRow = app.buttons["permission-row-auto"]
         XCTAssertTrue(
             chatAutoRow.waitForExistence(timeout: 5),
-            "Lightweight PermissionsSheetView must render permission-row-auto"
+            "PermissionsSheetView must render permission-row-auto"
         )
         XCTAssertTrue(
             waitForAppearanceOptionSelected(chatAutoRow, timeout: 4),
-            "Selecting Auto in 1st-level Settings must sync directly to Chat PermissionsSheetView"
+            "Selecting Auto in Settings must sync directly to Chat PermissionsSheetView"
         )
         let permissionsDoneButton = app.buttons["btn-permissions-done"]
         XCTAssertTrue(permissionsDoneButton.waitForExistence(timeout: 5))
         permissionsDoneButton.tap()
 
-        // 8. Navigate back to Agents Home -> Settings and restore Default permission & System appearance mode
-        backToSessionsButton.tap()
-        XCTAssertTrue(reviewRow.waitForExistence(timeout: 6))
-
-        XCTAssertTrue(settingsTab.waitForExistence(timeout: 5))
-        settingsTab.tap()
+        // 8. Navigate via Sidebar -> Settings and restore Default permission & System appearance mode
+        sidebarButton.tap()
+        XCTAssertTrue(settingsNav.waitForExistence(timeout: 5))
+        settingsNav.tap()
 
         let permissionsDefaultButton = app.buttons["settings-permission-default"]
-        scrollUntilHittable(permissionsDefaultButton, in: app, maxSwipes: 6, avoidBottomInset: 110)
+        scrollUntilHittable(permissionsDefaultButton, in: app, maxSwipes: 6, avoidBottomInset: 40)
         XCTAssertTrue(permissionsDefaultButton.waitForExistence(timeout: 5))
         permissionsDefaultButton.tap()
         XCTAssertTrue(
@@ -1108,7 +1071,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Restoring Default permission must mark settings-permission-default as selected"
         )
 
-        scrollUntilHittable(systemButton, in: app, maxSwipes: 6, avoidBottomInset: 110)
+        scrollUntilHittable(systemButton, in: app, maxSwipes: 6, avoidBottomInset: 40)
         XCTAssertTrue(systemButton.waitForExistence(timeout: 5))
         systemButton.tap()
         XCTAssertTrue(
@@ -1117,19 +1080,20 @@ final class AntigravityInteractiveUITests: XCTestCase {
         )
     }
 
-    /// Domain: Display Options (`UE02`) — Sort popover closed by default, dismissed on outside tap & option selection, and bound to live store state.
+    /// Domain: Display Options (`UE02`) launched from Sidebar Drawer (`UE01B`) — Sort popover closed by default, dismissed on outside tap & option selection, and bound to live store state.
     func testDisplayOptionsPopoverDismissAndStoreSync() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
         let app = launchLiveApp(serverPort: server.port)
-        let reviewRow = app.buttons["conv-row-cid-slardar-review"]
+        let sidebarButton = app.buttons["btn-sidebar"]
         XCTAssertTrue(
-            reviewRow.waitForExistence(timeout: 12),
-            "Live Agents Home must finish loading before opening Display Options"
+            sidebarButton.waitForExistence(timeout: 12),
+            "Live Agents Home must finish loading before opening Sidebar Drawer"
         )
+        sidebarButton.tap()
 
-        // 1. Open Display Options sheet from Agents Home -> Sort popover MUST start closed
+        // 1. Open Display Options sheet from Sidebar Projects header -> Sort popover MUST start closed
         let displayOptionsButton = app.buttons["btn-display-options"]
         XCTAssertTrue(displayOptionsButton.waitForExistence(timeout: 5))
         displayOptionsButton.tap()
@@ -1211,7 +1175,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
         doneButton.tap()
         XCTAssertTrue(
             waitUntilElementDisappears(sortRow, timeout: 5),
-            "Tapping Done must dismiss Display Options sheet back to Agents Home"
+            "Tapping Done must dismiss Display Options sheet back to Sidebar"
         )
     }
 

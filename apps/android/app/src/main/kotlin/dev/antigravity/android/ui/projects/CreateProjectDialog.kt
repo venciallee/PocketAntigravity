@@ -6,40 +6,47 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccountTree
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Computer
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,16 +56,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.antigravity.android.core.ui.components.SectionHeaderLabel
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.antigravityColors
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
@@ -70,8 +76,9 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
 /**
- * UE05_CREATE_PROJECT: Material 3 Full-Screen Dialog for creating a local (MacBook Pro)
- * or Cloud VM workspace from a GitHub repository or Drive folder.
+ * UE05_CREATE_PROJECT (`and-new-project.png`): Material 3 Full-Screen Dialog matching
+ * `and-new-project.png` with top-right primary Create pill, SegmentedButton runtime picker,
+ * FilterChip source toggles, RadioButton repo list, Branch dropdown, New worktree switch, and Name field.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,8 +102,16 @@ fun CreateProjectScreen(
     var selectedRepo by remember {
         mutableStateOf(workspaceState.newProjectDraft.selectedRepo ?: repos.firstOrNull())
     }
-    var branchWorktree by remember { mutableStateOf(workspaceState.newProjectDraft.branchWorktree) }
-    var projectName by remember { mutableStateOf(workspaceState.newProjectDraft.projectName) }
+    var selectedBranch by remember { mutableStateOf("main") }
+    var branchMenuExpanded by remember { mutableStateOf(false) }
+    var newWorktreeEnabled by remember { mutableStateOf(true) }
+    var projectName by remember {
+        mutableStateOf(
+            workspaceState.newProjectDraft.projectName
+                .ifBlank { "ledger-svc" }
+                .removeSuffix("-cloud"),
+        )
+    }
 
     val filteredRepos = remember(repos, repoSearchQuery) {
         val q = repoSearchQuery.trim().lowercase()
@@ -106,470 +121,447 @@ fun CreateProjectScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(colors.surfaceSheet),
+            .background(colors.canvasObsidian)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
     ) {
-        // 1. M3 Full-Screen Dialog Header Bar
+        // 1. Top Full-Screen Dialog Header: X | New project | [Create]
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextButton(
+            IconButton(
                 onClick = onDismiss,
                 modifier = Modifier
-                    .defaultMinSize(minWidth = 72.dp, minHeight = AntigravityDesignTokens.MinTouchTarget)
-                    .testTag("btn-cancel-project"),
+                    .size(AntigravityDesignTokens.MinTouchTarget)
+                    .testTag("btn-cancel-create-project"),
             ) {
-                Text(
-                    text = "Cancel",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontSize = 15.5.sp,
-                        fontWeight = FontWeight.Medium,
-                    ),
-                    color = colors.inkSecondary,
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Close",
+                    tint = colors.inkReading,
                 )
             }
 
-            Spacer(modifier = Modifier.weight(1f))
-
             Text(
-                text = "New Project",
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.SemiBold,
+                text = "New project",
+                style = MaterialTheme.typography.headlineSmall.copy(
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Normal,
                 ),
                 color = colors.inkReading,
-                maxLines = 1,
+                modifier = Modifier.weight(1f),
             )
 
-            Spacer(modifier = Modifier.weight(1f))
-
-            Spacer(modifier = Modifier.width(72.dp))
-        }
-
-        HorizontalDivider(color = colors.subtleDivider)
-
-        // Scrollable Dialog Form Body
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // 2. RUNS ON Material 3 SingleChoiceSegmentedButtonRow
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionHeaderLabel(title = "RUNS ON")
-
-                val runTargets = listOf(
-                    Triple(ProjectRuntimeTarget.MAC_BOOK_PRO, Icons.Rounded.Computer, "seg-runs-on-mac"),
-                    Triple(ProjectRuntimeTarget.CLOUD, Icons.Rounded.Cloud, "seg-runs-on-cloud"),
-                )
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    runTargets.forEachIndexed { index, (target, icon, tag) ->
-                        val isSelected = runsOn == target
-                        SegmentedButton(
-                            selected = isSelected,
-                            onClick = {
-                                runsOn = target
-                                val repoSlug = selectedRepo?.fullName?.substringAfterLast('/')
-                                if (!repoSlug.isNullOrBlank()) {
-                                    projectName = if (target == ProjectRuntimeTarget.CLOUD) {
-                                        "$repoSlug-cloud"
-                                    } else {
-                                        repoSlug
-                                    }
-                                }
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = runTargets.size),
-                            modifier = Modifier
-                                .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget)
-                                .testTag(tag),
-                            colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = colors.surfaceActiveTab,
-                                activeContentColor = colors.inkReading,
-                                activeBorderColor = colors.cardBorder,
-                                inactiveContainerColor = colors.surfaceSheetGroup,
-                                inactiveContentColor = colors.inkSecondary,
-                                inactiveBorderColor = colors.cardBorder,
-                            ),
-                            icon = {
-                                Icon(
-                                    imageVector = icon,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = target.displayTitle,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                )
-                            },
-                        )
-                    }
-                }
-
-                Text(
-                    text = runsOn.descriptionText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.inkSecondary,
-                )
-            }
-
-            // 3. SOURCE Dual Selectable Cards
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionHeaderLabel(title = "SOURCE")
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    SourceOptionCard(
-                        title = ProjectSourceKind.GITHUB_REPO.displayTitle,
-                        icon = Icons.Rounded.AccountTree,
-                        selected = sourceKind == ProjectSourceKind.GITHUB_REPO,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("source-card-github"),
-                        onClick = { sourceKind = ProjectSourceKind.GITHUB_REPO },
-                    )
-                    SourceOptionCard(
-                        title = ProjectSourceKind.DRIVE_FOLDER.displayTitle,
-                        icon = Icons.Rounded.Folder,
-                        selected = sourceKind == ProjectSourceKind.DRIVE_FOLDER,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("source-card-drive"),
-                        onClick = { sourceKind = ProjectSourceKind.DRIVE_FOLDER },
-                    )
-                }
-            }
-
-            // 4. Repository Search Field
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget),
-                shape = RoundedCornerShape(14.dp),
-                color = colors.surfaceSheetGroup,
-                border = BorderStroke(1.dp, colors.cardBorder),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Search,
-                        contentDescription = null,
-                        tint = colors.inkMuted,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (repoSearchQuery.isEmpty()) {
-                            Text(
-                                text = if (sourceKind == ProjectSourceKind.DRIVE_FOLDER) {
-                                    "Search Drive folders"
-                                } else {
-                                    "Search repositories"
-                                },
-                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
-                                color = colors.inkMuted,
-                                maxLines = 1,
-                            )
-                        }
-                        BasicTextField(
-                            value = repoSearchQuery,
-                            onValueChange = { repoSearchQuery = it },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                fontSize = 15.sp,
-                                color = colors.inkReading,
-                            ),
-                            cursorBrush = SolidColor(colors.accentPeriwinkle),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("repo-search-input"),
-                        )
-                    }
-                }
-            }
-
-            // 5. Selectable Repository List Card
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                color = colors.surfaceSheetGroup,
-                border = BorderStroke(1.dp, colors.cardBorder),
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    if (filteredRepos.isEmpty()) {
-                        Text(
-                            text = "No repositories match \"$repoSearchQuery\"",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.inkSecondary,
-                            modifier = Modifier.padding(16.dp),
-                        )
-                    } else {
-                        filteredRepos.forEachIndexed { index, repo ->
-                            val slug = repo.fullName.substringAfterLast('/')
-                            val isSelected = selectedRepo?.id == repo.id ||
-                                selectedRepo?.fullName == repo.fullName
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .defaultMinSize(minHeight = 52.dp)
-                                    .clickable {
-                                        selectedRepo = repo
-                                        projectName = if (runsOn == ProjectRuntimeTarget.CLOUD) {
-                                            "$slug-cloud"
-                                        } else {
-                                            slug
-                                        }
-                                    }
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                                    .testTag("repo-row-$slug"),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                                ) {
-                                    Text(
-                                        text = repo.fullName,
-                                        style = MaterialTheme.typography.titleSmall.copy(
-                                            fontFamily = FontFamily.Monospace,
-                                            fontWeight = FontWeight.Medium,
-                                        ),
-                                        color = colors.inkReading,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = repoMetadataLine(repo),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = colors.inkSecondary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Check,
-                                        contentDescription = "Selected repository",
-                                        tint = colors.accentPeriwinkle,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            }
-                            if (index < filteredRepos.lastIndex) {
-                                HorizontalDivider(color = colors.subtleDivider)
-                            }
-                        }
-                    }
-                }
-            }
-
-            Text(
-                text = "Missing a repo? Configure on GitHub",
-                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
-                color = colors.accentPeriwinkle,
-                modifier = Modifier.padding(start = 2.dp),
-            )
-
-            // 6. Branch & Worktree + Editable Project Name Card
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                color = colors.surfaceSheetGroup,
-                border = BorderStroke(1.dp, colors.cardBorder),
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget)
-                            .clickable {
-                                branchWorktree = if (branchWorktree == "main · New worktree") {
-                                    "main · Existing checkout"
-                                } else {
-                                    "main · New worktree"
-                                }
-                            }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = "Branch & worktree",
-                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
-                            color = colors.inkReading,
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text(
-                            text = branchWorktree,
-                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                            color = colors.inkSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Icon(
-                            imageVector = Icons.Rounded.UnfoldMore,
-                            contentDescription = null,
-                            tint = colors.inkMuted,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-
-                    HorizontalDivider(color = colors.subtleDivider)
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget)
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text(
-                            text = "Name",
-                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
-                            color = colors.inkReading,
-                        )
-                        BasicTextField(
-                            value = projectName,
-                            onValueChange = { projectName = it },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                fontSize = 14.5.sp,
-                                color = colors.inkLabel,
-                                textAlign = TextAlign.End,
-                            ),
-                            cursorBrush = SolidColor(colors.accentPeriwinkle),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("project-name-input"),
-                        )
-                    }
-                }
-            }
-        }
-
-        // 7. Bottom Docked Full-Width Periwinkle CTA Button
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-        ) {
             Button(
                 onClick = {
+                    val trimmedName = projectName.trim().ifBlank { "ledger-svc-cloud" }
                     val draft = NewProjectDraft(
                         runsOn = runsOn,
                         source = sourceKind,
                         repoSearchQuery = repoSearchQuery,
                         selectedRepo = selectedRepo,
-                        branchWorktree = branchWorktree,
-                        projectName = projectName.trim().ifEmpty { "ledger-svc-cloud" },
+                        branchWorktree = if (newWorktreeEnabled) "$selectedBranch · New worktree" else selectedBranch,
+                        projectName = trimmedName,
                     )
                     coordinator.workspaceStore.updateNewProjectDraft { draft }
                     scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                        val rpcClient = if (coordinator.isVerificationMode) {
-                            null
-                        } else {
-                            coordinator.connectionStore.activeClient()
-                        }
+                        val rpcClient = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
                         coordinator.workspaceStore.createProject(client = rpcClient, draft = draft)
-                        onCreated()
                     }
+                    onCreated()
                 },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = 52.dp)
-                    .testTag("btn-submit-create-project"),
-                shape = RoundedCornerShape(16.dp),
+                    .defaultMinSize(minHeight = 42.dp)
+                    .testTag("btn-create-project-submit"),
+                shape = RoundedCornerShape(100.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = colors.accentPeriwinkle,
                     contentColor = colors.inkOnPrimaryCta,
                 ),
-                contentPadding = PaddingValues(vertical = 14.dp),
             ) {
                 Text(
-                    text = "Create Project",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontSize = 16.sp,
+                    text = "Create",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                     ),
                 )
             }
         }
-    }
-}
 
-@Composable
-private fun SourceOptionCard(
-    title: String,
-    icon: ImageVector,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = MaterialTheme.antigravityColors
-    Surface(
-        onClick = onClick,
-        modifier = modifier.defaultMinSize(minHeight = 72.dp),
-        shape = RoundedCornerShape(16.dp),
-        color = if (selected) colors.surfaceSelectionTint else colors.surfaceSheetGroup,
-        border = BorderStroke(
-            width = if (selected) 1.5.dp else 1.dp,
-            color = if (selected) colors.accentPeriwinkle else colors.cardBorder,
-        ),
-    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalAlignment = Alignment.Start,
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 6.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (selected) colors.accentPeriwinkle else colors.inkSecondary,
-                modifier = Modifier.size(18.dp),
-            )
+            // Runs on
             Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
+                text = "Runs on",
+                style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                color = colors.accentPeriwinkle,
+            )
+
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("runtime-segmented-row"),
+            ) {
+                SegmentedButton(
+                    selected = runsOn == ProjectRuntimeTarget.MAC_BOOK_PRO,
+                    onClick = { runsOn = ProjectRuntimeTarget.MAC_BOOK_PRO },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = {
+                        if (runsOn == ProjectRuntimeTarget.MAC_BOOK_PRO) {
+                            Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        } else {
+                            Icon(Icons.Rounded.Computer, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                    },
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = colors.surfaceActiveTab,
+                        activeContentColor = colors.pillActiveForeground,
+                        inactiveContainerColor = colors.canvasObsidian,
+                        inactiveContentColor = colors.inkReading,
+                        activeBorderColor = colors.cardBorder,
+                        inactiveBorderColor = colors.cardBorder,
+                    ),
+                    modifier = Modifier.testTag("runtime-mac"),
+                ) {
+                    Text("MacBook Pro", maxLines = 1)
+                }
+
+                SegmentedButton(
+                    selected = runsOn == ProjectRuntimeTarget.CLOUD,
+                    onClick = { runsOn = ProjectRuntimeTarget.CLOUD },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = {
+                        if (runsOn == ProjectRuntimeTarget.CLOUD) {
+                            Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                    },
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = colors.surfaceActiveTab,
+                        activeContentColor = colors.pillActiveForeground,
+                        inactiveContainerColor = colors.canvasObsidian,
+                        inactiveContentColor = colors.inkReading,
+                        activeBorderColor = colors.cardBorder,
+                        inactiveBorderColor = colors.cardBorder,
+                    ),
+                    modifier = Modifier.testTag("runtime-cloud"),
+                ) {
+                    Text("Cloud", maxLines = 1)
+                }
+            }
+
+            Text(
+                text = if (runsOn == ProjectRuntimeTarget.CLOUD) {
+                    "Runs in its own cloud VM and keeps working while your computer sleeps."
+                } else {
+                    "Runs directly on your paired MacBook Pro with local filesystem access."
+                },
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp, lineHeight = 19.sp),
+                color = colors.inkSecondary,
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Source
+            Text(
+                text = "Source",
+                style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                color = colors.accentPeriwinkle,
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilterChip(
+                    selected = sourceKind == ProjectSourceKind.GITHUB_REPO,
+                    onClick = { sourceKind = ProjectSourceKind.GITHUB_REPO },
+                    label = { Text("GitHub repository") },
+                    leadingIcon = if (sourceKind == ProjectSourceKind.GITHUB_REPO) {
+                        { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    } else null,
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = colors.surfaceActiveTab,
+                        selectedLabelColor = colors.pillActiveForeground,
+                        selectedLeadingIconColor = colors.pillActiveForeground,
+                        containerColor = colors.canvasObsidian,
+                        labelColor = colors.inkReading,
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = sourceKind == ProjectSourceKind.GITHUB_REPO,
+                        borderColor = colors.cardBorder,
+                        selectedBorderColor = colors.surfaceActiveTab,
+                    ),
+                    modifier = Modifier.testTag("source-github"),
+                )
+
+                FilterChip(
+                    selected = sourceKind == ProjectSourceKind.DRIVE_FOLDER,
+                    onClick = { sourceKind = ProjectSourceKind.DRIVE_FOLDER },
+                    label = { Text("Drive folder") },
+                    leadingIcon = if (sourceKind == ProjectSourceKind.DRIVE_FOLDER) {
+                        { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    } else null,
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = colors.surfaceActiveTab,
+                        selectedLabelColor = colors.pillActiveForeground,
+                        selectedLeadingIconColor = colors.pillActiveForeground,
+                        containerColor = colors.canvasObsidian,
+                        labelColor = colors.inkReading,
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = sourceKind == ProjectSourceKind.DRIVE_FOLDER,
+                        borderColor = colors.cardBorder,
+                        selectedBorderColor = colors.surfaceActiveTab,
+                    ),
+                    modifier = Modifier.testTag("source-drive"),
+                )
+            }
+
+            // Rounded Search repositories pill
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(100.dp),
+                color = colors.surfaceCard,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = null,
+                        tint = colors.inkSecondary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    BasicTextField(
+                        value = repoSearchQuery,
+                        onValueChange = { repoSearchQuery = it },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("input-repo-search"),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.inkReading),
+                        cursorBrush = SolidColor(colors.accentPeriwinkle),
+                        decorationBox = { inner ->
+                            if (repoSearchQuery.isEmpty()) {
+                                Text(
+                                    text = "Search repositories",
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp),
+                                    color = colors.inkMuted,
+                                )
+                            }
+                            inner()
+                        },
+                    )
+                }
+            }
+
+            // RadioButton Repo List
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                filteredRepos.forEach { repo ->
+                    val isSelected = selectedRepo?.id == repo.id
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedRepo = repo
+                                projectName = repo.fullName.substringAfter("/")
+                            }
+                            .padding(vertical = 8.dp)
+                            .testTag("repo-row-${repo.id}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        RadioButton(
+                            selected = isSelected,
+                            onClick = {
+                                selectedRepo = repo
+                                projectName = repo.fullName.substringAfter("/")
+                            },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = colors.accentPeriwinkle,
+                                unselectedColor = colors.inkSecondary,
+                            ),
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = repo.fullName,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 15.5.sp,
+                                ),
+                                color = colors.inkReading,
+                            )
+                            Text(
+                                text = repo.visibilityLabel,
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                                color = colors.inkSecondary,
+                            )
+                        }
+                    }
+                }
+            }
+
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = colors.inkSecondary)) {
+                        append("Missing a repo? ")
+                    }
+                    withStyle(SpanStyle(color = colors.accentPeriwinkle, fontWeight = FontWeight.Medium)) {
+                        append("Configure on GitHub")
+                    }
+                },
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Branch & worktree
+            Text(
+                text = "Branch & worktree",
+                style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                color = colors.accentPeriwinkle,
+            )
+
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = selectedBranch,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Branch") },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.ArrowDropDown,
+                            contentDescription = "Select branch",
+                            tint = colors.inkSecondary,
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { branchMenuExpanded = true }
+                        .testTag("input-project-branch"),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        fontFamily = FontFamily.Monospace,
+                        color = colors.inkReading,
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.accentPeriwinkle,
+                        unfocusedBorderColor = colors.cardBorder,
+                        focusedLabelColor = colors.accentPeriwinkle,
+                        unfocusedLabelColor = colors.inkSecondary,
+                        focusedContainerColor = colors.canvasObsidian,
+                        unfocusedContainerColor = colors.canvasObsidian,
+                    ),
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable { branchMenuExpanded = true },
+                )
+                DropdownMenu(
+                    expanded = branchMenuExpanded,
+                    onDismissRequest = { branchMenuExpanded = false },
+                    containerColor = colors.surfacePopover,
+                ) {
+                    listOf("main", "develop", "feat/ratelimit").forEach { br ->
+                        DropdownMenuItem(
+                            text = { Text(br, color = colors.inkReading, fontFamily = FontFamily.Monospace) },
+                            onClick = {
+                                selectedBranch = br
+                                branchMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
+
+            // New worktree Switch row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { newWorktreeEnabled = !newWorktreeEnabled }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "New worktree",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                        color = colors.inkReading,
+                    )
+                    Text(
+                        text = "Keep this project's changes off your checkout",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                        color = colors.inkSecondary,
+                    )
+                }
+                Switch(
+                    checked = newWorktreeEnabled,
+                    onCheckedChange = { newWorktreeEnabled = it },
+                    modifier = Modifier.testTag("switch-new-worktree"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = colors.inkOnPrimaryCta,
+                        checkedTrackColor = colors.accentPeriwinkle,
+                        uncheckedThumbColor = colors.inkSecondary,
+                        uncheckedTrackColor = colors.surfaceElevated,
+                    ),
+                )
+            }
+
+            // Project Name OutlinedTextField (highlighted periwinkle outline matching `and-new-project.png`)
+            OutlinedTextField(
+                value = projectName,
+                onValueChange = { projectName = it },
+                label = { Text("Name") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("input-project-name"),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.inkReading),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = colors.accentPeriwinkle,
+                    unfocusedBorderColor = colors.accentPeriwinkle,
+                    focusedLabelColor = colors.accentPeriwinkle,
+                    unfocusedLabelColor = colors.accentPeriwinkle,
+                    focusedContainerColor = colors.canvasObsidian,
+                    unfocusedContainerColor = colors.canvasObsidian,
                 ),
-                color = colors.inkReading,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
         }
     }
 }
 
-private fun repoMetadataLine(repo: GitHubRepoItem): String = when (repo.fullName) {
-    "acme/ledger-svc" -> "${repo.visibilityLabel} · Go · updated 2h ago"
-    "acme/web-console" -> "${repo.visibilityLabel} · TypeScript · updated 1d ago"
-    "acme/design-tokens" -> "${repo.visibilityLabel} · updated 5d ago"
-    else -> "${repo.visibilityLabel} · ${repo.defaultBranch}"
-}
-
-private val defaultFallbackRepos: List<GitHubRepoItem> = listOf(
-    GitHubRepoItem(id = "repo-ledger-svc", fullName = "acme/ledger-svc", visibilityLabel = "Private", defaultBranch = "main"),
-    GitHubRepoItem(id = "repo-web-console", fullName = "acme/web-console", visibilityLabel = "Private", defaultBranch = "main"),
-    GitHubRepoItem(id = "repo-design-tokens", fullName = "acme/design-tokens", visibilityLabel = "Public", defaultBranch = "main"),
+private val defaultFallbackRepos = listOf(
+    GitHubRepoItem(
+        id = "repo-ledger-svc",
+        fullName = "acme/ledger-svc",
+        visibilityLabel = "Private · Go · updated 2h ago",
+        defaultBranch = "main",
+    ),
+    GitHubRepoItem(
+        id = "repo-web-console",
+        fullName = "acme/web-console",
+        visibilityLabel = "Private · TypeScript · updated 1d ago",
+        defaultBranch = "main",
+    ),
+    GitHubRepoItem(
+        id = "repo-design-tokens",
+        fullName = "acme/design-tokens",
+        visibilityLabel = "Public · updated 5d ago",
+        defaultBranch = "main",
+    ),
 )

@@ -11,6 +11,7 @@ extension AntigravitySessionStore {
         "cas-idempotency-payouts",
         "cas-pgx-v5-migration",
         "cas-audit-csp-headers",
+        "cas-audit-bundle-size",
         "cas-audit-log-admin"
     ]
     internal static let esddFixtureAutomationIds: Set<String> = [
@@ -21,7 +22,7 @@ extension AntigravitySessionStore {
     ]
 
 
-    // MARK: - Deterministic Scene Routing Helper (`UE01` .. `UE13`)
+    // MARK: - Deterministic Scene Routing Helper (`UE01` .. `UE15`, 20 scenes)
 
     public func configureForVerifyScene(_ scene: ESDDVerifySceneCase) {
         isVerificationMode = true
@@ -29,18 +30,27 @@ extension AntigravitySessionStore {
         presentedSheet = nil
         displayOptions = AgentDisplayOptions()
         isSortPopoverPresented = false
+        isSidebarPresented = false
+        isGlobalSearchPresented = false
+        includeSideQuestionInSlashMenu = false
         switch scene {
         case .agentsHome:
             selectedTab = .agents
             activeRoute = .tabRoot
+        case .sidebarDrawer:
+            selectedTab = .agents
+            activeRoute = .tabRoot
+            isSidebarPresented = true
         case .displayOptions:
             selectedTab = .agents
             activeRoute = .tabRoot
+            isSidebarPresented = true
             presentedSheet = .displayOptions
             isSortPopoverPresented = true
         case .contextMenuPin:
             selectedTab = .agents
             activeRoute = .tabRoot
+            isSidebarPresented = true
             contextMenuTargetCascadeId = "cas-flaky-settlement"
             swipePreviewCascadeId = "cas-upgrade-go"
             presentedSheet = .contextMenuPreview(cascadeId: "cas-flaky-settlement")
@@ -48,11 +58,6 @@ extension AntigravitySessionStore {
             selectedTab = .agents
             selectedProjectId = "ledger-svc"
             selectedProjectTab = .active
-            // Align ledger-svc to Active 3 / Archived 2 (5 conversations) as depicted in UE04
-            if let idx = summaries.firstIndex(where: { $0.cascadeId == "cas-idempotency-payouts" }) {
-                summaries[idx].isArchived = true
-            }
-            summaries.removeAll { $0.cascadeId == "cas-pgx-v5-migration" }
             activeRoute = .projectDetail("ledger-svc")
         case .createProject:
             selectedTab = .agents
@@ -61,15 +66,37 @@ extension AntigravitySessionStore {
         case .automations:
             selectedTab = .automations
             activeRoute = .tabRoot
+        case .automationDetail:
+            selectedTab = .automations
+            selectedAutomationId = "auto-nightly-audit"
+            activeRoute = .automationDetail("auto-nightly-audit")
+        case .automationEdit:
+            selectedTab = .automations
+            selectedAutomationId = "auto-nightly-audit"
+            activeRoute = .automationDetail("auto-nightly-audit")
+            presentedSheet = .automationEdit(automationId: "auto-nightly-audit")
         case .chatAndComposer:
             selectedTab = .agents
             activeCascadeId = "cas-rate-limiter"
             activeRoute = .cascadeChat("cas-rate-limiter")
+        case .permissionsPreset:
+            selectedTab = .agents
+            activeCascadeId = "cas-rate-limiter"
+            activeRoute = .cascadeChat("cas-rate-limiter")
+            presentedSheet = .permissionsPreset
         case .addContext:
             selectedTab = .agents
             activeCascadeId = "cas-rate-limiter"
             activeRoute = .cascadeChat("cas-rate-limiter")
             presentedSheet = .addContext
+        case .slashMenu:
+            selectedTab = .agents
+            activeCascadeId = "cas-rate-limiter"
+            composerDraftText = "/"
+            includeSideQuestionInSlashMenu = true
+            isSlashPopupDismissedManually = false
+            activeRoute = .cascadeChat("cas-rate-limiter")
+            presentedSheet = .slashMenu
         case .modelAndMode:
             selectedTab = .agents
             activeCascadeId = "cas-rate-limiter"
@@ -96,25 +123,41 @@ extension AntigravitySessionStore {
             selectedTab = .agents
             activeCascadeId = "cas-rate-limiter"
             activeRoute = .cascadeChat("cas-rate-limiter")
+        case .rulesAndSkills:
+            selectedTab = .agents
+            selectedProjectId = "ledger-svc"
+            activeRoute = .rulesAndSkills
+        case .settings:
+            selectedTab = .settings
+            activeRoute = .pairingSettings
         }
     }
 
-    // MARK: - Deterministic 1:1 UE Fixture Factory (`UE01` .. `UE13`)
+    // MARK: - Deterministic 1:1 UE Fixture Factory (`UE01` .. `UE15`)
 
     public static func makeESDDVerificationStore() -> AntigravitySessionStore {
         let macHost = RemoteHostInstance(
             instanceId: "macbook-pro-local",
             hostname: "MacBook Pro",
-            version: "v2.32.0",
-            channel: .directHost,
+            version: "2.33.1",
+            channel: .cloudRelay,
             endpointURL: URL(string: "https://127.0.0.1:42100")!,
             isOnline: true,
-            latencyMs: 6
+            latencyMs: 42
+        )
+        let officeImacHost = RemoteHostInstance(
+            instanceId: "office-imac-local",
+            hostname: "Office iMac",
+            version: "2.32.0",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/office-imac-local")!,
+            isOnline: false,
+            latencyMs: 0
         )
         let cloudHost = RemoteHostInstance(
             instanceId: "cloud-vm-us-central1",
             hostname: "Cloud",
-            version: "v2.32.0",
+            version: "2.33.1",
             channel: .cloudRelay,
             endpointURL: URL(string: "https://antigravity.google.com/r/cloud-vm-us-central1")!,
             isOnline: true,
@@ -154,7 +197,7 @@ extension AntigravitySessionStore {
                 displayName: "ledger-svc",
                 activeBranch: "main",
                 worktrees: ["main", "feat/ratelimit", "fix/settlement-clock"],
-                activeCascadeCount: 3,
+                activeCascadeCount: 4,
                 indexedFiles: [
                     "internal/middleware/ratelimit.go",
                     "internal/router/transfers.go",
@@ -168,7 +211,7 @@ extension AntigravitySessionStore {
                 displayName: "web-console",
                 activeBranch: "main",
                 worktrees: ["main", "feat/dark-mode"],
-                activeCascadeCount: 2,
+                activeCascadeCount: 3,
                 indexedFiles: [
                     "src/pages/settings/DarkModeToggle.tsx",
                     "src/theme/tokens.ts"
@@ -194,7 +237,7 @@ extension AntigravitySessionStore {
                 isPinned: true,
                 isArchived: false,
                 isUnread: false,
-                modelLabel: "Gemini 3.1 Pro",
+                modelLabel: "Gemini 4 Neon",
                 pendingInteractionTitle: "Approve: vegeta attack...",
                 lastMessagePreview: "Plan approved with your 2 comments. Tests pass — next is a load test, which needs your OK.",
                 totalAdditions: 128,
@@ -216,7 +259,7 @@ extension AntigravitySessionStore {
                 isPinned: false,
                 isArchived: false,
                 isUnread: true,
-                modelLabel: "Gemini 3.1 Pro",
+                modelLabel: "Gemini 4 Neon",
                 pendingInteractionTitle: "Awaiting review · Implementation Plan",
                 lastMessagePreview: "The flake comes from a shared fake clock across parallel subtests in settlement_test.go. I wrote a plan to isolate it per test — review it before I change anything?",
                 totalAdditions: 0,
@@ -232,13 +275,13 @@ extension AntigravitySessionStore {
                 stepCount: 19,
                 currentStepIndex: 5,
                 totalSteps: 5,
-                updatedAt: baseNow.addingTimeInterval(-3500),
-                relativeTimeLabel: "1h",
+                updatedAt: baseNow.addingTimeInterval(-14_400),
+                relativeTimeLabel: "4h",
                 statusSubtitle: "Done · Walkthrough ready",
                 isPinned: true,
                 isArchived: false,
                 isUnread: false,
-                modelLabel: "Gemini 3.8 Flash",
+                modelLabel: "Gemini 4 Hydrogen",
                 lastMessagePreview: "All v2.3 release checks succeeded and walkthrough artifact is ready.",
                 totalAdditions: 34,
                 totalDeletions: 8
@@ -259,7 +302,7 @@ extension AntigravitySessionStore {
                 isPinned: false,
                 isArchived: false,
                 isUnread: true,
-                modelLabel: "Gemini 3.1 Pro",
+                modelLabel: "Gemini 4 Neon",
                 lastMessagePreview: "Updated go.mod toolchain to Go 1.25 across 6 packages.",
                 totalAdditions: 42,
                 totalDeletions: 31
@@ -280,7 +323,7 @@ extension AntigravitySessionStore {
                 isPinned: false,
                 isArchived: false,
                 isUnread: true,
-                modelLabel: "Gemini 3.8 Flash",
+                modelLabel: "Gemini 4 Hydrogen",
                 lastMessagePreview: "Applying semantic obsidian tokens to SettingsView...",
                 totalAdditions: 64,
                 totalDeletions: 21
@@ -295,16 +338,37 @@ extension AntigravitySessionStore {
                 stepCount: 45,
                 currentStepIndex: 8,
                 totalSteps: 8,
-                updatedAt: baseNow.addingTimeInterval(-86400),
-                relativeTimeLabel: "Yesterday",
+                updatedAt: baseNow.addingTimeInterval(-86_400),
+                relativeTimeLabel: "1d",
                 statusSubtitle: "Done · Merged into main",
                 isPinned: false,
                 isArchived: false,
                 isUnread: false,
-                modelLabel: "Gemini 3.1 Pro",
+                modelLabel: "Gemini 4 Neon",
                 lastMessagePreview: "Merged payout idempotency key store into main.",
                 totalAdditions: 210,
                 totalDeletions: 19
+            ),
+            CascadeSummary(
+                cascadeId: "cas-audit-bundle-size",
+                title: "Audit bundle size",
+                projectSlug: "web-console",
+                workspaceUri: "cloud://acme/web-console",
+                branchName: "main",
+                status: .done,
+                stepCount: 11,
+                currentStepIndex: 4,
+                totalSteps: 4,
+                updatedAt: baseNow.addingTimeInterval(-172_800),
+                relativeTimeLabel: "2d",
+                statusSubtitle: "Done · -48 KB gzipped",
+                isPinned: false,
+                isArchived: false,
+                isUnread: false,
+                modelLabel: "Gemini 4 Hydrogen",
+                lastMessagePreview: "Trimmed duplicate charting chunks from settings bundle.",
+                totalAdditions: 16,
+                totalDeletions: 89
             ),
             CascadeSummary(
                 cascadeId: "cas-audit-log-admin",
@@ -322,7 +386,7 @@ extension AntigravitySessionStore {
                 isPinned: false,
                 isArchived: true,
                 isUnread: false,
-                modelLabel: "Gemini 3.1 Pro",
+                modelLabel: "Gemini 4 Neon",
                 lastMessagePreview: "Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words."
             ),
             CascadeSummary(
@@ -341,7 +405,7 @@ extension AntigravitySessionStore {
                 isPinned: false,
                 isArchived: true,
                 isUnread: false,
-                modelLabel: "Gemini 3.1 Pro",
+                modelLabel: "Gemini 4 Neon",
                 lastMessagePreview: "Completed pgxpool v5 batch migration."
             )
         ]
@@ -353,32 +417,56 @@ extension AntigravitySessionStore {
                 projectSlug: "ledger-svc",
                 scheduleSummary: "ledger-svc · Daily at 02:00 · Flash",
                 section: .scheduled,
-                nextRunText: "Tonight, 02:00",
+                nextRunText: "Tonight, 2:00 AM (GMT+8:00)",
                 lastRunText: "Succeeded · 22h ago",
                 needsReview: false,
-                isRunningNow: false
+                isRunningNow: false,
+                descriptionText: "Check go.mod for outdated or vulnerable modules.",
+                prompt: "Check go.mod for outdated or vulnerable modules. Open a PR for patch bumps only and summarize the rest.",
+                cronExpression: "CRON_TZ=Asia/Shanghai 0 2 * * *",
+                modelLabel: "Flash",
+                lastRunCascadeId: "cas-upgrade-go",
+                repeatsLabel: "Every day",
+                timeLabel: "2:00 AM",
+                timezoneLabel: "GMT+8:00",
+                recentRuns: [
+                    AutomationRunRecord(id: "run-1", status: .succeeded, relativeTimeLabel: "22h ago", summaryText: "No vulnerable modules · 2 patch bumps", durationLabel: "1m 14s", cascadeId: "cas-upgrade-go"),
+                    AutomationRunRecord(id: "run-2", status: .needsReview, relativeTimeLabel: "2d ago", summaryText: "PR for golang.org/x/net waiting", durationLabel: "2m 08s", cascadeId: "cas-flaky-settlement"),
+                    AutomationRunRecord(id: "run-4", status: .failed, relativeTimeLabel: "3d ago", summaryText: "Google sign-in expired", durationLabel: "32s")
+                ]
             ),
             AutomationItem(
                 id: "auto-weekly-flaky",
                 title: "Weekly flaky-test report",
                 projectSlug: "ledger-svc",
-                scheduleSummary: "ledger-svc · Mondays at 09:00 · Pro",
+                scheduleSummary: "ledger-svc · Mondays at 09:00 · Neon",
                 section: .scheduled,
                 nextRunText: "Mon, 09:00",
                 lastRunText: "Needs review · 2d",
                 needsReview: true,
-                isRunningNow: false
+                isRunningNow: false,
+                prompt: "Analyze CI test history from the last 7 days and summarize flaky Go tests with reproduction seeds.",
+                cronExpression: "CRON_TZ=America/Los_Angeles 0 9 * * 1",
+                modelLabel: "Gemini 4 Neon",
+                lastRunCascadeId: "cas-flaky-settlement",
+                repeatsLabel: "Weekly (Mon)",
+                timeLabel: "09:00"
             ),
             AutomationItem(
                 id: "auto-pr-triage",
                 title: "Triage new pull requests",
                 projectSlug: "web-console",
-                scheduleSummary: "web-console · On PR opened · Flash Lite",
+                scheduleSummary: "web-console · On PR opened · Hydrogen",
                 section: .alwaysOn,
                 nextRunText: "On PR opened",
                 lastRunText: "Last run 14m ago",
                 needsReview: false,
-                isRunningNow: false
+                isRunningNow: false,
+                prompt: "Label newly opened PRs, check bundle size impact, and assign reviewers based on CODEOWNERS.",
+                modelLabel: "Gemini 4 Hydrogen",
+                isScheduleBuiltin: false,
+                repeatsLabel: "On PR opened",
+                timeLabel: "Always on"
             ),
             AutomationItem(
                 id: "auto-bundle-size",
@@ -389,7 +477,13 @@ extension AntigravitySessionStore {
                 nextRunText: "Paused",
                 lastRunText: "Paused · 5d ago",
                 needsReview: false,
-                isRunningNow: false
+                isRunningNow: false,
+                prompt: "Measure production webpack/vite bundle deltas against main and flag regressions > 25 KB.",
+                cronExpression: "CRON_TZ=America/Los_Angeles 0 8 * * *",
+                modelLabel: "Gemini 3.8 Flash",
+                isEnabled: false,
+                repeatsLabel: "Daily",
+                timeLabel: "08:00"
             )
         ]
 
@@ -853,8 +947,11 @@ extension AntigravitySessionStore {
             )
         ]
 
+        var defaultNeon = CascadeModelConfig.liveDefaultCatalog[0]
+        defaultNeon.effort = .extra
+
         let store = AntigravitySessionStore(
-            hosts: [macHost, cloudHost],
+            hosts: [macHost, officeImacHost, cloudHost],
             activeHost: macHost,
             projects: projects,
             workspaces: workspaces,
@@ -877,7 +974,8 @@ extension AntigravitySessionStore {
             selectedDiffTurn: 3,
             selectedDiffFileIndex: 0,
             activeLineCommentDraft: "Use l.clock.Now() — the plan says to inject the clock so tests can control time.",
-            selectedModelConfig: CascadeModelConfig.catalog[0],
+            selectedModelConfig: defaultNeon,
+            availableModels: CascadeModelConfig.liveDefaultCatalog,
             secretStore: InMemorySecretStore(),
             networkMonitor: NoopNetworkReachabilityMonitor(),
             powerStateProvider: StaticPowerStateProvider(),
@@ -885,6 +983,15 @@ extension AntigravitySessionStore {
         )
         store.isVerificationMode = true
         store.isInitialSessionCheckComplete = true
+        store.appearancePreferences.appearanceMode = .dark
+        store.usageQuota = ModelUsageQuota(
+            geminiWeeklyRemaining: 0.48,
+            geminiFiveHourRemaining: 0.72,
+            partnerWeeklyRemaining: 0.72,
+            partnerFiveHourRemaining: 0.84,
+            aiCreditOveragesEnabled: false,
+            planDisplayName: "Google AI Pro"
+        )
         store.connectionStatusText = "Demo Sandbox · Offline ESDD Fixtures"
         store.composerAttachments = [
             ComposerAttachmentChip(

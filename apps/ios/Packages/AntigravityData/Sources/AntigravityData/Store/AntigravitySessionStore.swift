@@ -1,11 +1,13 @@
 import Foundation
 import Observation
 
-/// Active navigation destination in `AntigravityShellController` across all 13 UE screens.
+/// Active navigation destination in `AntigravityShellController` across all 20 UE screens.
 public enum AntigravityNavigationRoute: Sendable, Equatable, Hashable {
     case tabRoot
     case projectDetail(String)
     case cascadeChat(String)
+    case automationDetail(String)
+    case rulesAndSkills
     case planReview
     case turnDiffReview
     case pairingSettings
@@ -23,7 +25,10 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
     case displayOptions
     case contextMenuPreview(cascadeId: String)
     case createProject
+    case automationEdit(automationId: String)
+    case permissionsPreset
     case addContext
+    case slashMenu
     case modelAndMode
     case permissionGate(stepIndex: Int)
     case askQuestion(stepIndex: Int)
@@ -42,7 +47,10 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
         case .displayOptions: return "display-options"
         case .contextMenuPreview(let cid): return "context-menu-\(cid)"
         case .createProject: return "create-project"
+        case .automationEdit(let aid): return "automation-edit-\(aid)"
+        case .permissionsPreset: return "permissions-preset"
         case .addContext: return "add-context"
+        case .slashMenu: return "slash-menu"
         case .modelAndMode: return "model-and-mode"
         case .permissionGate(let idx): return "permission-\(idx)"
         case .askQuestion(let idx): return "question-\(idx)"
@@ -59,11 +67,13 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
     }
 }
 
-/// Central `@Observable` state coordinator for `PocketAntigravity` (v2.0 UE Aligned).
-/// Drives all 13 UE screens: Agents Home (`UE01`), Display Options (`UE02`), Long-Press & Pin (`UE03`),
-/// Project Detail (`UE04`), Create New Project (`UE05`), Automations (`UE06`), Chat & Composer (`UE07`),
-/// Add Context (`UE08`), Model & Mode (`UE09`), Structured Multi-Step Question (`UE10`),
-/// Implementation Plan Review (`UE11`), Turn Diff Line Review (`UE12`), and Live Activity (`UE13`).
+/// Central `@Observable` state coordinator for `PocketAntigravity` (v2.1 UE Aligned).
+/// Drives all 20 UE screens: Agents Home (`UE01`), Sidebar Drawer (`UE01B`), Display Options (`UE02`),
+/// Long-Press & Pin (`UE03`), Project Detail (`UE04`), Create New Project (`UE05`), Automations (`UE06`),
+/// Automation Detail (`UE06B`), Automation Edit (`UE06C`), Chat & Composer (`UE07`), Permissions Preset (`UE07B`),
+/// Add Context (`UE08`), Slash Menu (`UE08B`), Model & Effort (`UE09`), Structured Multi-Step Question (`UE10`),
+/// Implementation Plan Review (`UE11`), Turn Diff Line Review (`UE12`), Live Activity (`UE13`),
+/// Rules & Skills (`UE14`), and Settings (`UE15`).
 @MainActor
 @Observable
 public final class AntigravitySessionStore {
@@ -72,6 +82,8 @@ public final class AntigravitySessionStore {
     public var selectedTab: PrimaryTab = .agents
     public var activeRoute: AntigravityNavigationRoute = .tabRoot
     public var presentedSheet: AntigravityModalSheet? = nil
+    public var isSidebarPresented: Bool = false
+    public var isGlobalSearchPresented: Bool = false
 
     public var currentRoute: AntigravityNavigationRoute {
         get { activeRoute }
@@ -84,7 +96,7 @@ public final class AntigravitySessionStore {
         }
     }
 
-    // MARK: - Agents Home, Display Options & Search State (`UE01`, `UE02`, `UE03`)
+    // MARK: - Agents Home, Display Options & Search State (`UE01`, `UE01B`, `UE02`, `UE03`)
     public var quickFilter: AgentsQuickFilter = .all
     public var displayOptions: AgentDisplayOptions = AgentDisplayOptions()
     public var isSortPopoverPresented: Bool = false
@@ -106,9 +118,10 @@ public final class AntigravitySessionStore {
     public var workspaces: [WorkspaceInfo]
     public var selectedWorkspaceUri: String
 
-    // MARK: - Conversations, Automations & Context State (`UE01`, `UE06`, `UE08`)
+    // MARK: - Conversations, Automations & Context State (`UE01`, `UE06`, `UE06B`, `UE06C`, `UE08`)
     public var summaries: [CascadeSummary]
     public var automations: [AutomationItem]
+    public var selectedAutomationId: String = "auto-nightly-audit"
     public var automationPromptDraft: String = ""
     public var isLoadingAutomations: Bool = false
     public var isMutatingAutomation: Bool = false
@@ -117,6 +130,8 @@ public final class AntigravitySessionStore {
     public var contextCandidates: [ContextCandidateItem]
     public var contextSearchQuery: String = ""
     public var selectedContextCategoryFilter: ContextCategory? = nil
+    /// Feature-flag override enabling optional side-question entry in slash command popup (false by default in live mode).
+    public var includeSideQuestionInSlashMenu: Bool = false
 
     // MARK: - Active Trajectory & Message List State (`UE07`)
     public var activeCascadeId: String

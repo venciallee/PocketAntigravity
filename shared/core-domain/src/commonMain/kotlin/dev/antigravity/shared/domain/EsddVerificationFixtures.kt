@@ -61,24 +61,34 @@ public object EsddVerificationFixtures {
     public val macHost: RemoteHostInstance = RemoteHostInstance(
         instanceId = "macbook-pro-local",
         hostname = "MacBook Pro",
-        version = "v2.33.0",
-        channel = RemoteConnectionChannel.DIRECT_HOST,
+        version = "2.33.1",
+        channel = RemoteConnectionChannel.CLOUD_RELAY,
         endpointUrl = "https://127.0.0.1:42100",
         isOnline = true,
-        latencyMs = 6,
+        latencyMs = 42,
+    )
+
+    public val officeImacHost: RemoteHostInstance = RemoteHostInstance(
+        instanceId = "office-imac-local",
+        hostname = "Office iMac",
+        version = "2.32.0",
+        channel = RemoteConnectionChannel.CLOUD_RELAY,
+        endpointUrl = "https://antigravity.google.com/r/office-imac-local",
+        isOnline = false,
+        latencyMs = 0,
     )
 
     public val cloudHost: RemoteHostInstance = RemoteHostInstance(
         instanceId = "cloud-vm-us-central1",
         hostname = "Cloud",
-        version = "v2.33.0",
+        version = "2.33.1",
         channel = RemoteConnectionChannel.CLOUD_RELAY,
         endpointUrl = "https://antigravity.google.com/r/cloud-vm-us-central1",
         isOnline = true,
         latencyMs = 24,
     )
 
-    public val hosts: List<RemoteHostInstance> = listOf(macHost, cloudHost)
+    public val hosts: List<RemoteHostInstance> = listOf(macHost, officeImacHost, cloudHost)
 
     public val projects: List<ProjectWorkspace> = listOf(
         ProjectWorkspace(
@@ -181,7 +191,7 @@ public object EsddVerificationFixtures {
             isPinned = true,
             isArchived = false,
             isUnread = false,
-            modelLabel = "Gemini 3.1 Pro",
+            modelLabel = "Gemini 4 Neon",
             pendingInteractionTitle = "Approve: vegeta attack...",
             lastMessagePreview = "Plan approved with your 2 comments. Tests pass — next is a load test, which needs your OK.",
             totalAdditions = 128,
@@ -206,7 +216,7 @@ public object EsddVerificationFixtures {
             isPinned = false,
             isArchived = false,
             isUnread = true,
-            modelLabel = "Gemini 3.1 Pro",
+            modelLabel = "Gemini 4 Neon",
             pendingInteractionTitle = "Awaiting review · Implementation Plan",
             lastMessagePreview = "The flake comes from a shared fake clock across parallel subtests in settlement_test.go. I wrote a plan to isolate it per test — review it before I change anything?",
             totalAdditions = 0,
@@ -249,13 +259,13 @@ public object EsddVerificationFixtures {
             stepCount = 31,
             currentStepIndex = 6,
             totalSteps = 6,
-            updatedAtEpochMs = BASE_NOW_EPOCH_MS - 3_600_000L,
-            relativeTimeLabel = "1h",
+            updatedAtEpochMs = BASE_NOW_EPOCH_MS - 14_400_000L,
+            relativeTimeLabel = "4h",
             statusSubtitle = "Done · 6 files changed",
             isPinned = false,
             isArchived = false,
             isUnread = true,
-            modelLabel = "Gemini 3.1 Pro",
+            modelLabel = "Gemini 4 Neon",
             lastMessagePreview = "Updated go.mod toolchain to Go 1.25 across 6 packages.",
             totalAdditions = 42,
             totalDeletions = 31,
@@ -288,6 +298,30 @@ public object EsddVerificationFixtures {
             originHostName = "Cloud",
         ),
         CascadeSummary(
+            cascadeId = "cas-audit-bundle-size",
+            title = "Audit bundle size",
+            projectSlug = "web-console",
+            workspaceUri = "cloud://acme/web-console",
+            branchName = "main",
+            status = CortexStepStatus.DONE,
+            stepCount = 14,
+            currentStepIndex = 4,
+            totalSteps = 4,
+            updatedAtEpochMs = BASE_NOW_EPOCH_MS - 172_800_000L,
+            relativeTimeLabel = "2d",
+            statusSubtitle = "Done · -18KB gzipped",
+            isPinned = false,
+            isArchived = false,
+            isUnread = false,
+            modelLabel = "Gemini 3.8 Flash",
+            lastMessagePreview = "Tree-shook unused icon chunks and reduced initial bundle by 18KB.",
+            totalAdditions = 12,
+            totalDeletions = 98,
+            isCloud = true,
+            originInstanceUuid = "cloud-vm-us-central1",
+            originHostName = "Cloud",
+        ),
+        CascadeSummary(
             cascadeId = "cas-idempotency-payouts",
             title = "Idempotency keys for payouts",
             projectSlug = "ledger-svc",
@@ -298,12 +332,12 @@ public object EsddVerificationFixtures {
             currentStepIndex = 8,
             totalSteps = 8,
             updatedAtEpochMs = BASE_NOW_EPOCH_MS - 86_400_000L,
-            relativeTimeLabel = "Yesterday",
+            relativeTimeLabel = "1d",
             statusSubtitle = "Done · Merged into main",
             isPinned = false,
             isArchived = false,
             isUnread = false,
-            modelLabel = "Gemini 3.1 Pro",
+            modelLabel = "Gemini 4 Neon",
             lastMessagePreview = "Merged payout idempotency key store into main.",
             totalAdditions = 210,
             totalDeletions = 19,
@@ -323,11 +357,11 @@ public object EsddVerificationFixtures {
             totalSteps = 3,
             updatedAtEpochMs = BASE_NOW_EPOCH_MS - 172_800_000L,
             relativeTimeLabel = "2d",
-            statusSubtitle = "Archived · Planning",
+            statusSubtitle = "Archived · /plan interview",
             isPinned = false,
             isArchived = true,
             isUnread = false,
-            modelLabel = "Gemini 3.1 Pro",
+            modelLabel = "Gemini 4 Neon",
             lastMessagePreview = "Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words.",
             isCloud = false,
             originInstanceUuid = "macbook-pro-local",
@@ -349,7 +383,7 @@ public object EsddVerificationFixtures {
             isPinned = false,
             isArchived = true,
             isUnread = false,
-            modelLabel = "Gemini 3.1 Pro",
+            modelLabel = "Gemini 4 Neon",
             lastMessagePreview = "Completed pgxpool v5 batch migration.",
             isCloud = false,
             originInstanceUuid = "macbook-pro-local",
@@ -368,6 +402,34 @@ public object EsddVerificationFixtures {
             lastRunText = "Succeeded · 22h ago",
             needsReview = false,
             isRunningNow = false,
+            prompt = "Check go.mod for outdated or vulnerable modules. Open a PR for patch bumps only and summarize the rest.",
+            modelLabel = "Flash",
+            repeatsLabel = "Every day · 2:00 AM",
+            timeLabel = "2:00 AM",
+            timezoneLabel = "GMT+8:00",
+            recentRuns = listOf(
+                dev.antigravity.shared.model.AutomationRunRecord(
+                    id = "run-1",
+                    status = dev.antigravity.shared.model.AutomationRunStatus.SUCCEEDED,
+                    timestampLabel = "Succeeded · 22h ago",
+                    summary = "No vulnerable modules · 2 patch bumps",
+                    canRetry = false,
+                ),
+                dev.antigravity.shared.model.AutomationRunRecord(
+                    id = "run-2",
+                    status = dev.antigravity.shared.model.AutomationRunStatus.NEEDS_REVIEW,
+                    timestampLabel = "Needs review · 2d ago",
+                    summary = "PR for golang.org/x/net waiting",
+                    canRetry = false,
+                ),
+                dev.antigravity.shared.model.AutomationRunRecord(
+                    id = "run-3",
+                    status = dev.antigravity.shared.model.AutomationRunStatus.FAILED,
+                    timestampLabel = "Failed · 3d ago",
+                    summary = "Google sign-in expired",
+                    canRetry = true,
+                ),
+            ),
         ),
         AutomationItem(
             id = "auto-weekly-flaky",
@@ -379,6 +441,11 @@ public object EsddVerificationFixtures {
             lastRunText = "Needs review · 2d",
             needsReview = true,
             isRunningNow = false,
+            prompt = "Analyze CI test flake trends from the past 7 days and open a prioritized summary.",
+            modelLabel = "Pro",
+            repeatsLabel = "Every week · 9:00 AM",
+            timeLabel = "9:00 AM",
+            timezoneLabel = "GMT+8:00",
         ),
         AutomationItem(
             id = "auto-pr-triage",
@@ -390,6 +457,11 @@ public object EsddVerificationFixtures {
             lastRunText = "Last run 14m ago",
             needsReview = false,
             isRunningNow = false,
+            prompt = "Label incoming pull requests, verify required checks, and summarize diff risk.",
+            modelLabel = "Flash Lite",
+            repeatsLabel = "Always on",
+            timeLabel = "On PR opened",
+            timezoneLabel = "GMT+8:00",
         ),
         AutomationItem(
             id = "auto-bundle-size",
@@ -401,6 +473,11 @@ public object EsddVerificationFixtures {
             lastRunText = "Paused · 5d ago",
             needsReview = false,
             isRunningNow = false,
+            prompt = "Measure production web bundle gzipped size and alert if main chunk grows > 10KB.",
+            modelLabel = "Flash",
+            repeatsLabel = "Every day · 8:00 AM",
+            timeLabel = "8:00 AM",
+            timezoneLabel = "GMT+8:00",
         ),
     )
 
@@ -1029,11 +1106,14 @@ public object EsddVerificationFixtures {
     ) {
         coordinator.isVerificationMode = true
         when (scene) {
-            EsddVerifySceneCase.AGENTS_HOME -> {
+            EsddVerifySceneCase.AGENTS_HOME,
+            EsddVerifySceneCase.SIDEBAR_DRAWER,
+            -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
             }
             EsddVerifySceneCase.DISPLAY_OPTIONS -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+                coordinator.workspaceStore.updateDisplayOptions { it.copy(autoPinOnMessage = true) }
             }
             EsddVerifySceneCase.CONTEXT_MENU_PIN -> {
                 coordinator.chatStore.setActiveCascade("cas-flaky-settlement")
@@ -1041,18 +1121,7 @@ public object EsddVerificationFixtures {
             EsddVerifySceneCase.PROJECT_DETAIL -> {
                 coordinator.workspaceStore.selectProject("ledger-svc")
                 coordinator.workspaceStore.selectProjectTab(ProjectDetailTab.ACTIVE)
-                // Align ledger-svc to Active 3 / Archived 2 (5 conversations) as depicted in UE04
-                coordinator.conversationSyncStore.updateSummaries { current ->
-                    current
-                        .filterNot { it.cascadeId == "cas-pgx-v5-migration" }
-                        .map { summary ->
-                            if (summary.cascadeId == "cas-idempotency-payouts") {
-                                summary.copy(isArchived = true)
-                            } else {
-                                summary
-                            }
-                        }
-                }
+                // Align ledger-svc to Active 4 / Archived 2 as depicted in UE04 (ios-project-detail / and-project)
             }
             EsddVerifySceneCase.CREATE_PROJECT -> {
                 coordinator.workspaceStore.updateNewProjectDraft {
@@ -1062,11 +1131,22 @@ public object EsddVerificationFixtures {
             EsddVerifySceneCase.AUTOMATIONS -> {
                 // Uses seeded 4 automations across SCHEDULED, ALWAYS ON, and PAUSED sections
             }
-            EsddVerifySceneCase.CHAT_AND_COMPOSER -> {
+            EsddVerifySceneCase.AUTOMATION_DETAIL,
+            EsddVerifySceneCase.AUTOMATION_EDIT,
+            -> {
+                coordinator.workspaceStore.selectAutomation("auto-nightly-audit")
+            }
+            EsddVerifySceneCase.CHAT_AND_COMPOSER,
+            EsddVerifySceneCase.PERMISSIONS_PRESET,
+            -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
             }
             EsddVerifySceneCase.ADD_CONTEXT -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+            }
+            EsddVerifySceneCase.SLASH_MENU -> {
+                coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+                coordinator.chatStore.setDraftInputText("/")
             }
             EsddVerifySceneCase.MODEL_AND_MODE -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
@@ -1086,6 +1166,12 @@ public object EsddVerificationFixtures {
                 coordinator.reviewStore.selectDiffLine(29)
             }
             EsddVerifySceneCase.LIVE_ACTIVITY_SPEC -> {
+                coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+            }
+            EsddVerifySceneCase.RULES_AND_SKILLS -> {
+                coordinator.workspaceStore.selectProject("ledger-svc")
+            }
+            EsddVerifySceneCase.SETTINGS -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
             }
         }

@@ -320,6 +320,7 @@ public data class PluginCatalogItem(
     public val accountSignedIn: Boolean = false,
     public val mcpStartupError: String? = null,
     public val suggestedPrompts: List<String> = emptyList(),
+    public val scope: String = "Global",
 )
 
 @Serializable
@@ -339,43 +340,52 @@ public data class CustomizationsCatalog(
     public val mcpServers: List<McpServerStatusItem> = emptyList(),
     public val plugins: List<PluginCatalogItem> = emptyList(),
     public val hooks: List<LifecycleHookItem> = emptyList(),
-    public val customAgents: List<String> = listOf("Default"),
+    public val customAgents: List<String> = listOf("go-reviewer"),
+    public val loadedTokensLabel: String = "6.2k tokens",
 ) {
     public companion object {
         public val defaultCatalog: CustomizationsCatalog = CustomizationsCatalog(
             skills = listOf(
-                SkillSummary(name = "antigravity-doc-sync", description = "Auto-sync Antigravity 2.0 docs & ESDD deltas", scope = "Workspace"),
-                SkillSummary(name = "go-testing", description = "Table-driven Go tests & fake clock patterns", scope = "Workspace"),
-                SkillSummary(name = "generative_ui", description = "Interactive HTML widgets & data diagrams", scope = "Global"),
+                SkillSummary(name = "go-testing", description = "Table-driven tests with -race", scope = "Global"),
+                SkillSummary(name = "pr-summary", description = "Write PR descriptions from the diff", scope = "Global"),
+                SkillSummary(name = "api-review", description = "Check handlers against API rules · .agents/skills", scope = "Workspace"),
+                SkillSummary(name = "add-endpoint", description = "Scaffold handler + test + route · .agents/skills", scope = "Workspace"),
+                SkillSummary(name = "firebase:deploy", description = "From plugin firebase", scope = "Plugin"),
             ),
             rules = listOf(
                 RuleSummary(name = "AGENTS.md", scope = "Workspace", preview = "KMP shared core parity & 4-gate ESDD verification."),
+                RuleSummary(name = "go-concurrency.md", scope = "Workspace", preview = "Always inject Clock interfaces; avoid package-level mutable state."),
+                RuleSummary(name = "api-errors.md", scope = "Workspace", preview = "Return RFC 9457 Problem JSON with Retry-After on 429 responses."),
+                RuleSummary(name = "security-baseline.md", scope = "Global", preview = "Never commit credentials or bypass sandbox permission checks."),
             ),
             mcpServers = listOf(
-                McpServerStatusItem(name = "github", transport = "remote-oauth", isConnected = true, toolCount = 18, oauthConnected = true),
-                McpServerStatusItem(name = "postgres-dev", transport = "stdio", isConnected = true, toolCount = 6, oauthConnected = true),
+                McpServerStatusItem(name = "firebase", transport = "remote-oauth", isConnected = true, toolCount = 12, oauthConnected = true),
+                McpServerStatusItem(name = "datadog", transport = "remote-api", isConnected = false, toolCount = 0, errorMessage = "MCP needs an API key", oauthConnected = false),
             ),
             plugins = listOf(
                 PluginCatalogItem(
-                    id = "plugin-github",
-                    name = "GitHub",
-                    summary = "Repositories, PR status pills, Issues & Actions",
+                    id = "plugin-firebase",
+                    name = "Firebase",
+                    summary = "2 skills · 1 MCP server",
                     isInstalled = true,
                     isEnabled = true,
-                    provider = "GitHub",
+                    provider = "Firebase",
                     isFeaturedPartner = true,
                     accountSignedIn = true,
-                    suggestedPrompts = listOf("Review open PRs with failing checks"),
+                    suggestedPrompts = listOf("Deploy preview channel"),
+                    scope = "Global",
                 ),
                 PluginCatalogItem(
-                    id = "plugin-figma",
-                    name = "Figma",
-                    summary = "Inspect design frames, tokens & screenshots",
-                    isInstalled = false,
+                    id = "plugin-datadog",
+                    name = "Datadog",
+                    summary = "MCP needs an API key",
+                    isInstalled = true,
                     isEnabled = false,
-                    provider = "Figma",
+                    provider = "Datadog",
                     isFeaturedPartner = true,
                     accountSignedIn = false,
+                    mcpStartupError = "MCP needs an API key",
+                    scope = "Workspace",
                 ),
             ),
             hooks = listOf(
@@ -388,7 +398,8 @@ public data class CustomizationsCatalog(
                     timeoutSeconds = 30,
                 ),
             ),
-            customAgents = listOf("Default", "go-reviewer", "release-captain"),
+            customAgents = listOf("go-reviewer"),
+            loadedTokensLabel = "6.2k tokens",
         )
     }
 }
@@ -407,9 +418,9 @@ public object InterfaceLayoutModeSerializer : ResilientEnumSerializer<InterfaceL
 
 @Serializable(with = AppThemePresetSerializer::class)
 public enum class AppThemePreset(public val displayTitle: String) {
-    OBSIDIAN("Matte Obsidian"),
+    OBSIDIAN("Obsidian"),
     NORD("Nord"),
-    EVERFOREST_DARK("Everforest Dark"),
+    EVERFOREST_DARK("Everforest"),
     EVERFOREST_LIGHT("Everforest Light"),
 }
 
@@ -432,6 +443,26 @@ public object AppAppearanceModeSerializer : ResilientEnumSerializer<AppAppearanc
     fallbackProvider = { AppAppearanceMode.SYSTEM },
 )
 
+@Serializable(with = AppLanguageSerializer::class)
+public enum class AppLanguage(public val displayTitle: String) {
+    ENGLISH("English"),
+    ZH_HANS("简体中文"),
+}
+
+public object AppLanguageSerializer : ResilientEnumSerializer<AppLanguage>(
+    serialName = "dev.antigravity.shared.model.AppLanguage",
+    entriesProvider = { AppLanguage.entries },
+    fallbackProvider = { AppLanguage.ENGLISH },
+    extraMatcher = { raw ->
+        val norm = normalizeResilientEnumToken(raw)
+        when (norm) {
+            "en", "english", "enus" -> AppLanguage.ENGLISH
+            "zh", "zhcn", "zhhans", "chinese", "简体中文" -> AppLanguage.ZH_HANS
+            else -> null
+        }
+    },
+)
+
 @Serializable
 public data class AppAppearancePreferences(
     public val layoutMode: InterfaceLayoutMode = InterfaceLayoutMode.COMFORTABLE,
@@ -440,6 +471,10 @@ public data class AppAppearancePreferences(
     public val collapsedProjectIds: Set<String> = emptySet(),
     public val globalPermissionPreset: AgentPermissionPreset = AgentPermissionPreset.DEFAULT_POLICY,
     public val useDynamicColor: Boolean = false,
+    public val language: AppLanguage = AppLanguage.ENGLISH,
+    public val notificationsEnabled: Boolean = true,
+    public val suppressManualStopNotification: Boolean = true,
+    public val liveUpdatesEnabled: Boolean = true,
 )
 
 @Serializable

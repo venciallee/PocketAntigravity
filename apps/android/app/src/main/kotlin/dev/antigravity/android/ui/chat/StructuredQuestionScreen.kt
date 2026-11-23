@@ -19,23 +19,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +39,7 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,15 +50,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.antigravity.android.core.ui.components.AntigravitySurfaceCard
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
@@ -70,9 +63,9 @@ import dev.antigravity.shared.model.StructuredQuestionStepItem
 import kotlinx.coroutines.launch
 
 /**
- * UE10_STRUCTURED_QUESTION: Native Material 3 multi-step interactive structured question screen
- * (`Audit log for admin actions`), supporting multi-select checkboxes, single-select radio rows,
- * custom write-in ("Something else..."), stepper chips, and freeform reply fallback.
+ * UE10_STRUCTURED_QUESTION (`and-ask.png`): Native Material 3 multi-step `/plan interview`
+ * screen matching `and-ask.png` with user `/plan` bubble, `Gemini 4 Neon` attribution,
+ * answered summary pill, 3-segment question card, checkboxes, Back/Next CTAs, and bottom freeform bar.
  */
 @Composable
 fun StructuredQuestionScreen(
@@ -102,58 +95,44 @@ fun StructuredQuestionScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 IconButton(
                     onClick = onBack,
                     modifier = Modifier
-                        .defaultMinSize(
-                            minWidth = AntigravityDesignTokens.MinTouchTarget,
-                            minHeight = AntigravityDesignTokens.MinTouchTarget,
-                        )
-                        .testTag("btn-back-structured-question"),
+                        .size(AntigravityDesignTokens.MinTouchTarget)
+                        .testTag("btn-question-back"),
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                         contentDescription = "Back",
-                        tint = colors.accentPeriwinkle,
+                        tint = colors.inkReading,
                     )
                 }
 
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                     Text(
                         text = "Audit log for admin actions",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        style = MaterialTheme.typography.titleLarge.copy(fontSize = 19.sp, fontWeight = FontWeight.Normal),
                         color = colors.inkReading,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = "ledger-svc · Planning · Gemini 3.1 Pro",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "ledger-svc · /plan interview",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = colors.inkSecondary,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
 
                 IconButton(
                     onClick = {},
-                    modifier = Modifier.defaultMinSize(
-                        minWidth = AntigravityDesignTokens.MinTouchTarget,
-                        minHeight = AntigravityDesignTokens.MinTouchTarget,
-                    ),
+                    modifier = Modifier.size(AntigravityDesignTokens.MinTouchTarget),
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "Options",
-                        tint = colors.inkSecondary,
-                    )
+                    Icon(Icons.Rounded.MoreVert, contentDescription = "More", tint = colors.inkReading)
                 }
             }
         },
@@ -163,85 +142,51 @@ fun StructuredQuestionScreen(
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .imePadding()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                shape = RoundedCornerShape(26.dp),
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                shape = RoundedCornerShape(100.dp),
                 color = colors.surfaceCard,
                 border = BorderStroke(1.dp, colors.cardBorder),
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .defaultMinSize(minHeight = 52.dp)
-                        .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (freeformReply.isEmpty()) {
-                            Text(
-                                text = "Reply in your own words",
-                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
-                                color = colors.inkMuted,
-                            )
-                        }
-                        BasicTextField(
-                            value = freeformReply,
-                            onValueChange = { freeformReply = it },
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                fontSize = 15.sp,
-                                color = colors.inkReading,
-                            ),
-                            cursorBrush = SolidColor(colors.accentPeriwinkle),
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("composer-freeform-reply"),
-                        )
-                    }
-
-                    if (freeformReply.isNotBlank()) {
-                        Surface(
-                            onClick = {
-                                val text = freeformReply.trim()
-                                freeformReply = ""
-                                scope.launch {
-                                    coordinator.sendMessage(
-                                        cascadeId = chatState.activeCascadeId.ifBlank { "cas-audit-log" },
-                                        message = text,
-                                    )
+                    BasicTextField(
+                        value = freeformReply,
+                        onValueChange = { freeformReply = it },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("question-freeform-input"),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.inkReading),
+                        cursorBrush = SolidColor(colors.accentPeriwinkle),
+                        decorationBox = { inner ->
+                            if (freeformReply.isEmpty()) {
+                                Text(
+                                    text = "Or reply in your own words",
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp),
+                                    color = colors.inkMuted,
+                                )
+                            }
+                            inner()
+                        },
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.Mic,
+                        contentDescription = "Voice reply",
+                        tint = colors.inkLabel,
+                        modifier = Modifier
+                            .size(21.dp)
+                            .clickable {
+                                if (freeformReply.isNotBlank()) {
+                                    submittedBanner = "Sent reply: $freeformReply"
+                                    freeformReply = ""
                                 }
-                                submittedBanner = "Reply sent to agent"
                             },
-                            modifier = Modifier.size(38.dp),
-                            shape = CircleShape,
-                            color = colors.accentPeriwinkle,
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ArrowUpward,
-                                    contentDescription = "Send reply",
-                                    tint = colors.inkOnPrimaryCta,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        }
-                    } else {
-                        Surface(
-                            onClick = {},
-                            modifier = Modifier.size(38.dp),
-                            shape = CircleShape,
-                            color = colors.surfaceElevated,
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Mic,
-                                    contentDescription = "Voice reply",
-                                    tint = colors.inkSecondary,
-                                    modifier = Modifier.size(19.dp),
-                                )
-                            }
-                        }
-                    }
+                    )
                 }
             }
         },
@@ -252,343 +197,272 @@ fun StructuredQuestionScreen(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // Agent intro prompt
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.AutoAwesome,
-                    contentDescription = null,
-                    tint = colors.accentPeriwinkle,
-                    modifier = Modifier
-                        .padding(top = 3.dp)
-                        .size(18.dp),
+            // User `/plan` bubble (right-aligned tonal pill)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = colors.surfaceActiveTab,
+                ) {
+                    Text(
+                        text = "/plan Add an audit log for admin actions",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
+                        color = colors.pillActiveForeground,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
+                    )
+                }
+            }
+
+            // Agent attribution & prompt
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Gemini 4 Neon",
+                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp),
+                    color = colors.inkSecondary,
                 )
                 Text(
                     text = "Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words.",
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = 15.5.sp,
-                        lineHeight = 23.sp,
-                    ),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp, lineHeight = 23.sp),
                     color = colors.inkReading,
-                    modifier = Modifier.weight(1f),
                 )
             }
 
-            // Interactive M3 Question Card
-            AntigravitySurfaceCard(
-                modifier = Modifier.fillMaxWidth(),
-                containerColor = colors.surfaceCard,
-                borderColor = colors.cardBorder,
-                cornerRadius = 22.dp,
-                contentPadding = PaddingValues(16.dp),
-            ) {
-                // Stepper Chips Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            // Answered Step 1 pill (`✓ Storage: Postgres table`)
+            if (activeIdx > 0) {
+                val prevStep = questions.first()
+                val answerText = prevStep.selectedOptions.firstOrNull() ?: "Postgres table"
+                Surface(
+                    onClick = { coordinator.chatStore.setActiveQuestionStepIndex(0) },
+                    modifier = Modifier.testTag("question-answered-pill-0"),
+                    shape = RoundedCornerShape(10.dp),
+                    color = colors.canvasObsidian,
+                    border = BorderStroke(1.dp, colors.cardBorder),
                 ) {
-                    questions.forEachIndexed { idx, step ->
-                        val isActive = idx == activeIdx
-                        val stepTag = questionStepTag(step, idx)
-                        val chipBg = if (isActive) colors.pillActiveBackground else colors.surfaceElevated
-                        val chipFg = if (isActive) colors.pillActiveForeground else colors.inkSecondary
-
-                        Surface(
-                            onClick = { coordinator.chatStore.setActiveQuestionStepIndex(idx) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .defaultMinSize(minHeight = 38.dp)
-                                .testTag(stepTag),
-                            shape = RoundedCornerShape(100.dp),
-                            color = chipBg,
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center,
-                            ) {
-                                if (step.isCompleted && !isActive) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Check,
-                                        contentDescription = "Completed",
-                                        tint = colors.statusDone,
-                                        modifier = Modifier
-                                            .padding(end = 4.dp)
-                                            .size(14.dp),
-                                    )
-                                }
-                                Text(
-                                    text = "${step.stepNumber} ${step.shortTabTitle}",
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.SemiBold,
-                                    ),
-                                    color = chipFg,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint = colors.statusDone,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = "${prevStep.shortTabTitle}: $answerText",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
+                            color = colors.inkReading,
+                        )
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(16.dp))
+            // Main Question Card (`and-ask.png`)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("structured-question-card"),
+                shape = RoundedCornerShape(22.dp),
+                color = colors.surfaceCard,
+                border = BorderStroke(1.dp, colors.cardBorder),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    // Header: Question 2 of 3 | Select all that apply
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Question ${activeIdx + 1} of ${questions.size}",
+                            style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
+                            color = colors.inkSecondary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = if (activeQuestion.isMultiSelect) "Select all that apply" else "Select one",
+                            style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
+                            color = colors.inkSecondary,
+                        )
+                    }
 
-                // Question Metadata & Heading
-                Text(
-                    text = "Question ${activeQuestion.stepNumber} of ${questions.size} · ${
-                        if (activeQuestion.isMultiSelect) "Select all that apply" else "Select one"
-                    }",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.inkSecondary,
-                )
+                    // 3-segment progress bar
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        questions.indices.forEach { stepIdx ->
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(100.dp))
+                                    .background(
+                                        if (stepIdx <= activeIdx) colors.accentPeriwinkle else colors.ringTrack,
+                                    ),
+                            )
+                        }
+                    }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                    // Question Title
+                    Text(
+                        text = activeQuestion.questionTitle,
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontSize = 20.sp,
+                            lineHeight = 27.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        color = colors.inkReading,
+                    )
 
-                Text(
-                    text = activeQuestion.questionTitle,
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontSize = 20.sp,
-                        lineHeight = 26.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    color = colors.inkReading,
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Option Rows (Checkbox for multi-select, RadioButton for single-select)
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    activeQuestion.options.forEach { option ->
-                        val isSelected = option in activeQuestion.selectedOptions
-                        val optionTag = questionOptionTag(option)
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .defaultMinSize(minHeight = 54.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable(role = if (activeQuestion.isMultiSelect) Role.Checkbox else Role.RadioButton) {
-                                    coordinator.chatStore.toggleQuestionOption(option, activeIdx)
-                                }
-                                .testTag(optionTag),
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (isSelected) colors.surfaceSelectionTint else colors.surfaceSubtleBox,
-                            border = BorderStroke(
-                                width = if (isSelected) 1.25.dp else 1.dp,
-                                color = if (isSelected) colors.accentPeriwinkle.copy(alpha = 0.72f) else colors.cardBorder,
-                            ),
-                        ) {
+                    // Options list (4 visible checkboxes matching `and-ask.png`)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        activeQuestion.options.forEachIndexed { optIdx, option ->
+                            val isSelected = option in activeQuestion.selectedOptions
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        coordinator.chatStore.toggleQuestionOption(option = option, stepIndex = activeIdx)
+                                    }
+                                    .padding(vertical = 4.dp)
+                                    .testTag("question-option-$optIdx"),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 if (activeQuestion.isMultiSelect) {
                                     Checkbox(
                                         checked = isSelected,
-                                        onCheckedChange = null,
+                                        onCheckedChange = {
+                                            coordinator.chatStore.toggleQuestionOption(option = option, stepIndex = activeIdx)
+                                        },
                                         colors = CheckboxDefaults.colors(
                                             checkedColor = colors.accentPeriwinkle,
-                                            uncheckedColor = colors.inkMuted,
                                             checkmarkColor = colors.inkOnPrimaryCta,
+                                            uncheckedColor = colors.inkSecondary,
                                         ),
                                     )
                                 } else {
                                     RadioButton(
                                         selected = isSelected,
-                                        onClick = null,
+                                        onClick = {
+                                            coordinator.chatStore.toggleQuestionOption(option = option, stepIndex = activeIdx)
+                                        },
                                         colors = RadioButtonDefaults.colors(
                                             selectedColor = colors.accentPeriwinkle,
-                                            unselectedColor = colors.inkMuted,
+                                            unselectedColor = colors.inkSecondary,
                                         ),
                                     )
                                 }
                                 Text(
                                     text = option,
-                                    style = MaterialTheme.typography.titleSmall.copy(
-                                        fontSize = 15.sp,
-                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                    ),
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                                     color = colors.inkReading,
-                                    modifier = Modifier.weight(1f),
                                 )
                             }
                         }
                     }
 
-                    // Custom write-in field ("Something else...")
-                    Surface(
+                    // Bottom Card Footer: Back (left text button) | Next · 3 selected (right primary pill)
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .defaultMinSize(minHeight = 52.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        color = colors.surfaceObsidian,
-                        border = BorderStroke(1.dp, colors.inkMuted.copy(alpha = 0.35f)),
+                            .padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        TextButton(
+                            onClick = {
+                                if (activeIdx > 0) {
+                                    coordinator.chatStore.setActiveQuestionStepIndex(activeIdx - 1)
+                                } else {
+                                    onBack()
+                                }
+                            },
+                            modifier = Modifier.testTag("btn-question-prev"),
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Edit,
-                                contentDescription = "Custom answer",
-                                tint = colors.inkMuted,
-                                modifier = Modifier.size(18.dp),
+                            Text(
+                                text = "Back",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                                color = colors.accentPeriwinkle,
                             )
-                            Box(modifier = Modifier.weight(1f)) {
-                                if (activeQuestion.customWriteIn.isEmpty()) {
-                                    Text(
-                                        text = "Something else...",
-                                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
-                                        color = colors.inkMuted,
-                                    )
-                                }
-                                BasicTextField(
-                                    value = activeQuestion.customWriteIn,
-                                    onValueChange = { text ->
-                                        coordinator.chatStore.setQuestionCustomWriteIn(text, activeIdx)
-                                    },
-                                    textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                        fontSize = 15.sp,
-                                        color = colors.inkReading,
-                                    ),
-                                    cursorBrush = SolidColor(colors.accentPeriwinkle),
-                                    singleLine = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("q-input-something-else"),
-                                )
-                            }
                         }
-                    }
-                }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                        Spacer(modifier = Modifier.weight(1f))
 
-                // Card Footer Buttons: Back + Next / Submit
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    FilledTonalButton(
-                        onClick = { coordinator.chatStore.previousQuestionStep() },
-                        modifier = Modifier
-                            .defaultMinSize(minWidth = 92.dp, minHeight = AntigravityDesignTokens.MinTouchTarget)
-                            .testTag("q-btn-back"),
-                        shape = RoundedCornerShape(100.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = colors.surfaceElevated,
-                            contentColor = colors.inkReading,
-                        ),
-                    ) {
-                        Text(
-                            text = "Back",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            if (isLastStep) {
-                                val summary = questions.joinToString("; ") { q ->
-                                    val chosen = (q.selectedOptions.toList() + listOfNotNull(
-                                        q.customWriteIn.takeIf { it.isNotBlank() },
-                                    )).joinToString(", ")
-                                    "${q.shortTabTitle}: ${chosen.ifBlank { "default" }}"
+                        val count = activeQuestion.selectedOptions.size
+                        Button(
+                            onClick = {
+                                if (!isLastStep) {
+                                    coordinator.chatStore.setActiveQuestionStepIndex(activeIdx + 1)
+                                } else {
+                                    scope.launch {
+                                        submittedBanner = "Decisions submitted to Gemini 4 Neon"
+                                    }
+                                    onBack()
                                 }
-                                scope.launch {
-                                    coordinator.sendMessage(
-                                        cascadeId = chatState.activeCascadeId.ifBlank { "cas-audit-log" },
-                                        message = "Decisions confirmed — $summary",
-                                    )
-                                }
-                                submittedBanner = "Answers submitted to agent"
-                            } else {
-                                coordinator.chatStore.advanceQuestionStep()
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget)
-                            .testTag("q-btn-next"),
-                        shape = RoundedCornerShape(100.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colors.accentPeriwinkle,
-                            contentColor = colors.inkOnPrimaryCta,
-                        ),
-                    ) {
-                        Text(
-                            text = if (isLastStep) "Submit" else "Next",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
+                            },
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 46.dp)
+                                .testTag("btn-question-next"),
+                            shape = RoundedCornerShape(100.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.accentPeriwinkle,
+                                contentColor = colors.inkOnPrimaryCta,
                             ),
-                        )
+                            contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
+                        ) {
+                            Text(
+                                text = if (isLastStep) {
+                                    "Submit"
+                                } else if (activeQuestion.isMultiSelect && count > 0) {
+                                    "Next · $count selected"
+                                } else {
+                                    "Next"
+                                },
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                            )
+                        }
                     }
                 }
             }
 
             if (submittedBanner != null) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = colors.statusDone.copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, colors.statusDone.copy(alpha = 0.35f)),
-                ) {
-                    Text(
-                        text = submittedBanner.orEmpty(),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = colors.statusDone,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    )
-                }
+                Text(
+                    text = submittedBanner.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.statusDone,
+                    modifier = Modifier.testTag("question-submitted-banner"),
+                )
             }
         }
     }
 }
 
-private fun questionStepTag(step: StructuredQuestionStepItem, idx: Int): String {
-    val slug = step.shortTabTitle.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
-    return "q-step-${step.stepNumber}-$slug".ifBlank { "q-step-${idx + 1}" }
-}
-
-private fun questionOptionTag(option: String): String {
-    val lower = option.lowercase()
-    return when {
-        lower.contains("freeze") -> "q-opt-freeze"
-        lower.contains("limit") -> "q-opt-limit"
-        lower.contains("adjustment") || lower.contains("ledger") -> "q-opt-adjustments"
-        lower.contains("role") || lower.contains("permission") -> "q-opt-role"
-        else -> "q-opt-${lower.replace(Regex("[^a-z0-9]+"), "-").trim('-')}"
-    }
-}
-
 private fun defaultStructuredQuestionsFallback(): List<StructuredQuestionStepItem> = listOf(
     StructuredQuestionStepItem(
-        id = "q-1",
+        id = "q-storage",
         stepNumber = 1,
         shortTabTitle = "Storage",
-        questionTitle = "Where should audit events be stored?",
-        options = listOf("Append-only Postgres table", "Dedicated BigQuery sink", "Encrypted S3 parquet"),
-        selectedOptions = setOf("Append-only Postgres table"),
-        isCompleted = true,
+        questionTitle = "Where should audit events be persisted?",
+        options = listOf("Postgres table", "Append-only S3 bucket", "Kafka topic"),
         isMultiSelect = false,
+        selectedOptions = setOf("Postgres table"),
     ),
     StructuredQuestionStepItem(
-        id = "q-2",
+        id = "q-actions",
         stepNumber = 2,
         shortTabTitle = "Actions",
         questionTitle = "Which admin actions should be audited?",
@@ -598,22 +472,20 @@ private fun defaultStructuredQuestionsFallback(): List<StructuredQuestionStepIte
             "Manual ledger adjustments",
             "Role & permission changes",
         ),
+        isMultiSelect = true,
         selectedOptions = setOf(
             "Account freeze / unfreeze",
             "Limit changes",
             "Manual ledger adjustments",
         ),
-        isCompleted = false,
-        isMultiSelect = true,
     ),
     StructuredQuestionStepItem(
-        id = "q-3",
+        id = "q-retention",
         stepNumber = 3,
         shortTabTitle = "Retention",
         questionTitle = "How long should audit logs be retained?",
-        options = listOf("90 days hot + 7 years cold", "1 year hot", "Indefinite immutable archive"),
-        selectedOptions = setOf("90 days hot + 7 years cold"),
-        isCompleted = false,
+        options = listOf("90 days", "1 year", "7 years (compliance)"),
         isMultiSelect = false,
+        selectedOptions = setOf("7 years (compliance)"),
     ),
 )

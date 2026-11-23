@@ -123,10 +123,10 @@ object AntigravityDesignTokens {
     val FabCornerRadius = 16.dp
     val FabSize = 56.dp
 
-    // Locked cross-platform semantic status colors (Dark)
+    // Locked cross-platform semantic status colors (Dark, UE v2.1 aligned)
     private val DarkStatusRunning = Color(0xFF7DA7FF)
-    private val DarkStatusWaiting = Color(0xFFEBB365)
-    private val DarkStatusDone = Color(0xFF57C88A)
+    private val DarkStatusWaiting = Color(0xFFF2B866)
+    private val DarkStatusDone = Color(0xFF6FD8A6)
     private val DarkStatusError = Color(0xFFF07167)
 
     // Locked cross-platform semantic status colors (Light, WCAG AA >= 4.5:1)
@@ -137,45 +137,45 @@ object AntigravityDesignTokens {
 
     private val ObsidianDark = AntigravityExtendedColors(
         isDark = true,
-        canvasObsidian = Color(0xFF090A0D),
-        surfaceObsidian = Color(0xFF0F1014),
-        surfaceCard = Color(0xFF141519),
-        surfaceSheet = Color(0xFF17181D),
-        surfacePill = Color(0xFF17191F),
-        surfaceSubtleBox = Color(0xFF1B1D23),
-        surfaceElevated = Color(0xFF1D1F26),
-        surfaceSheetGroup = Color(0xFF202229),
-        surfacePopover = Color(0xFF25272F),
-        surfaceActiveTab = Color(0xFF31343E),
+        canvasObsidian = Color(0xFF111113),
+        surfaceObsidian = Color(0xFF161619),
+        surfaceCard = Color(0xFF1B1B1E),
+        surfaceSheet = Color(0xFF1B1B1E),
+        surfacePill = Color(0xFF1B1B1E),
+        surfaceSubtleBox = Color(0xFF212125),
+        surfaceElevated = Color(0xFF212125),
+        surfaceSheetGroup = Color(0xFF212125),
+        surfacePopover = Color(0xFF26262B),
+        surfaceActiveTab = Color(0xFF24324A),
         cardBorder = Color.White.copy(alpha = 0.08f),
         subtleDivider = Color.White.copy(alpha = 0.07f),
-        accentPeriwinkle = Color(0xFF8EB4FF),
+        accentPeriwinkle = Color(0xFF8DB8FF),
         accentSecondary = Color(0xFF7DA7FF),
         inkOnPrimaryCta = Color(0xFF0A0E17),
         inkOnAmberCta = Color(0xFF0A0E17),
-        pillActiveBackground = Color(0xFFFFFFFF),
-        pillActiveForeground = Color(0xFF0A0E17),
+        pillActiveBackground = Color(0xFF24324A),
+        pillActiveForeground = Color(0xFFE6EEFF),
         statusRunning = DarkStatusRunning,
         statusWaiting = DarkStatusWaiting,
         statusDone = DarkStatusDone,
         statusError = DarkStatusError,
-        inkReading = Color(0xFFF5F6F8),
-        inkLabel = Color(0xFFD1D5DF),
-        inkSecondary = Color(0xFF8A909E),
-        inkMuted = Color(0xFF6D7485),
-        surfaceSelectionTint = Color(0xFF202431),
-        surfaceAmberTint = DarkStatusWaiting.copy(alpha = 0.14f),
-        surfaceCodeBlock = Color(0xFF101217),
-        surfaceInlineCode = Color(0xFF1D1F26),
+        inkReading = Color(0xFFF2F2F5),
+        inkLabel = Color(0xFFD6D6DC),
+        inkSecondary = Color(0xFF9A9AA3),
+        inkMuted = Color(0xFF767680),
+        surfaceSelectionTint = Color(0xFF24324A),
+        surfaceAmberTint = Color(0xFF241E14),
+        surfaceCodeBlock = Color(0xFF141417),
+        surfaceInlineCode = Color(0xFF212125),
         inkInlineCode = Color(0xFFDCE6FF),
         surfaceDiffAdd = DarkStatusDone.copy(alpha = 0.14f),
         surfaceDiffRemove = DarkStatusError.copy(alpha = 0.14f),
-        ringTrack = Color(0xFF2A3142),
+        ringTrack = Color(0xFF2E2E34),
         syntaxComment = Color(0xFF6E768A),
         syntaxKeyword = Color(0xFFC594F6),
-        syntaxString = Color(0xFF7CD6A2),
-        syntaxNumber = Color(0xFFF0B975),
-        syntaxType = Color(0xFF8EB4FF),
+        syntaxString = Color(0xFF6FD8A6),
+        syntaxNumber = Color(0xFFF2B866),
+        syntaxType = Color(0xFF8DB8FF),
         syntaxFunction = Color(0xFF7CC7FF),
         syntaxProperty = Color(0xFFE6A4B4),
     )

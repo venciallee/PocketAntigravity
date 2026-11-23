@@ -1,15 +1,15 @@
 {
   "stateId": "UE07_CHAT_AND_COMPOSER",
-  "viewportWidth": 393,
-  "viewportHeight": 852,
-  "scrollWidth": 393,
-  "scrollHeight": 852,
+  "viewportWidth": 390,
+  "viewportHeight": 844,
+  "scrollWidth": 390,
+  "scrollHeight": 844,
   "overflowPx": 0,
   "elements": {
     "[data-testid='chat-diff-pill']": {
       "exists": true,
-      "x": 269,
-      "y": 56,
+      "x": 266,
+      "y": 59,
       "width": 82,
       "height": 32,
       "text": "+128 -14"
@@ -17,63 +17,63 @@
     "[data-testid='row-thought-14s']": {
       "exists": true,
       "x": 16,
-      "y": 135,
-      "width": 138.9,
+      "y": 138.6,
+      "width": 141.6,
       "height": 30,
       "text": "Thought for 14s"
     },
     "[data-testid='card-artifact-plan']": {
       "exists": true,
       "x": 16,
-      "y": 228,
-      "width": 361,
-      "height": 60,
+      "y": 231.6,
+      "width": 358,
+      "height": 60.8,
       "text": "Implementation Plan\nApproved \u00b7 2 comments addressed"
     },
     "[data-testid='card-task-progress-7seg']": {
       "exists": true,
       "x": 16,
-      "y": 298,
-      "width": 361,
-      "height": 138,
+      "y": 302.4,
+      "width": 358,
+      "height": 134.1,
       "text": "Task \u00b7 4 of 7 done\n2m 41s\n\u2713\nWire limiter into router\n\u2713\ngo test ./internal/...\n42 passed\nLoad test with vegeta"
     },
     "[data-testid='card-command-approval']": {
       "exists": true,
       "x": 16,
-      "y": 446,
-      "width": 361,
-      "height": 181.5,
+      "y": 446.5,
+      "width": 358,
+      "height": 185.5,
       "text": "Run this command?\nvegeta attack -rate=2000/s -duration=30s \\\n\u00a0\u00a0-targets=load/transfers.txt | vegeta\nreport\nDeny\nAllow"
     },
     "[data-testid='btn-command-deny']": {
       "exists": true,
       "x": 31,
-      "y": 569.5,
-      "width": 149.3,
+      "y": 574,
+      "width": 147.9,
       "height": 44,
       "text": "Deny"
     },
     "[data-testid='btn-command-allow-faceid']": {
       "exists": true,
-      "x": 190.3,
-      "y": 569.5,
-      "width": 171.7,
+      "x": 188.9,
+      "y": 574,
+      "width": 170.1,
       "height": 44,
       "text": "Allow"
     },
     "[data-testid='btn-stop-turn']": {
       "exists": true,
-      "x": 313.2,
-      "y": 637.5,
-      "width": 63.8,
+      "x": 307.7,
+      "y": 642,
+      "width": 66.3,
       "height": 32,
       "text": "Stop"
     },
     "[data-testid='composer-chip-ratelimit']": {
       "exists": true,
       "x": 29,
-      "y": 695,
+      "y": 686,
       "width": 126.8,
       "height": 28,
       "text": "@ratelimit.go\n\u00d7"
@@ -81,34 +81,34 @@
     "[data-testid='composer-btn-add-context']": {
       "exists": true,
       "x": 29,
-      "y": 783,
-      "width": 36,
+      "y": 775,
+      "width": 34,
       "height": 36,
       "text": ""
     },
-    "[data-testid='composer-pill-mode']": {
-      "exists": true,
-      "x": 72,
-      "y": 784,
-      "width": 92.5,
-      "height": 34,
-      "text": "Planning"
-    },
     "[data-testid='composer-pill-model']": {
       "exists": true,
-      "x": 171.5,
-      "y": 784,
-      "width": 127,
+      "x": 72,
+      "y": 775,
+      "width": 105.7,
+      "height": 36,
+      "text": "Gemini 4 Neon\nExtra High"
+    },
+    "[data-testid='composer-pill-preset']": {
+      "exists": true,
+      "x": 215.1,
+      "y": 776,
+      "width": 75.9,
       "height": 34,
-      "text": "Gemini 3.1 Pro"
+      "text": "Default"
     },
     "[data-testid='composer-btn-send']": {
       "exists": true,
-      "x": 326,
-      "y": 782,
+      "x": 323,
+      "y": 774,
       "width": 38,
       "height": 38,
-      "text": ""
+      "text": "\u2192"
     }
   }
 }

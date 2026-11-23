@@ -59,6 +59,9 @@ public struct AddContextSheetView: View {
     @State private var searchQuery: String = ""
     @State private var activeCategoryFilter: CategoryTile? = nil
     @State private var selectedItemIds: Set<String>
+    @State private var isExpandedToPicker: Bool
+
+    public var showHomeBackdrop: Bool
 
     private let verificationRows: [ContextRowSpec] = [
         ContextRowSpec(
@@ -106,15 +109,15 @@ public struct AddContextSheetView: View {
             testId: "ctx-row-terminal"
         ),
         ContextRowSpec(
-            id: "/boost",
+            id: "/plan",
             section: "ACTIONS & SKILLS",
             category: .actions,
-            iconName: "bolt",
-            title: "/boost",
-            subtitle: "Action · extra multi-agent reasoning pass",
+            iconName: "slash.circle",
+            title: "/plan",
+            subtitle: "Action · explore first, then draft a reviewable plan",
             isMonospacedTitle: true,
             usesPlusAffordance: true,
-            testId: "ctx-row-boost"
+            testId: "ctx-row-plan"
         ),
         ContextRowSpec(
             id: "go-testing",
@@ -170,7 +173,7 @@ public struct AddContextSheetView: View {
                 id: "/plan",
                 section: "ACTIONS & SKILLS",
                 category: .actions,
-                iconName: "bolt",
+                iconName: "slash.circle",
                 title: "/plan",
                 subtitle: "Action · step-by-step implementation plan",
                 isMonospacedTitle: true,
@@ -183,7 +186,7 @@ public struct AddContextSheetView: View {
                 id: "/goal",
                 section: "ACTIONS & SKILLS",
                 category: .actions,
-                iconName: "bolt",
+                iconName: "slash.circle",
                 title: "/goal",
                 subtitle: "Action · thorough autonomous execution",
                 isMonospacedTitle: true,
@@ -196,14 +199,18 @@ public struct AddContextSheetView: View {
 
     public init(
         store: AntigravitySessionStore,
+        startExpanded: Bool = false,
+        showHomeBackdrop: Bool = true,
         onAddLabels: (([String]) -> Void)? = nil,
         onPickDeviceFile: (() -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.store = store
+        self.showHomeBackdrop = showHomeBackdrop
         self.onAddLabels = onAddLabels
         self.onPickDeviceFile = onPickDeviceFile
         self.onDismiss = onDismiss
+        self._isExpandedToPicker = State(initialValue: startExpanded)
         if store.isVerificationMode {
             self._selectedItemIds = State(initialValue: ["ratelimit.go", "idempotency-payouts", "go-testing"])
         } else {
@@ -224,6 +231,129 @@ public struct AddContextSheetView: View {
     }
 
     public var body: some View {
+        if !isExpandedToPicker {
+            anchoredAddContextPopover
+        } else {
+            fullMultiSelectPickerBody
+        }
+    }
+
+    /// Official anchored `Add Context` popover (`docs/ue/ios/ios-add-context.png`).
+    private var anchoredAddContextPopover: some View {
+        ZStack(alignment: .bottom) {
+            Group {
+                if showHomeBackdrop {
+                    VStack {
+                        Spacer()
+                        Text("Welcome back, Alex.\nWhere should we pick\nup?")
+                            .font(.system(size: 30, weight: .bold))
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(AntigravityTheme.textPrimary.opacity(0.32))
+                            .padding(.bottom, 120)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
+                } else {
+                    Color.black.opacity(0.45).ignoresSafeArea()
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismissSheet()
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Add Context")
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.textSecondary)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 16)
+                        .padding(.bottom, 8)
+
+                    popoverCategoryRow(icon: "paperclip", title: "Files", trailingLabel: nil, testId: "ctx-menu-files") {
+                        activeCategoryFilter = .files
+                        isExpandedToPicker = true
+                    }
+                    popoverCategoryRow(icon: "folder", title: "Folder", trailingLabel: nil, testId: "ctx-menu-folder") {
+                        activeCategoryFilter = .folder
+                        isExpandedToPicker = true
+                    }
+                    popoverCategoryRow(icon: "at", title: "Mentions", trailingLabel: nil, testId: "ctx-menu-mentions") {
+                        activeCategoryFilter = .mentions
+                        isExpandedToPicker = true
+                    }
+                    popoverCategoryRow(icon: "slash.circle", title: "Actions", trailingLabel: nil, testId: "ctx-menu-actions") {
+                        activeCategoryFilter = .actions
+                        isExpandedToPicker = true
+                    }
+                    popoverCategoryRow(icon: "externaldrive", title: "Drive", trailingLabel: "Set up", testId: "ctx-menu-drive") {
+                        activeCategoryFilter = nil
+                        isExpandedToPicker = true
+                    }
+                }
+                .padding(.bottom, 10)
+                .frame(width: 274)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(AntigravityTheme.surfacePopover)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                )
+                .shadow(color: AntigravityTheme.glassShadow, radius: 22, x: 0, y: 10)
+                .padding(.leading, 14)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("add-context-popover")
+
+                if showHomeBackdrop {
+                    dockedBackdropComposerBar(
+                        highlightPermissions: false,
+                        highlightAdd: true,
+                        draftText: nil
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+                }
+            }
+        }
+        .background(showHomeBackdrop ? AntigravityTheme.canvasObsidian.ignoresSafeArea() : Color.clear)
+    }
+
+    private func popoverCategoryRow(
+        icon: String,
+        title: String,
+        trailingLabel: String?,
+        testId: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.textBody)
+                    .frame(width: 22)
+                Text(title)
+                    .font(.system(size: 16.5, weight: .regular))
+                    .foregroundStyle(AntigravityTheme.textPrimary)
+                Spacer()
+                if let trailingLabel {
+                    Text(trailingLabel)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                }
+            }
+            .padding(.horizontal, 18)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(testId)
+    }
+
+    private var fullMultiSelectPickerBody: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 18)
 

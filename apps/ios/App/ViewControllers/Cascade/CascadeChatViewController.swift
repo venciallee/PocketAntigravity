@@ -8,14 +8,17 @@ import AntigravityData
 public struct CascadeChatViewController: View {
     @Bindable public var store: AntigravitySessionStore
     public var onBack: (() -> Void)?
+    public var onOpenSidebar: (() -> Void)?
     @State private var isTurnStopped: Bool = false
 
     public init(
         store: AntigravitySessionStore,
-        onBack: (() -> Void)? = nil
+        onBack: (() -> Void)? = nil,
+        onOpenSidebar: (() -> Void)? = nil
     ) {
         self.store = store
         self.onBack = onBack
+        self.onOpenSidebar = onOpenSidebar
     }
 
     private var isStaticESDDFixtureView: Bool {
@@ -569,22 +572,48 @@ public struct CascadeChatViewController: View {
         let showDiffPill = activePendingDraft == nil && (!isLiveOrPaired || store.totalDiffAdditions > 0 || store.totalDiffDeletions > 0)
 
         return HStack(spacing: 8) {
-            Button {
-                store.discardPendingDraftConversation()
-                if let onBack {
-                    onBack()
-                } else {
-                    store.currentRoute = .tabRoot
+            if let onOpenSidebar, onBack == nil {
+                Button {
+                    store.discardPendingDraftConversation()
+                    onOpenSidebar()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
                 }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
-                    .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open sidebar")
+                .accessibilityIdentifier("btn-sidebar")
+            } else if let onBack {
+                Button {
+                    store.discardPendingDraftConversation()
+                    onBack()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("btn-back-sessions")
+            } else {
+                Button {
+                    store.discardPendingDraftConversation()
+                    store.isSidebarPresented = true
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open sidebar")
+                .accessibilityIdentifier("btn-sidebar")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("btn-back-sessions")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(navTitle)
@@ -614,13 +643,14 @@ public struct CascadeChatViewController: View {
                     }
                     .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                     .padding(.horizontal, 11)
-                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: AntigravityTheme.minTouchTargetPt)
+                    .frame(minWidth: AntigravityTheme.minTouchTargetPt, minHeight: 34)
                     .background(AntigravityTheme.surfacePill)
                     .overlay(
                         Capsule()
                             .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
                     .clipShape(Capsule())
+                    .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("chat-diff-pill")
@@ -646,7 +676,12 @@ public struct CascadeChatViewController: View {
                     store.currentRoute = .turnDiffReview
                 }
                 Button {
-                    store.presentedSheet = .customizationsSettings
+                    store.activeRoute = .rulesAndSkills
+                } label: {
+                    Label("Rules & Skills", systemImage: "doc.text")
+                }
+                Button {
+                    store.presentedSheet = .permissionsPreset
                 } label: {
                     Label("Permissions", systemImage: "shield.lefthalf.filled")
                 }
@@ -661,7 +696,7 @@ public struct CascadeChatViewController: View {
             }
             .accessibilityIdentifier("btn-chat-more")
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
         .padding(.vertical, 2)
     }
 

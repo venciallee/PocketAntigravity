@@ -176,19 +176,26 @@ class MainActivity : FragmentActivity() {
             }?.let { return it }
 
             return when (rawSlug.lowercase()) {
-                "ue01", "agents-home" -> EsddVerifySceneCase.AGENTS_HOME
+                "ue01", "agents-home", "new-conversation" -> EsddVerifySceneCase.AGENTS_HOME
+                "ue01b", "sidebar-drawer", "sidebar" -> EsddVerifySceneCase.SIDEBAR_DRAWER
                 "ue02", "display-options" -> EsddVerifySceneCase.DISPLAY_OPTIONS
                 "ue03", "context-menu-pin", "context-menu" -> EsddVerifySceneCase.CONTEXT_MENU_PIN
                 "ue04", "project-detail" -> EsddVerifySceneCase.PROJECT_DETAIL
                 "ue05", "create-project", "new-project" -> EsddVerifySceneCase.CREATE_PROJECT
                 "ue06", "automations" -> EsddVerifySceneCase.AUTOMATIONS
+                "ue06b", "automation-detail" -> EsddVerifySceneCase.AUTOMATION_DETAIL
+                "ue06c", "automation-edit" -> EsddVerifySceneCase.AUTOMATION_EDIT
                 "ue07", "chat-and-composer" -> EsddVerifySceneCase.CHAT_AND_COMPOSER
+                "ue07b", "permissions-preset", "preset" -> EsddVerifySceneCase.PERMISSIONS_PRESET
                 "ue08", "add-context" -> EsddVerifySceneCase.ADD_CONTEXT
-                "ue09", "model-and-mode" -> EsddVerifySceneCase.MODEL_AND_MODE
-                "ue10", "structured-question" -> EsddVerifySceneCase.STRUCTURED_QUESTION
+                "ue08b", "slash-menu", "slash" -> EsddVerifySceneCase.SLASH_MENU
+                "ue09", "model-and-mode", "model" -> EsddVerifySceneCase.MODEL_AND_MODE
+                "ue10", "structured-question", "ask" -> EsddVerifySceneCase.STRUCTURED_QUESTION
                 "ue11", "plan-review" -> EsddVerifySceneCase.PLAN_REVIEW
-                "ue12", "turn-diff-review" -> EsddVerifySceneCase.TURN_DIFF_REVIEW
-                "ue13", "live-activity-spec", "live-updates-spec" -> EsddVerifySceneCase.LIVE_ACTIVITY_SPEC
+                "ue12", "turn-diff-review", "diff" -> EsddVerifySceneCase.TURN_DIFF_REVIEW
+                "ue13", "live-activity-spec", "live-updates-spec", "live-update" -> EsddVerifySceneCase.LIVE_ACTIVITY_SPEC
+                "ue14", "rules-and-skills", "customizations" -> EsddVerifySceneCase.RULES_AND_SKILLS
+                "ue15", "settings" -> EsddVerifySceneCase.SETTINGS
                 else -> null
             }
         }

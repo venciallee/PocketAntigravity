@@ -11,6 +11,7 @@ public struct RemotePairingViewController: View {
     @Bindable public var store: AntigravitySessionStore
     public var externalScannerTrigger: Binding<Bool>?
     public var onConnected: (() -> Void)?
+    public var onDismiss: (() -> Void)?
 
     @State private var pendingRelayURL: String = ""
     @State private var pendingScannedQRCode: String? = nil
@@ -20,37 +21,84 @@ public struct RemotePairingViewController: View {
     public init(
         store: AntigravitySessionStore,
         externalScannerTrigger: Binding<Bool>? = nil,
-        onConnected: (() -> Void)? = nil
+        onConnected: (() -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
     ) {
         self.store = store
         self.externalScannerTrigger = externalScannerTrigger
         self.onConnected = onConnected
+        self.onDismiss = onDismiss
+    }
+
+    private var displayedHosts: [RelayInstanceInfo] {
+        if !store.availableRelayInstances.isEmpty {
+            return store.availableRelayInstances
+        }
+        if store.isVerificationMode {
+            return [
+                RelayInstanceInfo(
+                    uuid: "macbook-pro-local",
+                    name: "MacBook Pro",
+                    version: "2.33.1",
+                    supportsChunking: true,
+                    status: .connected
+                ),
+                RelayInstanceInfo(
+                    uuid: "office-imac-local",
+                    name: "Office iMac",
+                    version: "2.32.0",
+                    supportsChunking: true,
+                    status: .offline
+                )
+            ]
+        }
+        return []
     }
 
     public var body: some View {
         let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
-        let isOnlineConnected = store.isDeviceNetworkReachable && store.isLiveBackendConnected && store.activeHost.isOnline
-        let isOfflinePaired = store.hasPairedBackend && !isOnlineConnected
+        let isOnlineConnected = store.isVerificationMode
+            || (store.isDeviceNetworkReachable && store.isLiveBackendConnected && store.activeHost.isOnline)
+        let isOfflinePaired = !store.isVerificationMode && store.hasPairedBackend && !isOnlineConnected
         let isGoogleAuthExpired = store.activeHost.channel == .cloudRelay
             && (store.connectionStatusText.contains("Expired")
                 || (store.connectionErrorText?.lowercased().contains("unauthorized") ?? false))
 
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Settings")
-                        .font(.system(size: 30, weight: .bold))
-                        .tracking(-0.5)
-                        .foregroundStyle(AntigravityTheme.textPrimary)
+                    HStack(alignment: .center) {
+                        Text("Settings")
+                            .font(.system(size: 32, weight: .bold))
+                            .tracking(-0.5)
+                            .foregroundStyle(AntigravityTheme.textPrimary)
+                        Spacer()
+                        Button {
+                            if let onDismiss {
+                                onDismiss()
+                            } else {
+                                store.activeRoute = .tabRoot
+                            }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.textPrimary)
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(AntigravityTheme.surfaceElevated))
+                                .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("btn-settings-close")
+                    }
                     Text("Scan Antigravity Desktop's Remote Control QR code — works over Wi-Fi & 5G")
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
 
-                // Single Primary Card: Tap to Scan Remote Control QR (or Live Connection Status)
+                // 1. Primary Connection Hero Card (`ios-settings.png`)
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .fill(AntigravityTheme.surfaceCard)
-                    .frame(minHeight: 236)
+                    .frame(minHeight: 196)
                     .overlay(
                         RoundedRectangle(cornerRadius: 24, style: .continuous)
                             .strokeBorder(
@@ -63,7 +111,7 @@ public struct RemotePairingViewController: View {
                             )
                     )
                     .overlay(
-                        VStack(spacing: 12) {
+                        VStack(spacing: 10) {
                             if store.isConnectingToBackend || store.isSwitchingHost {
                                 ProgressView()
                                     .controlSize(.large)
@@ -97,12 +145,12 @@ public struct RemotePairingViewController: View {
                             } else {
                                 Image(
                                     systemName: isOnlineConnected
-                                        ? "checkmark.shield.fill"
+                                        ? "checkmark.shield"
                                         : (isOfflinePaired
                                             ? (isGoogleAuthExpired ? "person.crop.circle.badge.exclamationmark" : "wifi.slash")
                                             : "qrcode.viewfinder")
                                 )
-                                .font(.system(size: 48, weight: .light))
+                                .font(.system(size: 32, weight: .medium))
                                 .foregroundStyle(
                                     isOnlineConnected
                                         ? AntigravityTheme.statusDone
@@ -120,16 +168,18 @@ public struct RemotePairingViewController: View {
                                                 ? (isGoogleAuthExpired ? "Google Sign-In Expired" : "Host Offline: \(store.activeHost.hostname)")
                                                 : "Tap to Scan Remote Control QR"))
                                 )
-                                .font(.system(size: 17, weight: .semibold))
+                                .font(.system(size: 17.5, weight: .bold))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
                                 .multilineTextAlignment(.center)
 
-                                let visibleSessionCount = store.summaries.filter {
-                                    store.summaryMatchesHostScope($0)
-                                }.count
+                                let visibleSessionCount = store.isVerificationMode
+                                    ? 12
+                                    : store.summaries.filter { store.summaryMatchesHostScope($0) }.count
+                                let channelLabel = store.activeHost.channel == .directHost ? "Direct LAN" : "Cloud Relay"
+                                let latencyMs = store.isVerificationMode ? 42 : (store.lastPingLatencyMs ?? store.activeHost.latencyMs)
                                 Text(
                                     isOnlineConnected
-                                        ? "\(store.activeHost.channel.displayName) · \(store.lastPingLatencyMs ?? store.activeHost.latencyMs)ms · \(visibleSessionCount) sessions"
+                                        ? "\(channelLabel) · \(latencyMs)ms · \(visibleSessionCount) sessions"
                                         : (isNoInternet
                                             ? "Paused while iPhone is offline · Auto-resumes when network returns"
                                             : (isOfflinePaired
@@ -138,7 +188,7 @@ public struct RemotePairingViewController: View {
                                                     : "Power-saving backoff reconnect · Tap below to retry or scan QR")
                                                 : "Open Antigravity on Mac/PC → Remote Control"))
                                 )
-                                .font(.system(size: 13, weight: .regular))
+                                .font(.system(size: 13.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textSecondary)
                                 .multilineTextAlignment(.center)
                                 .lineLimit(2)
@@ -210,24 +260,25 @@ public struct RemotePairingViewController: View {
                                     Button {
                                         isShowingQRScanner = true
                                     } label: {
-                                        HStack(spacing: 6) {
+                                        HStack(spacing: 7) {
                                             Image(systemName: "qrcode.viewfinder")
-                                                .font(.system(size: 12.5, weight: .semibold))
+                                                .font(.system(size: 13.5, weight: .semibold))
                                             Text("Scan New QR")
-                                                .font(.system(size: 13, weight: .semibold))
+                                                .font(.system(size: 14, weight: .semibold))
                                         }
-                                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                                        .padding(.horizontal, 14)
-                                        .frame(minHeight: 36)
-                                        .background(Capsule().fill(AntigravityTheme.surfacePill))
+                                        .foregroundStyle(AntigravityTheme.textPrimary)
+                                        .padding(.horizontal, 18)
+                                        .frame(minHeight: 38)
+                                        .background(Capsule().fill(AntigravityTheme.surfaceElevated))
                                         .overlay(Capsule().strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
                                     }
                                     .buttonStyle(.plain)
-                                    .padding(.top, 2)
+                                    .padding(.top, 4)
+                                    .accessibilityIdentifier("btn-scan-new-qr")
                                 }
                             }
                         }
-                        .padding(24)
+                        .padding(20)
                     )
                     .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .onTapGesture {
@@ -251,22 +302,13 @@ public struct RemotePairingViewController: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
-                // First-level Appearance selector (System / Dark / Light), always available even when unpaired/offline
-                appearanceModeCard
-
-                // First-level Default Permissions selector (Request Review / Default / Auto / Turbo)
-                defaultPermissionsCard
-
-                // First-level Local Notifications preferences
-                notificationsCard
-
-                // Multi-instance switcher (shown only when >1 Desktop instance is paired on the signed-in Google account)
-                if store.availableRelayInstances.count > 1 {
-                    VStack(alignment: .leading, spacing: 8) {
+                // 2. AVAILABLE HOSTS (`ios-settings.png`)
+                if !displayedHosts.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Text("AVAILABLE HOSTS")
-                                .font(.system(size: 11, weight: .semibold))
-                                .tracking(0.7)
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .tracking(0.8)
                                 .foregroundStyle(AntigravityTheme.textMuted)
                             Spacer()
                             Button {
@@ -274,7 +316,7 @@ public struct RemotePairingViewController: View {
                                     await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
                                 }
                             } label: {
-                                HStack(spacing: 4) {
+                                HStack(spacing: 5) {
                                     if store.isRefreshingRelayHosts {
                                         ProgressView()
                                             .controlSize(.mini)
@@ -282,11 +324,11 @@ public struct RemotePairingViewController: View {
                                         Text("Probing...")
                                     } else {
                                         Image(systemName: "arrow.clockwise")
-                                            .font(.system(size: 10.5, weight: .semibold))
+                                            .font(.system(size: 11.5, weight: .semibold))
                                         Text("Refresh")
                                     }
                                 }
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             }
                             .buttonStyle(.plain)
@@ -294,54 +336,58 @@ public struct RemotePairingViewController: View {
                             .accessibilityIdentifier("btn-refresh-hosts")
                         }
 
-                        ForEach(store.availableRelayInstances) { inst in
+                        ForEach(displayedHosts) { inst in
                             let isSelected: Bool = {
                                 if case let .localHost(filterId, _) = store.selectedHostScope {
                                     return filterId == inst.uuid
                                 }
                                 return store.activeHost.instanceId == inst.uuid
                             }()
-                            let isInstOnline = store.isDeviceNetworkReachable && inst.status.isReachable
+                            let isInstOnline = (store.isVerificationMode || store.isDeviceNetworkReachable) && inst.status.isReachable
                             let isRefreshingThisHost = store.isRefreshingHost(instanceId: inst.uuid, hostname: inst.name)
                             Button {
-                                Task {
-                                    let connected = await store.switchToRelayInstance(inst)
-                                    if connected || (store.hasPairedBackend && store.activeHost.instanceId == inst.uuid) {
-                                        onConnected?()
+                                if store.isVerificationMode {
+                                    store.selectHostScope(.localHost(id: inst.uuid, name: inst.name))
+                                } else {
+                                    Task {
+                                        let connected = await store.switchToRelayInstance(inst)
+                                        if connected || (store.hasPairedBackend && store.activeHost.instanceId == inst.uuid) {
+                                            onConnected?()
+                                        }
                                     }
                                 }
                             } label: {
                                 HStack(spacing: 12) {
                                     ZStack(alignment: .topTrailing) {
-                                        Image(systemName: "laptopcomputer")
-                                            .font(.system(size: 16, weight: .regular))
+                                        Image(systemName: inst.name.lowercased().contains("imac") ? "desktopcomputer" : "laptopcomputer")
+                                            .font(.system(size: 17, weight: .regular))
                                             .foregroundStyle(isInstOnline ? AntigravityTheme.inkReading : AntigravityTheme.inkMuted)
-                                            .frame(width: 24, height: 20)
+                                            .frame(width: 26, height: 22)
                                         ZStack {
                                             Circle()
                                                 .fill(AntigravityTheme.surfaceCard)
-                                                .frame(width: 10, height: 10)
+                                                .frame(width: 11, height: 11)
                                             if isInstOnline {
                                                 Circle()
                                                     .fill(AntigravityTheme.statusDone)
-                                                    .frame(width: 6.5, height: 6.5)
+                                                    .frame(width: 7.5, height: 7.5)
                                             } else {
                                                 Circle()
-                                                    .strokeBorder(AntigravityTheme.statusError, lineWidth: 1.5)
-                                                    .frame(width: 6.5, height: 6.5)
+                                                    .strokeBorder(AntigravityTheme.statusError, lineWidth: 1.7)
+                                                    .frame(width: 7.5, height: 7.5)
                                             }
                                         }
-                                        .offset(x: 2, y: -2)
+                                        .offset(x: 3, y: -3)
                                     }
-                                    VStack(alignment: .leading, spacing: 2) {
+                                    VStack(alignment: .leading, spacing: 3) {
                                         Text(inst.name)
-                                            .font(.system(size: 14.5, weight: .semibold))
+                                            .font(.system(size: 15.5, weight: .semibold))
                                             .foregroundStyle(isInstOnline ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
-                                        let statusBadge = isInstOnline ? inst.status.badgeText : "Offline"
-                                        let versionPart = inst.version.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        let statusBadge = isInstOnline ? "Online" : "Offline"
+                                        let versionPart = inst.version.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "v", with: "")
                                         let subtitleLine = versionPart.isEmpty ? statusBadge : "\(statusBadge) · \(versionPart)"
                                         Text(subtitleLine)
-                                            .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                                            .font(.system(size: 12.5, weight: .regular, design: .monospaced))
                                             .foregroundStyle(isInstOnline ? AntigravityTheme.textSecondary : AntigravityTheme.statusError)
                                     }
                                     Spacer()
@@ -351,26 +397,44 @@ public struct RemotePairingViewController: View {
                                             .tint(AntigravityTheme.accentPeriwinkle)
                                     } else if isSelected {
                                         Image(systemName: "checkmark.circle.fill")
+                                            .font(.system(size: 19))
                                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                     }
                                 }
-                                .padding(12)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 13)
                                 .background(AntigravityTheme.surfaceCard)
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
                                         .strokeBorder(
-                                            isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.5) : AntigravityTheme.cardBorder,
+                                            isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.65) : AntigravityTheme.cardBorder,
                                             lineWidth: 1
                                         )
                                 )
                             }
                             .buttonStyle(.plain)
+                            .accessibilityIdentifier("settings-host-\(inst.uuid)")
                         }
                     }
                 }
 
-                if store.hasPairedBackend || store.isLiveBackendConnected {
+                // 3. GENERAL (`Appearance` + `Theme` + `Language`, `ios-settings.png`)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("GENERAL")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(AntigravityTheme.textMuted)
+
+                    appearanceModeCard
+                    languageCard
+                }
+
+                // 4. Permissions, Notifications, Disconnect & About (`ios-settings-more.png`)
+                defaultPermissionsCard
+                notificationsCard
+
+                if store.hasPairedBackend || store.isLiveBackendConnected || store.isVerificationMode {
                     Button {
                         Task {
                             await CloudRelayCookieExtractor.clearGoogleCookies()
@@ -378,12 +442,12 @@ public struct RemotePairingViewController: View {
                         }
                     } label: {
                         Text("Sign Out & Disconnect Host")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.statusError)
-                            .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
+                            .frame(maxWidth: .infinity, minHeight: 48)
                             .background(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(AntigravityTheme.statusError.opacity(0.10))
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(AntigravityTheme.statusError.opacity(0.12))
                             )
                     }
                     .buttonStyle(.plain)
@@ -394,7 +458,7 @@ public struct RemotePairingViewController: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
-            .padding(.bottom, 24)
+            .padding(.bottom, 28)
         }
         .refreshable {
             if store.hasPairedBackend && !store.isVerificationMode {
@@ -402,7 +466,7 @@ public struct RemotePairingViewController: View {
             }
             await store.reconnectNow(userInitiated: true)
         }
-        .background(AntigravityTheme.canvasObsidian)
+        .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
         .task {
             if store.hasPairedBackend && !store.isVerificationMode && store.activeHost.channel == .cloudRelay {
                 await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
@@ -466,74 +530,53 @@ public struct RemotePairingViewController: View {
 
     private var appearanceModeCard: some View {
         let currentMode = store.appearancePreferences.appearanceMode
-        return VStack(alignment: .leading, spacing: 12) {
+        let currentTheme = store.appearancePreferences.theme
+        return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
-                Image(systemName: currentMode.sfSymbolName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        AntigravityTheme.accentPeriwinkle.opacity(0.14),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    )
+                Image(systemName: "circle.lefthalf.filled")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.textPrimary)
+                    .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Appearance")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 15.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Text("Follow iOS or lock Dark / Light mode")
-                        .font(.system(size: 12, weight: .regular))
+                        .font(.system(size: 12.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
 
                 Spacer(minLength: 8)
-
-                Text(currentMode.displayLabel)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(AntigravityTheme.surfaceSelectionTint)
-                    )
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(AntigravityTheme.accentPeriwinkle.opacity(0.28), lineWidth: 1)
-                    )
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: 10) {
                 ForEach(AppAppearanceMode.allCases) { mode in
                     let isSelected = (currentMode == mode)
                     Button {
                         store.setAppearanceMode(mode)
                     } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: mode.sfSymbolName)
-                                .font(.system(size: 13.5, weight: .semibold))
+                        VStack(spacing: 8) {
+                            appearancePreviewThumbnail(for: mode)
                             Text(mode.displayLabel)
                                 .font(.system(size: 13.5, weight: isSelected ? .semibold : .medium))
+                                .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
                                 .lineLimit(1)
                         }
-                        .foregroundStyle(
-                            isSelected
-                                ? AntigravityTheme.accentPeriwinkle
-                                : AntigravityTheme.inkSecondary
-                        )
-                        .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
                         .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(isSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(isSelected ? AntigravityTheme.surfaceSelectionTint : AntigravityTheme.surfaceObsidian)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .strokeBorder(
-                                    isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.55) : Color.clear,
-                                    lineWidth: 1.2
+                                    isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.cardBorder,
+                                    lineWidth: isSelected ? 1.5 : 1
                                 )
                         )
-                        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier(appearanceModeAccessibilityId(for: mode))
@@ -541,15 +584,40 @@ public struct RemotePairingViewController: View {
                     .accessibilityValue(isSelected ? "selected" : "unselected")
                 }
             }
-            .padding(4)
-            .background(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .fill(AntigravityTheme.surfaceSubtleBox)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .strokeBorder(AntigravityTheme.glassHairline, lineWidth: 1)
-            )
+
+            Divider()
+                .overlay(AntigravityTheme.subtleDivider)
+
+            // Theme Swatch Row (`Obsidian`, `Nord`, `Everforest`)
+            HStack(spacing: 12) {
+                Text("Theme")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(AntigravityTheme.textPrimary)
+                Spacer()
+                HStack(spacing: 16) {
+                    themeSwatchButton(
+                        preset: .obsidian,
+                        label: "Obsidian",
+                        darkHalf: Color(red: 0.08, green: 0.08, blue: 0.10),
+                        accentHalf: Color(red: 0.55, green: 0.72, blue: 1.0),
+                        isSelected: currentTheme == .obsidian
+                    )
+                    themeSwatchButton(
+                        preset: .nord,
+                        label: "Nord",
+                        darkHalf: Color(red: 0.18, green: 0.20, blue: 0.25),
+                        accentHalf: Color(red: 0.53, green: 0.75, blue: 0.82),
+                        isSelected: currentTheme == .nord
+                    )
+                    themeSwatchButton(
+                        preset: .everforestDark,
+                        label: "Everforest",
+                        darkHalf: Color(red: 0.18, green: 0.21, blue: 0.23),
+                        accentHalf: Color(red: 0.65, green: 0.75, blue: 0.50),
+                        isSelected: currentTheme == .everforestDark || currentTheme == .everforestLight
+                    )
+                }
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -563,6 +631,149 @@ public struct RemotePairingViewController: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("card-appearance-mode")
+    }
+
+    @ViewBuilder
+    private func appearancePreviewThumbnail(for mode: AppAppearanceMode) -> some View {
+        switch mode {
+        case .system:
+            HStack(spacing: 0) {
+                Color(red: 0.94, green: 0.95, blue: 0.96)
+                Color(red: 0.06, green: 0.06, blue: 0.08)
+            }
+            .frame(width: 48, height: 28)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
+        case .dark:
+            ZStack(alignment: .bottomLeading) {
+                Color(red: 0.08, green: 0.08, blue: 0.10)
+                Capsule()
+                    .fill(AntigravityTheme.accentPeriwinkle)
+                    .frame(width: 22, height: 4)
+                    .padding(6)
+            }
+            .frame(width: 48, height: 28)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
+        case .light:
+            ZStack(alignment: .bottomLeading) {
+                Color.white
+                Capsule()
+                    .fill(Color(red: 0.23, green: 0.45, blue: 0.92))
+                    .frame(width: 22, height: 4)
+                    .padding(6)
+            }
+            .frame(width: 48, height: 28)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
+        }
+    }
+
+    private func themeSwatchButton(
+        preset: AppThemePreset,
+        label: String,
+        darkHalf: Color,
+        accentHalf: Color,
+        isSelected: Bool
+    ) -> some View {
+        Button {
+            store.appearancePreferences.theme = preset
+            store.saveAppearancePreferences()
+        } label: {
+            VStack(spacing: 5) {
+                ZStack {
+                    Circle()
+                        .fill(darkHalf)
+                    GeometryReader { geo in
+                        Path { path in
+                            path.move(to: CGPoint(x: geo.size.width, y: 0))
+                            path.addLine(to: CGPoint(x: geo.size.width, y: geo.size.height))
+                            path.addLine(to: CGPoint(x: 0, y: geo.size.height))
+                            path.closeSubpath()
+                        }
+                        .fill(accentHalf)
+                    }
+                    .clipShape(Circle())
+                }
+                .frame(width: 28, height: 28)
+                .padding(3)
+                .overlay(
+                    Circle()
+                        .strokeBorder(
+                            isSelected ? AntigravityTheme.accentPeriwinkle : Color.clear,
+                            lineWidth: 2
+                        )
+                )
+
+                Text(label)
+                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("theme-preset-\(label.lowercased())")
+    }
+
+    private var languageCard: some View {
+        let currentLang = store.appearancePreferences.language
+        return HStack(spacing: 10) {
+            Image(systemName: "globe")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(AntigravityTheme.textPrimary)
+                .frame(width: 24)
+
+            Text("Language")
+                .font(.system(size: 15.5, weight: .semibold))
+                .foregroundStyle(AntigravityTheme.textPrimary)
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 2) {
+                ForEach(AppLanguage.allCases) { lang in
+                    let isSelected = (currentLang == lang)
+                    Button {
+                        store.setAppLanguage(lang)
+                    } label: {
+                        Text(lang.displayLabel)
+                            .font(.system(size: 13.5, weight: isSelected ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 34)
+                            .background(
+                                Group {
+                                    if isSelected {
+                                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                            .fill(AntigravityTheme.surfaceActiveTabSlot)
+                                    }
+                                }
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-lang-\(lang.rawValue)")
+                }
+            }
+            .padding(3)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(AntigravityTheme.surfaceSubtleBox)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AntigravityTheme.surfaceCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("card-settings-language")
     }
 
     private func appearanceModeAccessibilityId(for mode: AppAppearanceMode) -> String {

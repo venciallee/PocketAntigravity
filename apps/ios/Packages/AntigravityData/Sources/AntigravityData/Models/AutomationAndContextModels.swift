@@ -51,7 +51,44 @@ public struct SidecarRunEvent: Codable, Sendable, Equatable {
     }
 }
 
-/// Scheduled, event-triggered, or paused background agent automation (`UE04`, `UE06`).
+/// Outcome status for an individual Automation run (`UE06B`).
+public enum AutomationRunStatus: String, ResilientStringEnum, CaseIterable, Identifiable {
+    case succeeded = "Succeeded"
+    case needsReview = "Needs review"
+    case failed = "Failed"
+    case running = "Running"
+
+    public var id: String { rawValue }
+    public static var unknownFallback: AutomationRunStatus { .succeeded }
+}
+
+/// Recent execution row displayed on `AutomationDetailView` (`UE06B`).
+public struct AutomationRunRecord: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var status: AutomationRunStatus
+    public var relativeTimeLabel: String
+    public var summaryText: String
+    public var durationLabel: String
+    public var cascadeId: String?
+
+    public init(
+        id: String,
+        status: AutomationRunStatus,
+        relativeTimeLabel: String,
+        summaryText: String,
+        durationLabel: String = "",
+        cascadeId: String? = nil
+    ) {
+        self.id = id
+        self.status = status
+        self.relativeTimeLabel = relativeTimeLabel
+        self.summaryText = summaryText
+        self.durationLabel = durationLabel
+        self.cascadeId = cascadeId
+    }
+}
+
+/// Scheduled, event-triggered, or paused background agent automation (`UE04`, `UE06`, `UE06B`, `UE06C`).
 /// Maps directly to Antigravity 2.0 native Sidecars (`GetSidecars`, `GetSidecarEvents`, `ManageSidecar`).
 public struct AutomationItem: Codable, Sendable, Equatable, Identifiable {
     public var id: String
@@ -76,6 +113,10 @@ public struct AutomationItem: Codable, Sendable, Equatable, Identifiable {
     public var isEnabled: Bool
     public var isScheduleBuiltin: Bool
     public var originInstanceUuid: String?
+    public var repeatsLabel: String
+    public var timeLabel: String
+    public var timezoneLabel: String
+    public var recentRuns: [AutomationRunRecord]
 
     public init(
         id: String,
@@ -97,7 +138,11 @@ public struct AutomationItem: Codable, Sendable, Equatable, Identifiable {
         lastError: String? = nil,
         isEnabled: Bool? = nil,
         isScheduleBuiltin: Bool? = nil,
-        originInstanceUuid: String? = nil
+        originInstanceUuid: String? = nil,
+        repeatsLabel: String = "Daily",
+        timeLabel: String = "02:00",
+        timezoneLabel: String = "America/Los_Angeles (PDT)",
+        recentRuns: [AutomationRunRecord] = []
     ) {
         self.id = id
         self.title = title
@@ -119,6 +164,10 @@ public struct AutomationItem: Codable, Sendable, Equatable, Identifiable {
         self.isEnabled = isEnabled ?? (section != .paused)
         self.isScheduleBuiltin = isScheduleBuiltin ?? (section != .alwaysOn)
         self.originInstanceUuid = originInstanceUuid
+        self.repeatsLabel = repeatsLabel
+        self.timeLabel = timeLabel
+        self.timezoneLabel = timezoneLabel
+        self.recentRuns = recentRuns
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -126,7 +175,7 @@ public struct AutomationItem: Codable, Sendable, Equatable, Identifiable {
         case needsReview, isRunningNow
         case descriptionText, prompt, cronExpression, projectId, allProjects
         case modelLabel, lastRunCascadeId, lastError, isEnabled, isScheduleBuiltin
-        case originInstanceUuid
+        case originInstanceUuid, repeatsLabel, timeLabel, timezoneLabel, recentRuns
     }
 
     public init(from decoder: Decoder) throws {
@@ -153,6 +202,10 @@ public struct AutomationItem: Codable, Sendable, Equatable, Identifiable {
         self.isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? (decodedSection != .paused)
         self.isScheduleBuiltin = try c.decodeIfPresent(Bool.self, forKey: .isScheduleBuiltin) ?? (decodedSection != .alwaysOn)
         self.originInstanceUuid = try c.decodeIfPresent(String.self, forKey: .originInstanceUuid)
+        self.repeatsLabel = try c.decodeIfPresent(String.self, forKey: .repeatsLabel) ?? "Daily"
+        self.timeLabel = try c.decodeIfPresent(String.self, forKey: .timeLabel) ?? "02:00"
+        self.timezoneLabel = try c.decodeIfPresent(String.self, forKey: .timezoneLabel) ?? "America/Los_Angeles (PDT)"
+        self.recentRuns = try c.decodeIfPresent([AutomationRunRecord].self, forKey: .recentRuns) ?? []
     }
 
     public var category: AutomationSectionKind {
@@ -714,6 +767,7 @@ public enum ContextCategory: String, ResilientStringEnum, CaseIterable, Identifi
     case mentions = "Mentions"
     case actions = "Actions"
     case skills = "Skills"
+    case drive = "Drive"
 
     public var id: String { rawValue }
     public static var unknownFallback: ContextCategory { .files }
@@ -755,6 +809,7 @@ public struct ContextCandidateItem: Codable, Sendable, Equatable, Identifiable {
             return title.lowercased().contains("terminal") ? .terminalLog : .conversationMention
         case .actions: return .action
         case .skills: return .skill
+        case .drive: return .folder
         }
     }
 }

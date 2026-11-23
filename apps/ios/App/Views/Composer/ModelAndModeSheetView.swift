@@ -1,12 +1,11 @@
 import SwiftUI
 import AntigravityData
 
-/// State `UE09_MODEL_AND_MODE`: Official Model, Permissions & Custom Agent Picker sheet.
-/// - In live Antigravity 2.x mode (aligned with PC 2.x where Planning/Fast moved to `/plan`):
-///   displays grouped `MODEL` families with inline effort-tier segmented controls (`Low` / `Medium` / `High` / `XHigh`),
-///   `REMOTE PERMISSIONS` / `PERMISSIONS` (`Request Review`, `Default`, `Auto`, `Turbo`), and optional `AGENT` pills.
-/// - In ESDD verification mode (`UE09_MODEL_AND_MODE`), preserves compact equal-height `Planning` & `Fast` mode cards
-///   alongside `MODEL` and `AGENT` pills for full spec parity.
+/// State `UE09_MODEL_AND_MODE`: Official Model Picker sheet (`docs/ue/ios/ios-model.png`).
+/// Per official Google Antigravity 2.x docs, Planning/Fast mode cards are removed (planning is `/plan`).
+/// Displays `Orchestrator` (`Neon plans · Hydrogen executes`), `Gemini 4 Neon` `[New]` with 4-level
+/// thinking segmented control (`Low` / `Medium` / `High` / `Extra High`), primary models,
+/// expandable `More models`, and `Five Hour Limit Remaining` / `Weekly Limit Remaining` quota bars.
 public struct ModelAndModeSheetView: View {
     @Bindable public var store: AntigravitySessionStore
     public var isPresentedAsNativeSheet: Bool
@@ -15,38 +14,8 @@ public struct ModelAndModeSheetView: View {
 
     public static let sheetSurfaceColor = AntigravityTheme.surfaceSheet
 
-    private struct ModelEffortVariant: Identifiable {
-        let option: CascadeModelConfig
-        let effortLabel: String
-        let effortRank: Int
-
-        var id: String { option.modelId }
-    }
-
-    private struct ModelFamilyGroup: Identifiable {
-        let id: String
-        let familyName: String
-        let variants: [ModelEffortVariant]
-        let singleOption: CascadeModelConfig?
-        let singleEffortBadge: String?
-        let preferredOption: CascadeModelConfig
-        let firstIndex: Int
-
-        var isGroupedFamily: Bool {
-            variants.count >= 2
-        }
-
-        func selectedVariant(for selected: CascadeModelConfig) -> CascadeModelConfig? {
-            if let single = singleOption {
-                return Self.matches(single, selected: selected) ? single : nil
-            }
-            return variants.first(where: { Self.matches($0.option, selected: selected) })?.option
-        }
-
-        static func matches(_ option: CascadeModelConfig, selected: CascadeModelConfig) -> Bool {
-            option.modelId == selected.modelId || option.displayName == selected.displayName
-        }
-    }
+    @State private var showMoreModels: Bool = false
+    @State private var showUsageExpanded: Bool = false
 
     public init(
         store: AntigravitySessionStore,
@@ -60,28 +29,48 @@ public struct ModelAndModeSheetView: View {
         self.onDismiss = onDismiss
     }
 
-    private var isLiveAntigravity2Mode: Bool {
-        !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected
-    }
-
-    private var sheetTitle: String {
-        isLiveAntigravity2Mode ? "Model & Permissions" : "Model & Mode"
-    }
-
-    private var displayedModels: [CascadeModelConfig] {
+    private var catalogModels: [CascadeModelConfig] {
         store.availableModels.isEmpty ? CascadeModelConfig.liveDefaultCatalog : store.availableModels
     }
 
-    private var modelGroups: [ModelFamilyGroup] {
-        Self.buildModelGroups(from: displayedModels)
+    private var orchestratorModel: CascadeModelConfig {
+        catalogModels.first(where: \.isOrchestrator)
+            ?? CascadeModelConfig(
+                modelId: "MODEL_ORCHESTRATOR_NEON",
+                displayName: "Orchestrator",
+                subtitle: "Neon plans · Hydrogen executes",
+                isOrchestrator: true,
+                plannerModelName: "Gemini 4 Neon",
+                executorModelName: "Gemini 4 Hydrogen",
+                supportedEfforts: []
+            )
     }
 
-    private var displayedAgents: [String] {
-        store.availableAgents.isEmpty ? ["Default"] : store.availableAgents
+    private var primaryModels: [CascadeModelConfig] {
+        let nonOrch = catalogModels.filter { !$0.isOrchestrator }
+        let preferredIds = [
+            "MODEL_GOOGLE_GEMINI_4_NEON",
+            "MODEL_GOOGLE_GEMINI_4_CARBON",
+            "MODEL_GOOGLE_GEMINI_4_ARGON",
+            "MODEL_GOOGLE_GEMINI_4_HYDROGEN",
+            "MODEL_CLAUDE_5_5_OPUS_THINKING",
+            "MODEL_GOOGLE_GEMINI_3_8_FLASH"
+        ]
+        var ordered: [CascadeModelConfig] = []
+        for pid in preferredIds {
+            if let found = nonOrch.first(where: { $0.modelId == pid }) {
+                ordered.append(found)
+            }
+        }
+        if ordered.isEmpty {
+            return Array(nonOrch.prefix(6))
+        }
+        return ordered
     }
 
-    private var shouldShowAgentSection: Bool {
-        displayedAgents.count > 1 || (!isLiveAntigravity2Mode && store.isVerificationMode)
+    private var extraModels: [CascadeModelConfig] {
+        let primaryIds = Set(primaryModels.map(\.modelId))
+        return catalogModels.filter { !$0.isOrchestrator && !primaryIds.contains($0.modelId) }
     }
 
     public var body: some View {
@@ -93,6 +82,8 @@ public struct ModelAndModeSheetView: View {
             } else {
                 ZStack(alignment: .bottom) {
                     AntigravityTheme.canvasObsidian.ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { applyAndDismiss() }
 
                     sheetInnerContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -121,637 +112,325 @@ public struct ModelAndModeSheetView: View {
                 }
             }
         }
-        .sensoryFeedback(.selection, trigger: store.selectedModelConfig.mode)
         .sensoryFeedback(.selection, trigger: store.selectedModelConfig.modelId)
         .sensoryFeedback(.selection, trigger: store.selectedModelConfig.effort)
-        .sensoryFeedback(.selection, trigger: store.activePermissionPreset)
         .task {
             if store.hasPairedBackend || store.isLiveBackendConnected {
                 await store.refreshModelCatalog()
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("model-picker-sheet")
     }
 
-    // MARK: - Sheet Content
+    // MARK: - Sheet Inner Content
 
     private var sheetInnerContent: some View {
         VStack(spacing: 0) {
             if !isPresentedAsNativeSheet {
                 Capsule()
                     .fill(AntigravityTheme.sheetHandle)
-                    .frame(width: 36, height: 4.5)
+                    .frame(width: 38, height: 4.5)
                     .padding(.top, 10)
             }
 
-            headerBar
-                .padding(.horizontal, 16)
-                .padding(.top, isPresentedAsNativeSheet ? 14 : 6)
-                .padding(.bottom, 8)
+            // Header: centered `Model`, trailing blue `Done`
+            ZStack {
+                Text("Model")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(AntigravityTheme.inkReading)
 
-            Divider()
-                .overlay(AntigravityTheme.subtleDivider)
+                HStack {
+                    Spacer()
+                    Button {
+                        applyAndDismiss()
+                    } label: {
+                        Text("Done")
+                            .font(.system(size: 16.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                            .frame(minWidth: 52, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-model-done")
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, isPresentedAsNativeSheet ? 10 : 6)
+            .padding(.bottom, 6)
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 20) {
-                    if !isLiveAntigravity2Mode {
-                        modeSection
-                    }
-
-                    if isLiveAntigravity2Mode && store.selectedModelConfig.isOrchestrator {
-                        HStack(spacing: 8) {
-                            Image(systemName: "cpu.fill")
-                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                            Text("Orchestrator uses fixed Planner (\(store.selectedModelConfig.plannerModelName ?? "Gemini 4 Neon")) + Executor (\(store.selectedModelConfig.executorModelName ?? "Gemini 4 Hydrogen")) settings.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(AntigravityTheme.inkSecondary)
-                        }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(AntigravityTheme.surfaceSheetGroup, in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
-                        )
-                    }
-
-                    modelSection
-
-                    if isLiveAntigravity2Mode {
-                        dualPoolQuotaSection
-                        permissionsSection
-                    }
-
-                    if shouldShowAgentSection {
-                        agentSection
-                    }
+                VStack(alignment: .leading, spacing: 18) {
+                    groupedModelCard
+                    quotaLimitsFooter
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 16)
+                .padding(.top, 8)
                 .padding(.bottom, 28)
             }
             .scrollBounceBehavior(.basedOnSize)
         }
     }
 
-    private var dualPoolQuotaSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                sectionHeader("QUOTA · \(store.usageQuota.planDisplayName.uppercased())")
-                Spacer()
-                Text("5h & Weekly Pools")
-                    .font(.system(size: 11))
-                    .foregroundStyle(AntigravityTheme.inkMuted)
-            }
-            HStack(spacing: 12) {
-                quotaMiniBar(label: "Gemini 5h", pct: store.usageQuota.geminiFiveHourPercent)
-                quotaMiniBar(label: "Gemini Wk", pct: store.usageQuota.geminiWeeklyPercent)
-                quotaMiniBar(label: "Partner 5h", pct: store.usageQuota.partnerFiveHourPercent)
-                quotaMiniBar(label: "Partner Wk", pct: store.usageQuota.partnerWeeklyPercent)
-            }
-            .padding(12)
-            .background(AntigravityTheme.surfaceSheetGroup, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1))
-        }
-        .accessibilityIdentifier("model-usage-quota-card")
-    }
+    // MARK: - Single Grouped Model Card (`ios-model.png`)
 
-    private func quotaMiniBar(label: String, pct: Int) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(AntigravityTheme.inkSecondary)
-            Text("\(pct)%")
-                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                .foregroundStyle(pct > 25 ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.statusWaiting)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
+    private var groupedModelCard: some View {
+        let orch = orchestratorModel
+        let isOrchSelected = store.selectedModelConfig.isOrchestrator
 
-    private var headerBar: some View {
-        ZStack {
-            Text(sheetTitle)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(AntigravityTheme.inkReading)
-
-            HStack {
-                if isLiveAntigravity2Mode {
-                    Button {
-                        Task { await store.refreshModelCatalog(forceRefresh: true) }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 14.5, weight: .semibold))
+        return VStack(spacing: 0) {
+            // Row 0: Orchestrator
+            Button {
+                selectModelOption(orch)
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Orchestrator")
+                            .font(.system(size: 16.5, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                        Text("Neon plans · Hydrogen executes")
+                            .font(.system(size: 13.5, weight: .regular))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
-                            .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .leading)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("btn-refresh-models")
-                }
-                Spacer()
-                Button {
-                    applyAndDismiss()
-                } label: {
-                    Text("Done")
-                        .font(.system(size: 14.5, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                        .padding(.horizontal, 14)
-                        .frame(height: 32)
-                        .background(AntigravityTheme.accentPeriwinkle.opacity(0.14))
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(AntigravityTheme.accentPeriwinkle.opacity(0.28), lineWidth: 1)
-                        )
-                        .clipShape(Capsule())
-                        .frame(
-                            minWidth: AntigravityTheme.minTouchTargetPt,
-                            minHeight: AntigravityTheme.minTouchTargetPt,
-                            alignment: .trailing
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("btn-model-done")
-            }
-        }
-        .frame(height: 44)
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 11.5, weight: .semibold))
-            .tracking(0.8)
-            .foregroundStyle(AntigravityTheme.inkSecondary)
-            .padding(.leading, 4)
-    }
-
-    // MARK: - MODE Section (ESDD UE09 Verification Parity)
-
-    private var modeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("MODE")
-
-            HStack(spacing: 10) {
-                modeCardButton(
-                    mode: .planning,
-                    iconName: "doc.text",
-                    activeIconName: "doc.text.fill",
-                    description: "Plans first and writes artifacts for you to review",
-                    testId: "mode-card-planning"
-                )
-
-                modeCardButton(
-                    mode: .fast,
-                    iconName: "bolt",
-                    activeIconName: "bolt.fill",
-                    description: "Acts directly — best for small, local edits",
-                    testId: "mode-card-fast"
-                )
-            }
-            .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func modeCardButton(
-        mode: CascadeExecutionMode,
-        iconName: String,
-        activeIconName: String,
-        description: String,
-        testId: String
-    ) -> some View {
-        let isSelected = store.selectedModelConfig.mode == mode
-        return Button {
-            withAnimation(.snappy(duration: 0.2)) {
-                store.selectedModelConfig.mode = mode
-            }
-            onSelectConfiguration?(
-                mode.rawValue,
-                store.selectedModelConfig.displayName,
-                store.selectedModelConfig.agentPersona
-            )
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.16) : AntigravityTheme.surfaceSubtleBox)
-                            .frame(width: 28, height: 28)
-                        Image(systemName: isSelected ? activeIconName : iconName)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary)
-                    }
-
-                    Text(mode.rawValue)
-                        .font(.system(size: 15.5, weight: .semibold))
-                        .foregroundStyle(isSelected ? AntigravityTheme.inkReading : AntigravityTheme.inkLabel)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.88)
-
-                    Spacer(minLength: 2)
-
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 16, weight: .semibold))
+                    Spacer()
+                    if isOrchSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     } else {
-                        Circle()
-                            .strokeBorder(AntigravityTheme.inkSecondary.opacity(0.35), lineWidth: 1.25)
-                            .frame(width: 16, height: 16)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
                     }
                 }
-
-                Text(description)
-                    .font(.system(size: 12.5, weight: .regular))
-                    .foregroundStyle(isSelected ? AntigravityTheme.inkLabel : AntigravityTheme.inkSecondary)
-                    .lineSpacing(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .background(isOrchSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
+                .contentShape(Rectangle())
             }
-            .padding(13)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isSelected ? AntigravityTheme.surfaceSelectionTint : AntigravityTheme.surfaceSheetGroup)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(
-                        isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.85) : AntigravityTheme.cardBorder,
-                        lineWidth: isSelected ? 1.4 : 1
-                    )
-            )
-            .shadow(color: isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.12) : .clear, radius: 10, x: 0, y: 3)
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(testId)
-    }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("model-row-orchestrator")
 
-    // MARK: - MODEL Section
+            Divider().overlay(AntigravityTheme.subtleDivider)
 
-    private var modelSection: some View {
-        let groups = modelGroups
-        return VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("MODEL")
-
-            VStack(spacing: 0) {
-                ForEach(Array(groups.enumerated()), id: \.element.id) { idx, group in
-                    modelGroupRow(group)
-                    if idx < groups.count - 1 {
-                        Divider()
-                            .overlay(AntigravityTheme.subtleDivider)
-                            .padding(.leading, 14)
-                    }
+            // Primary Models (`Gemini 4 Neon` + inline 4-segment effort, Carbon, Argon, Hydrogen, Claude Opus 5.5, Gemini 3.8 Flash)
+            ForEach(Array(primaryModels.enumerated()), id: \.element.modelId) { idx, model in
+                modelRowView(model)
+                if idx < primaryModels.count - 1 {
+                    Divider().overlay(AntigravityTheme.subtleDivider)
                 }
             }
-            .background(AntigravityTheme.surfaceSheetGroup)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
-            )
 
-            HStack(spacing: 5) {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 11.5, weight: .medium))
-                Text("A new model takes effect on the next turn.")
-                    .font(.system(size: 12))
+            if showMoreModels && !extraModels.isEmpty {
+                ForEach(extraModels, id: \.modelId) { extra in
+                    Divider().overlay(AntigravityTheme.subtleDivider)
+                    modelRowView(extra)
+                }
             }
-            .foregroundStyle(AntigravityTheme.inkMuted)
-            .padding(.leading, 4)
-            .padding(.top, 2)
-        }
-    }
 
-    // MARK: - PERMISSIONS Section (Antigravity 2.x Local & Remote Permissions)
+            Divider().overlay(AntigravityTheme.subtleDivider)
 
-    private var permissionsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader(store.isActiveSessionCloud ? "REMOTE PERMISSIONS" : "PERMISSIONS")
-            PermissionsPresetListCard(store: store)
+            // More models expandable footer row
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    showMoreModels.toggle()
+                }
+            } label: {
+                HStack {
+                    Text(showMoreModels ? "Fewer models" : "More models")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                    Spacer()
+                    Image(systemName: showMoreModels ? "chevron.up" : "chevron.right")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("btn-more-models")
         }
+        .background(AntigravityTheme.surfaceSheetGroup)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+        )
     }
 
     @ViewBuilder
-    private func modelGroupRow(_ group: ModelFamilyGroup) -> some View {
-        let selectedOption = group.selectedVariant(for: store.selectedModelConfig)
-        let isSelected = selectedOption != nil
-        let activeOption = selectedOption ?? group.preferredOption
-        let tagBadge = Self.effectiveBadgeTitle(for: activeOption)
-            ?? group.variants.compactMap { Self.effectiveBadgeTitle(for: $0.option) }.first
-        let subtitle = Self.effectiveSubtitle(for: activeOption)
+    private func modelRowView(_ model: CascadeModelConfig) -> some View {
+        let isSelected = (store.selectedModelConfig.modelId == model.modelId)
+        let cleanName = model.displayName.replacingOccurrences(of: " (Thinking)", with: "")
+        let supportsEfforts = !model.supportedEfforts.isEmpty
 
-        if group.isGroupedFamily {
-            VStack(alignment: .leading, spacing: 10) {
-                Button {
-                    withAnimation(.snappy(duration: 0.22)) {
-                        selectModelOption(activeOption)
-                    }
-                } label: {
-                    modelRowHeaderContent(
-                        title: group.familyName,
-                        subtitle: subtitle,
-                        tagBadge: tagBadge,
-                        effortBadge: nil,
-                        hasThinkingBadge: activeOption.hasThinkingBadge,
-                        isSelected: isSelected,
-                        unselectedTierCount: group.variants.count
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier(Self.accessibilityId(for: group.preferredOption, index: group.firstIndex))
-
-                if isSelected {
-                    effortTierSegmentedBar(variants: group.variants)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .background(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.08) : Color.clear)
-        } else {
-            let showsInlineEfforts = isLiveAntigravity2Mode
-                && activeOption.supportsEffortAdjustment
-                && activeOption.supportedEfforts.count >= 2
-            VStack(alignment: .leading, spacing: 10) {
-                Button {
-                    withAnimation(.snappy(duration: 0.2)) {
-                        selectModelOption(activeOption)
-                    }
-                } label: {
-                    modelRowHeaderContent(
-                        title: group.familyName,
-                        subtitle: subtitle,
-                        tagBadge: tagBadge,
-                        effortBadge: group.singleEffortBadge,
-                        hasThinkingBadge: activeOption.hasThinkingBadge,
-                        isSelected: isSelected,
-                        unselectedTierCount: (!isSelected && showsInlineEfforts) ? activeOption.supportedEfforts.count : nil
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier(Self.accessibilityId(for: activeOption, index: group.firstIndex))
-
-                if isSelected && showsInlineEfforts {
-                    effortLevelSegmentedBar(efforts: activeOption.supportedEfforts, modelId: activeOption.modelId)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .background(isSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.08) : Color.clear)
-        }
-    }
-
-    private func modelRowHeaderContent(
-        title: String,
-        subtitle: String,
-        tagBadge: String?,
-        effortBadge: String?,
-        hasThinkingBadge: Bool,
-        isSelected: Bool,
-        unselectedTierCount: Int?
-    ) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(title)
-                        .font(.system(size: 15.5, weight: isSelected ? .semibold : .medium))
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                selectModelOption(model)
+            } label: {
+                HStack(spacing: 8) {
+                    Text(cleanName)
+                        .font(.system(size: 16.5, weight: isSelected ? .semibold : .regular))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .lineLimit(1)
 
-                    if let tagBadge {
-                        Text(tagBadge)
-                            .font(.system(size: 10.5, weight: .bold))
-                            .foregroundStyle(AntigravityTheme.statusDone)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, 6.5)
-                            .padding(.vertical, 2)
-                            .background(AntigravityTheme.statusDone.opacity(0.14))
-                            .clipShape(Capsule())
+                    if model.isNewBadge && model.modelId == "MODEL_GOOGLE_GEMINI_4_NEON" {
+                        Text("New")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(AntigravityTheme.accentPeriwinkle.opacity(0.16))
+                            )
                     }
 
-                    if let effortBadge {
-                        Text(effortBadge)
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(AntigravityTheme.inkLabel)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, 6.5)
-                            .padding(.vertical, 2)
-                            .background(AntigravityTheme.inkSecondary.opacity(0.14))
-                            .clipShape(Capsule())
-                    }
+                    Spacer()
 
-                    if hasThinkingBadge {
-                        Text("Thinking")
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(AntigravityTheme.inkLabel)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, 6.5)
-                            .padding(.vertical, 2)
-                            .background(AntigravityTheme.inkSecondary.opacity(0.14))
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 14.5, weight: .bold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     }
                 }
-
-                Text(subtitle)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(isSelected ? AntigravityTheme.inkLabel : AntigravityTheme.inkSecondary)
-                    .lineLimit(1)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(Self.accessibilityId(for: model))
 
-            Spacer(minLength: 4)
-
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-            } else if let tierCount = unselectedTierCount {
-                Text("\(tierCount) levels")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(AntigravityTheme.inkSecondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(AntigravityTheme.inkSecondary.opacity(0.14))
-                    .clipShape(Capsule())
-            }
-        }
-        .contentShape(Rectangle())
-    }
-
-    private func effortTierSegmentedBar(variants: [ModelEffortVariant]) -> some View {
-        HStack(spacing: 4) {
-            ForEach(variants) { variant in
-                let isVariantSelected = ModelFamilyGroup.matches(variant.option, selected: store.selectedModelConfig)
-                Button {
-                    withAnimation(.snappy(duration: 0.18)) {
-                        selectModelOption(variant.option)
-                    }
-                } label: {
-                    Text(variant.effortLabel)
-                        .font(.system(size: 12.5, weight: isVariantSelected ? .semibold : .medium))
-                        .foregroundStyle(isVariantSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                                .fill(isVariantSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                                .strokeBorder(
-                                    isVariantSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.45) : Color.clear,
-                                    lineWidth: 1
+            // Inline 4-segment Thinking Effort selector when selected model supports thinking tiers (`ios-model.png`)
+            if isSelected && supportsEfforts {
+                HStack(spacing: 4) {
+                    ForEach(model.supportedEfforts, id: \.self) { effort in
+                        let isEffortSelected = (store.selectedModelConfig.effort == effort)
+                        Button {
+                            store.selectedModelConfig.effort = effort
+                        } label: {
+                            Text(effortDisplayLabel(effort))
+                                .font(.system(size: 13.5, weight: isEffortSelected ? .semibold : .regular))
+                                .foregroundStyle(isEffortSelected ? AntigravityTheme.inkReading : AntigravityTheme.inkSecondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                                .background(
+                                    Group {
+                                        if isEffortSelected {
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill(AntigravityTheme.surfaceActiveTabSlot)
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                        .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                                                )
+                                        }
+                                    }
                                 )
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("model-effort-\(variant.option.modelId)")
-            }
-        }
-        .padding(3)
-        .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(AntigravityTheme.surfaceObsidian)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
-        )
-    }
-
-    private func effortLevelSegmentedBar(efforts: [ThinkingEffortLevel], modelId: String) -> some View {
-        HStack(spacing: 4) {
-            ForEach(efforts) { tier in
-                let isTierSelected = store.selectedModelConfig.effort == tier
-                let tierLabel = (tier == .extra) ? "XHigh" : tier.rawValue
-                Button {
-                    withAnimation(.snappy(duration: 0.18)) {
-                        store.selectedModelConfig.effort = tier
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("effort-chip-\(effort.rawValue.lowercased())")
                     }
-                    onSelectConfiguration?(
-                        store.selectedModelConfig.mode.rawValue,
-                        store.selectedModelConfig.displayName,
-                        store.selectedModelConfig.agentPersona
-                    )
-                } label: {
-                    Text(tierLabel)
-                        .font(.system(size: 12.5, weight: isTierSelected ? .semibold : .medium))
-                        .foregroundStyle(isTierSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkSecondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                                .fill(isTierSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                                .strokeBorder(
-                                    isTierSelected ? AntigravityTheme.accentPeriwinkle.opacity(0.45) : Color.clear,
-                                    lineWidth: 1
-                                )
-                        )
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("model-effort-\(modelId)-\(tier.cliValue)")
+                .padding(4)
+                .background(
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .fill(AntigravityTheme.surfaceObsidian)
+                )
             }
         }
-        .padding(3)
-        .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(AntigravityTheme.surfaceObsidian)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
-        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, isSelected && supportsEfforts ? 14 : 13)
+        .background(isSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
     }
 
-    // MARK: - AGENT Section
+    private func effortDisplayLabel(_ level: ThinkingEffortLevel) -> String {
+        switch level {
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        case .extra: return "Extra High"
+        }
+    }
 
-    private var agentSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("AGENT")
+    // MARK: - Dual Quota Progress Bars (`Five Hour Limit Remaining` / `Weekly Limit Remaining`)
+
+    private var quotaLimitsFooter: some View {
+        let fiveHourPct = max(0, min(100, store.usageQuota.geminiFiveHourPercent))
+        let weeklyPct = max(0, min(100, store.usageQuota.geminiWeeklyPercent))
+
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Five Hour Limit Remaining")
+                        .font(.system(size: 13.5, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                    Spacer()
+                    Button {
+                        showUsageExpanded.toggle()
+                    } label: {
+                        Text("View Usage")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("btn-view-usage")
+                }
+
+                quotaProgressBar(fraction: Double(fiveHourPct) / 100.0)
+            }
 
             VStack(alignment: .leading, spacing: 6) {
-                let agentList = displayedAgents
-                ForEach(Array(stride(from: 0, to: agentList.count, by: 2)), id: \.self) { rowStart in
-                    HStack(spacing: 8) {
-                        let firstName = agentList[rowStart]
-                        agentPersonaPill(
-                            name: firstName,
-                            isMonospaced: firstName != "Default",
-                            testId: "agent-pill-\(firstName.lowercased())"
-                        )
-                        if rowStart + 1 < agentList.count {
-                            let secondName = agentList[rowStart + 1]
-                            agentPersonaPill(
-                                name: secondName,
-                                isMonospaced: secondName != "Default",
-                                testId: "agent-pill-\(secondName.lowercased())"
-                            )
-                        }
-                        Spacer(minLength: 0)
+                HStack {
+                    Text("Weekly Limit Remaining")
+                        .font(.system(size: 13.5, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                    Spacer()
+                    if showUsageExpanded {
+                        Text("\(weeklyPct)% · resets Mon")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
                     }
                 }
+
+                quotaProgressBar(fraction: Double(weeklyPct) / 100.0)
+            }
+
+            if showUsageExpanded {
+                HStack {
+                    Text("Plan: \(store.usageQuota.planDisplayName)")
+                    Spacer()
+                    Text("5h: \(fiveHourPct)% · Partner: \(store.usageQuota.partnerFiveHourPercent)%")
+                }
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(AntigravityTheme.inkMuted)
+                .padding(.top, 2)
             }
         }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("model-usage-quota-card")
     }
 
-    private func agentPersonaPill(
-        name: String,
-        isMonospaced: Bool,
-        testId: String
-    ) -> some View {
-        let isSelected = store.selectedModelConfig.agentPersona == name
-        return Button {
-            withAnimation(.snappy(duration: 0.18)) {
-                store.selectedModelConfig.agentPersona = name
+    private func quotaProgressBar(fraction: Double) -> some View {
+        GeometryReader { geo in
+            let width = max(0, geo.size.width * min(1, max(0, fraction)))
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(AntigravityTheme.surfaceElevated)
+                Capsule()
+                    .fill(AntigravityTheme.accentPeriwinkle)
+                    .frame(width: width)
             }
-            onSelectConfiguration?(
-                store.selectedModelConfig.mode.rawValue,
-                store.selectedModelConfig.displayName,
-                name
-            )
-        } label: {
-            Text(name)
-                .font(
-                    isMonospaced
-                        ? .system(size: 13, weight: isSelected ? .bold : .medium, design: .monospaced)
-                        : .system(size: 13.5, weight: .semibold)
-                )
-                .foregroundStyle(isSelected ? AntigravityTheme.pillActiveForeground : AntigravityTheme.inkLabel)
-                .padding(.horizontal, 16)
-                .frame(height: 36)
-                .background(isSelected ? AntigravityTheme.pillActiveBackground : AntigravityTheme.surfaceSheetGroup)
-                .overlay(
-                    Capsule()
-                        .strokeBorder(isSelected ? Color.clear : AntigravityTheme.cardBorder, lineWidth: 1)
-                )
-                .clipShape(Capsule())
-                .frame(minHeight: AntigravityTheme.minTouchTargetPt)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(testId)
+        .frame(height: 5)
     }
 
-    // MARK: - Actions & Model Grouping Helpers
+    // MARK: - Actions
 
     private func selectModelOption(_ option: CascadeModelConfig) {
-        let isSameModel = store.selectedModelConfig.modelId == option.modelId
+        let isSameModel = (store.selectedModelConfig.modelId == option.modelId)
         let resolvedEffort: ThinkingEffortLevel = {
             if isSameModel, option.supportedEfforts.contains(store.selectedModelConfig.effort) {
                 return store.selectedModelConfig.effort
@@ -791,156 +470,16 @@ public struct ModelAndModeSheetView: View {
         if let onDismiss {
             onDismiss()
         } else {
+            store.presentedSheet = nil
             store.currentRoute = .chatAndComposer
         }
     }
 
-    private static func accessibilityId(for option: CascadeModelConfig, index: Int) -> String {
+    private static func accessibilityId(for option: CascadeModelConfig) -> String {
         let lower = option.displayName.lowercased()
-        if option.modelId == "gemini-3-1-pro" || (index == 0 && lower.contains("gemini") && lower.contains("pro")) {
-            return "model-row-gemini-pro"
-        }
-        if lower.contains("flash") {
-            return "model-row-gemini-flash"
-        }
-        if lower.contains("opus") {
-            return "model-row-claude-opus"
-        }
-        if lower.contains("sonnet") {
-            return "model-row-claude-sonnet"
-        }
+        if lower.contains("neon") { return "model-row-gemini-4-neon" }
+        if lower.contains("opus") { return "model-row-claude-opus" }
+        if lower.contains("flash") { return "model-row-gemini-flash" }
         return "model-row-\(option.modelId)"
-    }
-
-    private static func parseEffortSuffix(from displayName: String) -> (baseName: String, effortLabel: String, rank: Int)? {
-        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasSuffix(")"), let openIdx = trimmed.lastIndex(of: "(") else {
-            return nil
-        }
-        let insideStart = trimmed.index(after: openIdx)
-        let insideEnd = trimmed.index(before: trimmed.endIndex)
-        guard insideStart < insideEnd else { return nil }
-        let token = trimmed[insideStart..<insideEnd]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let base = trimmed[..<openIdx].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !base.isEmpty else { return nil }
-
-        switch token {
-        case "minimal":
-            return (base, "Minimal", 0)
-        case "low":
-            return (base, "Low", 1)
-        case "med", "medium":
-            return (base, "Medium", 2)
-        case "high":
-            return (base, "High", 3)
-        case "xhigh", "x-high", "extra", "extra high":
-            return (base, "XHigh", 4)
-        case "max":
-            return (base, "Max", 5)
-        default:
-            return nil
-        }
-    }
-
-    private static func cleanedSingleTitle(for option: CascadeModelConfig) -> (title: String, effortBadge: String?) {
-        let trimmed = option.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let parsed = parseEffortSuffix(from: trimmed) {
-            return (parsed.baseName, parsed.effortLabel)
-        }
-        if option.hasThinkingBadge, trimmed.lowercased().hasSuffix(" (thinking)") {
-            return (String(trimmed.dropLast(" (thinking)".count)), nil)
-        }
-        return (trimmed, nil)
-    }
-
-    private static func buildModelGroups(from models: [CascadeModelConfig]) -> [ModelFamilyGroup] {
-        var familyOrder: [String] = []
-        var familyEntries: [String: [(index: Int, option: CascadeModelConfig, effortLabel: String, rank: Int)]] = [:]
-
-        for (idx, option) in models.enumerated() {
-            if let parsed = parseEffortSuffix(from: option.displayName) {
-                if familyEntries[parsed.baseName] == nil {
-                    familyOrder.append(parsed.baseName)
-                }
-                familyEntries[parsed.baseName, default: []].append(
-                    (index: idx, option: option, effortLabel: parsed.effortLabel, rank: parsed.rank)
-                )
-            }
-        }
-
-        var mergeableFamilies: Set<String> = []
-        for baseName in familyOrder {
-            if let entries = familyEntries[baseName], entries.count >= 2 {
-                let uniqueLabels = Set(entries.map(\.effortLabel))
-                if uniqueLabels.count == entries.count {
-                    mergeableFamilies.insert(baseName)
-                }
-            }
-        }
-
-        var groups: [ModelFamilyGroup] = []
-        var emittedFamilies: Set<String> = []
-
-        for (idx, option) in models.enumerated() {
-            if let parsed = parseEffortSuffix(from: option.displayName),
-               mergeableFamilies.contains(parsed.baseName) {
-                guard !emittedFamilies.contains(parsed.baseName),
-                      let entries = familyEntries[parsed.baseName] else {
-                    continue
-                }
-                emittedFamilies.insert(parsed.baseName)
-                let sortedVariants = entries
-                    .sorted { $0.rank < $1.rank }
-                    .map { ModelEffortVariant(option: $0.option, effortLabel: $0.effortLabel, effortRank: $0.rank) }
-                groups.append(
-                    ModelFamilyGroup(
-                        id: "family:\(parsed.baseName)",
-                        familyName: parsed.baseName,
-                        variants: sortedVariants,
-                        singleOption: nil,
-                        singleEffortBadge: nil,
-                        preferredOption: entries[0].option,
-                        firstIndex: entries[0].index
-                    )
-                )
-            } else {
-                let cleaned = cleanedSingleTitle(for: option)
-                groups.append(
-                    ModelFamilyGroup(
-                        id: "single:\(option.modelId)",
-                        familyName: cleaned.title,
-                        variants: [],
-                        singleOption: option,
-                        singleEffortBadge: cleaned.effortBadge,
-                        preferredOption: option,
-                        firstIndex: idx
-                    )
-                )
-            }
-        }
-
-        return groups
-    }
-
-    private static func effectiveBadgeTitle(for option: CascadeModelConfig) -> String? {
-        if let badge = option.badgeTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !badge.isEmpty {
-            return badge
-        }
-        let rawSub = option.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if CascadeModelConfig.isGenericBadgeLabel(rawSub) {
-            return rawSub
-        }
-        return nil
-    }
-
-    private static func effectiveSubtitle(for option: CascadeModelConfig) -> String {
-        let raw = option.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matchesTag = option.badgeTitle.map { raw.caseInsensitiveCompare($0) == .orderedSame } ?? false
-        if raw.isEmpty || matchesTag || CascadeModelConfig.isGenericBadgeLabel(raw) {
-            return CascadeModelConfig.descriptiveSubtitle(forModelLabel: option.displayName)
-        }
-        return raw
     }
 }

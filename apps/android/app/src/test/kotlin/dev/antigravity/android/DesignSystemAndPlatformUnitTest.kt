@@ -50,10 +50,10 @@ class DesignSystemAndPlatformUnitTest {
             preset = AppThemePreset.OBSIDIAN,
             darkTheme = false,
         )
-        assertEquals(0xFF090A0D.toInt(), darkObsidian.canvasBackgroundHex)
-        assertEquals(0xFF8EB4FF.toInt(), darkObsidian.accentPeriwinkleHex)
-        assertEquals(0xFFEBB365.toInt(), darkObsidian.statusWaitingHex)
-        assertEquals(0xFF57C88A.toInt(), darkObsidian.statusDoneHex)
+        assertEquals(0xFF111113.toInt(), darkObsidian.canvasBackgroundHex)
+        assertEquals(0xFF8DB8FF.toInt(), darkObsidian.accentPeriwinkleHex)
+        assertEquals(0xFFF2B866.toInt(), darkObsidian.statusWaitingHex)
+        assertEquals(0xFF6FD8A6.toInt(), darkObsidian.statusDoneHex)
         assertEquals(0xFFF07167.toInt(), darkObsidian.statusErrorHex)
 
         // Light mode maintains high-contrast WCAG AA tokens

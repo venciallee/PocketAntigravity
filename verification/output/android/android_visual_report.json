@@ -1,12 +1,16 @@
 {
-  "totalScreens": 13,
+  "totalScreens": 20,
+  "canonicalScreens": 13,
+  "extendedScreens": 7,
   "overviewPng": "verification/output/android/ANDROID_13_SCREENS_OVERVIEW.png",
+  "overview20Png": "verification/output/android/ANDROID_20_SCREENS_OVERVIEW.png",
   "comparisons": [
     {
       "stateId": "UE01_AGENTS_HOME",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-new.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -16,9 +20,10 @@
     },
     {
       "stateId": "UE02_DISPLAY_OPTIONS",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-display-options.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -28,9 +33,10 @@
     },
     {
       "stateId": "UE03_CONTEXT_MENU_PIN",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-context-menu.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -40,9 +46,10 @@
     },
     {
       "stateId": "UE04_PROJECT_DETAIL",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-project.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -52,9 +59,10 @@
     },
     {
       "stateId": "UE05_CREATE_PROJECT",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-new-project.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -64,9 +72,10 @@
     },
     {
       "stateId": "UE06_AUTOMATIONS",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-automations.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -76,9 +85,10 @@
     },
     {
       "stateId": "UE07_CHAT_AND_COMPOSER",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-chat.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -88,9 +98,10 @@
     },
     {
       "stateId": "UE08_ADD_CONTEXT",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-add-context.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -100,9 +111,10 @@
     },
     {
       "stateId": "UE09_MODEL_AND_MODE",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-model.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -112,9 +124,10 @@
     },
     {
       "stateId": "UE10_STRUCTURED_QUESTION",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-ask.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -124,9 +137,10 @@
     },
     {
       "stateId": "UE11_PLAN_REVIEW",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-plan-review.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -136,9 +150,10 @@
     },
     {
       "stateId": "UE12_TURN_DIFF_REVIEW",
-      "iosSizePx": [
-        1179,
-        2556
+      "referenceUePng": "docs/ue/android/and-diff.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
         1236,
@@ -148,15 +163,107 @@
     },
     {
       "stateId": "UE13_LIVE_ACTIVITY_SPEC",
-      "iosSizePx": [
-        2400,
-        1500
+      "referenceUePng": "docs/ue/android/and-live-update.png",
+      "referenceSizePx": [
+        824,
+        1830
       ],
       "androidSizePx": [
-        2400,
-        1500
+        1236,
+        2745
       ],
       "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE13.png"
+    },
+    {
+      "stateId": "UE01B_SIDEBAR_DRAWER",
+      "referenceUePng": "docs/ue/android/and-home.png",
+      "referenceSizePx": [
+        824,
+        1830
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE01B_SIDEBAR_DRAWER.png"
+    },
+    {
+      "stateId": "UE06B_AUTOMATION_DETAIL",
+      "referenceUePng": "docs/ue/android/and-automation-detail.png",
+      "referenceSizePx": [
+        824,
+        1830
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE06B_AUTOMATION_DETAIL.png"
+    },
+    {
+      "stateId": "UE06C_AUTOMATION_EDIT",
+      "referenceUePng": "docs/ue/android/and-automation-edit.png",
+      "referenceSizePx": [
+        824,
+        1830
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE06C_AUTOMATION_EDIT.png"
+    },
+    {
+      "stateId": "UE07B_PERMISSIONS_PRESET",
+      "referenceUePng": "docs/ue/android/and-preset.png",
+      "referenceSizePx": [
+        824,
+        1830
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE07B_PERMISSIONS_PRESET.png"
+    },
+    {
+      "stateId": "UE08B_SLASH_MENU",
+      "referenceUePng": "docs/ue/android/and-slash.png",
+      "referenceSizePx": [
+        824,
+        1830
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE08B_SLASH_MENU.png"
+    },
+    {
+      "stateId": "UE14_RULES_AND_SKILLS",
+      "referenceUePng": "docs/ue/android/and-customizations.png",
+      "referenceSizePx": [
+        824,
+        1830
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE14_RULES_AND_SKILLS.png"
+    },
+    {
+      "stateId": "UE15_SETTINGS",
+      "referenceUePng": "docs/ue/android/and-settings.png",
+      "referenceSizePx": [
+        824,
+        1830
+      ],
+      "androidSizePx": [
+        1236,
+        2745
+      ],
+      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE15_SETTINGS.png"
     }
   ]
 }

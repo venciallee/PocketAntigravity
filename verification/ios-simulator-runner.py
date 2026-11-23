@@ -141,10 +141,76 @@ def build_overview_sheet(out_dir: Path, state_ids: list[str], device_label: str,
         draw.text((x, y), sid, fill=(213, 216, 226))
         board.paste(img, (ox, oy))
 
-    filename = "REAL_SIMULATOR_13_SCREENS_OVERVIEW.png" if is_full else "REAL_SIMULATOR_SCOPED_SCREENS_OVERVIEW.png"
+    filename = "REAL_SIMULATOR_20_SCREENS_OVERVIEW.png" if (is_full and len(state_ids) > 13) else (
+        "REAL_SIMULATOR_13_SCREENS_OVERVIEW.png" if is_full else "REAL_SIMULATOR_SCOPED_SCREENS_OVERVIEW.png"
+    )
     overview_path = out_dir / filename
     board.save(overview_path, format="PNG")
+    if is_full and len(state_ids) > 13:
+        legacy_path = out_dir / "REAL_SIMULATOR_13_SCREENS_OVERVIEW.png"
+        board.save(legacy_path, format="PNG")
     print(f"  [OVERVIEW] {overview_path}", flush=True)
+
+
+def build_reference_comparison_sheets(
+    out_dir: Path,
+    repo_root: Path,
+    screen_entries: list[dict[str, Any]],
+    captured_state_ids: list[str],
+    device_label: str,
+) -> list[Path]:
+    """Builds 1:1 side-by-side Reference UE (`docs/ue/ios/*.png`) vs Real iOS Simulator comparison PNGs."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        print("[!] Pillow not installed; skipping reference comparison sheet generation.", flush=True)
+        return []
+
+    ref_by_id = {entry["id"]: entry for entry in screen_entries}
+    cmp_dir = out_dir / "comparisons"
+    cmp_dir.mkdir(parents=True, exist_ok=True)
+    generated: list[Path] = []
+
+    for sid in captured_state_ids:
+        sim_path = out_dir / f"{sid}.png"
+        entry = ref_by_id.get(sid)
+        if not sim_path.exists() or not entry:
+            continue
+        raw_ref = Path(entry.get("referenceUEImage", ""))
+        ref_path = raw_ref if raw_ref.is_absolute() else (repo_root / raw_ref)
+        if not ref_path.exists():
+            continue
+
+        ref_img = Image.open(ref_path).convert("RGB")
+        sim_img = Image.open(sim_path).convert("RGB")
+
+        target_h = 1100
+        ref_scale = target_h / max(1, ref_img.height)
+        sim_scale = target_h / max(1, sim_img.height)
+        ref_resized = ref_img.resize((max(1, int(ref_img.width * ref_scale)), target_h), Image.Resampling.LANCZOS)
+        sim_resized = sim_img.resize((max(1, int(sim_img.width * sim_scale)), target_h), Image.Resampling.LANCZOS)
+
+        pad = 28
+        gap = 28
+        header_h = 84
+        canvas_w = pad * 2 + ref_resized.width + gap + sim_resized.width
+        canvas_h = header_h + target_h + pad
+
+        sheet = Image.new("RGB", (canvas_w, canvas_h), (11, 11, 12))
+        draw = ImageDraw.Draw(sheet)
+        draw.text((pad, 18), f"{sid} — Reference UE vs Real iOS Simulator ({device_label})", fill=(245, 246, 248))
+        draw.text((pad, 48), f"LEFT: Reference ({entry.get('referenceUEImage', '')})", fill=(141, 184, 255))
+        draw.text((pad + ref_resized.width + gap, 48), f"RIGHT: Real iOS Simulator ({sid}.png)", fill=(111, 216, 166))
+
+        sheet.paste(ref_resized, (pad, header_h))
+        sheet.paste(sim_resized, (pad + ref_resized.width + gap, header_h))
+
+        out_cmp = cmp_dir / f"IOS_CMP_{sid}.png"
+        sheet.save(out_cmp, format="PNG")
+        generated.append(out_cmp)
+        print(f"  [CMP] {out_cmp}", flush=True)
+
+    return generated
 
 
 def build_light_dark_comparison_sheet(out_dir: Path, device_label: str) -> Path | None:
@@ -177,7 +243,7 @@ def build_light_dark_comparison_sheet(out_dir: Path, device_label: str) -> Path 
     canvas_w = outer_pad * 2 + pair_cols * card_w + (pair_cols - 1) * pair_gap
     canvas_h = header_h + outer_pad + pair_rows * card_h + (pair_rows - 1) * pair_gap + outer_pad
 
-    board = Image.new("RGB", (canvas_w, canvas_h), (9, 10, 13))
+    board = Image.new("RGB", (canvas_w, canvas_h), (11, 11, 12))
     draw = ImageDraw.Draw(board)
     draw.text(
         (outer_pad, 26),
@@ -187,7 +253,7 @@ def build_light_dark_comparison_sheet(out_dir: Path, device_label: str) -> Path 
     draw.text(
         (outer_pad, 58),
         "Side-by-side Dark vs Light semantic surface, ink contrast & glass chrome verification (Home · Chat · Diff · Settings)",
-        fill=(142, 180, 255),
+        fill=(141, 184, 255),
     )
 
     for idx, (pair_title, dark_stem, light_stem) in enumerate(available_pairs):
@@ -198,7 +264,7 @@ def build_light_dark_comparison_sheet(out_dir: Path, device_label: str) -> Path 
 
         draw.rectangle(
             [card_x, card_y, card_x + card_w, card_y + card_h],
-            fill=(19, 21, 28),
+            fill=(20, 20, 22),
             outline=(42, 46, 58),
             width=2,
         )
@@ -208,8 +274,8 @@ def build_light_dark_comparison_sheet(out_dir: Path, device_label: str) -> Path 
         right_x = left_x + thumb_w + inner_gap
         slot_y = card_y + card_header_h
 
-        draw.text((left_x, card_y + 34), f"Dark · {dark_stem}", fill=(142, 180, 255))
-        draw.text((right_x, card_y + 34), f"Light · {light_stem}", fill=(235, 179, 101))
+        draw.text((left_x, card_y + 34), f"Dark · {dark_stem}", fill=(141, 184, 255))
+        draw.text((right_x, card_y + 34), f"Light · {light_stem}", fill=(242, 184, 102))
 
         for slot_x, stem in ((left_x, dark_stem), (right_x, light_stem)):
             img_path = out_dir / f"{stem}.png"
@@ -657,17 +723,24 @@ def main() -> None:
         timings["liveRpcHandshake"] = 0.0
         print("=== [4/5] Skipping Live Connect-RPC App Handshake (unaffected by change scope) ===", flush=True)
 
-    # Step 5: Capture impacted UE screens (or all 13 + Light/Dark visual verification in full/release mode)
+    # Step 5: Capture impacted UE screens (or all 20 + Light/Dark visual verification in full/release mode)
     captured_state_ids: list[str] = []
     captured_appearance_variants: list[str] = []
-    if cfg["screens"]:
+    all_screen_entries = list(ir.get("states", [])) + list(ir.get("extendedScreens", []))
+    screens_to_capture = list(cfg["screens"])
+    if cfg["allScreensSelected"]:
+        for ext in ir.get("extendedScreens", []):
+            if ext["id"] not in screens_to_capture:
+                screens_to_capture.append(ext["id"])
+
+    if screens_to_capture:
         t_shots = time.monotonic()
         ensure_app_installed()
         print(
-            f"=== [5/5] Capturing {len(cfg['screens'])}/{total_screens} Native SwiftUI UE Screen(s) on iOS Simulator ===",
+            f"=== [5/5] Capturing {len(screens_to_capture)}/{len(all_screen_entries)} Native SwiftUI UE Screen(s) on iOS Simulator ===",
             flush=True,
         )
-        for state_id in cfg["screens"]:
+        for state_id in screens_to_capture:
             captured_state_ids.append(state_id)
             subprocess.run(
                 ["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID],
@@ -700,6 +773,13 @@ def main() -> None:
             captured_state_ids,
             f"{sim_name} · {sim_runtime}",
             is_full=cfg["allScreensSelected"],
+        )
+        build_reference_comparison_sheets(
+            out_dir=out_dir,
+            repo_root=repo_root,
+            screen_entries=all_screen_entries,
+            captured_state_ids=captured_state_ids,
+            device_label=f"{sim_name} · {sim_runtime}",
         )
 
         # Light & Dark Mode Visual Verification (full/release mode)

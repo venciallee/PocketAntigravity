@@ -15,24 +15,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AlternateEmail
-import androidx.compose.material.icons.rounded.Bolt
-import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -51,7 +47,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -61,349 +56,280 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.antigravity.android.core.ui.components.SectionHeaderLabel
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.ui.home.AgentsHomeScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.ContextCandidateCategory
-import dev.antigravity.shared.model.ContextCandidateItem
 
 /**
- * UE08_ADD_CONTEXT: Material 3 Modal Bottom Sheet for searching and multi-selecting Files, Folders,
- * Conversation/Terminal Mentions, Slash Actions, and Workspace Skills to attach to `ChatComposer`.
+ * UE08_ADD_CONTEXT (`and-add-context.png`): Anchored Material 3 Add Context menu above the `+` button
+ * (`Files >`, `Folder >`, `Mentions >`, `Actions >`, `Drive [Set up]`), with interactive drill-down
+ * into the multi-select file/folder/mention/skill picker when any category is tapped.
  */
 @Composable
 fun AddContextSheetScreen(
     coordinator: AntigravityCoreCoordinator,
     onDismiss: () -> Unit,
+    showHomeBackdrop: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
     val workspaceState by coordinator.workspaceStore.state.collectAsState()
+    val connectionState by coordinator.connectionState.collectAsState()
+    val hostName = connectionState.activeHost?.hostname?.takeIf { it.isNotBlank() } ?: "MacBook Pro"
 
+    var drilldownCategory by remember { mutableStateOf<ContextCandidateCategory?>(null) }
     var searchQuery by remember { mutableStateOf("") }
-    var activeCategory by remember { mutableStateOf<ContextCandidateCategory?>(null) }
-
-    val allCandidates = workspaceState.contextCandidates
-    val filteredCandidates = remember(allCandidates, searchQuery, activeCategory) {
-        val q = searchQuery.trim().lowercase()
-        allCandidates.filter { item ->
-            val categoryMatch = activeCategory == null || item.category == activeCategory
-            val queryMatch = q.isEmpty() ||
-                item.title.lowercase().contains(q) ||
-                item.subtitle.lowercase().contains(q) ||
-                item.chipLabel.lowercase().contains(q)
-            categoryMatch && queryMatch
-        }
-    }
-
-    val filesAndFolders = filteredCandidates.filter {
-        it.category == ContextCandidateCategory.FILES || it.category == ContextCandidateCategory.FOLDER
-    }
-    val mentions = filteredCandidates.filter { it.category == ContextCandidateCategory.MENTIONS }
-    val actionsAndSkills = filteredCandidates.filter {
-        it.category == ContextCandidateCategory.ACTIONS || it.category == ContextCandidateCategory.SKILLS
-    }
-    val selectedCount = allCandidates.count { it.isSelected }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(colors.canvasObsidian),
+            .background(if (showHomeBackdrop) colors.canvasObsidian else Color.Transparent),
     ) {
-        // Subtle dimmed backdrop behind bottom sheet
+        if (showHomeBackdrop) {
+            AgentsHomeScreen(
+                coordinator = coordinator,
+                onOpenSidebar = {},
+                onOpenConversation = {},
+                highlightAddContextButton = true,
+                showNeedsApprovalBanner = false,
+                showSearchAction = false,
+                showHostChevron = false,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        // Scrim to dismiss
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = if (colors.isDark) 0.54f else 0.34f))
+                .background(Color.Black.copy(alpha = if (drilldownCategory != null) 0.56f else 0.14f))
                 .clickable(onClick = onDismiss),
         )
 
-        // Material 3 Bottom Sheet Container
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .padding(top = 34.dp),
-            shape = RoundedCornerShape(
-                topStart = AntigravityDesignTokens.SheetCornerRadius,
-                topEnd = AntigravityDesignTokens.SheetCornerRadius,
-            ),
-            color = colors.surfaceSheet,
-            border = BorderStroke(1.dp, colors.cardBorder),
-        ) {
-            Column(
+        if (drilldownCategory == null) {
+            // Anchored Popover Menu matching `and-add-context.png`
+            Surface(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .navigationBarsPadding(),
+                    .align(Alignment.BottomStart)
+                    .navigationBarsPadding()
+                    .padding(start = 18.dp, bottom = 140.dp)
+                    .width(256.dp)
+                    .testTag("add-context-popover"),
+                shape = RoundedCornerShape(18.dp),
+                color = colors.surfacePopover,
+                border = BorderStroke(1.dp, colors.cardBorder),
+                shadowElevation = 12.dp,
             ) {
-                // Drag Handle
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 10.dp, bottom = 4.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .width(38.dp)
-                            .height(4.dp)
-                            .clip(RoundedCornerShape(100.dp))
-                            .background(colors.sheetHandle),
-                    )
-                }
-
-                // Header Bar: centered title + close X
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                        .padding(vertical = 10.dp),
                 ) {
                     Text(
                         text = "Add Context",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                        color = colors.inkReading,
-                        modifier = Modifier.align(Alignment.Center),
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
+                        color = colors.inkSecondary,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
                     )
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .defaultMinSize(
-                                minWidth = AntigravityDesignTokens.MinTouchTarget,
-                                minHeight = AntigravityDesignTokens.MinTouchTarget,
-                            )
-                            .testTag("btn-close-add-context"),
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = colors.surfaceElevated,
-                            modifier = Modifier.size(34.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Close,
-                                    contentDescription = "Close",
-                                    tint = colors.inkLabel,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-                    }
-                }
 
-                // Search Bar
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .defaultMinSize(minHeight = 46.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    color = colors.surfaceElevated,
-                    border = BorderStroke(1.dp, colors.cardBorder),
-                ) {
+                    AddContextMenuRow(
+                        icon = Icons.Rounded.Description,
+                        label = "Files",
+                        onClick = { drilldownCategory = ContextCandidateCategory.FILES },
+                        modifier = Modifier.testTag("ctx-menu-files"),
+                    )
+                    AddContextMenuRow(
+                        icon = Icons.Rounded.Folder,
+                        label = "Folder",
+                        onClick = { drilldownCategory = ContextCandidateCategory.FOLDER },
+                        modifier = Modifier.testTag("ctx-menu-folder"),
+                    )
+                    AddContextMenuRow(
+                        icon = Icons.Rounded.AlternateEmail,
+                        label = "Mentions",
+                        onClick = { drilldownCategory = ContextCandidateCategory.MENTIONS },
+                        modifier = Modifier.testTag("ctx-menu-mentions"),
+                    )
+                    AddContextMenuRow(
+                        icon = Icons.Rounded.Terminal,
+                        label = "Actions",
+                        onClick = { drilldownCategory = ContextCandidateCategory.ACTIONS },
+                        modifier = Modifier.testTag("ctx-menu-actions"),
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 6.dp),
+                        color = colors.subtleDivider,
+                    )
+
+                    // Drive row with `Set up` trailing CTA
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                            .clickable { drilldownCategory = ContextCandidateCategory.DRIVE }
+                            .padding(horizontal = 18.dp, vertical = 12.dp)
+                            .testTag("ctx-menu-drive"),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.Search,
-                            contentDescription = "Search",
-                            tint = colors.inkMuted,
-                            modifier = Modifier.size(18.dp),
+                            imageVector = Icons.Rounded.CloudQueue,
+                            contentDescription = null,
+                            tint = colors.inkLabel,
+                            modifier = Modifier.size(20.dp),
                         )
-                        Box(modifier = Modifier.weight(1f)) {
-                            if (searchQuery.isEmpty()) {
-                                Text(
-                                    text = "Search files, folders, skills...",
-                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
-                                    color = colors.inkMuted,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
+                        Text(
+                            text = "Drive",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                            color = colors.inkReading,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = "Set up",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                            color = colors.accentPeriwinkle,
+                        )
+                    }
+
+                    Text(
+                        text = "Files and folders come from $hostName",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                        color = colors.inkMuted,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        } else {
+            // Interactive multi-select drilldown sheet when a category is chosen
+            val filtered = remember(workspaceState.contextCandidates, drilldownCategory, searchQuery) {
+                val q = searchQuery.trim().lowercase()
+                workspaceState.contextCandidates.filter { item ->
+                    val catMatch = drilldownCategory == null || item.category == drilldownCategory
+                    val qMatch = q.isEmpty() || item.title.lowercase().contains(q) || item.subtitle.lowercase().contains(q)
+                    catMatch && qMatch
+                }
+            }
+            val selectedCount = workspaceState.contextCandidates.count { it.isSelected }
+
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .testTag("add-context-picker-sheet"),
+                shape = RoundedCornerShape(
+                    topStart = AntigravityDesignTokens.SheetCornerRadius,
+                    topEnd = AntigravityDesignTokens.SheetCornerRadius,
+                ),
+                color = colors.surfaceSheet,
+                border = BorderStroke(1.dp, colors.cardBorder),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = drilldownCategory?.displayTitle ?: "Add Context",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = colors.inkReading,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { drilldownCategory = null }) {
+                            Icon(Icons.Rounded.Close, contentDescription = "Back to categories", tint = colors.inkSecondary)
+                        }
+                    }
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(100.dp),
+                        color = colors.surfaceElevated,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Rounded.Search, contentDescription = null, tint = colors.inkSecondary, modifier = Modifier.size(18.dp))
                             BasicTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
-                                textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                    fontSize = 15.sp,
-                                    color = colors.inkReading,
-                                ),
-                                cursorBrush = SolidColor(colors.accentPeriwinkle),
+                                modifier = Modifier.weight(1f).testTag("input-context-search"),
                                 singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.inkReading),
+                                cursorBrush = SolidColor(colors.accentPeriwinkle),
+                                decorationBox = { inner ->
+                                    if (searchQuery.isEmpty()) Text("Search...", color = colors.inkMuted)
+                                    inner()
+                                },
+                            )
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        filtered.forEach { item ->
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .testTag("context-search-input"),
-                            )
+                                    .clickable { coordinator.workspaceStore.toggleContextCandidate(item.id) }
+                                    .padding(vertical = 6.dp)
+                                    .testTag("context-candidate-${item.id}"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Checkbox(
+                                    checked = item.isSelected,
+                                    onCheckedChange = { coordinator.workspaceStore.toggleContextCandidate(item.id) },
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = colors.accentPeriwinkle,
+                                        checkmarkColor = colors.inkOnPrimaryCta,
+                                    ),
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.title,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                        color = colors.inkReading,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = item.subtitle,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colors.inkSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                         }
-                        if (searchQuery.isNotEmpty()) {
-                            Icon(
-                                imageVector = Icons.Rounded.Close,
-                                contentDescription = "Clear search",
-                                tint = colors.inkSecondary,
-                                modifier = Modifier
-                                    .size(18.dp)
-                                    .clickable { searchQuery = "" },
-                            )
-                        }
                     }
-                }
 
-                // 5 Category Tiles Row
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    ContextCategoryTile(
-                        label = "Files",
-                        icon = Icons.Rounded.Description,
-                        selected = activeCategory == ContextCandidateCategory.FILES,
-                        onClick = {
-                            activeCategory = if (activeCategory == ContextCandidateCategory.FILES) {
-                                null
-                            } else {
-                                ContextCandidateCategory.FILES
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile-files"),
-                    )
-                    ContextCategoryTile(
-                        label = "Folder",
-                        icon = Icons.Rounded.Folder,
-                        selected = activeCategory == ContextCandidateCategory.FOLDER,
-                        onClick = {
-                            activeCategory = if (activeCategory == ContextCandidateCategory.FOLDER) {
-                                null
-                            } else {
-                                ContextCandidateCategory.FOLDER
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile-folder"),
-                    )
-                    ContextCategoryTile(
-                        label = "Mentions",
-                        icon = Icons.Rounded.AlternateEmail,
-                        selected = activeCategory == ContextCandidateCategory.MENTIONS,
-                        onClick = {
-                            activeCategory = if (activeCategory == ContextCandidateCategory.MENTIONS) {
-                                null
-                            } else {
-                                ContextCandidateCategory.MENTIONS
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile-mentions"),
-                    )
-                    ContextCategoryTile(
-                        label = "Actions",
-                        icon = Icons.Rounded.Bolt,
-                        selected = activeCategory == ContextCandidateCategory.ACTIONS,
-                        onClick = {
-                            activeCategory = if (activeCategory == ContextCandidateCategory.ACTIONS) {
-                                null
-                            } else {
-                                ContextCandidateCategory.ACTIONS
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile-actions"),
-                    )
-                    ContextCategoryTile(
-                        label = "Skills",
-                        icon = Icons.Rounded.ViewInAr,
-                        selected = activeCategory == ContextCandidateCategory.SKILLS,
-                        onClick = {
-                            activeCategory = if (activeCategory == ContextCandidateCategory.SKILLS) {
-                                null
-                            } else {
-                                ContextCandidateCategory.SKILLS
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("tile-skills"),
-                    )
-                }
-
-                // Scrollable Grouped Candidates
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    if (filesAndFolders.isNotEmpty()) {
-                        ContextCandidateGroupCard(
-                            sectionTitle = "FILES & FOLDERS",
-                            items = filesAndFolders,
-                            onToggle = { coordinator.workspaceStore.toggleContextCandidate(it.id) },
-                        )
-                    }
-                    if (mentions.isNotEmpty()) {
-                        ContextCandidateGroupCard(
-                            sectionTitle = "MENTIONS",
-                            items = mentions,
-                            onToggle = { coordinator.workspaceStore.toggleContextCandidate(it.id) },
-                        )
-                    }
-                    if (actionsAndSkills.isNotEmpty()) {
-                        ContextCandidateGroupCard(
-                            sectionTitle = "ACTIONS & SKILLS",
-                            items = actionsAndSkills,
-                            onToggle = { coordinator.workspaceStore.toggleContextCandidate(it.id) },
-                        )
-                    }
-                    if (filteredCandidates.isEmpty()) {
-                        Text(
-                            text = "No matching context items found.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.inkSecondary,
-                            modifier = Modifier.padding(vertical = 24.dp),
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = colors.subtleDivider)
-
-                // Footer Bar: Selected count + Add to message CTA
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = "$selectedCount selected",
-                        style = MaterialTheme.typography.bodyLarge.copy(
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        color = colors.inkSecondary,
-                    )
                     Button(
                         onClick = {
                             coordinator.workspaceStore.applySelectedContextToComposer()
                             onDismiss()
                         },
                         modifier = Modifier
-                            .defaultMinSize(minWidth = 156.dp, minHeight = AntigravityDesignTokens.MinTouchTarget)
-                            .testTag("btn-add-to-message"),
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("btn-add-context-apply"),
                         shape = RoundedCornerShape(100.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colors.accentPeriwinkle,
@@ -411,11 +337,8 @@ fun AddContextSheetScreen(
                         ),
                     ) {
                         Text(
-                            text = "Add to message",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
+                            text = if (selectedCount > 0) "Add to message ($selectedCount)" else "Done",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                         )
                     }
                 }
@@ -425,168 +348,38 @@ fun AddContextSheetScreen(
 }
 
 @Composable
-private fun ContextCategoryTile(
-    label: String,
+private fun AddContextMenuRow(
     icon: ImageVector,
-    selected: Boolean,
+    label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
-    Surface(
-        onClick = onClick,
-        modifier = modifier.defaultMinSize(minHeight = 62.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = if (selected) colors.surfaceSelectionTint else colors.surfaceElevated,
-        border = BorderStroke(
-            width = 1.dp,
-            color = if (selected) colors.accentPeriwinkle else colors.cardBorder,
-        ),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = if (selected) colors.accentPeriwinkle else colors.inkLabel,
-                modifier = Modifier.size(19.dp),
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontFamily = FontFamily.SansSerif,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 11.sp,
-                ),
-                color = if (selected) colors.accentPeriwinkle else colors.inkReading,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ContextCandidateGroupCard(
-    sectionTitle: String,
-    items: List<ContextCandidateItem>,
-    onToggle: (ContextCandidateItem) -> Unit,
-) {
-    val colors = LocalAntigravityColors.current
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionHeaderLabel(title = sectionTitle)
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            color = colors.surfaceSheetGroup,
-            border = BorderStroke(1.dp, colors.cardBorder),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                items.forEachIndexed { idx, item ->
-                    ContextCandidateRow(
-                        item = item,
-                        onToggle = { onToggle(item) },
-                    )
-                    if (idx < items.lastIndex) {
-                        HorizontalDivider(
-                            color = colors.subtleDivider,
-                            modifier = Modifier.padding(horizontal = 14.dp),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ContextCandidateRow(
-    item: ContextCandidateItem,
-    onToggle: () -> Unit,
-) {
-    val colors = LocalAntigravityColors.current
-    val rowTag = contextCandidateTestTag(item)
-    val icon = when (item.category) {
-        ContextCandidateCategory.FILES -> Icons.Rounded.Description
-        ContextCandidateCategory.FOLDER -> Icons.Rounded.Folder
-        ContextCandidateCategory.MENTIONS ->
-            if (item.title.lowercase().contains("terminal")) Icons.Rounded.Terminal else Icons.Rounded.ChatBubbleOutline
-        ContextCandidateCategory.ACTIONS -> Icons.Rounded.Bolt
-        ContextCandidateCategory.SKILLS -> Icons.Rounded.ViewInAr
-    }
-    val isCodeStyleTitle = item.category == ContextCandidateCategory.FILES ||
-        item.category == ContextCandidateCategory.FOLDER ||
-        item.category == ContextCandidateCategory.ACTIONS
-
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .defaultMinSize(minHeight = 58.dp)
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .testTag(rowTag),
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (item.isSelected) colors.accentPeriwinkle else colors.inkSecondary,
-            modifier = Modifier.size(19.dp),
+            tint = colors.inkLabel,
+            modifier = Modifier.size(20.dp),
         )
-        Column(
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+            color = colors.inkReading,
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontSize = 14.5.sp,
-                    fontFamily = if (isCodeStyleTitle) FontFamily.Monospace else FontFamily.SansSerif,
-                ),
-                color = colors.inkReading,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = item.subtitle,
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                color = colors.inkSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (item.isActionTrigger && !item.isSelected) {
-            Icon(
-                imageVector = Icons.Rounded.Add,
-                contentDescription = "Add action",
-                tint = colors.inkSecondary,
-                modifier = Modifier.size(22.dp),
-            )
-        } else {
-            Checkbox(
-                checked = item.isSelected,
-                onCheckedChange = null,
-                colors = CheckboxDefaults.colors(
-                    checkedColor = colors.accentPeriwinkle,
-                    uncheckedColor = colors.inkMuted,
-                    checkmarkColor = colors.inkOnPrimaryCta,
-                ),
-            )
-        }
-    }
-}
-
-private fun contextCandidateTestTag(item: ContextCandidateItem): String {
-    val lower = item.title.lowercase()
-    return when {
-        lower.contains("ratelimit") -> "ctx-row-ratelimit"
-        lower.contains("go-testing") -> "ctx-row-go-testing"
-        else -> "ctx-row-${item.id}"
+        )
+        Icon(
+            imageVector = Icons.Rounded.ChevronRight,
+            contentDescription = null,
+            tint = colors.inkMuted,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }

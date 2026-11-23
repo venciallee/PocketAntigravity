@@ -33,34 +33,35 @@ Every screen follows the normative ESDD specs ([`specs/`](../specs/) and [`specs
 
 | Screen ID | Capability | iOS (`apps/ios/`) | Android (`apps/android/`) | Shared KMP State (`shared/`) |
 | :--- | :--- | :---: | :---: | :--- |
-| **`UE01`** | **Agents Home** — Multi-host conversation feed, Cloud/Local badges, running pulse, inbox filter, pull-to-refresh, compose FAB | ✅ `AgentsHomeViewController` | ✅ `AgentsHomeScreen` | ✅ `ConversationSyncStore` |
-| **`UE02`** | **Display Options** — Group by Workspace/Status/Date, sort order, archived/cloud filters | ✅ `DisplayOptionsSheetView` | ✅ `DisplayOptionsSheet` | ✅ `ConversationSyncStore` |
-| **`UE03`** | **Conversation Context Menu** — Pin, Rename, Mark Unread, Export Summary, Archive, Delete | ✅ `ConversationContextPreviewMenu` | ✅ `ConversationContextSheet` | ✅ `ConversationSyncStore` |
-| **`UE04`** | **Project / Workspace Detail** — Repo header, branch status, workspace conversations, quick new task | ✅ `ProjectDetailViewController` | ✅ `ProjectDetailScreen` | ✅ `WorkspaceAndAutomationStore` |
-| **`UE05`** | **Create Project** — New workspace / git worktree creation with validation | ✅ `CreateProjectSheetView` | ✅ `CreateProjectDialog` | ✅ `WorkspaceAndAutomationStore` |
-| **`UE06`** | **Automations** — Scheduled & event-driven agent automations (list, create, toggle, run now) | ✅ `AutomationsViewController` | ✅ `AutomationsScreen` | ✅ `WorkspaceAndAutomationStore` |
-| **`UE07`** | **Cascade Chat & Composer** — Streaming Markdown AST, thought/tool/terminal cards, inline amber approval card, Claude-style adaptive composer | ✅ `CascadeChatViewController` + `ChatComposerView` | ✅ `CascadeChatScreen` | ✅ `CascadeChatDomainStore` + `core-markdown` |
-| **`UE08`** | **Add Context (`@`)** — Workspace files, folders, symbols, rules, workflows, images | ✅ `AddContextSheetView` | ✅ `AddContextSheet` | ✅ `CascadeChatDomainStore` |
-| **`UE09`** | **Model & Mode Picker** — Live model catalog, reasoning effort / thinking budget, Planning vs Fast mode | ✅ `ModelAndModeSheetView` | ✅ `ModelAndModeSheet` | ✅ `CascadeChatDomainStore` + `SettingsAndCustomizationStore` |
-| **`UE10`** | **Structured Question Wizard** — Multi-step agent clarification Q&A (`ASK_QUESTION`) with freeform & preset choices | ✅ `StructuredQuestionCardView` | ✅ `StructuredQuestionScreen` | ✅ `CascadeChatDomainStore` |
-| **`UE11`** | **Implementation Plan Review** — Paragraph-level inline review comments, request revisions, approve plan | ✅ `ImplementationPlanReviewViewController` | ✅ `ImplementationPlanReviewScreen` | ✅ `ReviewAndVcsStore` |
-| **`UE12`** | **Turn Diff Review** — File tree, unified/split diff hunks, line-level comments, revert-to-step & PR links | ✅ `TurnDiffReviewViewController` | ✅ `TurnDiffReviewScreen` | ✅ `ReviewAndVcsStore` |
-| **`UE13`** | **Live Agent Progress Surface** — Real-time progress & biometric approval outside the app | ✅ Dynamic Island & Lock Screen Live Activity (`ActivityKit`) | ✅ Android 16 `NotificationCompat.ProgressStyle` Live Updates + Android 10–15 FGS Fallback + Spec Gallery | ✅ `LiveProgressModels` + `AntigravityCoreCoordinator` |
+| **`UE01` / `UE01B`** | **New Conversation Home & PC-Aligned Sidebar Drawer** — Welcome greeting, amber Needs Approval jump banner, Host switcher, Search, Left Sidebar Drawer (`+ New Conversation`, `Automations`, `Customizations`, `Pinned`, `Projects`, `Settings`) | ✅ `AgentsHomeViewController` + `AgentsSidebarDrawerView` | ✅ `AgentsHomeScreen` + `ModalNavigationDrawer` | ✅ `ConversationSyncStore` |
+| **`UE02`** | **Display Options** — Group by `Project` / `Host` / `None`, Sort Conversations (`Last Updated` / `Date Created` / `Title`), Sort Projects, Filter, Density, Auto Pin, Archived Only, Mark All as Read | ✅ `DisplayOptionsSheetView` | ✅ `DisplayOptionsSheet` | ✅ `ConversationSyncStore` |
+| **`UE03`** | **Conversation Context Menu** — Rich preview (`Gemini 4 Neon`), Pin, Mark Unread, Rename, Move to Project, Export Summary, Archive, Delete (+ iOS Swipe Pin/Archive) | ✅ `ConversationContextPreviewMenu` | ✅ `ConversationContextSheet` | ✅ `ConversationSyncStore` |
+| **`UE04`** | **Project Detail** — Repo header, `main ↑2`, `Working tree clean`, Active/Archived/Automations tabs, single-line conversation rows, wired `Project rules & skills` & Automation Detail | ✅ `ProjectDetailViewController` | ✅ `ProjectDetailScreen` | ✅ `WorkspaceAndAutomationStore` |
+| **`UE05`** | **Create Project** — MacBook Pro vs Cloud runtime, GitHub repo vs Drive folder, branch/worktree configuration | ✅ `CreateProjectSheetView` | ✅ `CreateProjectDialog` | ✅ `WorkspaceAndAutomationStore` |
+| **`UE06` / `UE06B` / `UE06C`** | **Automations Hub, Detail & Edit** — NL quick-create, filter chips, Scheduled / Always On / Paused, Run Now, Recent Runs history + Retry, full Edit Schedule & Prompt form | ✅ `AutomationsViewController` + `AutomationDetailView` + `AutomationEditSheetView` | ✅ `AutomationsScreen` + `AutomationDetailScreen` + `AutomationEditDialog` | ✅ `WorkspaceAndAutomationStore` |
+| **`UE07` / `UE07B`** | **Cascade Chat, Composer & Permissions Preset** — Streaming Markdown AST, thought/tool/terminal cards, 7-segment task card, inline amber Face ID/Biometric approval, PC-aligned Composer (`+`, `Gemini 4 Neon / Extra High`, anchored `🛡 Default` Permissions Preset popover) | ✅ `CascadeChatViewController` + `ChatComposerView` + `PermissionsSheetView` | ✅ `CascadeChatScreen` + `PermissionsPresetOverlay` | ✅ `CascadeChatDomainStore` + `core-markdown` |
+| **`UE08` / `UE08B`** | **Add Context (`+`) & `/` Actions / Skills** — Anchored Add Context menu (`Files`, `Folder`, `Mentions`, `Actions`, `Drive [Set up]`) + categorized `/` Actions (`/plan`, `/goal`, `/schedule`, `/automation`) & Skills (`/go-testing`, `/api-review`) | ✅ `AddContextSheetView` + `ChatComposerView` | ✅ `AddContextSheet` + `SlashCommandOverlay` | ✅ `CascadeChatDomainStore` |
+| **`UE09`** | **Model, Orchestrator, Thinking Effort & Usage Quota** — Live Gemini 4 catalog (`Orchestrator`, `Gemini 4 Neon` default, `Carbon`, `Argon`, `Hydrogen`, `Claude Opus 5.5`, `Gemini 3.8 Flash`, `More models`), 4 thinking levels (`Low`/`Medium`/`High`/`Extra High`), 5h/Weekly quota bars (Planning handled via `/plan`) | ✅ `ModelAndModeSheetView` | ✅ `ModelAndModeSheet` | ✅ `CascadeChatDomainStore` + `SettingsAndCustomizationStore` |
+| **`UE10`** | **Structured `/plan` Interview Question Wizard** — Multi-step clarification Q&A (`ASK_QUESTION`) with multi-select checkboxes, write-in & freeform reply | ✅ `StructuredQuestionCardView` | ✅ `StructuredQuestionScreen` | ✅ `CascadeChatDomainStore` |
+| **`UE11`** | **Implementation Plan Review** — Paused amber banner, `MODIFY`/`NEW` badges, paragraph-level inline comments, `Proceed` / `Send comments` | ✅ `ImplementationPlanReviewViewController` | ✅ `ImplementationPlanReviewScreen` | ✅ `ReviewAndVcsStore` |
+| **`UE12`** | **Turn Diff Review** — Turn switcher, file pager, single-column line-number gutter (`v2.34`), word-level diff, inline line-29 comment composer, Git staging & commit | ✅ `TurnDiffReviewViewController` | ✅ `TurnDiffReviewScreen` | ✅ `ReviewAndVcsStore` |
+| **`UE13`** | **Live Agent Progress Surface** — Real-time progress & biometric approval outside the app | ✅ Dynamic Island & Lock Screen Live Activity (`ActivityKit`) | ✅ Android 16 `NotificationCompat.ProgressStyle` Live Updates + FGS Fallback + Dark Notification Shade Spec | ✅ `LiveProgressModels` + `AntigravityCoreCoordinator` |
 
 ---
 
-### 2.2 Antigravity `v2.33+` Agent Workflows & Rich Content
+### 2.2 Antigravity `v2.33–v2.34` Agent Workflows, Customizations & Settings
 
 | Feature | iOS | Android | KMP Shared Core | Notes |
 | :--- | :---: | :---: | :---: | :--- |
 | **Conversation Overview Sheet** (Goals, Subagents + Stop, Background Tasks + Cancel, Changed Files, Linked PRs) | ✅ | ✅ | ✅ | Powered by `OrchestrationAndSideChannelStore` & `ReviewAndVcsStore` |
-| **`/btw` Side Question Channel** (ask parallel clarification without interrupting running trajectory) | ✅ | ✅ | ✅ | `SideQuestionSheetView` (iOS) · `SideQuestionSheet` (Android) |
+| **`/btw` Side Question Channel** (ask parallel clarification without interrupting running trajectory) | ✅ | ✅ | ✅ | `SideQuestionSheetView` (iOS) · `SideQuestionSheet` (Android) (gated behind feature flag in live `/` menu) |
 | **`/swarm` Multi-Agent Board** (agent roster, channel feed, status updates) | ✅ | ✅ | ✅ | `SwarmBoardSheetView` (iOS) · `SwarmBoardSheet` (Android) |
-| **Gemini Live Voice Mode & Call Summary** | ✅ | 🚧 | ✅ | iOS wires live `SFSpeechRecognizer`/`AVAudioEngine`; Android ships `VoiceModeSheet` (voice selector, mute/unmute, live turn entry, persisted `VoiceCallTranscriptSummary`) with live `SpeechRecognizer` mic capture next |
+| **Gemini Live Voice Mode & Call Summary** | ✅ | 🚧 | ✅ | iOS wires live `SFSpeechRecognizer`/`AVAudioEngine`; Android ships `VoiceModeSheet` + persisted `VoiceCallTranscriptSummary` |
 | **Rich Artifact Viewer** (Markdown, code blocks, images, Jupyter `.ipynb`, image region comments, unknown artifact fallback) | ✅ | ✅ | ✅ | `RichArtifactViewerSheet` on both iOS and Android (`ArtifactKind.UNKNOWN` safe fallback) |
 | **Mermaid Diagrams & `<agent-embed>` Cards** | ✅ | ✅ | ✅ | Native rendering on iOS (`MarkdownEmbedAndMermaidViews`); Compose AST & structured card rendering on Android (`AntigravityComponents`) |
 | **Slash Commands & Live Model Catalog** | ✅ | ✅ | ✅ | Fetched via KMP `AntigravityKmpRpcClientV233` with graceful fallback on older Desktop versions |
-| **Permissions & Customizations** (Permission presets, Global/Workspace Rules, Skills, Workflows, MCP Servers) | ✅ | ✅ | ✅ | `CustomizationsSettingsView` & `PermissionsSheetView` (iOS) · `SettingsAndCustomizationsScreen` (Android) |
+| **Project Rules & Skills (`UE14`)** (Read-only Skills/Rules/Plugins/Agents viewer, loaded token budget, live plugin enable/disable switches) | ✅ | ✅ | ✅ | `CustomizationsSettingsView` (iOS) · `ProjectRulesAndSkillsScreen` (Android); reachable from both Sidebar `Customizations` & Project Detail `Project rules & skills` |
+| **Flattened Mobile Settings (`UE15`)** (Remote Control status/QR, Host switcher, Appearance/Theme/Dynamic Color, Language `English`/`简体中文`, Global Permissions Preset, Notifications, About) | ✅ | ✅ | ✅ | `RemotePairingViewController` (iOS) · `SettingsAndCustomizationsScreen` (Android) |
 
 ---
 

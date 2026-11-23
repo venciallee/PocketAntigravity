@@ -7,6 +7,8 @@ public struct AutomationsViewController: View {
     @Bindable public var store: AntigravitySessionStore
     public var onSelectTab: ((ShellTab) -> Void)?
     public var onOpenDisplayOptions: (() -> Void)?
+    public var onOpenSidebar: (() -> Void)?
+    public var onOpenAutomationDetail: ((String) -> Void)?
 
     public struct ScheduledAutomationCardModel: Identifiable {
         public let id: String
@@ -62,11 +64,15 @@ public struct AutomationsViewController: View {
     public init(
         store: AntigravitySessionStore,
         onSelectTab: ((ShellTab) -> Void)? = nil,
-        onOpenDisplayOptions: (() -> Void)? = nil
+        onOpenDisplayOptions: (() -> Void)? = nil,
+        onOpenSidebar: (() -> Void)? = nil,
+        onOpenAutomationDetail: ((String) -> Void)? = nil
     ) {
         self.store = store
         self.onSelectTab = onSelectTab
         self.onOpenDisplayOptions = onOpenDisplayOptions
+        self.onOpenSidebar = onOpenSidebar
+        self.onOpenAutomationDetail = onOpenAutomationDetail
     }
 
     private var isLiveMode: Bool {
@@ -78,61 +84,30 @@ public struct AutomationsViewController: View {
     }
 
     public var body: some View {
-        ZStack(alignment: .bottom) {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 10) {
-                    topFilterToolbar
-                    Text("Automations")
-                        .font(.system(size: 32, weight: .bold))
-                        .tracking(-0.5)
-                        .foregroundStyle(AntigravityTheme.textPrimary)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 10) {
+                topFilterToolbar
+                Text("Automations")
+                    .font(.system(size: 32, weight: .bold))
+                    .tracking(-0.5)
+                    .foregroundStyle(AntigravityTheme.textPrimary)
 
-                    quickCreateCapsuleBar
+                quickCreateCapsuleBar
 
-                    if isLiveMode {
-                        liveAutomationsBody
-                    } else {
-                        scheduledSection
-                        alwaysOnSection
-                        pausedSection
-                    }
+                if isLiveMode {
+                    liveAutomationsBody
+                } else {
+                    scheduledSection
+                    alwaysOnSection
+                    pausedSection
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 6)
-                .padding(.bottom, 96)
             }
-            .refreshable {
-                await store.reconnectNow(userInitiated: true, includeAutomations: true)
-            }
-
-            LinearGradient(
-                colors: [
-                    AntigravityTheme.canvasObsidian.opacity(0.0),
-                    AntigravityTheme.canvasObsidian.opacity(0.84),
-                    AntigravityTheme.canvasObsidian
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 82)
-            .allowsHitTesting(false)
-
-            AntigravityFloatingTabBar(
-                selectedTab: .automations,
-                tabBarAccessibilityId: "floating-tab-bar",
-                fabAccessibilityId: "fab-add-automation",
-                onSelectTab: { tab in
-                    onSelectTab?(tab)
-                },
-                onTapFAB: {
-                    if isLiveMode {
-                        editingAutomation = nil
-                        isShowingEditorSheet = true
-                    } else {
-                        createInlineAutomation()
-                    }
-                }
-            )
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 28)
+        }
+        .refreshable {
+            await store.reconnectNow(userInitiated: true, includeAutomations: true)
         }
         .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
         .task {
@@ -208,10 +183,35 @@ public struct AutomationsViewController: View {
         }
     }
 
-    // MARK: - 1. Top Filter Button
+    // MARK: - 1. Top Sidebar & Filter Toolbar
+
+    private func triggerOpenAutomationDetail(_ id: String) {
+        if let onOpenAutomationDetail {
+            onOpenAutomationDetail(id)
+        } else {
+            store.openAutomationDetail(id)
+        }
+    }
 
     private var topFilterToolbar: some View {
-        HStack {
+        HStack(spacing: 10) {
+            Button {
+                if let onOpenSidebar {
+                    onOpenSidebar()
+                } else {
+                    store.isSidebarPresented = true
+                }
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(AntigravityTheme.textPrimary)
+                    .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open sidebar")
+            .accessibilityIdentifier("btn-sidebar")
+
             if isLiveMode && sectionFilter != .all {
                 Button {
                     sectionFilter = .all
@@ -379,16 +379,21 @@ public struct AutomationsViewController: View {
                 let item = scheduledAutomations[index]
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(alignment: .center, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title)
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(AntigravityTheme.textPrimary)
-                            Text(item.subtitle)
-                                .font(.system(size: 13, weight: .regular))
-                                .foregroundStyle(AntigravityTheme.textSecondary)
+                        Button {
+                            triggerOpenAutomationDetail(item.id)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(AntigravityTheme.textPrimary)
+                                Text(item.subtitle)
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(AntigravityTheme.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
-
-                        Spacer()
+                        .buttonStyle(.plain)
 
                         Button {
                             scheduledAutomations[index].lastRunText = "Running · just now"
@@ -900,18 +905,23 @@ public struct AutomationsViewController: View {
     private func liveScheduledCard(_ item: AutomationItem) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .center, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.textPrimary)
-                        .lineLimit(2)
-                    Text(item.scheduleSummary)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.textSecondary)
-                        .lineLimit(1)
+                Button {
+                    triggerOpenAutomationDetail(item.id)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.title)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.textPrimary)
+                            .lineLimit(2)
+                        Text(item.scheduleSummary)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-
-                Spacer(minLength: 4)
+                .buttonStyle(.plain)
 
                 Button {
                     store.triggerAutomationNow(item.id)

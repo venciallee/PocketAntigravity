@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Android Native Material 3 Compose vs iOS Reference UE Side-by-Side Visual Comparison Builder.
+"""Android Native Material 3 Compose vs Official Android UE Board Side-by-Side Visual Comparison Builder.
 
 Reads real Jetpack Compose PNG screenshots produced by `AndroidUeScreenshotTest` (Roborazzi)
 under `apps/android/app/build/outputs/android_ue/` and compares every screen 1:1 against the
-official iOS Reference UE screenshots under `verification/output/screenshots/`:
-  - Generates `ANDROID_CMP_UE01.png` .. `ANDROID_CMP_UE13.png`
-  - Generates `ANDROID_13_SCREENS_OVERVIEW.png`
+official Android UE boards under `docs/ue/android/*.png`:
+  - Generates `ANDROID_CMP_<STATE_ID>.png` (and canonical `ANDROID_CMP_UE01..UE13.png`) for all 20 screens
+  - Generates `ANDROID_20_SCREENS_OVERVIEW.png` and `ANDROID_13_SCREENS_OVERVIEW.png`
   - Emits structured `android_visual_report.json` with dimensions & pass/fail completeness checks
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -39,49 +40,48 @@ def _load_font(size: int) -> ImageFont.ImageFont:
 
 
 def build_side_by_side(
-    idx_1based: int,
+    label_prefix: str,
     state_id: str,
     title: str,
-    ios_png: Path,
+    ref_png: Path,
     android_png: Path,
     out_png: Path,
-    is_landscape: bool = False,
 ) -> dict:
     font_title = _load_font(20)
     font_sub = _load_font(15)
 
-    panel_w, panel_h = (960, 600) if is_landscape else (590, 1308)
+    panel_w, panel_h = 540, 1200
     pad = 24
     header_h = 76
     canvas_w = pad * 3 + panel_w * 2
     canvas_h = header_h + pad * 2 + panel_h
 
-    canvas = Image.new("RGB", (canvas_w, canvas_h), (12, 13, 18))
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (14, 14, 17))
     draw = ImageDraw.Draw(canvas)
 
     draw.text(
         (pad, 14),
-        f"ANDROID_CMP_UE{idx_1based:02d} · {state_id} — {title}",
-        fill=(245, 247, 250),
+        f"{label_prefix} · {state_id} — {title}",
+        fill=(242, 242, 245),
         font=font_title,
     )
     draw.text(
         (pad, 44),
-        "LEFT: iOS Reference UE (HIG / Liquid Glass)",
-        fill=(157, 162, 176),
+        f"LEFT: Official Android UE ({ref_png.name})",
+        fill=(154, 154, 163),
         font=font_sub,
     )
     draw.text(
         (pad * 2 + panel_w, 44),
         "RIGHT: Android Native Jetpack Compose (Material 3)",
-        fill=(142, 180, 255),
+        fill=(141, 184, 255),
         font=font_sub,
     )
 
-    with Image.open(ios_png) as ios_im:
-        ios_size = ios_im.size
-        ios_rgb = ios_im.convert("RGB").resize((panel_w, panel_h), Image.Resampling.LANCZOS)
-    canvas.paste(ios_rgb, (pad, header_h + pad))
+    with Image.open(ref_png) as ref_im:
+        ref_size = ref_im.size
+        ref_rgb = ref_im.convert("RGB").resize((panel_w, panel_h), Image.Resampling.LANCZOS)
+    canvas.paste(ref_rgb, (pad, header_h + pad))
     draw.rectangle(
         [pad - 1, header_h + pad - 1, pad + panel_w, header_h + pad + panel_h],
         outline=(75, 80, 94),
@@ -94,7 +94,7 @@ def build_side_by_side(
     canvas.paste(and_rgb, (pad * 2 + panel_w, header_h + pad))
     draw.rectangle(
         [pad * 2 + panel_w - 1, header_h + pad - 1, pad * 2 + panel_w * 2, header_h + pad + panel_h],
-        outline=(142, 180, 255),
+        outline=(141, 184, 255),
         width=2,
     )
 
@@ -102,39 +102,32 @@ def build_side_by_side(
     canvas.save(out_png, format="PNG")
     return {
         "stateId": state_id,
-        "iosSizePx": list(ios_size),
+        "referenceUePng": str(ref_png.relative_to(REPO_ROOT)),
+        "referenceSizePx": list(ref_size),
         "androidSizePx": list(android_size),
         "comparisonPng": str(out_png.relative_to(REPO_ROOT)),
     }
 
 
-def build_master_overview(entries: list[tuple[str, Path]], output_path: Path) -> None:
+def build_master_overview(entries: list[tuple[str, Path]], output_path: Path, title_text: str) -> None:
     font_hdr = _load_font(26)
     font_lbl = _load_font(14)
 
-    cols = 6
-    thumb_w, thumb_h = 314, 696
-    pad = 22
+    cols = 5 if len(entries) > 13 else 5
+    rows = math.ceil(len(entries) / cols)
+    thumb_w, thumb_h = 300, 666
+    pad = 20
     label_h = 28
-    header_h = 84
-
-    mobile_entries = entries[:12]
-    spec_entry = entries[12]
-    spec_w, spec_h = 1120, 700
+    header_h = 80
 
     canvas_w = cols * thumb_w + (cols + 1) * pad
-    canvas_h = header_h + 2 * (thumb_h + label_h + pad) + spec_h + label_h + pad * 2
+    canvas_h = header_h + rows * (thumb_h + label_h + pad) + pad
 
-    grid = Image.new("RGB", (canvas_w, canvas_h), (9, 10, 13))
+    grid = Image.new("RGB", (canvas_w, canvas_h), (14, 14, 17))
     draw = ImageDraw.Draw(grid)
-    draw.text(
-        (pad, 26),
-        "AG Pocket Android — 13-Screen Native Material 3 Jetpack Compose Gallery (UE01..UE13)",
-        fill=(245, 247, 250),
-        font=font_hdr,
-    )
+    draw.text((pad, 24), title_text, fill=(242, 242, 245), font=font_hdr)
 
-    for idx, (state_id, img_path) in enumerate(mobile_entries):
+    for idx, (state_id, img_path) in enumerate(entries):
         r = idx // cols
         c = idx % cols
         x = pad + c * (thumb_w + pad)
@@ -143,77 +136,90 @@ def build_master_overview(entries: list[tuple[str, Path]], output_path: Path) ->
             resized = im.convert("RGB").resize((thumb_w, thumb_h), Image.Resampling.LANCZOS)
         grid.paste(resized, (x, y))
         draw.rectangle([x - 1, y - 1, x + thumb_w, y + thumb_h], outline=(55, 62, 78), width=1)
-        draw.text((x, y + thumb_h + 6), state_id, fill=(142, 180, 255), font=font_lbl)
-
-    spec_x = (canvas_w - spec_w) // 2
-    spec_y = header_h + 2 * (thumb_h + label_h + pad)
-    with Image.open(spec_entry[1]) as sim:
-        spec_resized = sim.convert("RGB").resize((spec_w, spec_h), Image.Resampling.LANCZOS)
-    grid.paste(spec_resized, (spec_x, spec_y))
-    draw.rectangle([spec_x - 1, spec_y - 1, spec_x + spec_w, spec_y + spec_h], outline=(142, 180, 255), width=2)
-    draw.text((spec_x, spec_y + spec_h + 6), f"{spec_entry[0]} (Android 16 Live Updates Spec)", fill=(142, 180, 255), font=font_lbl)
+        draw.text((x, y + thumb_h + 6), state_id, fill=(141, 184, 255), font=font_lbl)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     grid.save(output_path, format="PNG")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build iOS vs Android Compose visual comparison sheets.")
+    parser = argparse.ArgumentParser(description="Build Android UE vs Compose visual comparison sheets.")
     parser.add_argument("--android-shots", type=Path, default=DEFAULT_ANDROID_SHOTS_DIR)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     args = parser.parse_args()
 
     spec = json.loads(ANDROID_SPEC_PATH.read_text(encoding="utf-8"))
-    states = spec["states"]
+    canonical_states = spec["states"]
+    extended_states = spec.get("extendedScreens", [])
+    all_states = list(canonical_states) + list(extended_states)
+
     cmp_dir = args.out_dir / "comparisons"
     cmp_dir.mkdir(parents=True, exist_ok=True)
 
     missing: list[str] = []
     results: list[dict] = []
-    overview_entries: list[tuple[str, Path]] = []
+    canonical_entries: list[tuple[str, Path]] = []
+    all_entries: list[tuple[str, Path]] = []
 
-    for idx, state in enumerate(states, start=1):
+    for idx, state in enumerate(all_states, start=1):
         state_id = state["id"]
-        ios_png = REPO_ROOT / state["iosReferencePng"]
+        ref_rel = state.get("androidReferencePng") or state.get("iosReferencePng")
+        ref_png = REPO_ROOT / ref_rel
         android_png = args.android_shots / f"{state_id}.png"
-        if not ios_png.exists():
-            missing.append(f"Missing iOS reference: {ios_png}")
+        if not ref_png.exists():
+            missing.append(f"Missing Android UE reference: {ref_png}")
             continue
         if not android_png.exists():
             missing.append(f"Missing Android Compose render: {android_png}")
             continue
 
-        is_landscape = "viewportOverrideDp" in state
-        out_cmp = cmp_dir / f"ANDROID_CMP_UE{idx:02d}.png"
+        is_canonical = idx <= len(canonical_states)
+        out_name = f"ANDROID_CMP_UE{idx:02d}.png" if is_canonical else f"ANDROID_CMP_{state_id}.png"
+        out_cmp = cmp_dir / out_name
+        label_prefix = f"ANDROID_CMP_UE{idx:02d}" if is_canonical else f"ANDROID_CMP_{state_id}"
         entry = build_side_by_side(
-            idx_1based=idx,
+            label_prefix=label_prefix,
             state_id=state_id,
             title=state["title"],
-            ios_png=ios_png,
+            ref_png=ref_png,
             android_png=android_png,
             out_png=out_cmp,
-            is_landscape=is_landscape,
         )
         results.append(entry)
-        overview_entries.append((state_id, android_png))
+        all_entries.append((state_id, android_png))
+        if is_canonical:
+            canonical_entries.append((state_id, android_png))
 
     if missing:
         for m in missing:
             print(f"[ERROR] {m}", file=sys.stderr)
         return 1
 
-    overview_path = args.out_dir / "ANDROID_13_SCREENS_OVERVIEW.png"
-    build_master_overview(overview_entries, overview_path)
+    overview_13 = args.out_dir / "ANDROID_13_SCREENS_OVERVIEW.png"
+    build_master_overview(
+        canonical_entries,
+        overview_13,
+        "AG Pocket Android — 13 Canonical Material 3 Jetpack Compose Gallery (UE01..UE13)",
+    )
+    overview_20 = args.out_dir / "ANDROID_20_SCREENS_OVERVIEW.png"
+    build_master_overview(
+        all_entries,
+        overview_20,
+        f"AG Pocket Android — {len(all_entries)}-Screen Native Material 3 Jetpack Compose Gallery (UE01..UE15)",
+    )
 
     report = {
         "totalScreens": len(results),
-        "overviewPng": str(overview_path.relative_to(REPO_ROOT)),
+        "canonicalScreens": len(canonical_entries),
+        "extendedScreens": len(all_entries) - len(canonical_entries),
+        "overviewPng": str(overview_13.relative_to(REPO_ROOT)),
+        "overview20Png": str(overview_20.relative_to(REPO_ROOT)),
         "comparisons": results,
     }
     report_path = args.out_dir / "android_visual_report.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(f"[OK] Generated {len(results)}/13 iOS vs Android side-by-side comparisons -> {cmp_dir.relative_to(REPO_ROOT)}")
-    print(f"[OK] Generated master gallery -> {overview_path.relative_to(REPO_ROOT)}")
+    print(f"[OK] Generated {len(results)}/{len(all_states)} Android UE vs Compose side-by-side comparisons -> {cmp_dir.relative_to(REPO_ROOT)}")
+    print(f"[OK] Generated 20-screen master gallery -> {overview_20.relative_to(REPO_ROOT)}")
     return 0
 
 

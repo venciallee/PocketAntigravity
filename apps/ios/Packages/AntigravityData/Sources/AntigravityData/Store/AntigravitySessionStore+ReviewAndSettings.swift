@@ -522,6 +522,11 @@ extension AntigravitySessionStore {
         saveAppearancePreferences()
     }
 
+    public func setAppLanguage(_ language: AppLanguage) {
+        appearancePreferences.language = language
+        saveAppearancePreferences()
+    }
+
     public func saveAppearancePreferences() {
         let snapshot = appearancePreferences
         preferencesStore.set(snapshot.appearanceMode.rawValue, forKey: Self.appearanceModeDefaultsKey)

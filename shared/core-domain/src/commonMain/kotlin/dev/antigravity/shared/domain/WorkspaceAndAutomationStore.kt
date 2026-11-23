@@ -22,6 +22,7 @@ import kotlin.random.Random
 public data class WorkspaceAndAutomationState(
     public val projects: List<ProjectWorkspace> = emptyList(),
     public val automations: List<AutomationItem> = emptyList(),
+    public val selectedAutomationId: String = "auto-nightly-audit",
     public val availableRepos: List<GitHubRepoItem> = emptyList(),
     public val contextCandidates: List<ContextCandidateItem> = emptyList(),
     public val attachedComposerChips: List<ComposerAttachmentChip> = emptyList(),
@@ -325,6 +326,130 @@ public class WorkspaceAndAutomationStore(
             rollback = { _state.update { it.copy(automations = previous) } },
         ) { rpc ->
             rpc.setAutomationPaused(automationId = automationId, paused = true)
+        }
+    }
+
+    public fun selectAutomation(automationId: String) {
+        _state.update { it.copy(selectedAutomationId = automationId) }
+    }
+
+    public suspend fun updateAutomation(
+        client: AntigravityKmpRpcClient?,
+        automationId: String,
+        title: String,
+        prompt: String,
+        projectSlug: String,
+        section: AutomationSectionKind,
+        repeatsLabel: String,
+        timeLabel: String,
+        modelLabel: String,
+    ) {
+        val trimmedTitle = title.trim().ifEmpty { "Scheduled automation" }
+        val trimmedPrompt = prompt.trim().ifEmpty { trimmedTitle }
+        val summary = if (section == AutomationSectionKind.ALWAYS_ON) {
+            "$projectSlug · On PR opened · $modelLabel"
+        } else {
+            "$projectSlug · $repeatsLabel at $timeLabel · $modelLabel"
+        }
+        val previous = _state.value.automations
+        _state.update { prev ->
+            prev.copy(
+                automations = prev.automations.map { item ->
+                    if (item.id == automationId) {
+                        item.copy(
+                            title = trimmedTitle,
+                            prompt = trimmedPrompt,
+                            projectSlug = projectSlug,
+                            section = section,
+                            scheduleSummary = summary,
+                            repeatsLabel = "$repeatsLabel · $timeLabel",
+                            timeLabel = timeLabel,
+                            modelLabel = modelLabel,
+                            isScheduleBuiltin = section != AutomationSectionKind.ALWAYS_ON,
+                        )
+                    } else {
+                        item
+                    }
+                },
+                lastCapabilityError = null,
+            )
+        }
+        performLiveCapabilityWrite(
+            client = client,
+            capability = HostCapability.SIDECAR_AUTOMATIONS,
+            onUnsupported = ::recordCapabilityError,
+            rollback = { _state.update { it.copy(automations = previous) } },
+        ) { rpc ->
+            rpc.setAutomationPaused(automationId = automationId, paused = section == AutomationSectionKind.PAUSED)
+        }
+    }
+
+    public suspend fun deleteAutomation(
+        client: AntigravityKmpRpcClient?,
+        automationId: String,
+    ) {
+        val previous = _state.value.automations
+        _state.update { prev ->
+            val remaining = prev.automations.filterNot { it.id == automationId }
+            prev.copy(
+                automations = remaining,
+                selectedAutomationId = if (prev.selectedAutomationId == automationId) {
+                    remaining.firstOrNull()?.id.orEmpty()
+                } else {
+                    prev.selectedAutomationId
+                },
+                lastCapabilityError = null,
+            )
+        }
+        performLiveCapabilityWrite(
+            client = client,
+            capability = HostCapability.SIDECAR_AUTOMATIONS,
+            onUnsupported = ::recordCapabilityError,
+            rollback = { _state.update { it.copy(automations = previous) } },
+        ) { rpc ->
+            rpc.setAutomationPaused(automationId = automationId, paused = true)
+        }
+    }
+
+    public suspend fun retryAutomationRun(
+        client: AntigravityKmpRpcClient?,
+        automationId: String,
+        runId: String,
+    ) {
+        val previous = _state.value.automations
+        _state.update { prev ->
+            prev.copy(
+                automations = prev.automations.map { item ->
+                    if (item.id == automationId) {
+                        item.copy(
+                            isRunningNow = true,
+                            lastRunText = "Retrying now...",
+                            recentRuns = item.recentRuns.map { run ->
+                                if (run.id == runId) {
+                                    run.copy(
+                                        status = dev.antigravity.shared.model.AutomationRunStatus.RUNNING,
+                                        timestampLabel = "Running · just now",
+                                        canRetry = false,
+                                    )
+                                } else {
+                                    run
+                                }
+                            },
+                        )
+                    } else {
+                        item
+                    }
+                },
+                lastCapabilityError = null,
+            )
+        }
+        performLiveCapabilityWrite(
+            client = client,
+            capability = HostCapability.SIDECAR_AUTOMATIONS,
+            onUnsupported = ::recordCapabilityError,
+            rollback = { _state.update { it.copy(automations = previous) } },
+        ) { rpc ->
+            rpc.triggerAutomationNow(automationId)
         }
     }
 
