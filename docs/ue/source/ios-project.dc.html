@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Project menu — new conversation in project</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <!-- Sidebar behind, blurred -->
+  <div aria-hidden="true" style="position: absolute; left: 0; top: 0; bottom: 0; width: 322px; background: #0F0F11; padding: 110px 24px 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px; filter: blur(8px); opacity: 0.7">
+    <div style="height: 46px; border-radius: 12px; background: #232327"></div>
+    <div style="font-size: 16px">Automations</div>
+    <div style="font-size: 16px">Customizations</div>
+    <div style="font-size: 13px; color: #8E8E98; margin-top: 20px">Projects</div>
+    <div style="height: 180px; border-radius: 12px; background: #17171A"></div>
+    <div style="height: 120px; border-radius: 12px; background: #17171A"></div>
+  </div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(0,0,0,0.45)"></div>
+
+  <!-- Lifted project -->
+  <div style="position: absolute; left: 12px; top: 236px; width: 298px; border-radius: 18px; background: #1A1A1D; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 24px 60px rgba(0,0,0,0.6); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box">
+    <div style="display: flex; align-items: center; gap: 10px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+      <span style="display: flex; flex-direction: column; min-width: 0">
+        <span style="font-weight: 600">ledger-svc</span>
+        <span style="font-size: 12px; color: #8E8E98; font-family: 'JetBrains Mono', ui-monospace, monospace">~/code/ledger-svc · MacBook Pro</span>
+      </span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px; padding-left: 30px; font-size: 14px; color: #A0A0AA">
+      <span>Add rate limiter to /transfers</span>
+      <span>Fix flaky TestSettlementBatch</span>
+      <span>Upgrade to Go 1.25</span>
+      <span style="color: #8E8E98">1 more</span>
+    </div>
+  </div>
+
+  <!-- Context menu -->
+  <div role="menu" aria-label="ledger-svc actions" style="position: absolute; left: 12px; top: 412px; width: 272px; border-radius: 22px; background: rgba(48,48,53,0.97); border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 18px 50px rgba(0,0,0,0.6); padding: 6px 0; display: flex; flex-direction: column">
+    <a href="Main.dc.html" role="menuitem" style="display: flex; align-items: center; justify-content: space-between; height: 48px; padding: 0 16px; background: rgba(255,255,255,0.06); color: #F1F1F3; text-decoration: none; font-weight: 600">
+      New Conversation in Project
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>
+    </a>
+    <a href="ios-project-detail.dc.html" role="menuitem" style="display: flex; align-items: center; justify-content: space-between; height: 46px; padding: 0 16px; color: #F1F1F3; text-decoration: none">
+      <span>Open Project</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+    </a>
+    <button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; height: 46px; padding: 0 16px">
+      <span>Collapse</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>
+    </button>
+    <button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; height: 46px; padding: 0 16px">
+      <span>Reveal in Finder on Mac</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5" width="15" height="10" rx="1.5"/><path d="M2.5 19h19"/></svg>
+    </button>
+    <button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; height: 46px; padding: 0 16px">
+      <span>Rename</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>
+    </button>
+    <div aria-hidden="true" style="height: 6px; margin: 4px 0; background: rgba(0,0,0,0.25)"></div>
+    <button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; height: 46px; padding: 0 16px; color: #FF8F87">
+      <span>Delete Project</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7h14M10 7V4.5h4V7M6.5 7l1 12.5h9l1-12.5"/></svg>
+    </button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

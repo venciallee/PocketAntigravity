@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Watch — artifact summary</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#000000}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 208px; height: 248px; position: relative; overflow: hidden; background: #000000; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 1.3; -webkit-font-smoothing: antialiased">
+
+  <div style="position: absolute; top: 8px; left: 12px; right: 64px; display: flex; align-items: center; gap: 8px">
+    <a href="watch-chat.dc.html" aria-label="Back" style="width: 36px; height: 36px; border-radius: 18px; background: rgba(255,255,255,0.16); display: flex; align-items: center; justify-content: center; color: #F1F1F3; flex: none">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"></path></svg>
+    </a>
+    <span style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Walkthrough</span>
+  </div>
+
+  <article style="position: absolute; top: 50px; left: 0; right: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 6px">
+    <h1 style="margin: 0; font-size: 15px; font-weight: 700; line-height: 1.25">Per-tenant token bucket</h1>
+    <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px">
+      <li style="display: flex; gap: 7px"><span style="width: 16px; height: 16px; border-radius: 8px; background: #26262B; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: none; margin-top: 1px">1</span><span>Limiter in <span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px">ratelimit.go</span>, keyed by tenant</span></li>
+      <li style="display: flex; gap: 7px"><span style="width: 16px; height: 16px; border-radius: 8px; background: #26262B; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: none; margin-top: 1px">2</span><span>Rate, burst and TTL come from config</span></li>
+      <li style="display: flex; gap: 7px"><span style="width: 16px; height: 16px; border-radius: 8px; background: #26262B; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex: none; margin-top: 1px">3</span><span>p99 <span style="color: #6FD8A6; font-weight: 600">3.8 ms</span> at 1000/s</span></li>
+    </ol>
+  </article>
+
+  <div style="position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; gap: 6px">
+    <button aria-label="Open on iPhone" style="width: 40px; height: 40px; border-radius: 20px; background: #26262B; display: flex; align-items: center; justify-content: center; flex: none">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F1F1F3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"></rect><path d="M11 18.5h2"></path></svg>
+    </button>
+    <a href="watch-code.dc.html" style="flex: 1; height: 40px; border-radius: 20px; background: #8DB8FF; color: #0A1A33; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; text-decoration: none">See changes</a>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":208,"height":248}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

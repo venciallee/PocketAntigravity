@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — navigation drawer</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <!-- New-conversation screen behind -->
+  <div aria-hidden="true" style="position: absolute; left: 352px; top: 360px; font-size: 26px; font-weight: 600; white-space: nowrap">Welcome back</div>
+  <div aria-hidden="true" style="position: absolute; left: 340px; width: 400px; bottom: 28px; height: 120px; border-radius: 28px; background: #212125"></div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(0,0,0,0.55)"></div>
+
+  <nav aria-label="Navigation drawer" style="position: absolute; left: 0; top: 0; bottom: 0; width: 336px; background: #1B1B1E; border-radius: 0 16px 16px 0; display: flex; flex-direction: column; padding: 44px 12px 24px; box-sizing: border-box">
+    <a href="and-new.dc.html" style="height: 56px; margin: 4px 0 8px; border-radius: 16px; background: #263552; color: #D6E3FF; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 15px; font-weight: 600; text-decoration: none">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      New Conversation
+    </a>
+    <a href="and-automations.dc.html" style="height: 52px; border-radius: 26px; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 15px; font-weight: 500; color: #EDEDF0; text-decoration: none">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+      Automations
+    </a>
+    <button style="height: 52px; border-radius: 26px; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 15px; font-weight: 500">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="7.5" width="17" height="12" rx="1.5"/><path d="M9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5M3.5 12.5h17"/></svg>
+      Customizations
+    </button>
+    <div aria-hidden="true" style="height: 1px; background: #2E2E34; margin: 8px 16px"></div>
+
+    <div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column">
+      <div style="height: 36px; display: flex; align-items: center; padding: 0 16px; font-size: 14px; font-weight: 500; color: #A9A9B2">Pinned</div>
+      <a href="and-chat.dc.html" style="height: 48px; border-radius: 24px; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 15px; color: #EDEDF0; text-decoration: none">
+        <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Release checklist v2.3</span>
+        <span style="font-size: 12px; color: #A9A9B2">1h</span>
+      </a>
+
+      <div style="height: 48px; display: flex; align-items: center; padding-left: 16px; font-size: 14px; font-weight: 500; color: #A9A9B2">
+        <span style="flex: 1">Projects</span>
+        <a href="and-display-options.dc.html" aria-label="Display options" style="width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; color: #C4C4CC"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M7 12h10M10 17h4"/></svg></a>
+        <a href="and-new-project.dc.html" aria-label="Create new project" style="width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; color: #C4C4CC"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path d="M12 11v5M9.5 13.5h5"/></svg></a>
+      </div>
+
+      <div style="height: 44px; display: flex; align-items: center; gap: 12px; padding-left: 16px; color: #A9A9B2; font-size: 15px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+        <a href="and-project.dc.html" style="flex: 1; color: inherit; text-decoration: none; min-height: 44px; display: flex; align-items: center">ledger-svc</a>
+        <a href="and-new.dc.html" aria-label="New conversation in ledger-svc" style="width: 48px; height: 44px; display: flex; align-items: center; justify-content: center; color: #C4C4CC"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></a>
+      </div>
+      <a href="and-chat.dc.html" aria-current="page" style="height: 48px; border-radius: 24px; background: #2E3545; display: flex; align-items: center; gap: 12px; padding: 0 16px 0 48px; font-size: 15px; font-weight: 600; color: #D6E3FF; text-decoration: none">
+        <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Add rate limiter to /transfers</span>
+        <span role="img" aria-label="Needs approval" style="width: 8px; height: 8px; border-radius: 50%; background: #F2B866; flex: none"></span>
+      </a>
+      <a href="and-chat.dc.html" style="height: 48px; border-radius: 24px; display: flex; align-items: center; gap: 12px; padding: 0 16px 0 48px; font-size: 15px; color: #EDEDF0; text-decoration: none">
+        <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Fix flaky TestSettlementBatch</span>
+        <span role="img" aria-label="Unread" style="width: 8px; height: 8px; border-radius: 50%; background: #4C8DFF; flex: none"></span>
+      </a>
+      <a href="and-chat.dc.html" style="height: 48px; border-radius: 24px; display: flex; align-items: center; gap: 12px; padding: 0 16px 0 48px; font-size: 15px; color: #EDEDF0; text-decoration: none">
+        <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Upgrade to Go 1.25</span>
+        <span style="font-size: 12px; color: #A9A9B2">4h</span>
+      </a>
+      <a href="and-chat.dc.html" style="height: 48px; border-radius: 24px; display: flex; align-items: center; gap: 12px; padding: 0 16px 0 48px; font-size: 15px; color: #EDEDF0; text-decoration: none">
+        <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Idempotency keys for payouts</span>
+        <span style="font-size: 12px; color: #A9A9B2">1d</span>
+      </a>
+
+      <div style="height: 44px; display: flex; align-items: center; gap: 12px; padding-left: 16px; color: #A9A9B2; font-size: 15px; margin-top: 4px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5h10a4 4 0 0 0 .5-8 5.5 5.5 0 0 0-10.6-1.2A4.6 4.6 0 0 0 7 18.5z"/></svg>
+        <span style="flex: 1">acme/web-console</span>
+        <button aria-label="New conversation in acme/web-console" style="width: 48px; height: 44px; display: flex; align-items: center; justify-content: center; color: #C4C4CC"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+      <a href="and-chat.dc.html" style="height: 48px; border-radius: 24px; display: flex; align-items: center; gap: 12px; padding: 0 16px 0 48px; font-size: 15px; color: #EDEDF0; text-decoration: none">
+        <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Dark mode for settings page</span>
+        <svg role="img" aria-label="Running" width="14" height="14" viewBox="0 0 16 16" fill="none" style="animation: agspin 1.1s linear infinite; flex: none"><circle cx="8" cy="8" r="6" stroke="#2C3A52" stroke-width="2"/><path d="M8 2a6 6 0 0 1 6 6" stroke="#8DB8FF" stroke-width="2" stroke-linecap="round"/></svg>
+      </a>
+    </div>
+
+    <div aria-hidden="true" style="height: 1px; background: #2E2E34; margin: 4px 16px 6px"></div>
+    <a href="and-settings.dc.html" style="height: 52px; border-radius: 26px; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 15px; font-weight: 500; color: #EDEDF0; text-decoration: none">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg>
+      Settings
+    </a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

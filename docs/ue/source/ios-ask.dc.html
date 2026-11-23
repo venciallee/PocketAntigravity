@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Structured multi-select questions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input{font:inherit;color:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.4; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column">
+
+  <!-- Nav -->
+  <div style="padding: 58px 8px 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #1C1C1F; flex: none">
+    <a href="Main.dc.html" aria-label="Back to Agents" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #8DB8FF">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"></path></svg>
+    </a>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+      <span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Audit log for admin actions</span>
+      <span style="font-size: 12px; color: #8E8E98">ledger-svc · /plan interview · Gemini 4 Neon</span>
+    </div>
+    <button aria-label="Conversation options" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #C2C2CA">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.7"></circle><circle cx="12" cy="12" r="1.7"></circle><circle cx="18.5" cy="12" r="1.7"></circle></svg>
+    </button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 14px; padding: 16px 16px 0">
+    <div style="display: flex; gap: 10px; align-items: flex-start">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8E8E98" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px"><circle cx="12" cy="12" r="3"></circle><ellipse cx="12" cy="12" rx="9.5" ry="4" transform="rotate(-30 12 12)"></ellipse></svg>
+      <p style="margin: 0; color: #E2E2E6">Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words.</p>
+    </div>
+
+    <sc-if value="{{ open }}" hint-placeholder-val="{{ true }}">
+      <section aria-label="Agent questions" style="border-radius: 20px; background: #141416; border: 1px solid #26262B; padding: 14px; display: flex; flex-direction: column; gap: 14px">
+        <!-- Stepper -->
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px">
+          <sc-for list="{{ steps }}" as="s" hint-placeholder-count="3">
+            <sc-if value="{{ s.current }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ s.go }}" aria-current="step" style="height: 36px; border-radius: 10px; background: #F1F1F3; color: #0B0B0C; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 4px">{{ s.label }}</button>
+            </sc-if>
+            <sc-if value="{{ s.notCurrent }}" hint-placeholder-val="{{ true }}">
+              <button onClick="{{ s.go }}" style="height: 36px; border-radius: 10px; background: #26262B; color: #C2C2CA; font-size: 12px; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 4px">
+                <sc-if value="{{ s.answered }}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6FD8A6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg></sc-if>
+                {{ s.label }}
+              </button>
+            </sc-if>
+          </sc-for>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 2px">
+          <span style="font-size: 12px; color: #8E8E98">Question {{ qNum }} of 3 · {{ q.hint }}</span>
+          <h2 style="margin: 0; font-size: 18px; font-weight: 600; line-height: 1.3">{{ q.title }}</h2>
+        </div>
+
+        <div role="group" aria-label="{{ q.title }}" style="display: flex; flex-direction: column; gap: 8px">
+          <sc-for list="{{ options }}" as="opt" hint-placeholder-count="4">
+            <sc-if value="{{ opt.selected }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ opt.pick }}" aria-pressed="true" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 14px; background: rgba(141,184,255,0.10); border: 1.5px solid #8DB8FF; min-height: 48px; box-sizing: border-box">
+                <sc-if value="{{ opt.multi }}" hint-placeholder-val="{{ false }}">
+                  <span style="width: 22px; height: 22px; border-radius: 6px; background: #8DB8FF; color: #0A1A33; display: flex; align-items: center; justify-content: center; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg></span>
+                </sc-if>
+                <sc-if value="{{ opt.single }}" hint-placeholder-val="{{ true }}">
+                  <span style="width: 22px; height: 22px; border-radius: 11px; border: 2px solid #8DB8FF; display: flex; align-items: center; justify-content: center; flex: none; box-sizing: border-box"><span style="width: 10px; height: 10px; border-radius: 5px; background: #8DB8FF"></span></span>
+                </sc-if>
+                <span style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+                  <span style="display: flex; align-items: center; gap: 8px; font-weight: 600">{{ opt.label }}<sc-if value="{{ opt.hasTag }}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: #1F2735; color: #8DB8FF">{{ opt.tag }}</span></sc-if></span>
+                  <sc-if value="{{ opt.hasDesc }}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; color: #C2C2CA">{{ opt.desc }}</span></sc-if>
+                </span>
+              </button>
+            </sc-if>
+            <sc-if value="{{ opt.unselected }}" hint-placeholder-val="{{ true }}">
+              <button onClick="{{ opt.pick }}" aria-pressed="false" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 14px; background: #1D1D20; border: 1.5px solid transparent; min-height: 48px; box-sizing: border-box">
+                <sc-if value="{{ opt.multi }}" hint-placeholder-val="{{ false }}">
+                  <span style="width: 22px; height: 22px; border-radius: 6px; border: 2px solid #55555C; flex: none; box-sizing: border-box"></span>
+                </sc-if>
+                <sc-if value="{{ opt.single }}" hint-placeholder-val="{{ true }}">
+                  <span style="width: 22px; height: 22px; border-radius: 11px; border: 2px solid #55555C; flex: none; box-sizing: border-box"></span>
+                </sc-if>
+                <span style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+                  <span style="display: flex; align-items: center; gap: 8px; font-weight: 500">{{ opt.label }}<sc-if value="{{ opt.hasTag }}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: #1F2735; color: #8DB8FF">{{ opt.tag }}</span></sc-if></span>
+                  <sc-if value="{{ opt.hasDesc }}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; color: #8E8E98">{{ opt.desc }}</span></sc-if>
+                </span>
+              </button>
+            </sc-if>
+          </sc-for>
+          <label style="display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 12px; border-radius: 14px; border: 1.5px dashed #3A3A40; color: #8E8E98">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg>
+            <input aria-label="Other answer" placeholder="Something else…" style="flex: 1; min-width: 0; background: none; border: 0; outline: none; font-size: 15px; color: #F1F1F3">
+          </label>
+        </div>
+
+        <div style="display: flex; gap: 8px">
+          <sc-if value="{{ showBack }}" hint-placeholder-val="{{ true }}">
+            <button onClick="{{ back }}" style="height: 48px; padding: 0 18px; border-radius: 24px; background: #26262B; font-weight: 600">Back</button>
+          </sc-if>
+          <sc-if value="{{ canNext }}" hint-placeholder-val="{{ true }}">
+            <button onClick="{{ next }}" style="flex: 1; height: 48px; border-radius: 24px; background: #8DB8FF; color: #0A1A33; font-weight: 600">{{ nextLabel }}</button>
+          </sc-if>
+          <sc-if value="{{ cannotNext }}" hint-placeholder-val="{{ false }}">
+            <button aria-disabled="true" style="flex: 1; height: 48px; border-radius: 24px; background: #26262B; color: #8E8E98; font-weight: 600; cursor: default">Choose an option</button>
+          </sc-if>
+        </div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{ submitted }}" hint-placeholder-val="{{ false }}">
+      <div style="align-self: flex-end; max-width: 310px; border-radius: 20px 20px 6px 20px; background: #26262B; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 14px">
+        <sc-for list="{{ summary }}" as="row" hint-placeholder-count="3">
+          <span><span style="color: #8E8E98">{{ row.k }}: </span>{{ row.v }}</span>
+        </sc-for>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8DB8FF">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #8DB8FF"></span>
+        Drafting implementation plan…
+        <button onClick="{{ edit }}" style="margin-left: auto; min-height: 44px; padding: 0 4px; color: #C2C2CA; font-size: 13px; font-weight: 600">Edit answers</button>
+      </div>
+    </sc-if>
+  </div>
+
+  <!-- Slim composer -->
+  <div style="flex: none; padding: 10px 12px 30px">
+    <label style="display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 6px 0 16px; border-radius: 24px; background: #1A1A1D; border: 1px solid #2A2A2F; color: #8E8E98">
+      <input aria-label="Reply" placeholder="Reply in your own words" style="flex: 1; min-width: 0; background: none; border: 0; outline: none; font-size: 16px; color: #F1F1F3">
+      <span style="width: 36px; height: 36px; border-radius: 18px; background: #26262B; display: flex; align-items: center; justify-content: center; color: #C2C2CA"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"></path></svg></span>
+    </label>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  getQuestions() {
+    return [
+      { key: 'store', short: 'Storage', title: 'Where should audit events be stored?', hint: 'Pick one', multi: false, options: [
+        { id: 'pg', label: 'Postgres table', desc: 'Same DB, written inside the request transaction', tag: 'Recommended' },
+        { id: 's3', label: 'Append-only object storage', desc: 'Immutable and cheap, slower to query' },
+        { id: 'stream', label: 'Event stream to warehouse', desc: 'Async — needs an existing pipeline' }
+      ] },
+      { key: 'actions', short: 'Actions', title: 'Which admin actions should be audited?', hint: 'Select all that apply', multi: true, options: [
+        { id: 'freeze', label: 'Account freeze / unfreeze' },
+        { id: 'limits', label: 'Limit changes' },
+        { id: 'adjust', label: 'Manual ledger adjustments' },
+        { id: 'roles', label: 'Role & permission changes' }
+      ] },
+      { key: 'retention', short: 'Retention', title: 'How long should events be kept?', hint: 'Pick one', multi: false, options: [
+        { id: '90d', label: '90 days' },
+        { id: '1y', label: '1 year' },
+        { id: '7y', label: '7 years', desc: 'Typical for financial record-keeping' }
+      ] }
+    ];
+  }
+  st() {
+    const s = this.state || {};
+    return {
+      step: s.step ?? 1,
+      answers: s.answers ?? { store: 'pg', actions: ['freeze', 'limits', 'adjust'], retention: null },
+      submitted: s.submitted ?? false
+    };
+  }
+  renderVals() {
+    const QS = this.getQuestions();
+    const { step, answers, submitted } = this.st();
+    const q = QS[step];
+    const isAnswered = (qq) => qq.multi ? (answers[qq.key] || []).length > 0 : !!answers[qq.key];
+    const setAnswers = (next) => this.setState({ answers: next });
+    const options = q.options.map((o) => {
+      const sel = q.multi ? (answers[q.key] || []).includes(o.id) : answers[q.key] === o.id;
+      return {
+        label: o.label, desc: o.desc || '', hasDesc: !!o.desc, tag: o.tag || '', hasTag: !!o.tag,
+        selected: sel, unselected: !sel, multi: q.multi, single: !q.multi,
+        pick: () => {
+          if (q.multi) {
+            const cur = answers[q.key] || [];
+            setAnswers({ ...answers, [q.key]: cur.includes(o.id) ? cur.filter((x) => x !== o.id) : [...cur, o.id] });
+          } else {
+            setAnswers({ ...answers, [q.key]: o.id });
+          }
+        }
+      };
+    });
+    const steps = QS.map((qq, i) => ({
+      label: (i + 1) + ' ' + qq.short,
+      current: i === step, notCurrent: i !== step, answered: isAnswered(qq),
+      go: () => this.setState({ step: i })
+    }));
+    const can = isAnswered(q);
+    const labelFor = (qq) => {
+      const v = answers[qq.key];
+      if (qq.multi) return (v || []).map((id) => qq.options.find((o) => o.id === id).label).join(', ') || '—';
+      const f = qq.options.find((o) => o.id === v);
+      return f ? f.label : '—';
+    };
+    return {
+      open: !submitted,
+      submitted,
+      steps,
+      q,
+      qNum: step + 1,
+      options,
+      showBack: step > 0,
+      canNext: can,
+      cannotNext: !can,
+      nextLabel: step < QS.length - 1 ? 'Next' : 'Send answers',
+      next: () => { if (step < QS.length - 1) this.setState({ step: step + 1 }); else this.setState({ submitted: true }); },
+      back: () => this.setState({ step: Math.max(0, step - 1) }),
+      edit: () => this.setState({ submitted: false, step: 0 }),
+      summary: QS.map((qq) => ({ k: qq.short, v: labelFor(qq) }))
+    };
+  }
+}
+</script>
+</body>
+</html>

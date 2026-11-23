@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Share extension</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <!-- Host app (generic web page) -->
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: #F4F4F6; color: #1A1A1D; padding: 60px 20px 0; display: flex; flex-direction: column; gap: 12px">
+    <div style="height: 36px; border-radius: 10px; background: #E4E4E8; display: flex; align-items: center; justify-content: center; font-size: 13px; color: #55555E">issues.acme.dev/ledger-svc/482</div>
+    <span style="font-size: 22px; font-weight: 700">p99 latency spikes on /transfers</span>
+    <span style="height: 12px; width: 90%; border-radius: 6px; background: #DADAE0"></span><span style="height: 12px; width: 75%; border-radius: 6px; background: #DADAE0"></span>
+  </div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(0,0,0,0.45)"></div>
+
+  <section aria-label="Send to AG Pocket" style="position: absolute; left: 0; right: 0; top: 250px; bottom: 0; border-radius: 34px 34px 0 0; background: #1A1A1D; padding: 8px 16px 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+    
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+      <span aria-hidden="true" style="width: 36px; height: 5px; border-radius: 3px; background: #4A4A50"></span>
+      <div style="width: 100%; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 44px">
+        <span style="justify-self: start"><button style="height: 44px; padding: 0 4px; color: #C2C2CA; font-size: 16px">Cancel</button></span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600">Send to AG Pocket</h2>
+        <span style="justify-self: end"><a href="ios-chat.dc.html" style="height: 44px; display: flex; align-items: center; padding: 0 4px; color: #8DB8FF; font-size: 16px; font-weight: 600; text-decoration: none">Send</a></span>
+      </div>
+    </div>
+    <button style="border-radius: 14px; background: #26262B; min-height: 52px; padding: 0 14px; display: flex; align-items: center; gap: 12px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+      <span style="flex: 1; display: flex; flex-direction: column"><span style="font-weight: 600; font-size: 14.5px">ledger-svc · MacBook Pro</span><span style="font-size: 12.5px; color: #A0A0AA">New conversation</span></span>
+      <span style="font-size: 13px; color: #8DB8FF; font-weight: 600">Change</span>
+    </button>
+    <div style="border-radius: 14px; background: #26262B; padding: 12px 14px; display: flex; gap: 12px; align-items: center">
+      <span style="width: 44px; height: 44px; border-radius: 10px; background: #33333A; display: flex; align-items: center; justify-content: center; color: #C2C2CA; flex: none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">p99 latency spikes on /transfers</span><span class="mono" style="font-size: 12px; color: #A0A0AA; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">issues.acme.dev/ledger-svc/482</span></span>
+    </div>
+    <textarea aria-label="Message" rows="3" style="border-radius: 14px; background: #26262B; border: 0; outline: none; resize: none; padding: 12px 14px; font-size: 15px; line-height: 1.4">Find the cause of this spike and propose a fix. Don't merge anything.</textarea>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+      <span style="height: 32px; padding: 0 10px; border-radius: 16px; background: #26262B; display: flex; align-items: center; gap: 6px; font-size: 13px; color: #C2C2CA">Gemini 4 Neon · High</span>
+      <span style="height: 32px; padding: 0 10px; border-radius: 16px; background: #26262B; display: flex; align-items: center; gap: 6px; font-size: 13px; color: #C2C2CA"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 19 6v5.5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5V6z"/></svg>Request Review</span>
+    </div>
+    <span style="font-size: 12.5px; color: #8E8E98">Shared attachment ready for AG Pocket composer. Text, links, images and files are supported.</span>
+    <a href="ios-chat.dc.html" style="margin-top: auto; margin-bottom: 30px; height: 44px; display: flex; align-items: center; justify-content: center; color: #8DB8FF; font-size: 15px; font-weight: 600; text-decoration: none">Open in AG Pocket instead</a>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

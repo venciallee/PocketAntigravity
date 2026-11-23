@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Artifact viewer</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <div aria-hidden="true" style="position: absolute; inset: 0; padding: 58px 16px 0; display: flex; flex-direction: column; gap: 14px; color: #C2C2CA">
+    <div style="height: 44px; display: flex; align-items: center; justify-content: center; font-weight: 600; color: #F1F1F3">Add rate limiter to /transfers</div>
+    <div style="align-self: flex-end; width: 240px; height: 56px; border-radius: 18px; background: #1D2A44"></div>
+    <div style="width: 300px; height: 14px; border-radius: 7px; background: #1D1D20"></div>
+    <div style="width: 260px; height: 14px; border-radius: 7px; background: #1D1D20"></div>
+    <div style="height: 120px; border-radius: 16px; background: #141416"></div>
+  </div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(0,0,0,0.5)"></div>
+  <section aria-label="Artifact Viewer" style="position: absolute; left: 0; right: 0; top: 54px; bottom: 0; border-radius: 34px 34px 0 0; background: #1A1A1D; display: flex; flex-direction: column; padding: 8px 16px 0; box-sizing: border-box; gap: 12px; overflow: hidden">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+      <span aria-hidden="true" style="width: 36px; height: 5px; border-radius: 3px; background: #4A4A50"></span>
+      <div style="width: 100%; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 44px">
+        <span style="justify-self: start"><a href="#" style="height: 44px; display: flex; align-items: center; padding: 0 4px; color: #C2C2CA; font-size: 16px; font-weight: 400; text-decoration: none">Copy Path</a></span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600">Artifact Viewer</h2>
+        <span style="justify-self: end"><a href="ios-overview.dc.html" style="height: 44px; display: flex; align-items: center; padding: 0 4px; color: #8DB8FF; font-size: 16px; font-weight: 600; text-decoration: none">Done</a></span>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px">
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-weight: 600">walkthrough.md</span><span style="font-size: 12.5px; color: #8E8E98">Markdown · 2 images · 1 diagram</span></span>
+      <div role="radiogroup" aria-label="Mode" style="display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: #26262B">
+        <button role="radio" aria-checked="true" style="height: 30px; padding: 0 10px; border-radius: 8px; background: #3A3A40; font-size: 13px; font-weight: 600">Preview</button>
+        <button role="radio" aria-checked="false" style="height: 30px; padding: 0 10px; border-radius: 8px; font-size: 13px; color: #C2C2CA">Raw</button>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <h3 style="margin: 0; font-size: 19px; font-weight: 700">Rate limiter walkthrough</h3>
+      <p style="margin: 0; font-size: 14px; color: #C2C2CA">Requests pass the limiter before the handler. Rejected calls return 429 with Retry-After.</p>
+      <!-- Mermaid flow rendered natively -->
+      <div role="img" aria-label="Flow diagram: Request to Limiter, then Handler or 429" style="border-radius: 14px; background: #141416; border: 1px solid #26262B; padding: 14px 10px; display: flex; align-items: center; justify-content: space-between; font-size: 12px">
+        <span style="padding: 6px 10px; border-radius: 8px; border: 1.5px solid #3A3A40">Request</span><span style="color: #8E8E98">→</span>
+        <span style="padding: 6px 10px; border-radius: 8px; border: 1.5px solid #8DB8FF; color: #B9CFF5">Limiter</span><span style="color: #8E8E98">→</span>
+        <span style="display: flex; flex-direction: column; gap: 6px"><span style="padding: 5px 10px; border-radius: 8px; border: 1.5px solid #6FD8A6; color: #A9EBC8">Handler</span><span style="padding: 5px 10px; border-radius: 8px; border: 1.5px solid #FF8F87; color: #FFC2BC">429</span></span>
+      </div>
+      <!-- Image with region comment -->
+      <div style="position: relative; height: 172px; border-radius: 14px; background: #141416; border: 1px solid #26262B; overflow: hidden">
+        <span style="position: absolute; left: 12px; top: 10px; font-size: 11.5px; color: #8E8E98">p99 latency · load test</span>
+        <svg viewBox="0 0 340 150" width="100%" height="100%" aria-label="Latency chart with a spike in the middle" role="img" style="position: absolute; inset: 0"><polyline fill="none" stroke="#8DB8FF" stroke-width="2.2" points="10,120 50,116 90,112 130,110 170,108 200,60 222,52 246,104 280,106 330,104"/><line x1="10" y1="132" x2="330" y2="132" stroke="#2C2C31"/></svg>
+        <span aria-hidden="true" style="position: absolute; left: 178px; top: 34px; width: 80px; height: 62px; border: 2px dashed #F2B866; border-radius: 8px; background: rgba(242,184,102,0.10)"></span>
+        <span style="position: absolute; left: 252px; top: 26px; width: 22px; height: 22px; border-radius: 11px; background: #F2B866; color: #1E1A14; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center">1</span>
+      </div>
+      <span style="font-size: 12.5px; color: #8E8E98">Drag across image to annotate a specific region</span>
+    </div>
+    <div style="margin: auto -4px 30px; border-radius: 18px; background: #26262B; padding: 10px; display: flex; flex-direction: column; gap: 8px">
+      <span style="font-size: 12px; color: #F2B866">Region (62%, 40%)</span>
+      <div style="display: flex; align-items: center; gap: 8px">
+        <input aria-label="Comment on selected region" value="Spike starts when retries kick in?" style="flex: 1; min-width: 0; height: 40px; border-radius: 12px; background: #1A1A1D; border: 0; outline: none; padding: 0 12px; font-size: 15px">
+        <button style="height: 40px; padding: 0 16px; border-radius: 12px; background: #8DB8FF; color: #0A1A33; font-weight: 600">Add</button>
+      </div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

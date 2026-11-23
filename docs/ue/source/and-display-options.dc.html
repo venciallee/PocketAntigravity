@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — display options sheet</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <!-- Drawer behind, scrimmed -->
+  <div aria-hidden="true" style="position: absolute; left: 0; top: 0; bottom: 0; width: 336px; background: #1B1B1E; border-radius: 0 16px 16px 0; padding: 52px 24px 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px">
+    <div style="height: 56px; border-radius: 16px; background: #263552"></div>
+    <div>Automations</div><div>Customizations</div>
+    <div style="font-size: 14px; color: #A9A9B2; margin-top: 12px">Projects</div>
+  </div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(0,0,0,0.55)"></div>
+
+  <!-- Modal bottom sheet -->
+  <section aria-label="Display options" style="position: absolute; left: 0; right: 0; bottom: 0; top: 232px; border-radius: 28px 28px 0 0; background: #1B1B1E; display: flex; flex-direction: column; padding-bottom: 24px">
+    <span aria-hidden="true" style="align-self: center; width: 32px; height: 4px; border-radius: 2px; background: #6E6E78; margin: 22px 0 14px"></span>
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 12px 8px 24px">
+      <h2 style="margin: 0; font-size: 22px; font-weight: 400">Display options</h2>
+      <button style="height: 40px; padding: 0 12px; border-radius: 20px; color: #8DB8FF; font-size: 14px; font-weight: 600">Reset</button>
+    </div>
+
+    <button style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px">
+      <span style="flex: 1">Group by</span><span style="font-size: 14px; color: #A9A9B2">Project</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A9A9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+    <button aria-expanded="true" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px; background: #26262B">
+      <span style="flex: 1">Sort conversations</span><span style="font-size: 14px; color: #A9A9B2">Last updated</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A9A9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>
+    </button>
+    <button style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px">
+      <span style="flex: 1">Sort projects</span><span style="font-size: 14px; color: #A9A9B2">Custom order</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A9A9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+    <div aria-hidden="true" style="height: 1px; background: #2E2E34; margin: 4px 24px"></div>
+    <button style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px">
+      <span style="flex: 1">Filter</span><span style="font-size: 14px; color: #A9A9B2">All conversations</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A9A9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+    </button>
+    <button style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px">
+      <span style="flex: 1">Display</span><span style="font-size: 14px; color: #A9A9B2">Comfortable</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A9A9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+    </button>
+    <div style="display: flex; align-items: center; gap: 16px; min-height: 72px; padding: 0 24px">
+      <span style="flex: 1; display: flex; flex-direction: column"><span id="a-autopin">Auto pin</span><span style="font-size: 14px; color: #A9A9B2">Pin a conversation when you message it</span></span>
+      <button role="switch" aria-checked="true" aria-labelledby="a-autopin" style="width: 52px; height: 32px; border-radius: 16px; background: #8DB8FF; position: relative; flex: none"><span style="position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 12px; background: #0A1A33"></span></button>
+    </div>
+    <div style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px">
+      <span id="a-archived" style="flex: 1">Archived only</span>
+      <button role="switch" aria-checked="false" aria-labelledby="a-archived" style="width: 52px; height: 32px; border-radius: 16px; background: #26262B; border: 2px solid #8E8E98; position: relative; flex: none; box-sizing: border-box"><span style="position: absolute; top: 6px; left: 6px; width: 16px; height: 16px; border-radius: 8px; background: #8E8E98"></span></button>
+    </div>
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 0 24px">
+      <span style="font-size: 14px; color: #A9A9B2">3 unread</span>
+      <button style="height: 40px; padding: 0 16px; border-radius: 20px; background: #263552; color: #D6E3FF; font-size: 14px; font-weight: 600">Mark all as read</button>
+    </div>
+  </section>
+
+  <!-- Exposed dropdown menu for "Sort conversations" -->
+  <div role="menu" aria-label="Sort conversations" style="position: absolute; right: 24px; top: 412px; width: 220px; border-radius: 12px; background: #2A2A2F; box-shadow: 0 8px 24px rgba(0,0,0,0.5); padding: 8px 0; display: flex; flex-direction: column">
+    <button role="menuitemradio" aria-checked="true" style="display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 16px; background: #34343A">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8DB8FF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Last updated
+    </button>
+    <button role="menuitemradio" aria-checked="false" style="display: flex; align-items: center; height: 48px; padding: 0 16px 0 48px">Date created</button>
+    <button role="menuitemradio" aria-checked="false" style="display: flex; align-items: center; height: 48px; padding: 0 16px 0 48px">Title</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — agent swarm board</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 40px 4px 0; height: 64px; display: flex; align-items: center; gap: 4px; box-sizing: content-box">
+    <a href="and-chat.dc.html" aria-label="Back" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0; flex: none"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></a>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Agent swarm board</span><span style="font-size: 13px; color: #A9A9B2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Add rate limiter · 3 agents</span></div>
+    
+  </div>
+  <div style="padding: 12px 24px 4px; font-size: 14px; font-weight: 500; color: #8DB8FF; padding-left: 16px">Swarm roster (3)</div>
+  <div style="display: flex; gap: 8px; padding: 4px 16px 0"><div style="flex: 1; min-width: 0; border-radius: 16px; background: #26262B; padding: 12px; display: flex; flex-direction: column; gap: 4px"><span style="display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: #8DB8FF"></span>@planner</span><span style="font-size: 12px; color: #A9A9B2">Orchestrator</span><span style="font-size: 12px; color: #8DB8FF">Coordinating</span></div><div style="flex: 1; min-width: 0; border-radius: 16px; background: #26262B; padding: 12px; display: flex; flex-direction: column; gap: 4px"><span style="display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: #6FD8A6"></span>@backend</span><span style="font-size: 12px; color: #A9A9B2">Implementer</span><span style="font-size: 12px; color: #6FD8A6">Editing 2 files</span></div><div style="flex: 1; min-width: 0; border-radius: 16px; background: #26262B; padding: 12px; display: flex; flex-direction: column; gap: 4px"><span style="display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 4px; background: #F2B866"></span>@qa</span><span style="font-size: 12px; color: #A9A9B2">Verifier</span><span style="font-size: 12px; color: #F2B866">Waiting on you</span></div></div>
+  <div style="padding: 12px 24px 4px; font-size: 14px; font-weight: 500; color: #8DB8FF; padding-left: 16px; padding-top: 18px">Discussion board (4)</div>
+  <div role="radiogroup" aria-label="Filter posts" style="display: flex; gap: 8px; padding: 4px 16px 12px"><button role="radio" aria-checked="true" style="height: 32px; padding: 0 12px 0 8px; border-radius: 8px; background: #2E3545; color: #D6E3FF; display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>All</button><button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">@planner</button><button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">@backend</button><button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">@qa</button></div>
+  <div style="padding: 0 16px; display: flex; flex-direction: column; gap: 8px">
+    <div style="border-radius: 16px; background: #212125; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; border-left: 4px solid #F2B866;"><span style="display: flex; justify-content: space-between; font-size: 13px"><span style="font-weight: 600">@qa <span style="font-weight: 400; color: #8E8E98">→</span> <span style="color: #8DB8FF">@planner</span></span><span style="color: #A9A9B2">1m</span></span><span style="font-size: 14.5px; color: #DADAE0; line-height: 1.45">Load test needs approval: <span class="mono" style="font-size: 13px">vegeta attack -rate=2000/s</span>. Holding until the user allows it.</span></div>
+    <div style="border-radius: 16px; background: #212125; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; "><span style="display: flex; justify-content: space-between; font-size: 13px"><span style="font-weight: 600">@backend <span style="font-weight: 400; color: #8E8E98">→</span> <span style="color: #8DB8FF">@qa</span></span><span style="color: #A9A9B2">4m</span></span><span style="font-size: 14.5px; color: #DADAE0; line-height: 1.45">Limiter + middleware wired. Clock is injected, so the fake clock works in tests.</span></div>
+    <div style="border-radius: 16px; background: #212125; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; "><span style="display: flex; justify-content: space-between; font-size: 13px"><span style="font-weight: 600">@planner <span style="font-weight: 400; color: #8E8E98">→</span> <span style="color: #8DB8FF">@backend</span> <span style="color: #8DB8FF">@qa</span></span><span style="color: #A9A9B2">9m</span></span><span style="font-size: 14.5px; color: #DADAE0; line-height: 1.45">Split: backend owns middleware/, qa owns load + race tests. Report p99 back here.</span></div>
+    <div style="border-radius: 16px; background: #212125; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; "><span style="display: flex; justify-content: space-between; font-size: 13px"><span style="font-weight: 600">@planner <span style="font-weight: 400; color: #8E8E98">→</span> </span><span style="color: #A9A9B2">12m</span></span><span style="font-size: 14.5px; color: #DADAE0; line-height: 1.45">Plan v2 approved with 2 user comments.</span></div>
+  </div>
+  <a href="and-chat.dc.html" style="position: absolute; right: 16px; bottom: 40px; height: 56px; padding: 0 20px 0 16px; border-radius: 16px; background: #F2B866; color: #1E1A14; display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; text-decoration: none; box-shadow: 0 6px 16px rgba(0,0,0,0.45)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="m7.5 10 2.5 2-2.5 2M12 14.5h4"/></svg>Review pending approval</a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

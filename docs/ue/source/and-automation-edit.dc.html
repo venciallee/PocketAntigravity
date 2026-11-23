@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — edit automation</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 40px 8px 0 4px; height: 64px; display: flex; align-items: center; gap: 4px; box-sizing: content-box">
+    <a href="and-automations.dc.html" aria-label="Close" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </a>
+    <h1 style="flex: 1; margin: 0; font-size: 22px; font-weight: 400">Edit automation</h1>
+    <a href="and-automations.dc.html" style="height: 40px; padding: 0 20px; border-radius: 20px; background: #8DB8FF; color: #0A1A33; display: flex; align-items: center; font-size: 14px; font-weight: 600; text-decoration: none">Save</a>
+  </div>
+
+  <div style="padding: 12px 16px 0; display: flex; flex-direction: column; gap: 20px">
+    <div style="position: relative; height: 56px; border: 1px solid #45454C; border-radius: 4px; display: flex; align-items: center; padding: 0 16px">
+      <span style="position: absolute; left: 12px; top: -9px; padding: 0 4px; background: #111113; font-size: 12px; color: #A9A9B2">Name</span>
+      <input value="Nightly dependency audit" aria-label="Name" style="flex: 1; background: none; border: 0; outline: none; font-size: 16px">
+    </div>
+    <div style="position: relative; border: 2px solid #8DB8FF; border-radius: 4px; padding: 14px 15px 10px">
+      <span style="position: absolute; left: 11px; top: -10px; padding: 0 4px; background: #111113; font-size: 12px; color: #8DB8FF">Prompt</span>
+      <textarea aria-label="Prompt" rows="3" style="width: 100%; background: none; border: 0; outline: none; resize: none; font-size: 16px; line-height: 1.45; padding: 0">Check go.mod for outdated or vulnerable modules. Open a PR for patch bumps only and summarize the rest.</textarea>
+    </div>
+    <div style="position: relative; height: 56px; border: 1px solid #45454C; border-radius: 4px; display: flex; align-items: center; gap: 12px; padding: 0 12px 0 16px">
+      <span style="position: absolute; left: 12px; top: -9px; padding: 0 4px; background: #111113; font-size: 12px; color: #A9A9B2">Project</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A9A9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+      <span style="flex: 1">ledger-svc</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 10l5 5 5-5z"/></svg>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 14px; font-weight: 500; color: #8DB8FF">Trigger</span>
+      <div role="radiogroup" aria-label="Trigger" style="display: grid; grid-template-columns: 1fr 1fr; height: 40px; border: 1px solid #45454C; border-radius: 20px; overflow: hidden">
+        <button role="radio" aria-checked="true" style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; background: #2E3545; color: #D6E3FF; border-right: 1px solid #45454C">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Schedule
+        </button>
+        <button role="radio" aria-checked="false" style="display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500">Always on</button>
+      </div>
+      <div role="radiogroup" aria-label="Repeats" style="display: flex; gap: 8px; flex-wrap: wrap">
+        <button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">Every hour</button>
+        <button role="radio" aria-checked="true" style="height: 32px; padding: 0 12px 0 8px; border-radius: 8px; background: #2E3545; color: #D6E3FF; display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Every day
+        </button>
+        <button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">Weekdays</button>
+        <button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">Every week</button>
+      </div>
+      <button style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 4px">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+        <span style="flex: 1; display: flex; flex-direction: column"><span>Time</span><span style="font-size: 13px; color: #A9A9B2">GMT+8:00 · from this phone</span></span>
+        <span style="font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums">2:00 AM</span>
+      </button>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <span style="font-size: 14px; font-weight: 500; color: #8DB8FF">Model</span>
+      <div role="radiogroup" aria-label="Model" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); height: 40px; border: 1px solid #45454C; border-radius: 20px; overflow: hidden">
+        <button role="radio" aria-checked="false" style="display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; border-right: 1px solid #45454C">Flash Lite</button>
+        <button role="radio" aria-checked="true" style="display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 600; background: #2E3545; color: #D6E3FF; border-right: 1px solid #45454C">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Flash
+        </button>
+        <button role="radio" aria-checked="false" style="display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500">Pro</button>
+      </div>
+    </div>
+
+    <p style="margin: 0; font-size: 13px; color: #A9A9B2; line-height: 1.45">Runs unattended: anything that needs approval is denied automatically and the run shows up as Needs review.</p>
+    <button style="align-self: flex-start; height: 40px; padding: 0 12px; margin-left: -12px; border-radius: 20px; color: #FF8F87; font-size: 14px; font-weight: 600">Delete automation</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

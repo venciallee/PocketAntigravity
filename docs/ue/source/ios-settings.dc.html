@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings — connection, appearance, language</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 58px 8px 0 16px; display: flex; align-items: flex-start; gap: 8px">
+    <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; padding-top: 4px">
+      <h1 style="margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.02em">Settings</h1>
+      <p style="margin: 0; font-size: 13.5px; color: #A0A0AA">Scan Antigravity Desktop's Remote Control QR code — works over Wi-Fi &amp; 5G</p>
+    </div>
+    <a href="ios-drawer.dc.html" aria-label="Close settings" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #F1F1F3; flex: none">
+      <span style="width: 32px; height: 32px; border-radius: 16px; background: #26262B; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
+    </a>
+  </div>
+
+  <div style="padding: 14px 16px 0; display: flex; flex-direction: column; gap: 14px">
+
+    <!-- Remote Control connection card (connected state) -->
+    <section aria-label="Remote Control" style="border-radius: 24px; background: #141416; border: 1px solid rgba(111,216,166,0.45); padding: 14px 16px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#6FD8A6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 19 6v5.5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg>
+      <span style="font-size: 17px; font-weight: 600">Connected: MacBook Pro</span>
+      <span style="font-size: 13px; color: #A0A0AA">Cloud Relay · 42ms · 12 sessions</span>
+      <a href="ios-scan.dc.html" style="margin-top: 4px; height: 40px; padding: 0 16px; border-radius: 20px; background: #26262B; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #F1F1F3; text-decoration: none">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M8 8h3v3H8zM13 13h3v3h-3zM13 8h3M8 13v3"/></svg>
+        Scan New QR
+      </a>
+    </section>
+
+    <!-- Available hosts (shown when the Google account has more than one Desktop) -->
+    <section aria-label="Available hosts" style="display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 4px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: #8E8E98">AVAILABLE HOSTS</span>
+        <button style="min-height: 32px; display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: #8DB8FF">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4.5V8h-3.5"/></svg>
+          Refresh
+        </button>
+      </div>
+      <button aria-pressed="true" style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: #141416; border: 1px solid rgba(141,184,255,0.5)">
+        <span style="position: relative; width: 24px; height: 20px; flex: none; color: #E2E2E6">
+          <svg width="22" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5" width="15" height="10" rx="1.5"/><path d="M2.5 19h19"/></svg>
+          <span style="position: absolute; right: -2px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: #6FD8A6; border: 2px solid #141416"></span>
+        </span>
+        <span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14.5px; font-weight: 600">MacBook Pro</span><span style="font-size: 11.5px; color: #A0A0AA; font-family: 'JetBrains Mono', ui-monospace, monospace">Online · 2.33.1</span></span>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#8DB8FF" aria-label="Selected" role="img"><circle cx="12" cy="12" r="10"/><path d="m7.5 12.5 3 3 6-6.5" stroke="#0A1A33" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button aria-pressed="false" style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: #141416; border: 1px solid #222226">
+        <span style="position: relative; width: 24px; height: 20px; flex: none; color: #8E8E98">
+          <svg width="22" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11.5" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
+          <span style="position: absolute; right: -2px; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: #141416; border: 2px solid #FF8F87; box-sizing: border-box"></span>
+        </span>
+        <span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14.5px; font-weight: 600; color: #C2C2CA">Office iMac</span><span style="font-size: 11.5px; color: #FF8F87; font-family: 'JetBrains Mono', ui-monospace, monospace">Offline · 2.32.0</span></span>
+      </button>
+    </section>
+
+    <!-- General: Appearance + Language -->
+    <section aria-label="General" style="display: flex; flex-direction: column; gap: 8px">
+      <span style="padding: 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: #8E8E98">GENERAL</span>
+      <div style="border-radius: 20px; background: #141416; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="#C2C2CA"/></svg>
+          <span style="display: flex; flex-direction: column"><span style="font-weight: 600">Appearance</span><span style="font-size: 12.5px; color: #8E8E98">Follow iOS or lock Dark / Light mode</span></span>
+        </div>
+        <div role="radiogroup" aria-label="Appearance" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+          <button role="radio" aria-checked="true" style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; border-radius: 14px; border: 1.5px solid #8DB8FF; background: rgba(141,184,255,0.08); font-size: 13px; font-weight: 600">
+            <span aria-hidden="true" style="width: 52px; height: 28px; border-radius: 8px; overflow: hidden; display: flex; border: 1px solid #3A3A40"><span style="flex: 1; background: #F4F4F6"></span><span style="flex: 1; background: #0B0B0C"></span></span>
+            System
+          </button>
+          <button role="radio" aria-checked="false" style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; border-radius: 14px; border: 1.5px solid #26262B; font-size: 13px; color: #C2C2CA">
+            <span aria-hidden="true" style="width: 52px; height: 28px; border-radius: 8px; background: #0B0B0C; border: 1px solid #3A3A40; display: flex; align-items: flex-end; padding: 5px; box-sizing: border-box"><span style="width: 24px; height: 5px; border-radius: 3px; background: #8DB8FF"></span></span>
+            Dark
+          </button>
+          <button role="radio" aria-checked="false" style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; border-radius: 14px; border: 1.5px solid #26262B; font-size: 13px; color: #C2C2CA">
+            <span aria-hidden="true" style="width: 52px; height: 28px; border-radius: 8px; background: #F4F4F6; border: 1px solid #3A3A40; display: flex; align-items: flex-end; padding: 5px; box-sizing: border-box"><span style="width: 24px; height: 5px; border-radius: 3px; background: #2F6FEB"></span></span>
+            Light
+          </button>
+        </div>
+        <div aria-hidden="true" style="height: 1px; background: #26262B"></div>
+        <div style="display: flex; align-items: center; gap: 10px">
+          <span style="flex: 1; font-weight: 600">Theme</span>
+          <div role="radiogroup" aria-label="Theme" style="display: flex; gap: 14px"><button role="radio" aria-checked="true" aria-label="Obsidian" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px; color: #F1F1F3; font-weight: 600"><span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 15px; background: linear-gradient(135deg, #090A0D 50%, #8EB4FF 50%); border: 1px solid #3A3A40; box-shadow: 0 0 0 2px #0B0B0C, 0 0 0 4px #8DB8FF;"></span>Obsidian</button><button role="radio" aria-checked="false" aria-label="Nord" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px; color: #A0A0AA; font-weight: 500"><span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 15px; background: linear-gradient(135deg, #2E3440 50%, #88C0D0 50%); border: 1px solid #3A3A40; "></span>Nord</button><button role="radio" aria-checked="false" aria-label="Everforest" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px; color: #A0A0AA; font-weight: 500"><span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 15px; background: linear-gradient(135deg, #2D353B 50%, #A7C080 50%); border: 1px solid #3A3A40; "></span>Everforest</button></div>
+        </div>
+      </div>
+      <div style="border-radius: 20px; background: #141416; padding: 10px 10px 10px 14px; display: flex; align-items: center; gap: 10px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.6 5.4 3.6 8.5s-1.1 5.9-3.6 8.5c-2.5-2.6-3.6-5.4-3.6-8.5s1.1-5.9 3.6-8.5z"/></svg>
+        <span style="flex: 1; font-weight: 600">Language</span>
+        <div role="radiogroup" aria-label="Language" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: 12px; background: #1D1D20; width: 176px">
+          <button role="radio" aria-checked="true" lang="en" style="height: 34px; border-radius: 9px; font-size: 14px; font-weight: 600; background: #3A3A40; text-align: center">English</button>
+          <button role="radio" aria-checked="false" lang="zh-CN" style="height: 34px; border-radius: 9px; font-size: 14px; color: #C2C2CA; text-align: center">简体中文</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

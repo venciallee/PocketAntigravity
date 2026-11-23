@@ -1,0 +1,939 @@
+{
+ "v": 3,
+ "attachments": {},
+ "boards": {
+  "Main.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · New Conversation（首页）",
+   "w": 390,
+   "x": 0,
+   "y": 0,
+   "is_interactive": true
+  },
+  "ios-drawer.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 侧栏（对齐 PC Sidebar）",
+   "w": 390,
+   "x": 470,
+   "y": 0,
+   "is_interactive": true
+  },
+  "ios-display-options.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Display Options",
+   "w": 390,
+   "x": 940,
+   "y": 0,
+   "is_interactive": true
+  },
+  "ios-pin-menu.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 长按菜单 / Pin",
+   "w": 390,
+   "x": 1410,
+   "y": 0
+  },
+  "ios-new-project.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Create New Project",
+   "w": 390,
+   "x": 1880,
+   "y": 0,
+   "is_interactive": true
+  },
+  "ios-project.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 项目长按菜单 / New Conversation in Project",
+   "w": 390,
+   "x": 2350,
+   "y": 0,
+   "is_interactive": true
+  },
+  "ios-chat.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 消息列表与输入框",
+   "w": 390,
+   "x": 0,
+   "y": 1204,
+   "is_interactive": true
+  },
+  "ios-add-context.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Add Context（Files / Folder / Mentions / Actions / Drive）",
+   "w": 390,
+   "x": 470,
+   "y": 1204,
+   "is_interactive": true
+  },
+  "ios-slash.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · / Actions 与 Skills",
+   "w": 390,
+   "x": 940,
+   "y": 1204,
+   "is_interactive": true
+  },
+  "ios-model.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 模型与思考档位",
+   "w": 390,
+   "x": 1410,
+   "y": 1204,
+   "is_interactive": true
+  },
+  "ios-preset.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 权限预设",
+   "w": 390,
+   "x": 1880,
+   "y": 1204,
+   "is_interactive": true
+  },
+  "ios-ask.dc.html": {
+   "h": 844,
+   "is_interactive": true,
+   "radius": 52,
+   "title": "iOS · 结构化多选问答（可交互）",
+   "w": 390,
+   "x": 2350,
+   "y": 1204
+  },
+  "ios-plan-review.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Implementation Plan 审阅",
+   "w": 390,
+   "x": 0,
+   "y": 2408,
+   "is_interactive": true
+  },
+  "ios-diff.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Turn Diff 行级审查",
+   "w": 390,
+   "x": 470,
+   "y": 2408,
+   "is_interactive": true
+  },
+  "ios-automations.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Automations",
+   "w": 390,
+   "x": 1100,
+   "y": 2408,
+   "is_interactive": true
+  },
+  "live-activity.dc.html": {
+   "h": 844,
+   "title": "灵动岛 / Live Activity 规格",
+   "w": 1380,
+   "x": 0,
+   "y": 3612
+  },
+  "ios-settings.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 设置（连接 / 主题 / 语言）",
+   "w": 390,
+   "x": 1500,
+   "y": 3612,
+   "is_interactive": true
+  },
+  "ios-settings-more.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 设置（下滑：权限 / 通知 / 关于）",
+   "w": 390,
+   "x": 1970,
+   "y": 3612,
+   "is_interactive": true
+  },
+  "ios-scan.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 扫描 Remote Control 二维码",
+   "w": 390,
+   "x": 2440,
+   "y": 3612,
+   "is_interactive": true
+  },
+  "and-home.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 导航抽屉（对齐 PC Sidebar）",
+   "w": 412,
+   "x": 492,
+   "y": 7484,
+   "is_interactive": true
+  },
+  "and-chat.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 对话与输入",
+   "w": 412,
+   "x": 0,
+   "y": 8659,
+   "is_interactive": true
+  },
+  "and-live-update.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Live Update 通知",
+   "w": 412,
+   "x": 2460,
+   "y": 11009
+  },
+  "watch-home.dc.html": {
+   "h": 248,
+   "radius": 42,
+   "title": "Watch · 会话列表",
+   "w": 208,
+   "x": 0,
+   "y": 14794,
+   "is_interactive": true
+  },
+  "watch-devices.dc.html": {
+   "h": 248,
+   "radius": 42,
+   "title": "Watch · 在线设备",
+   "w": 208,
+   "x": 288,
+   "y": 14794,
+   "is_interactive": true
+  },
+  "watch-chat.dc.html": {
+   "h": 248,
+   "radius": 42,
+   "title": "Watch · 对话流",
+   "w": 208,
+   "x": 576,
+   "y": 14794,
+   "is_interactive": true
+  },
+  "watch-artifact.dc.html": {
+   "h": 248,
+   "radius": 42,
+   "title": "Watch · 产物摘要",
+   "w": 208,
+   "x": 864,
+   "y": 14794,
+   "is_interactive": true
+  },
+  "watch-code.dc.html": {
+   "h": 248,
+   "radius": 42,
+   "title": "Watch · 改动文件（少量）",
+   "w": 208,
+   "x": 1152,
+   "y": 14794,
+   "is_interactive": true
+  },
+  "watch-files-many.dc.html": {
+   "h": 248,
+   "radius": 42,
+   "title": "Watch · 改动文件（大量，按意图分组）",
+   "w": 208,
+   "x": 1440,
+   "y": 14794,
+   "is_interactive": true
+  },
+  "watch-voice.dc.html": {
+   "h": 248,
+   "radius": 42,
+   "title": "Watch · 语音输入",
+   "w": 208,
+   "x": 1728,
+   "y": 14794,
+   "is_interactive": true
+  },
+  "watch-notify.dc.html": {
+   "h": 248,
+   "radius": 42,
+   "title": "Watch · 通知（待批准）",
+   "w": 208,
+   "x": 2016,
+   "y": 14794,
+   "is_interactive": true
+  },
+  "ios-project-detail.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 项目详情（UE04）",
+   "w": 390,
+   "x": 2820,
+   "y": 0,
+   "is_interactive": true
+  },
+  "ios-automation-detail.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Automation 详情 / 运行记录",
+   "w": 390,
+   "x": 1570,
+   "y": 2408,
+   "is_interactive": true
+  },
+  "ios-automation-edit.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Edit Schedule & Prompt（新建同表单）",
+   "w": 390,
+   "x": 2040,
+   "y": 2408,
+   "is_interactive": true
+  },
+  "and-new.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · New Conversation（首页）",
+   "w": 412,
+   "x": 0,
+   "y": 7484,
+   "is_interactive": true
+  },
+  "and-display-options.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Display options（Bottom sheet）",
+   "w": 412,
+   "x": 984,
+   "y": 7484,
+   "is_interactive": true
+  },
+  "and-context-menu.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 会话操作 / Pin（长按 Bottom sheet）",
+   "w": 412,
+   "x": 1476,
+   "y": 7484,
+   "is_interactive": true
+  },
+  "and-project.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 项目详情（UE04）",
+   "w": 412,
+   "x": 1968,
+   "y": 7484,
+   "is_interactive": true
+  },
+  "and-new-project.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · New project（全屏对话框）",
+   "w": 412,
+   "x": 2460,
+   "y": 7484,
+   "is_interactive": true
+  },
+  "and-add-context.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Add Context 菜单",
+   "w": 412,
+   "x": 492,
+   "y": 8659,
+   "is_interactive": true
+  },
+  "and-slash.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · / Actions 与 Skills",
+   "w": 412,
+   "x": 984,
+   "y": 8659,
+   "is_interactive": true
+  },
+  "and-model.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 模型与思考档位（Bottom sheet）",
+   "w": 412,
+   "x": 1476,
+   "y": 8659,
+   "is_interactive": true
+  },
+  "and-preset.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 权限预设菜单",
+   "w": 412,
+   "x": 1968,
+   "y": 8659,
+   "is_interactive": true
+  },
+  "and-ask.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 结构化多选问答",
+   "w": 412,
+   "x": 2460,
+   "y": 8659,
+   "is_interactive": true
+  },
+  "and-plan-review.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Implementation Plan 审阅",
+   "w": 412,
+   "x": 0,
+   "y": 9834,
+   "is_interactive": true
+  },
+  "and-diff.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Turn Diff 行级审查",
+   "w": 412,
+   "x": 492,
+   "y": 9834,
+   "is_interactive": true
+  },
+  "and-automations.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Automations（筛选 + 溢出菜单）",
+   "w": 412,
+   "x": 984,
+   "y": 9834,
+   "is_interactive": true
+  },
+  "and-automation-edit.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 编辑 Automation",
+   "w": 412,
+   "x": 1968,
+   "y": 9834,
+   "is_interactive": true
+  },
+  "and-settings.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 设置（连接 / 外观主题 / 语言）",
+   "w": 412,
+   "x": 0,
+   "y": 11009,
+   "is_interactive": true
+  },
+  "and-settings-more.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 设置（权限 / 通知 / 关于）",
+   "w": 412,
+   "x": 492,
+   "y": 11009,
+   "is_interactive": true
+  },
+  "and-scan.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Connect to Desktop（扫码 / 粘贴链接）",
+   "w": 412,
+   "x": 984,
+   "y": 11009,
+   "is_interactive": true
+  },
+  "ios-welcome.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 首次启动 / 欢迎页",
+   "w": 390,
+   "x": 2910,
+   "y": 3612,
+   "is_interactive": true
+  },
+  "ios-signin.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Google 登录（Cloud Relay）",
+   "w": 390,
+   "x": 3380,
+   "y": 3612,
+   "is_interactive": true
+  },
+  "ios-overview.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Conversation Overview",
+   "w": 390,
+   "x": 0,
+   "y": 4816,
+   "is_interactive": true
+  },
+  "ios-btw.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · /btw 旁路提问",
+   "w": 390,
+   "x": 470,
+   "y": 4816,
+   "is_interactive": true
+  },
+  "ios-swarm.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Agent Swarm Board",
+   "w": 390,
+   "x": 940,
+   "y": 4816,
+   "is_interactive": true
+  },
+  "ios-voice.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Voice Mode（语音对话）",
+   "w": 390,
+   "x": 1410,
+   "y": 4816,
+   "is_interactive": true
+  },
+  "ios-artifact.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Artifact Viewer（Markdown / 图 / 区域评论）",
+   "w": 390,
+   "x": 1880,
+   "y": 4816,
+   "is_interactive": true
+  },
+  "ios-customizations.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 项目 Rules & skills（轻量 Customizations）",
+   "w": 390,
+   "x": 2350,
+   "y": 4816,
+   "is_interactive": true
+  },
+  "ios-faceid.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · Face ID 批准",
+   "w": 390,
+   "x": 0,
+   "y": 6020,
+   "is_interactive": true
+  },
+  "ios-widget.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 桌面 / 锁屏小组件",
+   "w": 390,
+   "x": 470,
+   "y": 6020,
+   "is_interactive": true
+  },
+  "ios-share.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 分享扩展（Send to AG Pocket）",
+   "w": 390,
+   "x": 940,
+   "y": 6020,
+   "is_interactive": true
+  },
+  "ios-offline.dc.html": {
+   "h": 844,
+   "radius": 52,
+   "title": "iOS · 离线缓存 + 排队消息",
+   "w": 390,
+   "x": 1410,
+   "y": 6020,
+   "is_interactive": true
+  },
+  "and-automation-detail.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Automation 详情 / 运行记录",
+   "w": 412,
+   "x": 1476,
+   "y": 9834,
+   "is_interactive": true
+  },
+  "and-welcome.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 首次启动 / 欢迎页",
+   "w": 412,
+   "x": 1476,
+   "y": 11009,
+   "is_interactive": true
+  },
+  "and-signin.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Google 登录（Cloud Relay WebView）",
+   "w": 412,
+   "x": 1968,
+   "y": 11009,
+   "is_interactive": true
+  },
+  "and-overview.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Conversation overview",
+   "w": 412,
+   "x": 0,
+   "y": 12184,
+   "is_interactive": true
+  },
+  "and-btw.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · /btw 旁路提问",
+   "w": 412,
+   "x": 492,
+   "y": 12184,
+   "is_interactive": true
+  },
+  "and-swarm.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Agent swarm board",
+   "w": 412,
+   "x": 984,
+   "y": 12184,
+   "is_interactive": true
+  },
+  "and-voice.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Voice mode",
+   "w": 412,
+   "x": 1476,
+   "y": 12184,
+   "is_interactive": true
+  },
+  "and-artifact.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Artifact viewer",
+   "w": 412,
+   "x": 1968,
+   "y": 12184,
+   "is_interactive": true
+  },
+  "and-customizations.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 项目 Rules & skills",
+   "w": 412,
+   "x": 2460,
+   "y": 12184,
+   "is_interactive": true
+  },
+  "and-biometric.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · BiometricPrompt（锁屏批准）",
+   "w": 412,
+   "x": 0,
+   "y": 13359,
+   "is_interactive": true
+  },
+  "and-widget.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · Glance 桌面小组件",
+   "w": 412,
+   "x": 492,
+   "y": 13359,
+   "is_interactive": true
+  },
+  "and-share.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 分享接收（ACTION_SEND）",
+   "w": 412,
+   "x": 984,
+   "y": 13359,
+   "is_interactive": true
+  },
+  "and-offline.dc.html": {
+   "h": 915,
+   "radius": 36,
+   "title": "Android · 离线缓存 + 排队消息",
+   "w": 412,
+   "x": 1476,
+   "y": 13359,
+   "is_interactive": true
+  }
+ },
+ "createdOnFiles": {
+  "at": "2026-11-10T16:12:22Z",
+  "v": 1
+ },
+ "designSystems": [],
+ "launch": {
+  "view": "canvas"
+ },
+ "noteOrder": [
+  "tA",
+  "tB",
+  "tC1",
+  "tC2",
+  "tD1",
+  "tD2",
+  "tD3",
+  "tD4",
+  "tE",
+  "tE2",
+  "tE3",
+  "tE4",
+  "tE5",
+  "tE6",
+  "brief",
+  "custBrief",
+  "andBrief",
+  "tF",
+  "watchBrief"
+ ],
+ "notes": {
+  "brief": {
+   "fill": "gray",
+   "size": 24,
+   "text": "非官方概念稿（Unofficial concept），不含任何官方 Logo。\n\n· 信息架构对齐 PC：侧栏 = New Conversation / Automations / Customizations / Projects（筛选 + 新建）/ Settings；手机用抽屉承载，首页 = New Conversation\n· 输入框与 PC 同构：项目 + 分支（Repo default）/ + Add Context / 模型 + 思考档位 / 权限预设 / 麦克风 / 发送\n· 会话行与 PC 一致：标题 + 右侧蓝点（未读）或时间；手机额外：琥珀点 = 等你批准，转圈 = 运行中\n· 设置以 PocketAntigravity 仓库的真实控件为准：Remote Control 连接卡 / 可用主机 / 外观（System·Dark·Light + Obsidian / Nord / Everforest 主题；Android 另有 Dynamic color）/ 语言（English·中文，新增）/ 权限预设 / 通知 / 退出 / 关于\n· 连接方式同仓库：扫描桌面 Remote Control 二维码或粘贴 antigravity.google.com/r/… 链接，Google 登录一次走 Cloud Relay，也支持 Direct LAN / Tailscale\n· 项目：点项目名进入项目详情（会话 Active / Archived、本项目 Automations、Project rules & skills），长按出菜单\n· 手机端定位：远程“看 + 批 + 指挥”，重编辑留在桌面",
+   "w": 380,
+   "x": 3300,
+   "y": 0
+  },
+  "tA": {
+   "kind": "title1",
+   "maxW": 3210,
+   "text": "首页 · 侧栏 · Pin · Projects",
+   "w": 240,
+   "x": 0,
+   "y": -260
+  },
+  "tB": {
+   "kind": "title1",
+   "maxW": 2740,
+   "text": "对话 · 输入框 · Add Context · / Actions · 模型 · 权限 · 问答",
+   "w": 240,
+   "x": 0,
+   "y": 944
+  },
+  "tC1": {
+   "kind": "title1",
+   "maxW": 860,
+   "text": "Artifact 审阅 · Turn Diff",
+   "w": 240,
+   "x": 0,
+   "y": 2148
+  },
+  "tC2": {
+   "kind": "title1",
+   "maxW": 1330,
+   "text": "Automations · 详情 · 编辑",
+   "w": 240,
+   "x": 1100,
+   "y": 2148
+  },
+  "tD1": {
+   "kind": "title1",
+   "maxW": 1380,
+   "text": "灵动岛 · Live Activity",
+   "w": 240,
+   "x": 0,
+   "y": 3352
+  },
+  "tD2": {
+   "kind": "title1",
+   "maxW": 2270,
+   "text": "设置 · 扫码 · 欢迎页 · Cloud Relay 登录",
+   "w": 240,
+   "x": 1500,
+   "y": 3352
+  },
+  "tE": {
+   "kind": "title1",
+   "maxW": 2872,
+   "text": "Android · 首页 · 抽屉 · Display options · 项目（Material 3）",
+   "w": 240,
+   "x": 0,
+   "y": 7224
+  },
+  "tF": {
+   "kind": "title1",
+   "maxW": 2224,
+   "text": "Apple Watch · 46mm（208×248 pt，1:1）",
+   "x": 0,
+   "y": 14534,
+   "w": 240
+  },
+  "watchBrief": {
+   "fill": "blue",
+   "size": 24,
+   "w": 360,
+   "x": 2304,
+   "y": 14794,
+   "text": "Watch 只做三件事：看状态、批准、说一句。\n\n· 左上角 = 当前设备（点开切换），右上角 = 语音新建\n· 产物只给摘要：标题 + ≤3 条要点 + 一个主操作\n· 不显示代码：只列改了哪些文件 + 每个文件一句话（A/M/D 标记）\n· ≤5 个文件且无风险项：可在手表 Accept all；否则先列「值得一看」，其余按意图折叠成组，主操作改为去 iPhone 审\n· Double Tap 手势 = 主操作（Allow / Send / Proceed）\n· 批准类操作要求手表已解锁且戴在腕上"
+  },
+  "tE2": {
+   "kind": "title1",
+   "maxW": 2872,
+   "text": "Android · 对话 · 输入框 · Add Context · / Actions · 模型 · 权限 · 问答",
+   "w": 240,
+   "x": 0,
+   "y": 8399
+  },
+  "tE3": {
+   "kind": "title1",
+   "maxW": 2380,
+   "text": "Android · 审阅 · Turn Diff · Automations",
+   "w": 240,
+   "x": 0,
+   "y": 9574
+  },
+  "tE4": {
+   "kind": "title1",
+   "maxW": 2872,
+   "text": "Android · 设置 · 扫码 · 欢迎页 · Cloud Relay 登录 · Live Update",
+   "w": 240,
+   "x": 0,
+   "y": 10749
+  },
+  "andBrief": {
+   "fill": "green",
+   "size": 24,
+   "w": 380,
+   "x": 2952,
+   "y": 7484,
+   "text": "Android 与 iOS 同一套信息架构，只换成 Material 3 原生控件：\n\n· 侧栏 → Modal navigation drawer；首页 = New Conversation，顶部主机切换 chip\n· iOS 长按菜单 / Sheet → Modal bottom sheet；Pin、Display options 都在 sheet 里\n· 分段选择 → Segmented button；多选筛选 → Filter chip\n· 新建项目 / 编辑 Automation → Full-screen dialog（右上 Create / Save）\n· 项目详情 → Primary tabs（Active / Archived / Automations）+ Extended FAB“New conversation in project”\n· 扫码 → 系统扫码器（Google code scanner）+ 粘贴链接对话框，对齐仓库 RemoteControlLinkDialog\n· 进度 → Android 16 Live Update 通知"
+  },
+  "tD3": {
+   "kind": "title1",
+   "maxW": 2740,
+   "text": "对话扩展 · Overview · /btw · Swarm · Voice · Artifact · Rules & skills",
+   "w": 240,
+   "x": 0,
+   "y": 4556
+  },
+  "tD4": {
+   "kind": "title1",
+   "maxW": 1800,
+   "text": "系统集成 · Face ID · 小组件 · 分享 · 离线",
+   "w": 240,
+   "x": 0,
+   "y": 5760
+  },
+  "custBrief": {
+   "fill": "yellow",
+   "size": 24,
+   "w": 380,
+   "x": 2840,
+   "y": 4816,
+   "text": "Customizations 在手机上只做\"看 + 开关\"：\n\n· 入口：项目详情 → Project rules & skills（不单独占侧栏）\n· 显示每轮加载的 token、Skills / Rules / Plugins / Agents，Global / Workspace 标记与桌面一致\n· 可以：开关插件（MCP 挂了能先关掉）、查看来源\n· 不做：Marketplace 安装、编辑 rules / SKILL.md、输入 API key —— 留给 Antigravity Desktop\n· 依据：官方 Customizations = Marketplace + Installed；仓库最新 Settings 也已把 Desktop 式子菜单拍平"
+  },
+  "tE5": {
+   "kind": "title1",
+   "maxW": 2872,
+   "text": "Android · 对话扩展 · Overview · /btw · Swarm · Voice · Artifact · Rules & skills",
+   "w": 240,
+   "x": 0,
+   "y": 11924
+  },
+  "tE6": {
+   "kind": "title1",
+   "maxW": 1888,
+   "text": "Android · 系统集成 · BiometricPrompt · Glance 小组件 · 分享 · 离线",
+   "w": 240,
+   "x": 0,
+   "y": 13099
+  }
+ },
+ "order": [
+  "Main.dc.html",
+  "ios-drawer.dc.html",
+  "ios-display-options.dc.html",
+  "ios-pin-menu.dc.html",
+  "ios-new-project.dc.html",
+  "ios-project.dc.html",
+  "ios-project-detail.dc.html",
+  "ios-chat.dc.html",
+  "ios-add-context.dc.html",
+  "ios-slash.dc.html",
+  "ios-model.dc.html",
+  "ios-preset.dc.html",
+  "ios-ask.dc.html",
+  "ios-plan-review.dc.html",
+  "ios-diff.dc.html",
+  "ios-automations.dc.html",
+  "ios-automation-detail.dc.html",
+  "ios-automation-edit.dc.html",
+  "live-activity.dc.html",
+  "ios-settings.dc.html",
+  "ios-settings-more.dc.html",
+  "ios-scan.dc.html",
+  "ios-welcome.dc.html",
+  "ios-signin.dc.html",
+  "ios-overview.dc.html",
+  "ios-btw.dc.html",
+  "ios-swarm.dc.html",
+  "ios-voice.dc.html",
+  "ios-artifact.dc.html",
+  "ios-customizations.dc.html",
+  "ios-faceid.dc.html",
+  "ios-widget.dc.html",
+  "ios-share.dc.html",
+  "ios-offline.dc.html",
+  "and-new.dc.html",
+  "and-home.dc.html",
+  "and-display-options.dc.html",
+  "and-context-menu.dc.html",
+  "and-project.dc.html",
+  "and-new-project.dc.html",
+  "and-chat.dc.html",
+  "and-add-context.dc.html",
+  "and-slash.dc.html",
+  "and-model.dc.html",
+  "and-preset.dc.html",
+  "and-ask.dc.html",
+  "and-plan-review.dc.html",
+  "and-diff.dc.html",
+  "and-automations.dc.html",
+  "and-automation-detail.dc.html",
+  "and-automation-edit.dc.html",
+  "and-settings.dc.html",
+  "and-settings-more.dc.html",
+  "and-scan.dc.html",
+  "and-welcome.dc.html",
+  "and-signin.dc.html",
+  "and-live-update.dc.html",
+  "and-overview.dc.html",
+  "and-btw.dc.html",
+  "and-swarm.dc.html",
+  "and-voice.dc.html",
+  "and-artifact.dc.html",
+  "and-customizations.dc.html",
+  "and-biometric.dc.html",
+  "and-widget.dc.html",
+  "and-share.dc.html",
+  "and-offline.dc.html",
+  "watch-home.dc.html",
+  "watch-devices.dc.html",
+  "watch-chat.dc.html",
+  "watch-artifact.dc.html",
+  "watch-code.dc.html",
+  "watch-files-many.dc.html",
+  "watch-voice.dc.html",
+  "watch-notify.dc.html"
+ ],
+ "pages": [],
+ "title": "Antigravity Mobile · 概念设计"
+}

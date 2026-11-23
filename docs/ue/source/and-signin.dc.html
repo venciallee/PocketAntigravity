@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — Cloud Relay sign-in</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 40px 4px 0; height: 64px; display: flex; align-items: center; gap: 4px; box-sizing: content-box">
+    <a href="and-welcome.dc.html" aria-label="Close" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0; flex: none"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></a>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Sign in to Cloud Relay</span><span style="font-size: 13px; color: #A9A9B2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Step 2 of 3 · MacBook Pro</span></div>
+    
+  </div>
+  <div role="progressbar" aria-label="Loading sign-in page" style="height: 4px; background: #263552; overflow: hidden"><span style="display: block; width: 46%; height: 100%; background: #8DB8FF"></span></div>
+  <div style="height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; background: #161618; font-size: 13px; color: #C4C4CC"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6FD8A6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="10.5" width="13" height="9.5" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg><span class="mono" style="font-size: 13px">accounts.google.com</span></div>
+  <div style="position: absolute; left: 0; right: 0; top: 156px; bottom: 210px; background: #0E0E10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 0 40px; text-align: center">
+    <span aria-hidden="true" style="width: 32px; height: 32px; border-radius: 50%; border: 4px solid #263552; border-top-color: #8DB8FF; animation: agspin 0.9s linear infinite"></span>
+    <span style="font-size: 15px; color: #C4C4CC">Google's own sign-in page loads here</span>
+    <span style="font-size: 13px; color: #8E8E98; line-height: 1.5">Secure in-app WebView · AG Pocket never sees your password</span>
+  </div>
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; background: #1B1B1E; border-radius: 28px 28px 0 0; padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 14px">
+    <div style="display: flex; gap: 8px; font-size: 13px; color: #A9A9B2">
+      <span style="display: flex; align-items: center; gap: 6px; color: #6FD8A6"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Scanned</span><span>›</span>
+      <span style="color: #EDEDF0; font-weight: 600">Sign in</span><span>›</span><span>Cloud Relay</span>
+    </div>
+    <p style="margin: 0; font-size: 13px; color: #A9A9B2; line-height: 1.5">After you sign in, only the relay key is kept, encrypted with Android Keystore. On the same Wi-Fi, Direct LAN / Tailscale is used when available.</p>
+    <div style="display: flex; justify-content: flex-end; gap: 8px"><a href="and-welcome.dc.html" style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; color: #8DB8FF; ">Cancel</a><button aria-disabled="true" style="height: 40px; padding: 0 20px; border-radius: 20px; background: #26262B; color: #6E6E78; font-size: 14px; font-weight: 600; cursor: default">Connect</button></div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
