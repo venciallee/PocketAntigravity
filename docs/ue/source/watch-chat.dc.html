@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Watch — conversation thread</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#000000}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 208px; height: 248px; position: relative; overflow: hidden; background: #000000; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 1.3; -webkit-font-smoothing: antialiased">
+
+  <!-- Toolbar: back + inline title (clock stays top-right) -->
+  <div style="position: absolute; top: 8px; left: 12px; right: 64px; display: flex; align-items: center; gap: 8px">
+    <a href="watch-home.dc.html" aria-label="Back" style="width: 36px; height: 36px; border-radius: 18px; background: rgba(255,255,255,0.16); display: flex; align-items: center; justify-content: center; color: #F1F1F3; flex: none">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"></path></svg>
+    </a>
+    <span style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Rate limiter</span>
+  </div>
+
+  <div style="position: absolute; top: 50px; left: 0; right: 0; bottom: 0; padding: 0 8px; display: flex; flex-direction: column; gap: 5px">
+    <span style="display: flex; align-items: center; gap: 6px; padding: 0 4px; font-size: 12px; color: #8DB8FF">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true" style="animation: agspin 1.1s linear infinite"><circle cx="8" cy="8" r="6" stroke="#2C3A52" stroke-width="2.6"></circle><path d="M8 2a6 6 0 0 1 6 6" stroke="#8DB8FF" stroke-width="2.6" stroke-linecap="round"></path></svg>
+      Step 6 of 7 · Running
+    </span>
+
+    <div style="align-self: flex-end; max-width: 156px; padding: 6px 10px; border-radius: 14px 14px 4px 14px; background: #26262B; display: flex; align-items: center; gap: 5px">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#A0A0AA" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-label="Sent by voice" role="img" style="flex: none"><rect x="9" y="3.5" width="6" height="11" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"></path></svg>
+      <span>Use 1000/s on staging</span>
+    </div>
+
+    <p style="margin: 0; padding: 0 4px; color: #E2E2E6">Load test passed. p99 is 3.8 ms at 1000/s.</p>
+
+    <a href="watch-artifact.dc.html" style="display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 14px; background: #1C1C1F; text-decoration: none; color: inherit">
+      <span style="width: 24px; height: 24px; border-radius: 7px; background: #1F2735; color: #8DB8FF; display: flex; align-items: center; justify-content: center; flex: none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4.5 4.5v12.5H7z"></path><path d="M14 3.5V8h4.5M10 13h5M10 16.5h5"></path></svg>
+      </span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2">
+        <span style="font-weight: 600">Walkthrough</span>
+        <span style="font-size: 11px; color: #A0A0AA">3 key points</span>
+      </span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8E8E98" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>
+    </a>
+
+    <a href="watch-code.dc.html" style="align-self: flex-start; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 14px; background: #1C1C1F; text-decoration: none; color: #E2E2E6; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px">
+      <span style="color: #74DDA9">+128</span><span style="color: #FF9B9B">−14</span><span style="color: #A0A0AA; font-family: Inter, system-ui, sans-serif">· 4 files</span>
+    </a>
+  </div>
+
+  <!-- Floating reply (voice) -->
+  <a href="watch-voice.dc.html" aria-label="Reply by voice" style="position: absolute; right: 12px; bottom: 10px; width: 40px; height: 40px; border-radius: 20px; background: #8DB8FF; color: #0A1A33; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(0,0,0,0.6)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"></path></svg>
+  </a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":208,"height":248}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

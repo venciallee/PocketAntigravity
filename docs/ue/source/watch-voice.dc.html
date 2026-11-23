@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Watch — voice input</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#000000}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+@keyframes agwave{from{transform:scaleY(0.35)}to{transform:scaleY(1)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 208px; height: 248px; position: relative; overflow: hidden; background: #000000; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 13px; line-height: 1.3; -webkit-font-smoothing: antialiased">
+
+  <div style="position: absolute; top: 8px; left: 12px">
+    <a href="watch-chat.dc.html" aria-label="Cancel" style="width: 36px; height: 36px; border-radius: 18px; background: rgba(255,255,255,0.16); display: flex; align-items: center; justify-content: center; color: #F1F1F3">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+    </a>
+  </div>
+
+  <div style="position: absolute; top: 50px; left: 0; right: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 8px">
+    <button style="align-self: flex-start; height: 24px; padding: 0 10px; border-radius: 12px; background: #1C1C1F; font-size: 12px; color: #C2C2CA; display: flex; align-items: center; gap: 4px">
+      To: Rate limiter
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+    </button>
+    <p aria-live="polite" style="margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3">Use 1000/s on staging, keep prod at <span style="color: #8E8E98">2000</span></p>
+
+    <div aria-hidden="true" style="height: 28px; display: flex; align-items: center; justify-content: center; gap: 3px">
+      <span style="width: 3px; height: 10px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out infinite alternate"></span>
+      <span style="width: 3px; height: 18px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.2s infinite alternate"></span>
+      <span style="width: 3px; height: 26px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.4s infinite alternate"></span>
+      <span style="width: 3px; height: 14px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.1s infinite alternate"></span>
+      <span style="width: 3px; height: 22px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.5s infinite alternate"></span>
+      <span style="width: 3px; height: 28px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.3s infinite alternate"></span>
+      <span style="width: 3px; height: 16px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.6s infinite alternate"></span>
+      <span style="width: 3px; height: 24px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.15s infinite alternate"></span>
+      <span style="width: 3px; height: 12px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.45s infinite alternate"></span>
+      <span style="width: 3px; height: 20px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.25s infinite alternate"></span>
+      <span style="width: 3px; height: 8px; border-radius: 2px; background: #8DB8FF; animation: agwave 0.7s ease-in-out -0.55s infinite alternate"></span>
+    </div>
+    <span style="text-align: center; font-size: 11px; color: #8E8E98">Double tap to send</span>
+  </div>
+
+  <div style="position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; gap: 6px">
+    <button aria-label="Stop listening" style="width: 40px; height: 40px; border-radius: 20px; background: #26262B; display: flex; align-items: center; justify-content: center; flex: none">
+      <span style="width: 12px; height: 12px; border-radius: 3px; background: #F1F1F3"></span>
+    </button>
+    <a href="watch-chat.dc.html" style="flex: 1; height: 40px; border-radius: 20px; background: #8DB8FF; color: #0A1A33; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 600; text-decoration: none">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>
+      Send
+    </a>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":208,"height":248}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

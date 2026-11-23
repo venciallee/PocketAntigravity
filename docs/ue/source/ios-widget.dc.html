@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home screen widgets</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: radial-gradient(120% 70% at 20% 10%, #23304D 0%, #121522 45%, #0A0B10 100%)"></div>
+
+  <!-- Medium widget -->
+  <section aria-label="AG Pocket widget, medium" style="position: absolute; left: 24px; right: 24px; top: 70px; height: 158px; border-radius: 22px; background: rgba(20,20,22,0.86); padding: 14px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px">
+    <div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 13px; font-weight: 700">Agents</span><span style="font-size: 12px; color: #A0A0AA">2 running · <span style="color: #F2B866">1 needs you</span></span></div>
+    <a href="ios-faceid.dc.html" style="display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit"><span style="width: 8px; height: 8px; border-radius: 4px; background: #F2B866; flex: none"></span><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Add rate limiter to /transfers</span><span style="font-size: 11.5px; color: #F2B866">Approve: vegeta attack…</span></span><span style="height: 28px; padding: 0 10px; border-radius: 14px; background: #F2B866; color: #1E1A14; font-size: 12px; font-weight: 700; display: flex; align-items: center">Review</span></a>
+    <a href="ios-chat.dc.html" style="display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit"><span style="width: 8px; height: 8px; border-radius: 4px; background: #8DB8FF; flex: none"></span><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Dark mode for settings page</span><span style="font-size: 11.5px; color: #A0A0AA">Cloud · step 2 of 5</span></span></a>
+    <div aria-hidden="true" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin-top: auto"><span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span><span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span><span style="height: 4px; border-radius: 2px; background: #33333A"></span><span style="height: 4px; border-radius: 2px; background: #33333A"></span><span style="height: 4px; border-radius: 2px; background: #33333A"></span></div>
+  </section>
+
+  <!-- Small widget + icons -->
+  <div style="position: absolute; left: 24px; right: 24px; top: 252px; display: flex; gap: 22px">
+    <section aria-label="AG Pocket widget, small" style="width: 158px; height: 158px; border-radius: 22px; background: rgba(30,26,20,0.92); border: 1px solid rgba(242,184,102,0.35); padding: 14px; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px">
+      <span style="font-size: 12px; font-weight: 700; color: #F2B866">Needs you</span>
+      <span style="font-size: 34px; font-weight: 700; line-height: 1">1</span>
+      <span style="font-size: 12.5px; color: #E2E2E6; line-height: 1.3">Approve load test in ledger-svc</span>
+      <span style="margin-top: auto; font-size: 11px; color: #A0A0AA">MacBook Pro · 1m ago</span>
+    </section>
+    <div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 22px 0; justify-items: center; align-content: start">
+      <span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #3A3A40, #26262B)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #2C3A57, #1D2A44)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #2D3B2F, #1D2A20)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #3B2D2D, #2A1D1D)"></span>
+    </div>
+  </div>
+  <div style="position: absolute; left: 30px; right: 30px; top: 440px; display: flex; flex-direction: column; gap: 22px">
+    <div style="display: flex; justify-content: space-between"><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #33333A, #222226)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #2C3A57, #1D2A44)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #3A3A40, #26262B)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #2D3B2F, #1D2A20)"></span></div>
+    <div style="display: flex; justify-content: space-between"><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #3B2D2D, #2A1D1D)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #33333A, #222226)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #2C3A57, #1D2A44)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #3A3A40, #26262B)"></span></div>
+  </div>
+
+  <!-- Lock screen accessory preview -->
+  <div style="position: absolute; left: 24px; right: 24px; top: 630px; display: flex; flex-direction: column; gap: 8px">
+    <span style="font-size: 12px; color: #A0A0AA">Lock Screen widgets</span>
+    <div style="display: flex; gap: 10px">
+      <span role="img" aria-label="Circular: 1 needs you" style="width: 60px; height: 60px; border-radius: 30px; background: rgba(255,255,255,0.12); display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 18px; font-weight: 700">1<span style="font-size: 9px; font-weight: 600; color: #C2C2CA">needs you</span></span>
+      <span role="img" aria-label="Rectangular: 2 running, Approve vegeta attack" style="flex: 1; height: 60px; border-radius: 14px; background: rgba(255,255,255,0.12); padding: 8px 12px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; font-size: 12.5px"><span style="font-weight: 700">AG Pocket · 2 running</span><span style="color: #C2C2CA">Approve: vegeta attack…</span></span>
+    </div>
+  </div>
+  <div aria-hidden="true" style="position: absolute; left: 14px; right: 14px; bottom: 14px; height: 88px; border-radius: 32px; background: rgba(255,255,255,0.10); display: flex; align-items: center; justify-content: space-around"><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #3A3A40, #26262B)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #2C3A57, #1D2A44)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #2D3B2F, #1D2A20)"></span><span aria-hidden="true" style="width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(145deg, #33333A, #222226)"></span></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

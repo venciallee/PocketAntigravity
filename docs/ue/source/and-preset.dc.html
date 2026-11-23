@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — permission preset menu</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+textarea,input{font:inherit;color:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div aria-hidden="true" style="position: absolute; left: 4px; right: 4px; top: 40px; height: 64px; display: flex; align-items: center; justify-content: space-between; color: #EDEDF0">
+    <span style="width: 48px; height: 48px; display: flex; align-items: center; justify-content: center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span>
+    <span style="height: 36px; padding: 0 12px; border-radius: 18px; background: #212125; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500"><span style="width: 8px; height: 8px; border-radius: 4px; background: #6FD8A6"></span>MacBook Pro</span>
+    <span style="width: 48px"></span>
+  </div>
+  <h1 aria-hidden="true" style="position: absolute; left: 32px; right: 32px; top: 350px; margin: 0; text-align: center; font-size: 28px; font-weight: 500; line-height: 1.3; color: #EDEDF0">Welcome back, Alex. Where should we pick up?</h1>
+
+  <div style="position: absolute; left: 12px; right: 12px; bottom: 28px; border-radius: 28px; background: #1B1B1E; padding: 6px; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 2px; padding: 0 2px; height: 40px; font-size: 14px; color: #C4C4CC">
+      <span style="padding: 0 10px; display: flex; align-items: center; gap: 6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>ledger-svc</span>
+      <span style="padding: 0 10px; display: flex; align-items: center; gap: 6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="6" r="2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="8" r="2"/><path d="M7 8v8M17 10c0 4-10 2-10 6"/></svg>Repo default</span>
+    </div>
+    <div style="border-radius: 24px; background: #212125; padding: 12px 4px 4px; display: flex; flex-direction: column; gap: 6px">
+      <textarea aria-label="Message" rows="1" placeholder="Ask anything, @ to mention, / for actions" style="background: none; border: 0; outline: none; resize: none; padding: 0 10px; font-size: 16px; color: #EDEDF0"></textarea>
+      <div style="display: flex; align-items: center; gap: 2px">
+        <a href="and-add-context.dc.html" aria-label="Add context" style="width: 44px; height: 44px; border-radius: 22px; display: flex; align-items: center; justify-content: center; color: #EDEDF0;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </a>
+        <a href="and-model.dc.html" aria-label="Model: Gemini 4 Neon, Extra High" style="height: 44px; padding: 0 6px; border-radius: 12px; display: flex; align-items: center; gap: 4px; text-decoration: none; color: #A9A9B2; ">
+          <span style="display: flex; flex-direction: column; line-height: 1.15"><span style="font-size: 14px; color: #EDEDF0; white-space: nowrap">Gemini 4 Neon</span><span style="font-size: 12px">Extra High</span></span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </a>
+        <span style="flex: 1"></span>
+        <a href="and-preset.dc.html" aria-label="Permission preset: Default" style="height: 44px; padding: 0 6px; border-radius: 12px; display: flex; align-items: center; gap: 4px; font-size: 14px; color: #EDEDF0; text-decoration: none; background: #2E3545;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 19 6v5.5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5V6z"/></svg>Default<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </a>
+        <button aria-label="Voice input" style="width: 44px; height: 44px; border-radius: 22px; display: flex; align-items: center; justify-content: center">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg>
+        </button>
+        <button aria-label="Send" aria-disabled="true" style="width: 44px; height: 44px; border-radius: 22px; background: #2E2E34; color: #8E8E98; display: flex; align-items: center; justify-content: center; cursor: default">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div role="menu" aria-label="Permissions for this conversation" style="position: absolute; right: 18px; bottom: 140px; width: 300px; border-radius: 16px; background: #2A2A2F; box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 0; display: flex; flex-direction: column">
+    <span style="padding: 6px 16px 8px; font-size: 13px; font-weight: 500; color: #A9A9B2">Permissions for this conversation</span>
+    <button role="menuitemradio" aria-checked="false" style="display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 0 16px; "><span style="flex: 1; display: flex; flex-direction: column"><span>Request Review</span><span style="font-size: 13px; color: #A9A9B2">Every command requires approval.</span></span><span style="width: 20px"></span></button>
+    <button role="menuitemradio" aria-checked="true" style="display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 0 16px; background: #34343A;"><span style="flex: 1; display: flex; flex-direction: column"><span>Default</span><span style="font-size: 13px; color: #A9A9B2">Ask before sensitive operations.</span></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8DB8FF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></button>
+    <button role="menuitemradio" aria-checked="false" style="display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 0 16px; "><span style="flex: 1; display: flex; flex-direction: column"><span>Auto</span><span style="font-size: 13px; color: #A9A9B2">Automatically decide if commands run.</span></span><span style="width: 20px"></span></button>
+    <button role="menuitemradio" aria-checked="false" style="display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 0 16px; "><span style="flex: 1; display: flex; flex-direction: column"><span>Turbo</span><span style="font-size: 13px; color: #A9A9B2">Run all commands without restrictions.</span></span><span style="width: 20px"></span></button>
+    <div aria-hidden="true" style="height: 1px; background: #3A3A40; margin: 8px 0"></div>
+    <a href="and-settings-more.dc.html" style="padding: 6px 16px 6px; font-size: 13px; color: #A9A9B2; text-decoration: none; min-height: 32px; display: flex; align-items: center">Default for new turns: Settings › Permissions</a>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

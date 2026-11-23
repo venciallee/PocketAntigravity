@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slash picker — actions and skills</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+textarea{font:inherit;color:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <!-- Suggestions while typing "/" -->
+  <div role="listbox" aria-label="Actions and skills" style="position: absolute; left: 10px; right: 10px; bottom: 166px; border-radius: 20px; background: #1A1A1D; border: 1px solid #2A2A2F; box-shadow: 0 18px 50px rgba(0,0,0,0.6); padding: 6px; display: flex; flex-direction: column">
+    <span style="padding: 8px 10px 4px; font-size: 13px; color: #8E8E98">Actions</span>
+    <button role="option" aria-selected="true" style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 10px; border-radius: 12px; background: #26262B">
+      <span style="width: 28px; height: 28px; border-radius: 8px; background: #1F2735; color: #8DB8FF; display: flex; align-items: center; justify-content: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M14.5 8.5 9.5 15.5"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px">/plan</span><span style="font-size: 12px; color: #A0A0AA; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Explore first, then draft a reviewable plan</span></span>
+    </button>
+    <button role="option" aria-selected="false" style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 10px; border-radius: 12px">
+      <span style="width: 28px; height: 28px; border-radius: 8px; background: #26262B; color: #C2C2CA; display: flex; align-items: center; justify-content: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M14.5 8.5 9.5 15.5"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px">/goal</span><span style="font-size: 12px; color: #8E8E98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Keep working until the goal is verified</span></span>
+    </button>
+    <button role="option" aria-selected="false" style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 10px; border-radius: 12px">
+      <span style="width: 28px; height: 28px; border-radius: 8px; background: #26262B; color: #C2C2CA; display: flex; align-items: center; justify-content: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M14.5 8.5 9.5 15.5"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px">/schedule</span><span style="font-size: 12px; color: #8E8E98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Wake this conversation later</span></span>
+    </button>
+    <button role="option" aria-selected="false" style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 10px; border-radius: 12px">
+      <span style="width: 28px; height: 28px; border-radius: 8px; background: #26262B; color: #C2C2CA; display: flex; align-items: center; justify-content: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M14.5 8.5 9.5 15.5"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px">/automation</span><span style="font-size: 12px; color: #8E8E98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Set up a recurring automation</span></span>
+    </button>
+    <a href="ios-btw.dc.html" role="option" aria-selected="false" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 10px; border-radius: 12px">
+      <span style="width: 28px; height: 28px; border-radius: 8px; background: #26262B; color: #C2C2CA; display: flex; align-items: center; justify-content: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M14.5 8.5 9.5 15.5"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px">/btw</span><span style="font-size: 12px; color: #8E8E98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Side question in a read-only fork</span></span>
+    </a>
+
+    <span style="padding: 10px 10px 4px; font-size: 13px; color: #8E8E98">Skills</span>
+    <button role="option" aria-selected="false" style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 10px; border-radius: 12px">
+      <span style="width: 28px; height: 28px; border-radius: 8px; background: #26262B; color: #C2C2CA; display: flex; align-items: center; justify-content: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px">/go-testing</span><span style="font-size: 12px; color: #8E8E98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Table-driven tests with -race</span></span>
+    </button>
+    <button role="option" aria-selected="false" style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 10px; border-radius: 12px">
+      <span style="width: 28px; height: 28px; border-radius: 8px; background: #26262B; color: #C2C2CA; display: flex; align-items: center; justify-content: center; flex: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px">/api-review</span><span style="font-size: 12px; color: #8E8E98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Check handlers against API rules</span></span>
+    </button>
+  </div>
+
+  <!-- Composer with "/" typed -->
+  <div style="position: absolute; left: 10px; right: 10px; bottom: 26px; border-radius: 26px; background: #141416; border: 1px solid #222226; padding: 6px; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 2px; padding: 0 2px; height: 34px; font-size: 13px; color: #8E8E98">
+      <span style="padding: 0 8px">ledger-svc</span><span style="padding: 0 8px">Repo default</span>
+    </div>
+    <div style="border-radius: 20px; background: #1D1D20; border: 1px solid #2C2C31; padding: 10px 4px 4px; display: flex; flex-direction: column; gap: 6px">
+      <textarea aria-label="Message" rows="1" style="background: none; border: 0; outline: none; resize: none; padding: 0 8px; font-size: 16px; line-height: 1.4; color: #F1F1F3; font-family: 'JetBrains Mono', ui-monospace, monospace">/</textarea>
+      <div style="display: flex; align-items: center; gap: 2px">
+        <a href="ios-add-context.dc.html" aria-label="Add context" style="width: 36px; height: 36px; border-radius: 18px; display: flex; align-items: center; justify-content: center; color: #F1F1F3">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </a>
+        <span style="height: 36px; padding: 0 6px; display: flex; flex-direction: column; justify-content: center; line-height: 1.15; color: #8E8E98"><span style="font-size: 13px; color: #E2E2E6">Gemini 4 Neon</span><span style="font-size: 11px">Extra High</span></span>
+        <span style="flex: 1"></span>
+        <span style="height: 36px; padding: 0 6px; display: flex; align-items: center; font-size: 13px; color: #C2C2CA">Default</span>
+        <button aria-label="Send" style="width: 36px; height: 36px; border-radius: 18px; background: #8DB8FF; color: #0A1A33; display: flex; align-items: center; justify-content: center">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

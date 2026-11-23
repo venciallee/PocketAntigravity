@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — automations</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input{font:inherit;color:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 40px 4px 0; height: 64px; display: flex; align-items: center; gap: 4px; box-sizing: content-box">
+    <a href="and-home.dc.html" aria-label="Open navigation drawer" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </a>
+    <h1 style="flex: 1; margin: 0; font-size: 22px; font-weight: 400">Automations</h1>
+    <button aria-label="Search automations" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/></svg>
+    </button>
+  </div>
+
+  <!-- Filter chips -->
+  <div role="radiogroup" aria-label="Filter" style="display: flex; gap: 8px; padding: 4px 16px 12px">
+    <button role="radio" aria-checked="true" style="height: 32px; padding: 0 12px 0 8px; border-radius: 8px; background: #2E3545; color: #D6E3FF; display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>All
+    </button>
+    <button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">Scheduled 2</button>
+    <button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">Always on 1</button>
+    <button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; font-size: 14px; font-weight: 500">Paused 1</button>
+  </div>
+
+  <!-- Create with prompt -->
+  <div style="margin: 0 16px; padding: 12px; border-radius: 16px; background: #1B1B1E; display: flex; flex-direction: column; gap: 8px">
+    <span style="font-size: 13px; font-weight: 500; color: #A9A9B2; padding-left: 4px">Create with Prompt</span>
+    <div style="display: flex; align-items: center; gap: 8px">
+      <input aria-label="Describe an automation" placeholder="Every weekday at 9, summarize…" style="flex: 1; min-width: 0; height: 48px; border-radius: 24px; background: #212125; border: 0; outline: none; padding: 0 16px; font-size: 15px">
+      <a href="and-automation-edit.dc.html" style="height: 48px; padding: 0 18px; border-radius: 24px; background: #8DB8FF; color: #0A1A33; display: flex; align-items: center; font-size: 14px; font-weight: 600; text-decoration: none">Create</a>
+    </div>
+  </div>
+
+  <div style="padding: 16px 16px 0; display: flex; flex-direction: column; gap: 8px">
+    <span style="font-size: 14px; font-weight: 500; color: #8DB8FF; padding-left: 4px">Scheduled · 2</span>
+
+    <div style="border-radius: 16px; background: #1B1B1E; padding: 14px 4px 12px 16px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; gap: 8px">
+        <a href="and-automation-detail.dc.html" style="flex: 1; min-width: 0; display: flex; flex-direction: column; text-decoration: none; color: inherit">
+          <span style="font-weight: 600">Nightly dependency audit</span>
+          <span style="font-size: 13px; color: #A9A9B2">ledger-svc · Daily at 02:00 · Flash</span>
+        </a>
+        <button aria-label="More actions for Nightly dependency audit" aria-expanded="true" style="width: 40px; height: 40px; border-radius: 20px; background: #2A2A2F; display: flex; align-items: center; justify-content: center; flex: none">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/></svg>
+        </button>
+      </div>
+      <div style="display: flex; gap: 24px; font-size: 13px">
+        <span style="display: flex; flex-direction: column"><span style="font-size: 11px; letter-spacing: 0.06em; color: #8E8E98">NEXT RUN</span>Tonight, 02:00</span>
+        <span style="display: flex; flex-direction: column"><span style="font-size: 11px; letter-spacing: 0.06em; color: #8E8E98">LAST RUN</span><span style="color: #6FD8A6">Succeeded · 22h ago</span></span>
+      </div>
+    </div>
+
+    <div style="border-radius: 16px; background: #1B1B1E; padding: 14px 4px 12px 16px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; gap: 8px">
+        <a href="and-automation-detail.dc.html" style="flex: 1; min-width: 0; display: flex; flex-direction: column; text-decoration: none; color: inherit">
+          <span style="font-weight: 600">Weekly flaky-test report</span>
+          <span style="font-size: 13px; color: #A9A9B2">ledger-svc · Mondays at 09:00 · Pro</span>
+        </a>
+        <button aria-label="More actions for Weekly flaky-test report" style="width: 40px; height: 40px; border-radius: 20px; display: flex; align-items: center; justify-content: center; flex: none">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/></svg>
+        </button>
+      </div>
+      <div style="display: flex; gap: 24px; font-size: 13px">
+        <span style="display: flex; flex-direction: column"><span style="font-size: 11px; letter-spacing: 0.06em; color: #8E8E98">NEXT RUN</span>Mon, 09:00</span>
+        <a href="and-plan-review.dc.html" style="display: flex; flex-direction: column; text-decoration: none; color: inherit"><span style="font-size: 11px; letter-spacing: 0.06em; color: #8E8E98">LAST RUN</span><span style="color: #F2B866">Needs review · 2d</span></a>
+      </div>
+    </div>
+
+    <span style="font-size: 14px; font-weight: 500; color: #8DB8FF; padding: 8px 0 0 4px">Always on · 1</span>
+    <a href="and-chat.dc.html" style="border-radius: 16px; background: #1B1B1E; min-height: 72px; padding: 0 16px; display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit">
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-weight: 600">Triage new pull requests</span><span style="font-size: 13px; color: #A9A9B2">web-console · On PR opened · Flash Lite · last run 14m ago</span></span>
+      <span style="height: 24px; padding: 0 8px; border-radius: 6px; background: rgba(111,216,166,0.14); color: #6FD8A6; font-size: 12px; font-weight: 600; display: flex; align-items: center">Active</span>
+    </a>
+
+    <span style="font-size: 14px; font-weight: 500; color: #8DB8FF; padding: 8px 0 0 4px">Paused · 1</span>
+    <div style="border-radius: 16px; background: #1B1B1E; min-height: 72px; padding: 0 12px 0 16px; display: flex; align-items: center; gap: 12px">
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; color: #A9A9B2"><span style="font-weight: 600; color: #C4C4CC">Bundle size watch</span><span style="font-size: 13px">web-console · Daily at 08:00 · Flash</span></span>
+      <button style="height: 40px; padding: 0 16px; border-radius: 20px; border: 1px solid #45454C; font-size: 14px; font-weight: 600; color: #8DB8FF">Resume</button>
+    </div>
+  </div>
+
+  <!-- Overflow menu for the first card -->
+  <div role="menu" aria-label="Nightly dependency audit actions" style="position: absolute; right: 24px; top: 336px; width: 236px; border-radius: 12px; background: #2A2A2F; box-shadow: 0 8px 24px rgba(0,0,0,0.55); padding: 8px 0; display: flex; flex-direction: column">
+    <button role="menuitem" style="display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 16px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="#C4C4CC" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>Run Now
+    </button>
+    <a href="and-automation-edit.dc.html" role="menuitem" style="display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 16px; color: #EDEDF0; text-decoration: none">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>Edit Schedule &amp; Prompt
+    </a>
+    <button role="menuitem" style="display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 16px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>Pause
+    </button>
+    <button role="menuitem" style="display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 16px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4.5v3.7h3.7"/></svg>Restart
+    </button>
+    <div aria-hidden="true" style="height: 1px; background: #3A3A40; margin: 8px 0"></div>
+    <button role="menuitem" style="display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 16px; color: #FF8F87">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7h14M10 7V4.5h4V7M6.5 7l1 12.5h9l1-12.5"/></svg>Delete
+    </button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

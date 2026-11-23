@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edit schedule and prompt</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#050506}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #050506; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <section aria-label="Edit Schedule &amp; Prompt" style="position: absolute; left: 0; right: 0; top: 54px; bottom: 0; border-radius: 34px 34px 0 0; background: #1A1A1D; display: flex; flex-direction: column; padding: 8px 16px 0; box-sizing: border-box; gap: 14px">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+      <span aria-hidden="true" style="width: 36px; height: 5px; border-radius: 3px; background: #4A4A50"></span>
+      <div style="width: 100%; display: flex; align-items: center; justify-content: space-between; height: 44px">
+        <a href="ios-automation-detail.dc.html" style="height: 44px; display: flex; align-items: center; padding: 0 4px; color: #C2C2CA; font-size: 16px; text-decoration: none">Cancel</a>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600">Edit Schedule &amp; Prompt</h2>
+        <a href="ios-automation-detail.dc.html" style="height: 44px; display: flex; align-items: center; padding: 0 4px; color: #8DB8FF; font-size: 16px; font-weight: 600; text-decoration: none">Save</a>
+      </div>
+    </div>
+
+    <div style="border-radius: 14px; background: #26262B; display: flex; flex-direction: column">
+      <label style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 14px; border-bottom: 1px solid #333339">
+        <span style="width: 64px; color: #A0A0AA; font-size: 14px">Name</span>
+        <input value="Nightly dependency audit" style="flex: 1; min-width: 0; background: none; border: 0; outline: none; font-size: 15px; color: #F1F1F3">
+      </label>
+      <label style="display: flex; gap: 12px; padding: 12px 14px">
+        <span style="width: 64px; color: #A0A0AA; font-size: 14px; padding-top: 1px">Prompt</span>
+        <textarea rows="3" style="flex: 1; min-width: 0; background: none; border: 0; outline: none; resize: none; font-size: 15px; line-height: 1.4; color: #F1F1F3">Check go.mod for outdated or vulnerable modules. Open a PR for patch bumps only and summarize the rest.</textarea>
+      </label>
+    </div>
+
+    <div style="border-radius: 14px; background: #26262B; display: flex; flex-direction: column">
+      <button style="display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 14px; border-bottom: 1px solid #333339">
+        <span>Project</span>
+        <span style="display: flex; align-items: center; gap: 4px; color: #A0A0AA">ledger-svc<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"/></svg></span>
+      </button>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 0 14px">
+        <span>Trigger</span>
+        <div role="radiogroup" aria-label="Trigger" style="display: flex; gap: 2px; padding: 3px; border-radius: 11px; background: #1A1A1D">
+          <button role="radio" aria-checked="true" style="height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; font-weight: 600; background: #3A3A40">Schedule</button>
+          <button role="radio" aria-checked="false" style="height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; color: #C2C2CA">Always on</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <span style="padding-left: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: #8E8E98">REPEATS</span>
+      <div role="radiogroup" aria-label="Repeats" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+        <button role="radio" aria-checked="false" style="height: 40px; border-radius: 12px; background: #26262B; font-size: 12.5px; color: #C2C2CA; text-align: center">Every hour</button>
+        <button role="radio" aria-checked="true" style="height: 40px; border-radius: 12px; background: rgba(141,184,255,0.12); border: 1.5px solid #8DB8FF; font-size: 12.5px; font-weight: 600; text-align: center">Every day</button>
+        <button role="radio" aria-checked="false" style="height: 40px; border-radius: 12px; background: #26262B; font-size: 12.5px; color: #C2C2CA; text-align: center">Weekdays</button>
+        <button role="radio" aria-checked="false" style="height: 40px; border-radius: 12px; background: #26262B; font-size: 12.5px; color: #C2C2CA; text-align: center">Every week</button>
+      </div>
+      <div style="border-radius: 14px; background: #26262B; display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 14px">
+        <span>Time</span>
+        <span style="display: flex; align-items: center; gap: 8px">
+          <span style="height: 32px; padding: 0 10px; border-radius: 8px; background: #33333A; display: flex; align-items: center; font-variant-numeric: tabular-nums">2:00 AM</span>
+          <span style="font-size: 13px; color: #A0A0AA">GMT+8:00</span>
+        </span>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <span style="padding-left: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: #8E8E98">MODEL</span>
+      <div role="radiogroup" aria-label="Model" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: 12px; background: #26262B">
+        <button role="radio" aria-checked="false" style="height: 34px; border-radius: 9px; font-size: 13px; color: #C2C2CA; text-align: center">Flash Lite</button>
+        <button role="radio" aria-checked="true" style="height: 34px; border-radius: 9px; font-size: 13px; font-weight: 600; background: #3A3A40; text-align: center">Flash</button>
+        <button role="radio" aria-checked="false" style="height: 34px; border-radius: 9px; font-size: 13px; color: #C2C2CA; text-align: center">Pro</button>
+      </div>
+    </div>
+
+    <p style="margin: 0; padding: 0 4px; font-size: 12.5px; color: #8E8E98; line-height: 1.45">Runs unattended: anything that needs approval is denied automatically and the run shows up as Needs review.</p>
+    <button style="min-height: 44px; color: #FF8F87; font-weight: 500; text-align: center">Delete Automation</button>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

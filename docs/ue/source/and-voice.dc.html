@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — voice mode</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 40px 8px 0; height: 64px; display: flex; align-items: center; justify-content: space-between; box-sizing: content-box">
+    <a href="and-chat.dc.html" aria-label="Minimize voice mode" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0; flex: none; "><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></a>
+    <div style="display: flex; flex-direction: column; align-items: center"><span style="font-size: 18px">Voice mode</span><span style="font-size: 13px; color: #6FD8A6">Connected · Orbit</span></div>
+    <button aria-label="Voice Orbit, speed 1.0x" style="height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid #45454C; font-size: 14px; font-weight: 600">1.0x</button>
+  </div>
+  <div aria-hidden="true" style="position: absolute; left: 50%; top: 160px; width: 210px; height: 210px; margin-left: -105px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #D6E3FF 0%, #6C93DE 35%, #263552 70%, rgba(17,17,19,0) 72%)"></div>
+  <span style="position: absolute; left: 0; right: 0; top: 396px; text-align: center; font-size: 16px; color: #C4C4CC">Listening...</span>
+  <div style="position: absolute; left: 16px; right: 16px; top: 440px; display: flex; flex-direction: column; gap: 12px">
+    <div style="align-self: flex-end; max-width: 300px; padding: 10px 14px; border-radius: 20px 20px 6px 20px; background: #263552; color: #D6E3FF; font-size: 15px">Run the load test again, but at one thousand per second.</div>
+    <p style="margin: 0; font-size: 15px; color: #DADAE0">Okay. That runs a command on MacBook Pro, so I need you to confirm.</p>
+    <div style="border-radius: 20px; background: #2A2418; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+      <span style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #F2B866"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F2B866" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 18.5c1-2 1.5-4 1.5-6.5a3 3 0 0 1 6 0c0 1.5-.2 3-.6 4.3M12 12c0 3-.8 5.6-2.4 7.8M18 15.5c.3-1.1.5-2.3.5-3.5a6.5 6.5 0 0 0-11.8-3.8M5.6 15.5c-.1-1.1-.1-2.3-.1-3.5"/></svg>Pending approval · Voice confirmation</span>
+      <span class="mono" style="font-size: 13.5px; color: #F8E2BE">vegeta attack -rate=1000/s -duration=30s</span>
+      <div style="display: flex; justify-content: flex-end; gap: 8px"><button style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; color: #8DB8FF; color: #F8E2BE">Deny</button><a href="and-biometric.dc.html" style="height: 40px; padding: 0 16px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; background: #F2B866; color: #1E1A14; "><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 18.5c1-2 1.5-4 1.5-6.5a3 3 0 0 1 6 0c0 1.5-.2 3-.6 4.3M12 12c0 3-.8 5.6-2.4 7.8M18 15.5c.3-1.1.5-2.3.5-3.5a6.5 6.5 0 0 0-11.8-3.8M5.6 15.5c-.1-1.1-.1-2.3-.1-3.5"/></svg>Approve</a></div>
+    </div>
+  </div>
+  <div style="position: absolute; left: 16px; right: 16px; bottom: 132px; height: 52px; border-radius: 26px; background: #1B1B1E; display: flex; align-items: center; padding: 0 20px"><input aria-label="Type a live voice turn" placeholder="Or type a live voice turn..." style="flex: 1; background: none; border: 0; outline: none; font-size: 16px"></div>
+  <div style="position: absolute; left: 0; right: 0; bottom: 40px; display: flex; justify-content: center; gap: 32px">
+    <button aria-label="Mute" style="width: 72px; height: 72px; border-radius: 24px; background: #26262B; display: flex; align-items: center; justify-content: center"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg></button>
+    <a href="and-chat.dc.html" aria-label="End call" style="width: 72px; height: 72px; border-radius: 24px; background: #93000A; color: #FFDAD6; display: flex; align-items: center; justify-content: center"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></a>
+  </div>
+  <span style="position: absolute; left: 0; right: 0; bottom: 18px; text-align: center; font-size: 12px; color: #8E8E98">Live mic capture on Android is next in the repo roadmap</span>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

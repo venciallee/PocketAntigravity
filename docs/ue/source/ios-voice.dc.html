@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Voice mode</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 58px 16px 0; height: 44px; display: flex; align-items: center; justify-content: space-between; box-sizing: content-box">
+    <a href="ios-chat.dc.html" aria-label="Minimize voice mode" style="width: 44px; height: 44px; border-radius: 22px; background: #1D1D20; display: flex; align-items: center; justify-content: center; color: #F1F1F3"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></a>
+    <div style="display: flex; flex-direction: column; align-items: center"><span style="font-size: 16px; font-weight: 600">Voice Mode</span><span style="font-size: 12.5px; color: #6FD8A6">Connected · Orbit</span></div>
+    <button aria-label="Voice: Orbit, speed 1.0x" style="height: 36px; padding: 0 12px; border-radius: 18px; background: #1D1D20; font-size: 13px; font-weight: 600">1.0x</button>
+  </div>
+
+  <div aria-hidden="true" style="position: absolute; left: 50%; top: 150px; width: 200px; height: 200px; margin-left: -100px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #B5D0FF 0%, #5B8CE8 35%, #1D2A44 70%, rgba(11,11,12,0) 72%)"></div>
+  <div aria-hidden="true" style="position: absolute; left: 50%; top: 130px; width: 240px; height: 240px; margin-left: -120px; border-radius: 50%; border: 1px solid rgba(141,184,255,0.25)"></div>
+  <span style="position: absolute; left: 0; right: 0; top: 386px; text-align: center; font-size: 15px; color: #C2C2CA">Listening...</span>
+
+  <div style="position: absolute; left: 16px; right: 16px; top: 424px; display: flex; flex-direction: column; gap: 10px">
+    <div style="align-self: flex-end; max-width: 280px; padding: 9px 13px; border-radius: 18px 18px 6px 18px; background: #1D2A44; color: #DCE7FF; font-size: 14.5px">Run the load test again, but at one thousand per second.</div>
+    <p style="margin: 0; font-size: 14.5px; color: #E2E2E6">Okay. That runs a command on MacBook Pro, so I need you to confirm.</p>
+    <div style="border-radius: 18px; background: #1E1A14; border: 1px solid rgba(242,184,102,0.4); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px">
+      <span style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: #F2B866"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F2B866" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M9 9.5v1.5M15 9.5v1.5M12 9.5v3.5h-1M9.5 15.5c1.5 1.2 3.5 1.2 5 0"/></svg>Pending Approval · Voice Confirmation</span>
+      <span class="mono" style="font-size: 13px; color: #F1F1F3">vegeta attack -rate=1000/s -duration=30s</span>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+        <button style="height: 44px; border-radius: 12px; background: #2B2B30; font-weight: 600; text-align: center">Deny</button>
+        <a href="ios-faceid.dc.html" style="height: 44px; border-radius: 12px; background: #F2B866; color: #1E1A14; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 600; text-decoration: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M9 9.5v1.5M15 9.5v1.5M12 9.5v3.5h-1M9.5 15.5c1.5 1.2 3.5 1.2 5 0"/></svg>Approve</a>
+      </div>
+    </div>
+  </div>
+
+  <div style="position: absolute; left: 16px; right: 16px; bottom: 120px; height: 48px; border-radius: 24px; background: #1D1D20; display: flex; align-items: center; padding: 0 16px">
+    <input aria-label="Type a live voice turn" placeholder="Or type a live voice turn..." style="flex: 1; background: none; border: 0; outline: none; font-size: 15px">
+  </div>
+  <div style="position: absolute; left: 0; right: 0; bottom: 36px; display: flex; justify-content: center; gap: 28px">
+    <button aria-label="Mute" style="width: 64px; height: 64px; border-radius: 32px; background: #26262B; display: flex; align-items: center; justify-content: center"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg></button>
+    <a href="ios-chat.dc.html" aria-label="End Call" style="width: 64px; height: 64px; border-radius: 32px; background: #E5484D; color: #FFFFFF; display: flex; align-items: center; justify-content: center"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></a>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
