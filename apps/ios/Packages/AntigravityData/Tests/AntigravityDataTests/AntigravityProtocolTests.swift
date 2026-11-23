@@ -4204,8 +4204,8 @@ final class AntigravityProtocolTests: XCTestCase {
             to: &req,
             cookieHeader: "SAPISID=secret_sapisid_val; SID=secret_sid_val",
             origin: "https://antigravity.google/r/0f5819ac-9308-40d8-a308-98b55122c533-v2",
-            apiKey: testKey,
-            authUser: "0"
+            authUser: "0",
+            apiKey: testKey
         )
         XCTAssertEqual(req.value(forHTTPHeaderField: "User-Agent"), SAPISIDHashGenerator.mobileRemoteUserAgent)
         XCTAssertEqual(req.value(forHTTPHeaderField: "Origin"), "https://antigravity.google.com")
