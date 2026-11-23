@@ -130,13 +130,13 @@ final class WatchCompanionTests: XCTestCase {
             title: "Implementation Plan",
             summary: "Add token bucket middleware",
             kind: .implementationPlan,
-            requestFeedback: true,
             content: """
             - Add `ratelimit.go`
             - Register on `POST /transfers`
             - Keep p99 under 5 ms
             - Extra item clamped
-            """
+            """,
+            requestFeedback: true
         )
         let planSummary = WatchArtifactSummarizer.buildSummary(from: plan)
         XCTAssertEqual(planSummary.title, "Plan")

@@ -789,6 +789,14 @@ def detect_version_bump_in_git_diff(
             continue
         for line in diff_text.splitlines():
             if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+                stripped = line[1:].strip()
+                if stripped in {
+                    'CFBundleShortVersionString: "$(MARKETING_VERSION)"',
+                    'CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"',
+                    'CFBundleShortVersionString: $(MARKETING_VERSION)',
+                    'CFBundleVersion: $(CURRENT_PROJECT_VERSION)',
+                }:
+                    continue
                 if any(key in line for key in VERSION_BUMP_KEYS):
                     return True
     return False
