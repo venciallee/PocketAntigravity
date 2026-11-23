@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — Live Update notifications</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0C0D10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #0C0D10; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 64px 12px 0; display: flex; flex-direction: column; gap: 8px">
+
+    <!-- Promoted Live Update: running -->
+    <article style="border-radius: 26px; background: #1E1F24; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #A9A9B2">
+        <span style="width: 24px; height: 24px; border-radius: 12px; background: #263552; display: flex; align-items: center; justify-content: center; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#D6E3FF" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="9.5" ry="4" transform="rotate(-30 12 12)"/></svg></span>
+        <span style="flex: 1">Agents · ledger-svc · now</span>
+        <span style="font-family: 'JetBrains Mono', ui-monospace, monospace; color: #8DB8FF">2:41</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 16px; font-weight: 600">Add rate limiter to /transfers</span>
+        <span style="font-size: 14px; color: #C2C2CA">Running <span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px">go test ./internal/...</span></span>
+      </div>
+      <!-- Segmented progress with tracker -->
+      <div aria-label="Step 4 of 7" role="img" style="position: relative; height: 22px; display: flex; align-items: center">
+        <div style="flex: 1; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px">
+          <span style="height: 6px; border-radius: 3px; background: #8DB8FF"></span><span style="height: 6px; border-radius: 3px; background: #8DB8FF"></span><span style="height: 6px; border-radius: 3px; background: #8DB8FF"></span><span style="height: 6px; border-radius: 3px; background: linear-gradient(to right, #8DB8FF 55%, #34363E 55%)"></span><span style="height: 6px; border-radius: 3px; background: #34363E"></span><span style="height: 6px; border-radius: 3px; background: #34363E"></span><span style="height: 6px; border-radius: 3px; background: #34363E"></span>
+        </div>
+        <span style="position: absolute; left: 49%; top: 1px; width: 20px; height: 20px; border-radius: 10px; background: #D6E3FF; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px #1E1F24"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0A1A33" stroke-width="2.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="9.5" ry="4" transform="rotate(-30 12 12)"/></svg></span>
+      </div>
+      <div style="display: flex; gap: 8px">
+        <button style="height: 40px; padding: 0 18px; border-radius: 20px; background: #2A2B31; font-size: 14px; font-weight: 600">Stop</button>
+        <a href="and-chat.dc.html" style="height: 40px; padding: 0 18px; border-radius: 20px; background: #2A2B31; font-size: 14px; font-weight: 600; color: #EDEDF0; display: flex; align-items: center; text-decoration: none">Open</a>
+      </div>
+    </article>
+
+    <!-- Approval (heads-up) -->
+    <article style="border-radius: 26px; background: #2A2418; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #D9C29A">
+        <span style="width: 24px; height: 24px; border-radius: 12px; background: #4A3A20; display: flex; align-items: center; justify-content: center; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F2B866" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4"/></svg></span>
+        <span style="flex: 1">Agents · Needs approval</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <span style="font-size: 16px; font-weight: 600; color: #F8E2BE">Run this command?</span>
+        <code style="display: block; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; line-height: 1.5; color: #E2E2E6; background: #15130E; border-radius: 12px; padding: 8px 10px; white-space: pre-wrap">vegeta attack -rate=2000/s -duration=30s</code>
+      </div>
+      <div style="display: flex; gap: 8px">
+        <button style="height: 40px; padding: 0 18px; border-radius: 20px; background: #3A3222; color: #F8E2BE; font-size: 14px; font-weight: 600">Deny</button>
+        <button style="height: 40px; padding: 0 18px 0 14px; border-radius: 20px; background: #F2B866; color: #2A1A00; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 8.5a7 7 0 0 1 11 0M5 12.5a7.5 7.5 0 0 1 .5-2M18.5 10.5c.3.8.5 1.7.5 2.5 0 2-.4 3.9-1.2 5.5M9 18.5c.6-1.6 1-3.4 1-5.5a2 2 0 0 1 4 0c0 2.6-.5 5-1.5 7M12 13c0 2.4-.6 4.6-1.7 6.5M7.8 13c0 1.8-.4 3.5-1.1 5"/></svg>
+          Allow
+        </button>
+        <button style="height: 40px; padding: 0 14px; border-radius: 20px; font-size: 14px; font-weight: 600; color: #D9C29A">Reply</button>
+      </div>
+    </article>
+
+    <!-- Second Live Update, collapsed -->
+    <article style="border-radius: 26px; background: #1E1F24; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <span style="width: 24px; height: 24px; border-radius: 12px; background: #263552; display: flex; align-items: center; justify-content: center; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#D6E3FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5h10a4 4 0 0 0 .5-8 5.5 5.5 0 0 0-10.6-1.2A4.6 4.6 0 0 0 7 18.5z"/></svg></span>
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Dark mode for settings page</span><span style="font-size: 13px; color: #A9A9B2">Cloud · step 2 of 5</span></span>
+        <span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: #A9A9B2">12:04</span>
+      </div>
+      <div aria-hidden="true" style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px"><span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span><span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span><span style="height: 4px; border-radius: 2px; background: #34363E"></span><span style="height: 4px; border-radius: 2px; background: #34363E"></span><span style="height: 4px; border-radius: 2px; background: #34363E"></span></div>
+    </article>
+
+    <!-- Finished turn -->
+    <article style="border-radius: 26px; background: #18191D; padding: 14px 16px; display: flex; align-items: center; gap: 10px">
+      <span style="width: 24px; height: 24px; border-radius: 12px; background: #1B2A22; display: flex; align-items: center; justify-content: center; flex: none"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6FD8A6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 15px; font-weight: 600">Upgrade to Go 1.25</span><span style="font-size: 13px; color: #A9A9B2">Done · 6 files <span style="color: #74DDA9">+42</span> <span style="color: #FF9B9B">−31</span></span></span>
+      <a href="ios-diff.dc.html" style="height: 36px; padding: 0 14px; border-radius: 18px; background: #2A2B31; font-size: 14px; font-weight: 600; color: #EDEDF0; display: flex; align-items: center; text-decoration: none">Review</a>
+    </article>
+
+    <div style="display: flex; justify-content: space-between; padding: 6px 4px 0">
+      <button style="height: 40px; padding: 0 16px; border-radius: 20px; background: #1E1F24; font-size: 14px; font-weight: 500">Manage</button>
+      <button style="height: 40px; padding: 0 16px; border-radius: 20px; background: #1E1F24; font-size: 14px; font-weight: 500">Clear all</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

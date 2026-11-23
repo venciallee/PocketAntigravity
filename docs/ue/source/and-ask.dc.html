@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — structured questions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+textarea{font:inherit;color:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 40px 4px 0; height: 64px; display: flex; align-items: center; gap: 4px; box-sizing: content-box">
+    <a href="and-home.dc.html" aria-label="Back" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+    </a>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+      <span style="font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Audit log for admin actions</span>
+      <span style="font-size: 13px; color: #A9A9B2">ledger-svc · /plan interview</span>
+    </div>
+    <button aria-label="More options" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/></svg>
+    </button>
+  </div>
+
+  <div style="padding: 12px 16px 0; display: flex; flex-direction: column; gap: 14px">
+    <div style="align-self: flex-end; max-width: 300px; padding: 10px 14px; border-radius: 20px 20px 6px 20px; background: #263552; color: #D6E3FF; font-size: 15px">/plan Add an audit log for admin actions</div>
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <span style="font-size: 12px; color: #A9A9B2">Gemini 4 Neon</span>
+      <p style="margin: 0; font-size: 15px; color: #DADAE0">Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words.</p>
+    </div>
+
+    <!-- Answered question collapses to a summary chip -->
+    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+      <span style="height: 32px; padding: 0 12px 0 8px; border-radius: 8px; border: 1px solid #45454C; display: flex; align-items: center; gap: 6px; font-size: 14px; color: #C4C4CC">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6FD8A6" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Storage: Postgres table
+      </span>
+    </div>
+
+    <!-- Question card -->
+    <section aria-label="Question 2 of 3" style="border-radius: 24px; background: #1B1B1E; padding: 16px 0 12px; display: flex; flex-direction: column">
+      <div style="padding: 0 20px; display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #A9A9B2">
+          <span>Question 2 of 3</span><span>Select all that apply</span>
+        </div>
+        <div role="progressbar" aria-valuenow="2" aria-valuemin="0" aria-valuemax="3" aria-label="Progress" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px">
+          <span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span>
+          <span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span>
+          <span style="height: 4px; border-radius: 2px; background: #33333A"></span>
+        </div>
+        <h2 style="margin: 4px 0 4px; font-size: 20px; font-weight: 500">Which admin actions should be audited?</h2>
+      </div>
+      <div role="group" aria-label="Admin actions" style="display: flex; flex-direction: column">
+        <button role="checkbox" aria-checked="true" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 20px">
+          <span style="width: 18px; height: 18px; border-radius: 2px; background: #8DB8FF; display: flex; align-items: center; justify-content: center; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0A1A33" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+          Account freeze / unfreeze
+        </button>
+        <button role="checkbox" aria-checked="true" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 20px">
+          <span style="width: 18px; height: 18px; border-radius: 2px; background: #8DB8FF; display: flex; align-items: center; justify-content: center; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0A1A33" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+          Limit changes
+        </button>
+        <button role="checkbox" aria-checked="true" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 20px">
+          <span style="width: 18px; height: 18px; border-radius: 2px; background: #8DB8FF; display: flex; align-items: center; justify-content: center; flex: none"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0A1A33" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+          Manual ledger adjustments
+        </button>
+        <button role="checkbox" aria-checked="false" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 20px">
+          <span style="width: 18px; height: 18px; border-radius: 2px; border: 2px solid #A9A9B2; box-sizing: border-box; flex: none"></span>
+          Role &amp; permission changes
+        </button>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 16px 0 8px">
+        <button style="height: 40px; padding: 0 12px; border-radius: 20px; color: #8DB8FF; font-size: 14px; font-weight: 600">Back</button>
+        <button style="height: 40px; padding: 0 24px; border-radius: 20px; background: #8DB8FF; color: #0A1A33; font-size: 14px; font-weight: 600">Next · 3 selected</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- Composer stays available -->
+  <div style="position: absolute; left: 12px; right: 12px; bottom: 28px; height: 56px; border-radius: 28px; background: #212125; display: flex; align-items: center; gap: 4px; padding: 0 6px 0 18px">
+    <textarea aria-label="Reply in your own words" rows="1" placeholder="Or reply in your own words" style="flex: 1; background: none; border: 0; outline: none; resize: none; font-size: 16px"></textarea>
+    <button aria-label="Voice input" style="width: 44px; height: 44px; border-radius: 22px; display: flex; align-items: center; justify-content: center">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg>
+    </button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

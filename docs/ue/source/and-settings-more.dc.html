@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — permissions, notifications, about</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 40px 4px 0; height: 64px; display: flex; align-items: center; gap: 4px; box-sizing: content-box">
+    <a href="and-settings.dc.html" aria-label="Back" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+    </a>
+    <h1 style="margin: 0; font-size: 22px; font-weight: 400">Settings</h1>
+  </div>
+
+  <div style="padding: 8px 16px 4px; display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 500; color: #8DB8FF">Permissions</span><span style="font-size: 13px; color: #A9A9B2">Default policy for commands &amp; tools</span></div>
+  <div role="radiogroup" aria-label="Default permission preset" style="display: flex; flex-direction: column">
+    <button role="radio" aria-checked="false" style="display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 0 24px 0 16px">
+      <span style="width: 20px; height: 20px; border-radius: 10px; border: 2px solid #A9A9B2; box-sizing: border-box; flex: none"></span>
+      <span style="display: flex; flex-direction: column"><span>Request Review</span><span style="font-size: 13px; color: #A9A9B2">Every command requires approval</span></span>
+    </button>
+    <button role="radio" aria-checked="true" style="display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 0 24px 0 16px">
+      <span style="width: 20px; height: 20px; border-radius: 10px; border: 2px solid #8DB8FF; display: flex; align-items: center; justify-content: center; box-sizing: border-box; flex: none"><span style="width: 10px; height: 10px; border-radius: 5px; background: #8DB8FF"></span></span>
+      <span style="display: flex; flex-direction: column"><span>Default</span><span style="font-size: 13px; color: #A9A9B2">Ask before sensitive operations</span></span>
+    </button>
+    <button role="radio" aria-checked="false" style="display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 0 24px 0 16px">
+      <span style="width: 20px; height: 20px; border-radius: 10px; border: 2px solid #A9A9B2; box-sizing: border-box; flex: none"></span>
+      <span style="display: flex; flex-direction: column"><span>Auto</span><span style="font-size: 13px; color: #A9A9B2">Automatically decide if commands run</span></span>
+    </button>
+    <button role="radio" aria-checked="false" style="display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 0 24px 0 16px">
+      <span style="width: 20px; height: 20px; border-radius: 10px; border: 2px solid #A9A9B2; box-sizing: border-box; flex: none"></span>
+      <span style="display: flex; flex-direction: column"><span>Turbo</span><span style="font-size: 13px; color: #A9A9B2">Run all commands without restrictions</span></span>
+    </button>
+  </div>
+  <p style="margin: 4px 16px 0; font-size: 13px; color: #A9A9B2">Applies to new turns on your paired Mac/PC. Fine-grained rules are managed in Antigravity Desktop.</p>
+
+  <div style="padding: 20px 16px 4px; display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 500; color: #8DB8FF">Notifications</span><span style="font-size: 13px; color: #A9A9B2">Alerts while agents run in the background</span></div>
+  <div style="display: flex; align-items: center; gap: 16px; min-height: 72px; padding: 0 24px 0 16px">
+    <span style="flex: 1; display: flex; flex-direction: column"><span id="n-alerts">Approval &amp; Completion Alerts</span><span style="font-size: 13px; color: #A9A9B2">Notify on waiting approval, run complete, or error</span></span>
+    <button role="switch" aria-checked="true" aria-labelledby="n-alerts" style="width: 52px; height: 32px; border-radius: 16px; background: #8DB8FF; position: relative; flex: none"><span style="position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 12px; background: #0A1A33"></span></button>
+  </div>
+  <div style="display: flex; align-items: center; gap: 16px; min-height: 72px; padding: 0 24px 0 16px">
+    <span style="flex: 1; display: flex; flex-direction: column"><span id="n-quiet">Quiet on Manual Stop</span><span style="font-size: 13px; color: #A9A9B2">Skip the alert when you stop a run yourself</span></span>
+    <button role="switch" aria-checked="true" aria-labelledby="n-quiet" style="width: 52px; height: 32px; border-radius: 16px; background: #8DB8FF; position: relative; flex: none"><span style="position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 12px; background: #0A1A33"></span></button>
+  </div>
+  <div style="display: flex; align-items: center; gap: 16px; min-height: 72px; padding: 0 24px 0 16px">
+    <span style="flex: 1; display: flex; flex-direction: column"><span id="n-live">Live updates</span><span style="font-size: 13px; color: #A9A9B2">Show run progress as a live notification</span></span>
+    <button role="switch" aria-checked="true" aria-labelledby="n-live" style="width: 52px; height: 32px; border-radius: 16px; background: #8DB8FF; position: relative; flex: none"><span style="position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 12px; background: #0A1A33"></span></button>
+  </div>
+
+  <div style="padding: 16px 16px 0">
+    <a href="and-welcome.dc.html" style="text-decoration: none; width: 100%; display: flex; align-items: center; justify-content: center; box-sizing: border-box; height: 48px; border-radius: 24px; background: #3A1B1B; color: #FFB4AB; font-size: 14px; font-weight: 600; text-align: center">Sign out &amp; disconnect host</a>
+  </div>
+
+  <div style="padding: 24px 16px 4px; font-size: 14px; font-weight: 500; color: #8DB8FF">About</div>
+  <div style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px 0 16px">
+    <span style="flex: 1; display: flex; flex-direction: column"><span>AG Pocket</span><span style="font-size: 13px; color: #A9A9B2">Companion for Antigravity</span></span>
+    <span style="font-size: 14px; color: #A9A9B2">v2.0.0 (1)</span>
+  </div>
+  <p style="margin: 0 16px; font-size: 12px; color: #8E8E98">Independent third-party client, not affiliated with Google LLC.</p>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

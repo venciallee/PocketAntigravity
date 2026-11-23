@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Live Activity and Dynamic Island spec</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#ECECEF}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#2B5FB8}a:hover{color:#1D4791}
+</style>
+</helmet>
+<div style="width: 1380px; height: 844px; box-sizing: border-box; padding: 44px 48px; background: #ECECEF; color: #141416; font-family: Inter, system-ui, -apple-system, 'PingFang SC', sans-serif; display: flex; flex-direction: column; gap: 28px; -webkit-font-smoothing: antialiased">
+
+  <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 40px">
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <h1 style="margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.01em">Live Activity · 灵动岛</h1>
+      <p style="margin: 0; font-size: 15px; color: #4A4A52; max-width: 760px">一个 Live Activity 对应一个正在运行的会话。锁屏卡片聚合多个 Agent；需要批准时，灵动岛从“进度”切换为“琥珀色待办”，并可在展开态直接批准（必须 Face ID）。</p>
+    </div>
+    <div style="display: flex; gap: 16px; font-size: 13px; color: #4A4A52">
+      <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; background: #8DB8FF; border: 1px solid #5F86C8"></span>运行中</span>
+      <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; background: #F2B866; border: 1px solid #B98535"></span>等你处理</span>
+      <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; background: #6FD8A6; border: 1px solid #3D9C70"></span>完成</span>
+    </div>
+  </div>
+
+  <!-- Row 1: compact & minimal -->
+  <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px">
+    <figure style="margin: 0; display: flex; flex-direction: column; gap: 10px">
+      <div style="height: 110px; border-radius: 22px; background: #D3D5DC; display: flex; justify-content: center; padding-top: 12px; box-sizing: border-box">
+        <div style="width: 250px; height: 37px; border-radius: 19px; background: #000000; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; box-sizing: border-box; color: #F1F1F3">
+          <span style="position: relative; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true" style="position: absolute; inset: 0; animation: agspin 1.4s linear infinite"><circle cx="11" cy="11" r="9" stroke="#26324A" stroke-width="2.5"></circle><path d="M11 2a9 9 0 0 1 9 9" stroke="#8DB8FF" stroke-width="2.5" stroke-linecap="round"></path></svg>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#F1F1F3" stroke-width="2.4" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><ellipse cx="12" cy="12" rx="10" ry="4.5" transform="rotate(-30 12 12)"></ellipse></svg>
+          </span>
+          <span style="font-size: 14px; font-weight: 600; color: #8DB8FF; font-family: 'JetBrains Mono', ui-monospace, monospace">4/7</span>
+        </div>
+      </div>
+      <figcaption style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Compact · 运行中</span><span style="font-size: 13px; color: #4A4A52">左：进度环；右：步骤计数。轻点进入会话。</span></figcaption>
+    </figure>
+
+    <figure style="margin: 0; display: flex; flex-direction: column; gap: 10px">
+      <div style="height: 110px; border-radius: 22px; background: #D3D5DC; display: flex; justify-content: center; padding-top: 12px; box-sizing: border-box">
+        <div style="width: 250px; height: 37px; border-radius: 19px; background: #000000; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; box-sizing: border-box">
+          <span style="width: 22px; height: 22px; border-radius: 11px; background: rgba(242,184,102,0.22); display: flex; align-items: center; justify-content: center"><span style="width: 10px; height: 10px; border-radius: 5px; background: #F2B866"></span></span>
+          <span style="font-size: 14px; font-weight: 600; color: #F2B866">Approve</span>
+        </div>
+      </div>
+      <figcaption style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Compact · 待批准</span><span style="font-size: 13px; color: #4A4A52">命令执行 / 计划审阅 / 问答时切换，伴随一次轻触感反馈。</span></figcaption>
+    </figure>
+
+    <figure style="margin: 0; display: flex; flex-direction: column; gap: 10px">
+      <div style="height: 110px; border-radius: 22px; background: #D3D5DC; display: flex; justify-content: center; gap: 8px; padding-top: 12px; box-sizing: border-box">
+        <div style="width: 126px; height: 37px; border-radius: 19px; background: #000000"></div>
+        <div style="width: 37px; height: 37px; border-radius: 19px; background: #000000; display: flex; align-items: center; justify-content: center">
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="9" stroke="#26324A" stroke-width="2.5"></circle><path d="M11 2a9 9 0 0 1 8.6 6.4" stroke="#8DB8FF" stroke-width="2.5" stroke-linecap="round"></path></svg>
+        </div>
+      </div>
+      <figcaption style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Minimal · 与其他活动并存</span><span style="font-size: 13px; color: #4A4A52">只保留进度环；有待批准时环变琥珀色。</span></figcaption>
+    </figure>
+
+    <figure style="margin: 0; display: flex; flex-direction: column; gap: 10px">
+      <div style="height: 110px; border-radius: 22px; background: #D3D5DC; display: flex; justify-content: center; padding-top: 12px; box-sizing: border-box">
+        <div style="width: 250px; height: 37px; border-radius: 19px; background: #000000; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; box-sizing: border-box">
+          <span style="width: 22px; height: 22px; border-radius: 11px; background: rgba(111,216,166,0.2); display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6FD8A6" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg></span>
+          <span style="font-size: 14px; font-weight: 600; color: #6FD8A6; font-family: 'JetBrains Mono', ui-monospace, monospace">+128 −14</span>
+        </div>
+      </div>
+      <figcaption style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Compact · 完成</span><span style="font-size: 13px; color: #4A4A52">显示本轮改动行数，停留 8 秒后收起，进入通知。</span></figcaption>
+    </figure>
+  </div>
+
+  <!-- Row 2: expanded + lock screen -->
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; flex: 1; min-height: 0">
+    <figure style="margin: 0; display: flex; flex-direction: column; gap: 10px">
+      <div style="height: 270px; border-radius: 22px; background: #D3D5DC; display: flex; justify-content: center; padding-top: 12px; box-sizing: border-box">
+        <div style="width: 371px; height: 172px; border-radius: 46px; background: #000000; color: #F1F1F3; padding: 18px 22px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span style="width: 32px; height: 32px; border-radius: 10px; background: #1F2735; display: flex; align-items: center; justify-content: center; flex: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8DB8FF" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><ellipse cx="12" cy="12" rx="9.5" ry="4" transform="rotate(-30 12 12)"></ellipse></svg></span>
+            <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Add rate limiter to /transfers</span><span style="font-size: 12px; color: #A0A0AA">ledger-svc · MacBook Pro</span></span>
+            <span style="font-size: 13px; color: #A0A0AA; font-family: 'JetBrains Mono', ui-monospace, monospace">2:41</span>
+          </div>
+          <span style="font-size: 13px; color: #8DB8FF; font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">go test ./internal/...</span>
+          <div aria-hidden="true" style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px"><span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span><span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span><span style="height: 4px; border-radius: 2px; background: #8DB8FF"></span><span style="height: 4px; border-radius: 2px; background: #5A7BB0"></span><span style="height: 4px; border-radius: 2px; background: #2E2E34"></span><span style="height: 4px; border-radius: 2px; background: #2E2E34"></span><span style="height: 4px; border-radius: 2px; background: #2E2E34"></span></div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: auto">
+            <button style="height: 36px; border-radius: 18px; background: #26262B; font-size: 13px; font-weight: 600; text-align: center">Stop</button>
+            <button style="height: 36px; border-radius: 18px; background: #8DB8FF; color: #0A1A33; font-size: 13px; font-weight: 600; text-align: center">Open</button>
+          </div>
+        </div>
+      </div>
+      <figcaption style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Expanded · 运行中（长按）</span><span style="font-size: 13px; color: #4A4A52">当前命令 + 7 段进度条 + 用时。Stop 不需要验证，Open 深链到会话。</span></figcaption>
+    </figure>
+
+    <figure style="margin: 0; display: flex; flex-direction: column; gap: 10px">
+      <div style="height: 270px; border-radius: 22px; background: #D3D5DC; display: flex; justify-content: center; padding-top: 12px; box-sizing: border-box">
+        <div style="width: 371px; height: 200px; border-radius: 46px; background: #000000; color: #F1F1F3; padding: 18px 22px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span style="width: 32px; height: 32px; border-radius: 10px; background: #2B2414; display: flex; align-items: center; justify-content: center; flex: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F2B866" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2"></rect><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4"></path></svg></span>
+            <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25"><span style="font-size: 14px; font-weight: 600; color: #F2B866">Run this command?</span><span style="font-size: 12px; color: #A0A0AA">Add rate limiter · step 5 of 7</span></span>
+          </div>
+          <code style="display: block; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.5; color: #E2E2E6; background: #141416; border-radius: 12px; padding: 8px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">vegeta attack -rate=2000/s -duration=30s</code>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: auto">
+            <button style="height: 40px; border-radius: 20px; background: #26262B; font-size: 14px; font-weight: 600; text-align: center">Deny</button>
+            <button style="height: 40px; border-radius: 20px; background: #F2B866; color: #2A1A00; font-size: 14px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"></path><path d="M9 9.5v1M15 9.5v1M9.5 15.5a3.5 3.5 0 0 0 5 0"></path></svg>
+              Allow
+            </button>
+          </div>
+        </div>
+      </div>
+      <figcaption style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Expanded · 待批准</span><span style="font-size: 13px; color: #4A4A52">Allow 走 App Intent + Face ID，结果经 Remote Control 回传到电脑；Deny 可直接点。</span></figcaption>
+    </figure>
+
+    <figure style="margin: 0; display: flex; flex-direction: column; gap: 10px">
+      <div style="height: 270px; border-radius: 22px; background: #2B2E38; display: flex; align-items: flex-end; justify-content: center; padding: 0 0 16px; box-sizing: border-box">
+        <div style="width: 360px; border-radius: 26px; background: rgba(20,20,22,0.82); color: #F1F1F3; padding: 14px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; border: 1px solid rgba(255,255,255,0.08)">
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #A0A0AA">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><ellipse cx="12" cy="12" rx="9.5" ry="4" transform="rotate(-30 12 12)"></ellipse></svg>
+            <span style="flex: 1">Agents · 2 running · 1 needs you</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span style="width: 9px; height: 9px; border-radius: 50%; background: #F2B866; flex: none"></span>
+            <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3"><span style="font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Add rate limiter to /transfers</span><span style="font-size: 12px; color: #F2B866">Approve: vegeta attack…</span></span>
+            <button style="height: 32px; padding: 0 12px; border-radius: 16px; background: #F2B866; color: #2A1A00; font-size: 13px; font-weight: 600">Review</button>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span style="width: 9px; height: 9px; border-radius: 50%; background: #8DB8FF; flex: none"></span>
+            <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3"><span style="font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Dark mode for settings page</span><span style="font-size: 12px; color: #A0A0AA">Cloud · step 2 of 5</span></span>
+            <span style="font-size: 12px; color: #A0A0AA; font-family: 'JetBrains Mono', ui-monospace, monospace">12:04</span>
+          </div>
+        </div>
+      </div>
+      <figcaption style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Lock Screen · 多 Agent 聚合</span><span style="font-size: 13px; color: #4A4A52">待处理排最前；本地会话随电脑在线，云端会话合盖后继续推送。</span></figcaption>
+    </figure>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1380,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

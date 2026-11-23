@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — biometric approval</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: radial-gradient(120% 80% at 30% 20%, #23304D 0%, #121522 50%, #0A0B10 100%)"></div>
+  <div aria-hidden="true" style="position: absolute; left: 0; right: 0; top: 120px; text-align: center; font-size: 72px; font-weight: 300; letter-spacing: -0.02em; color: #EDEDF0">9:41</div>
+  <div aria-hidden="true" style="position: absolute; left: 0; right: 0; top: 214px; text-align: center; font-size: 16px; color: #C4C4CC">Mon, 23 Nov</div>
+  <div aria-hidden="true" style="position: absolute; left: 12px; right: 12px; top: 280px; border-radius: 24px; background: rgba(27,27,30,0.92); padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+    <span style="font-size: 12px; color: #A9A9B2">AG Pocket · now</span>
+    <span style="font-size: 15px; font-weight: 600">Approve: vegeta attack -rate=2000/s</span>
+    <span style="font-size: 13px; color: #A9A9B2">ledger-svc · MacBook Pro · step 5 of 7</span>
+  </div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(0,0,0,0.5)"></div>
+
+  <section role="dialog" aria-labelledby="bp-title" style="position: absolute; left: 0; right: 0; bottom: 0; border-radius: 28px 28px 0 0; background: #212125; padding: 28px 24px 36px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center">
+    <span aria-hidden="true" style="width: 40px; height: 40px; border-radius: 12px; background: #263552; color: #D6E3FF; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center">AG</span>
+    <h2 id="bp-title" style="margin: 0; font-size: 22px; font-weight: 400">Approve agent command</h2>
+    <span style="font-size: 14px; color: #C4C4CC">Confirm with biometrics or screen lock</span>
+    <span class="mono" style="margin-top: 4px; font-size: 13px; color: #EDEDF0; background: #161618; border-radius: 10px; padding: 10px 12px; width: 100%; box-sizing: border-box; text-align: left">vegeta attack -rate=2000/s -duration=30s</span>
+    <span style="margin: 18px 0 6px; width: 72px; height: 72px; border-radius: 36px; background: #263552; color: #8DB8FF; display: flex; align-items: center; justify-content: center"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 18.5c1-2 1.5-4 1.5-6.5a3 3 0 0 1 6 0c0 1.5-.2 3-.6 4.3M12 12c0 3-.8 5.6-2.4 7.8M18 15.5c.3-1.1.5-2.3.5-3.5a6.5 6.5 0 0 0-11.8-3.8M5.6 15.5c-.1-1.1-.1-2.3-.1-3.5"/></svg></span>
+    <span style="font-size: 14px; color: #A9A9B2">Touch the fingerprint sensor</span>
+    <div style="align-self: stretch; display: flex; justify-content: space-between; margin-top: 10px"><button style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; color: #8DB8FF; ">Use screen lock</button><a href="and-live-update.dc.html" style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; color: #8DB8FF; ">Cancel</a></div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

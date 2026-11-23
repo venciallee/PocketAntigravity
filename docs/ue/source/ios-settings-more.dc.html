@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings — permissions, notifications, about</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <!-- Scrolled: large title collapses into the bar -->
+  <div style="position: absolute; left: 0; right: 0; top: 0; padding: 58px 8px 6px; display: flex; align-items: center; justify-content: center; background: rgba(11,11,12,0.92); border-bottom: 1px solid #1C1C1F; z-index: 1">
+    <span style="font-size: 17px; font-weight: 600; height: 44px; display: flex; align-items: center">Settings</span>
+    <a href="ios-drawer.dc.html" aria-label="Close settings" style="position: absolute; right: 8px; bottom: 6px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #F1F1F3">
+      <span style="width: 32px; height: 32px; border-radius: 16px; background: #26262B; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
+    </a>
+  </div>
+
+  <div style="padding: 118px 16px 0; display: flex; flex-direction: column; gap: 16px">
+
+    <!-- Permissions (default for new turns) -->
+    <section aria-label="Permissions" style="border-radius: 20px; background: #141416; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 19 6v5.5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5V6z"/><path d="M12 3v18" /></svg>
+        <span style="display: flex; flex-direction: column"><span style="font-weight: 600">Permissions</span><span style="font-size: 12.5px; color: #8E8E98">Default policy for commands &amp; tools</span></span>
+      </div>
+      <div role="radiogroup" aria-label="Default permission preset" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+        <button role="radio" aria-checked="false" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 14px; border: 1.5px solid #26262B">
+          <span style="font-weight: 600; font-size: 14px">Request Review</span><span style="font-size: 12px; color: #8E8E98">Every command requires approval</span>
+        </button>
+        <button role="radio" aria-checked="true" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 14px; border: 1.5px solid #8DB8FF; background: rgba(141,184,255,0.08)">
+          <span style="font-weight: 600; font-size: 14px">Default</span><span style="font-size: 12px; color: #C2C2CA">Ask before sensitive operations</span>
+        </button>
+        <button role="radio" aria-checked="false" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 14px; border: 1.5px solid #26262B">
+          <span style="font-weight: 600; font-size: 14px">Auto</span><span style="font-size: 12px; color: #8E8E98">Automatically decide if commands run</span>
+        </button>
+        <button role="radio" aria-checked="false" style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 14px; border: 1.5px solid #26262B">
+          <span style="font-weight: 600; font-size: 14px; color: #F2B866">Turbo</span><span style="font-size: 12px; color: #8E8E98">Run all commands without restrictions</span>
+        </button>
+      </div>
+      <p style="margin: 0; font-size: 12px; color: #8E8E98; line-height: 1.45">Applies to new turns on your paired Mac/PC. Fine-grained rules are managed in Antigravity Desktop.</p>
+    </section>
+
+    <!-- Notifications -->
+    <section aria-label="Notifications" style="border-radius: 20px; background: #141416; padding: 14px; display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; align-items: center; gap: 10px; padding-bottom: 6px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg>
+        <span style="display: flex; flex-direction: column"><span style="font-weight: 600">Notifications</span><span style="font-size: 12.5px; color: #8E8E98">Local alerts while agents run in background</span></span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px; border-top: 1px solid #222226">
+        <span style="flex: 1; display: flex; flex-direction: column"><span id="n-alerts">Approval &amp; Completion Alerts</span><span style="font-size: 12px; color: #8E8E98">Notify on waiting approval, run complete, or error</span></span>
+        <button role="switch" aria-checked="true" aria-labelledby="n-alerts" style="width: 51px; height: 31px; border-radius: 16px; background: #8DB8FF; position: relative; flex: none"><span style="position: absolute; top: 2px; right: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF"></span></button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px; border-top: 1px solid #222226">
+        <span style="flex: 1; display: flex; flex-direction: column"><span id="n-quiet">Quiet on Manual Stop</span><span style="font-size: 12px; color: #8E8E98">Skip alert when you stop a run yourself</span></span>
+        <button role="switch" aria-checked="false" aria-labelledby="n-quiet" style="width: 51px; height: 31px; border-radius: 16px; background: #3A3A40; position: relative; flex: none"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF"></span></button>
+      </div>
+    </section>
+
+    <a href="ios-welcome.dc.html" style="text-decoration: none; min-height: 48px; display: flex; align-items: center; justify-content: center; border-radius: 14px; background: rgba(255,143,135,0.10); color: #FF8F87; font-size: 14px; font-weight: 600; text-align: center">Sign Out &amp; Disconnect Host</a>
+
+    <!-- About -->
+    <section aria-label="About" style="display: flex; flex-direction: column; gap: 8px">
+      <span style="padding: 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: #8E8E98">ABOUT</span>
+      <div style="border-radius: 20px; background: #141416; padding: 14px; display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; align-items: baseline; justify-content: space-between"><span style="font-weight: 600">AG Pocket</span><span style="font-size: 12px; color: #8E8E98; font-family: 'JetBrains Mono', ui-monospace, monospace">v2.0.0 (1)</span></div>
+        <span style="font-size: 12.5px; color: #A0A0AA">Companion for Antigravity · Independent third-party client, not affiliated with Google LLC.</span>
+      </div>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — project detail</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <!-- Medium top app bar -->
+  <div style="padding: 40px 4px 0; display: flex; align-items: center; justify-content: space-between; height: 64px; box-sizing: content-box">
+    <a href="and-home.dc.html" aria-label="Back" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+    </a>
+    <button aria-label="More options for ledger-svc" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/></svg>
+    </button>
+  </div>
+  <div style="padding: 4px 16px 0; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <h1 style="margin: 0; font-size: 28px; font-weight: 400">ledger-svc</h1>
+      <span style="font-size: 14px; color: #A9A9B2; font-family: 'JetBrains Mono', ui-monospace, monospace">~/code/ledger-svc</span>
+    </div>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+      <span style="height: 32px; padding: 0 12px 0 10px; border-radius: 8px; border: 1px solid #45454C; display: flex; align-items: center; gap: 8px; font-size: 14px"><span style="width: 8px; height: 8px; border-radius: 4px; background: #6FD8A6"></span>Local · MacBook Pro</span>
+      <span style="height: 32px; padding: 0 12px 0 10px; border-radius: 8px; border: 1px solid #45454C; display: flex; align-items: center; gap: 6px; font-size: 14px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="6" r="2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="8" r="2"/><path d="M7 8v8M17 10c0 4-10 2-10 6"/></svg>
+        <span style="font-family: 'JetBrains Mono', ui-monospace, monospace">main</span><span style="color: #8DB8FF">↑2</span>
+      </span>
+      <span style="height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid #45454C; display: flex; align-items: center; font-size: 14px">Clean</span>
+    </div>
+  </div>
+
+  <!-- Primary tabs -->
+  <div role="tablist" aria-label="Project conversations" style="margin-top: 16px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid #2E2E34">
+    <button role="tab" aria-selected="true" style="height: 48px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; font-size: 14px; font-weight: 600; color: #8DB8FF">
+      <span style="flex: 1; display: flex; align-items: center">Active · 4</span>
+      <span style="width: 56px; height: 3px; border-radius: 3px 3px 0 0; background: #8DB8FF"></span>
+    </button>
+    <button role="tab" aria-selected="false" style="height: 48px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; color: #A9A9B2">Archived · 2</button>
+    <button role="tab" aria-selected="false" style="height: 48px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500; color: #A9A9B2">Automations · 1</button>
+  </div>
+
+  <div style="display: flex; flex-direction: column; padding-top: 4px">
+    <a href="and-chat.dc.html" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0">
+      <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Add rate limiter to /transfers</span>
+      <span role="img" aria-label="Needs approval" style="width: 8px; height: 8px; border-radius: 50%; background: #F2B866"></span>
+    </a>
+    <a href="and-plan-review.dc.html" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0">
+      <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Fix flaky TestSettlementBatch</span>
+      <span role="img" aria-label="Unread" style="width: 8px; height: 8px; border-radius: 50%; background: #4C8DFF"></span>
+    </a>
+    <a href="and-diff.dc.html" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0">
+      <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Upgrade to Go 1.25</span>
+      <span style="font-size: 12px; color: #A9A9B2">4h</span>
+    </a>
+    <a href="and-chat.dc.html" style="display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0">
+      <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Idempotency keys for payouts</span>
+      <span style="font-size: 12px; color: #A9A9B2">1d</span>
+    </a>
+  </div>
+
+  <div style="padding: 16px 16px 4px; font-size: 14px; font-weight: 500; color: #8DB8FF">This project</div>
+  <a href="and-automation-detail.dc.html" style="display: flex; align-items: center; gap: 16px; min-height: 72px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+    <span style="flex: 1; display: flex; flex-direction: column"><span>Nightly dependency audit</span><span style="font-size: 14px; color: #A9A9B2">Every day · 2:00 AM · next in 6h</span></span>
+  </a>
+  <a href="and-customizations.dc.html" style="text-decoration: none; color: inherit; box-sizing: border-box; display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 0 24px 0 16px; width: 100%">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4.5 4.5v12.5H7z"/><path d="M14 3.5V8h4.5"/></svg>
+    <span style="flex: 1">Project rules &amp; skills</span><span style="font-size: 14px; color: #A9A9B2">4</span>
+  </a>
+
+  <!-- Extended FAB: new conversation in this project -->
+  <a href="and-new.dc.html" style="position: absolute; right: 16px; bottom: 40px; height: 56px; padding: 0 20px 0 16px; border-radius: 16px; background: #263552; color: #D6E3FF; display: flex; align-items: center; gap: 12px; font-size: 15px; font-weight: 600; text-decoration: none; box-shadow: 0 6px 16px rgba(0,0,0,0.45)">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>
+    New conversation in project
+  </a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

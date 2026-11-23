@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — artifact viewer</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 40px 4px 0; height: 64px; display: flex; align-items: center; gap: 4px; box-sizing: content-box">
+    <a href="and-overview.dc.html" aria-label="Back" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0; flex: none"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></a>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">walkthrough.md</span><span style="font-size: 13px; color: #A9A9B2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Markdown · 2 images · 1 diagram</span></div>
+    <button aria-label="Copy artifact path" style="width: 48px; height: 48px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #EDEDF0; flex: none; "><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg></button>
+  </div>
+  <div role="radiogroup" aria-label="Mode" style="margin: 4px 16px 0; display: grid; grid-template-columns: 1fr 1fr; height: 40px; border: 1px solid #45454C; border-radius: 20px; overflow: hidden">
+    <button role="radio" aria-checked="true" style="display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 600; background: #2E3545; color: #D6E3FF; border-right: 1px solid #45454C"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Preview</button>
+    <button role="radio" aria-checked="false" style="display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 500">Raw</button>
+  </div>
+  <article style="padding: 16px 20px 0; display: flex; flex-direction: column; gap: 12px">
+    <h2 style="margin: 0; font-size: 22px; font-weight: 500">Rate limiter walkthrough</h2>
+    <p style="margin: 0; font-size: 15px; color: #C4C4CC">Requests pass the limiter before the handler. Rejected calls return 429 with Retry-After.</p>
+    <div role="img" aria-label="Flow diagram: Request to Limiter, then Handler or 429" style="border-radius: 16px; background: #1B1B1E; padding: 16px 12px; display: flex; align-items: center; justify-content: space-between; font-size: 13px">
+      <span style="padding: 6px 10px; border-radius: 8px; border: 1.5px solid #45454C">Request</span><span style="color: #8E8E98">→</span>
+      <span style="padding: 6px 10px; border-radius: 8px; border: 1.5px solid #8DB8FF; color: #B9CFF5">Limiter</span><span style="color: #8E8E98">→</span>
+      <span style="display: flex; flex-direction: column; gap: 6px"><span style="padding: 5px 10px; border-radius: 8px; border: 1.5px solid #6FD8A6; color: #A9EBC8">Handler</span><span style="padding: 5px 10px; border-radius: 8px; border: 1.5px solid #FF8F87; color: #FFC2BC">429</span></span>
+    </div>
+    <div style="position: relative; height: 184px; border-radius: 16px; background: #1B1B1E; overflow: hidden">
+      <span style="position: absolute; left: 14px; top: 12px; font-size: 12px; color: #A9A9B2">p99 latency · load test</span>
+      <svg viewBox="0 0 372 160" width="100%" height="100%" role="img" aria-label="Latency chart with a spike in the middle" style="position: absolute; inset: 0"><polyline fill="none" stroke="#8DB8FF" stroke-width="2.4" points="12,128 56,124 98,120 140,118 186,116 218,64 242,56 268,110 306,112 360,110"/><line x1="12" y1="142" x2="360" y2="142" stroke="#2E2E34"/></svg>
+      <span aria-hidden="true" style="position: absolute; left: 196px; top: 38px; width: 86px; height: 66px; border: 2px dashed #F2B866; border-radius: 8px; background: rgba(242,184,102,0.10)"></span>
+      <span style="position: absolute; left: 274px; top: 28px; width: 24px; height: 24px; border-radius: 12px; background: #F2B866; color: #1E1A14; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center">1</span>
+    </div>
+    <span style="font-size: 13px; color: #A9A9B2">Drag across the image to annotate a region</span>
+  </article>
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; background: #1B1B1E; border-radius: 28px 28px 0 0; padding: 16px 16px 28px; display: flex; flex-direction: column; gap: 10px">
+    <span style="font-size: 13px; color: #F2B866">Region (62%, 40%)</span>
+    <div style="display: flex; align-items: center; gap: 8px">
+      <div style="flex: 1; position: relative; height: 56px; border: 2px solid #8DB8FF; border-radius: 4px; display: flex; align-items: center; padding: 0 14px; box-sizing: border-box"><span style="position: absolute; left: 10px; top: -10px; padding: 0 4px; background: #1B1B1E; font-size: 12px; color: #8DB8FF">Comment on selected region</span><input aria-label="Comment on selected region" value="Spike starts when retries kick in?" style="flex: 1; min-width: 0; background: none; border: 0; outline: none; font-size: 15px"></div>
+      <button style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; background: #8DB8FF; color: #0A1A33; height: 48px; border-radius: 24px">Add</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

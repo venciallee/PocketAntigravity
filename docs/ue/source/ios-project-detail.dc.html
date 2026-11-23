@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Project detail — ledger-svc</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0B0B0C; color: #F1F1F3; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.35; -webkit-font-smoothing: antialiased">
+
+  <div style="padding: 58px 8px 0; height: 44px; display: flex; align-items: center; justify-content: space-between; box-sizing: content-box">
+    <a href="ios-drawer.dc.html" style="display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 8px; color: #8DB8FF; text-decoration: none; font-size: 16px">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
+      Projects
+    </a>
+    <a href="ios-project.dc.html" aria-label="Project options" style="width: 44px; height: 44px; border-radius: 22px; background: #1D1D20; display: flex; align-items: center; justify-content: center; color: #F1F1F3; margin-right: 8px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/></svg>
+    </a>
+  </div>
+
+  <div style="padding: 8px 16px 0; display: flex; flex-direction: column; gap: 14px">
+    <div style="display: flex; gap: 14px; align-items: center">
+      <span style="width: 56px; height: 56px; border-radius: 16px; background: #1D1D20; display: flex; align-items: center; justify-content: center; color: #C2C2CA; flex: none">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+      </span>
+      <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+        <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.02em">ledger-svc</h1>
+        <span style="font-size: 13px; color: #8E8E98; font-family: 'JetBrains Mono', ui-monospace, monospace">~/code/ledger-svc</span>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+      <span style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 14px; background: #1D1D20; font-size: 12px; color: #C2C2CA"><span style="width: 7px; height: 7px; border-radius: 50%; background: #6FD8A6"></span>Local · MacBook Pro</span>
+      <span style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 14px; background: #1D1D20; font-size: 12px; color: #C2C2CA">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="6" r="2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="8" r="2"/><path d="M7 8v8M17 10c0 4-10 2-10 6"/></svg>
+        <span style="font-family: 'JetBrains Mono', ui-monospace, monospace">main</span><span style="color: #8DB8FF">↑2</span>
+      </span>
+      <span style="display: flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 14px; background: #1D1D20; font-size: 12px; color: #C2C2CA">Working tree clean</span>
+    </div>
+
+    <a href="Main.dc.html" style="height: 52px; border-radius: 16px; background: #8DB8FF; color: #0A1A33; display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 600; font-size: 16px; text-decoration: none">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>
+      New Conversation in Project
+    </a>
+
+    <div role="tablist" aria-label="Project conversations" style="display: flex; gap: 20px; border-bottom: 1px solid #222226">
+      <button role="tab" aria-selected="true" style="height: 40px; font-weight: 600; border-bottom: 2px solid #F1F1F3; margin-bottom: -1px">Active <span style="color: #8E8E98; font-weight: 500">4</span></button>
+      <button role="tab" aria-selected="false" style="height: 40px; color: #8E8E98; font-weight: 500">Archived 2</button>
+      <button role="tab" aria-selected="false" style="height: 40px; color: #8E8E98; font-weight: 500">Automations 1</button>
+    </div>
+  </div>
+
+  <!-- Conversations: same row style as the sidebar / desktop -->
+  <div style="margin: 8px 16px 0; border-radius: 16px; background: #141416; display: flex; flex-direction: column">
+    <a href="ios-chat.dc.html" style="display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 14px; border-bottom: 1px solid #222226; text-decoration: none; color: #F1F1F3">
+      <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Add rate limiter to /transfers</span>
+      <span role="img" aria-label="Needs approval" style="width: 8px; height: 8px; border-radius: 50%; background: #F2B866"></span>
+    </a>
+    <a href="ios-plan-review.dc.html" style="display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 14px; border-bottom: 1px solid #222226; text-decoration: none; color: #E2E2E6">
+      <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Fix flaky TestSettlementBatch</span>
+      <span role="img" aria-label="Unread" style="width: 8px; height: 8px; border-radius: 50%; background: #4C8DFF"></span>
+    </a>
+    <a href="ios-diff.dc.html" style="display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 14px; border-bottom: 1px solid #222226; text-decoration: none; color: #E2E2E6">
+      <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Upgrade to Go 1.25</span>
+      <span style="font-size: 13px; color: #8E8E98">4h</span>
+    </a>
+    <a href="ios-chat.dc.html" style="display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 14px; text-decoration: none; color: #E2E2E6">
+      <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Idempotency keys for payouts</span>
+      <span style="font-size: 13px; color: #8E8E98">1d</span>
+    </a>
+  </div>
+
+  <div style="margin: 20px 16px 0; display: flex; flex-direction: column; gap: 8px">
+    <span style="padding-left: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: #8E8E98">THIS PROJECT</span>
+    <div style="border-radius: 16px; background: #141416; display: flex; flex-direction: column">
+      <a href="ios-automation-detail.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 14px; border-bottom: 1px solid #222226; text-decoration: none; color: inherit">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+        <span style="flex: 1; display: flex; flex-direction: column"><span>Nightly dependency audit</span><span style="font-size: 12px; color: #8E8E98">Every day · 2:00 AM · next in 6h</span></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8E8E98" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+      </a>
+      <a href="ios-customizations.dc.html" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 14px; border-bottom: 1px solid #222226">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4.5 4.5v12.5H7z"/><path d="M14 3.5V8h4.5"/></svg>
+        <span style="flex: 1">Project rules &amp; skills</span>
+        <span style="font-size: 13px; color: #8E8E98">4</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8E8E98" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+      </a>
+      <button style="display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 14px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C2C2CA" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5" width="15" height="10" rx="1.5"/><path d="M2.5 19h19"/></svg>
+        <span style="flex: 1">Reveal in Finder on Mac</span>
+      </button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android — conversation overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#111113}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+@keyframes agspin{to{transform:rotate(360deg)}}
+a{color:#8DB8FF}a:hover{color:#B5D0FF}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+
+</style>
+</helmet>
+<div style="width: 412px; height: 915px; position: relative; overflow: hidden; background: #111113; color: #EDEDF0; font-family: Inter, Roboto, system-ui, sans-serif; font-size: 16px; line-height: 1.4; -webkit-font-smoothing: antialiased">
+
+  <div aria-hidden="true" style="position: absolute; inset: 0; padding: 40px 16px 0; display: flex; flex-direction: column; gap: 14px">
+    <div style="height: 64px; display: flex; align-items: center; gap: 16px"><span style="width: 24px; height: 24px"></span><span style="display: flex; flex-direction: column"><span style="font-size: 18px">Add rate limiter</span><span style="font-size: 13px; color: #A9A9B2">ledger-svc · MacBook Pro</span></span></div>
+    <div style="align-self: flex-end; width: 250px; height: 60px; border-radius: 20px; background: #263552"></div>
+    <div style="width: 320px; height: 14px; border-radius: 7px; background: #1B1B1E"></div>
+    <div style="width: 270px; height: 14px; border-radius: 7px; background: #1B1B1E"></div>
+    <div style="height: 130px; border-radius: 16px; background: #1B1B1E"></div>
+  </div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(0,0,0,0.55)"></div>
+  <section aria-label="Conversation overview" style="position: absolute; left: 0; right: 0; bottom: 0; top: 56px; border-radius: 28px 28px 0 0; background: #1B1B1E; display: flex; flex-direction: column; padding-bottom: 28px; box-sizing: border-box; overflow: hidden">
+    <span aria-hidden="true" style="align-self: center; width: 32px; height: 4px; border-radius: 2px; background: #6E6E78; margin: 22px 0 12px; flex: none"></span>
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 12px 4px 24px"><h2 style="margin: 0; font-size: 22px; font-weight: 400">Conversation overview</h2><a href="and-chat.dc.html" style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; color: #8DB8FF; padding: 0 12px">Done</a></div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 14px 24px 4px; color: #8DB8FF; font-size: 14px; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg><span style="flex: 1">Goals (2)</span></div>
+    <div style="display: flex; align-items: center; gap: 16px; min-height: 44px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0; width: 100%; box-sizing: border-box"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style=""><span style="display: flex; align-items: center; gap: 10px"><span style="color: #6FD8A6"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>Limiter enforces per-tenant rate</span></span></span></div>
+    <div style="display: flex; align-items: center; gap: 16px; min-height: 44px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0; width: 100%; box-sizing: border-box"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style=""><span style="display: flex; align-items: center; gap: 10px"><span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 50%; border: 2px solid #3A3A40; border-top-color: #8DB8FF; animation: agspin 0.9s linear infinite; margin: 0 2px"></span>p99 under 50 ms at 2k rps</span></span></span><span style="font-size: 12px; color: #A9A9B2">verifying</span></div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 14px 24px 4px; color: #8DB8FF; font-size: 14px; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3.5h7l4.5 4.5v12.5H7z"/><path d="M14 3.5V8h4.5M9.5 12.5h6M9.5 16h4"/></svg><span style="flex: 1">Review &amp; diffs (4 files)</span><span style="font-size: 13px"><span style="color: #74DDA9">+128</span> <span style="color: #FF9B9B">−14</span></span></div>
+    <div style="display: flex; gap: 8px; padding: 6px 24px 0"><a href="and-diff.dc.html" style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; background: #263552; color: #D6E3FF; flex: 1">Open diff review</a><a href="and-plan-review.dc.html" style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; border: 1px solid #45454C; color: #8DB8FF; flex: 1; color: #EDEDF0">Plan review</a></div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 14px 24px 4px; color: #8DB8FF; font-size: 14px; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.5" cy="6" r="2"/><circle cx="6.5" cy="18" r="2"/><circle cx="17.5" cy="18" r="2"/><path d="M6.5 8v8M17.5 16V9.5a3 3 0 0 0-3-3H11M13 4.5 11 6.5l2 2"/></svg><span style="flex: 1">Pull requests (1)</span></div>
+    <div style="display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0; width: 100%; box-sizing: border-box"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style="font-weight: 600">acme/ledger-svc #482</span><span style="font-size: 14px; color: #A9A9B2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Add rate limiter · 3/4 checks passed</span></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A9A9B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 14px 24px 4px; color: #8DB8FF; font-size: 14px; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9.5" r="2.5"/><path d="M15.5 14.2a4.6 4.6 0 0 1 5 4.8"/></svg><span style="flex: 1">Subagents (2)</span><a href="and-swarm.dc.html" style="font-size: 14px; font-weight: 600; text-decoration: none; min-height: 40px; display: flex; align-items: center">Swarm board</a></div>
+    <div style="display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0; width: 100%; box-sizing: border-box"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style=""><span style="display: flex; align-items: center; gap: 10px"><span style="width: 8px; height: 8px; border-radius: 4px; background: #8DB8FF"></span>@load-tester</span></span><span style="font-size: 14px; color: #A9A9B2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Running vegeta · 1m 12s</span></span><button style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; background: #3A1B1B; color: #FFB4AB; height: 36px; padding: 0 14px">Stop</button></div>
+    <div style="display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0; width: 100%; box-sizing: border-box"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style=""><span style="display: flex; align-items: center; gap: 10px"><span style="width: 8px; height: 8px; border-radius: 4px; background: #6FD8A6"></span>@test-writer</span></span><span style="font-size: 14px; color: #A9A9B2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Done · 6 tests added</span></span></div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 14px 24px 4px; color: #8DB8FF; font-size: 14px; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M6 18l1.4-1.4M16.6 7.4 18 6"/></svg><span style="flex: 1">Background tasks (1)</span></div>
+    <div style="display: flex; align-items: center; gap: 16px; min-height: 60px; padding: 0 24px 0 16px; text-decoration: none; color: #EDEDF0; width: 100%; box-sizing: border-box"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span style=""><span class="mono" style="font-size: 13px">go run ./cmd/ledger</span></span><span style="font-size: 14px; color: #A9A9B2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">4m 03s</span></span><button style="height: 40px; padding: 0 20px; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none; box-sizing: border-box; border: 1px solid #45454C; color: #8DB8FF; height: 36px; padding: 0 14px; color: #EDEDF0">Cancel</button></div>
+    <div style="display: flex; gap: 8px; padding: 12px 16px 0">
+      <a href="and-artifact.dc.html" style="flex: 1; min-height: 64px; border-radius: 16px; background: #26262B; padding: 0 16px; display: flex; align-items: center; gap: 12px; color: #EDEDF0; text-decoration: none"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5c.6 4.2 2.3 5.9 6.5 6.5-4.2.6-5.9 2.3-6.5 6.5-.6-4.2-2.3-5.9-6.5-6.5 4.2-.6 5.9-2.3 6.5-6.5z"/></svg><span style="display: flex; flex-direction: column"><span style="font-weight: 600; font-size: 15px">Artifacts</span><span style="font-size: 13px; color: #A9A9B2">3 items</span></span></a>
+      <a href="and-diff.dc.html" style="flex: 1; min-height: 64px; border-radius: 16px; background: #26262B; padding: 0 16px; display: flex; align-items: center; gap: 12px; color: #EDEDF0; text-decoration: none"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C4C4CC" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg><span style="display: flex; flex-direction: column"><span style="font-weight: 600; font-size: 15px">Modified files</span><span style="font-size: 13px; color: #A9A9B2">4 files</span></span></a>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
