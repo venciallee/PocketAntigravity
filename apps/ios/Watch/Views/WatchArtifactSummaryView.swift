@@ -21,6 +21,10 @@ public struct WatchArtifactSummaryView: View {
         session?.artifactSummary ?? WatchVerificationFixtures.makeWalkthroughSummary()
     }
 
+    private var isProceeded: Bool {
+        store.proceededArtifactIds.contains(artifact.id)
+    }
+
     public var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView {
@@ -35,7 +39,7 @@ public struct WatchArtifactSummaryView: View {
                             .minimumScaleFactor(0.9)
 
                         VStack(alignment: .leading, spacing: 7) {
-                            ForEach(artifact.points) { point in
+                            ForEach(Array(artifact.points.prefix(WatchArtifactSummarySnapshot.maxKeyPoints))) { point in
                                 keyPointRow(point)
                             }
                         }
@@ -102,19 +106,44 @@ public struct WatchArtifactSummaryView: View {
                 store.openOnPhone(cascadeId: cascadeId, target: .artifact)
             }
 
-            Button {
-                WatchHaptics.click()
-                store.navigationPath.append(.changes(cascadeId: cascadeId))
-            } label: {
-                Text("See changes")
-                    .font(.system(size: 14, weight: .semibold))
+            if artifact.primaryAction == .proceed {
+                Button {
+                    store.proceedPlan(cascadeId: cascadeId, artifact: artifact)
+                } label: {
+                    HStack(spacing: 5) {
+                        if isProceeded {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                        Text(isProceeded ? "Proceeding" : "Proceed")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
                     .foregroundStyle(WatchTheme.inkOnPeriwinkle)
                     .frame(maxWidth: .infinity)
                     .frame(height: WatchTheme.bottomControlHeight)
-                    .background(Capsule().fill(WatchTheme.accentPeriwinkle))
+                    .background(
+                        Capsule().fill(isProceeded ? WatchTheme.emerald : WatchTheme.accentPeriwinkle)
+                    )
+                }
+                .buttonStyle(.plain)
+                .watchPrimaryDoubleTap(enabled: !isProceeded)
+                .accessibilityIdentifier("watch.artifact.proceed")
+            } else {
+                Button {
+                    WatchHaptics.click()
+                    store.navigationPath.append(.changes(cascadeId: cascadeId))
+                } label: {
+                    Text("See changes")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(WatchTheme.inkOnPeriwinkle)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: WatchTheme.bottomControlHeight)
+                        .background(Capsule().fill(WatchTheme.accentPeriwinkle))
+                }
+                .buttonStyle(.plain)
+                .watchPrimaryDoubleTap()
+                .accessibilityIdentifier("watch.artifact.seeChanges")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("watch.artifact.seeChanges")
         }
         .padding(.horizontal, 10)
         .padding(.top, 12)

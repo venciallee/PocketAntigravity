@@ -1,5 +1,5 @@
 {
-  "specVersion": "1.0.0",
+  "specVersion": "1.1.0",
   "project": "PocketAntigravity-AppleWatch",
   "targetPlatform": {
     "os": "watchOS 11.0+",
@@ -8,6 +8,18 @@
     "baselineDevice": "Apple Watch Series 10 (46mm)",
     "viewportPt": { "width": 208, "height": 248 },
     "viewportPx2x": { "width": 416, "height": 496 }
+  },
+  "productGuardrails": {
+    "corePillars": ["status_glance", "approval_gate", "voice_task_dispatch"],
+    "topLeftAction": "current_device_switcher",
+    "topRightAction": "voice_new_task",
+    "artifactMaxKeyPoints": 3,
+    "artifactSinglePrimaryActions": ["See changes", "Proceed"],
+    "noCodeDiffsOnWatch": true,
+    "compactAcceptMaxFiles": 5,
+    "compactAcceptRequiresZeroRisk": true,
+    "doubleTapPrimaryActions": ["Allow", "Send", "Proceed", "See changes", "Accept all", "iPhone"],
+    "wristUnlockPolicy": "deviceOwnerAuthenticationWithWristDetection"
   },
   "designTokens": {
     "colors": {
@@ -62,7 +74,7 @@
     },
     {
       "id": "W04_ARTIFACT_SUMMARY",
-      "title": "Watch · 产物摘要 (Walkthrough)",
+      "title": "Watch · 产物摘要 (Walkthrough / Plan)",
       "referencePng": "specs/watch/reference/W04_ARTIFACT_SUMMARY.png",
       "swiftView": "WatchArtifactSummaryView",
       "requiredAccessibilityIds": [
@@ -73,7 +85,7 @@
     },
     {
       "id": "W05_CHANGED_FILES_COMPACT",
-      "title": "Watch · 改动文件（少量）",
+      "title": "Watch · 改动文件（少量，≤5 且无风险项）",
       "referencePng": "specs/watch/reference/W05_CHANGED_FILES_COMPACT.png",
       "swiftView": "WatchChangedFilesView",
       "requiredAccessibilityIds": [
@@ -85,7 +97,7 @@
     },
     {
       "id": "W06_CHANGED_FILES_GROUPED",
-      "title": "Watch · 改动文件（大量，按意图分组）",
+      "title": "Watch · 改动文件（>5 或含风险项，按意图分组）",
       "referencePng": "specs/watch/reference/W06_CHANGED_FILES_GROUPED.png",
       "swiftView": "WatchChangedFilesView",
       "requiredAccessibilityIds": [
@@ -97,7 +109,7 @@
     },
     {
       "id": "W07_VOICE_INPUT",
-      "title": "Watch · 语音输入 (Voice Reply)",
+      "title": "Watch · 语音输入 (Voice New Task / Reply)",
       "referencePng": "specs/watch/reference/W07_VOICE_INPUT.png",
       "swiftView": "WatchVoiceInputView",
       "requiredAccessibilityIds": [
@@ -123,30 +135,31 @@
     }
   ],
   "events": [
-    { "id": "WE01", "from": "W01_SESSIONS", "to": "W02_DEVICES", "trigger": "Tap top-left device chrome button or device label" },
+    { "id": "WE01", "from": "W01_SESSIONS", "to": "W02_DEVICES", "trigger": "Tap top-left current device button or device label" },
     { "id": "WE02", "from": "W02_DEVICES", "to": "W01_SESSIONS", "trigger": "Select online device or tap back" },
-    { "id": "WE03", "from": "W01_SESSIONS", "to": "W07_VOICE_INPUT", "trigger": "Tap top-right periwinkle mic button" },
+    { "id": "WE03", "from": "W01_SESSIONS", "to": "W07_VOICE_INPUT", "trigger": "Tap top-right periwinkle mic button (Voice New Task)" },
     { "id": "WE04", "from": "W01_SESSIONS", "to": "W03_CHAT_STREAM", "trigger": "Tap any session platter row" },
-    { "id": "WE05", "from": "W03_CHAT_STREAM", "to": "W04_ARTIFACT_SUMMARY", "trigger": "Tap Walkthrough artifact card" },
-    { "id": "WE06", "from": "W03_CHAT_STREAM", "to": "W05_CHANGED_FILES_COMPACT", "trigger": "Tap diff summary pill (<= 6 files)" },
-    { "id": "WE07", "from": "W03_CHAT_STREAM", "to": "W06_CHANGED_FILES_GROUPED", "trigger": "Tap diff summary pill (> 6 files)" },
-    { "id": "WE08", "from": "W03_CHAT_STREAM", "to": "W07_VOICE_INPUT", "trigger": "Tap bottom-right floating voice FAB" },
+    { "id": "WE05", "from": "W03_CHAT_STREAM", "to": "W04_ARTIFACT_SUMMARY", "trigger": "Tap Walkthrough or Plan artifact card" },
+    { "id": "WE06", "from": "W03_CHAT_STREAM", "to": "W05_CHANGED_FILES_COMPACT", "trigger": "Tap diff summary pill (<= 5 files AND zero risk items)" },
+    { "id": "WE07", "from": "W03_CHAT_STREAM", "to": "W06_CHANGED_FILES_GROUPED", "trigger": "Tap diff summary pill (> 5 files OR any risk item)" },
+    { "id": "WE08", "from": "W03_CHAT_STREAM", "to": "W07_VOICE_INPUT", "trigger": "Tap bottom-right floating voice FAB (Reply to session)" },
     { "id": "WE09", "from": "W03_CHAT_STREAM", "to": "W08_APPROVAL_NOTIFICATION", "trigger": "Tap pending approval amber banner" },
-    { "id": "WE10", "from": "W04_ARTIFACT_SUMMARY", "to": "W05_CHANGED_FILES_COMPACT", "trigger": "Tap See changes CTA" },
+    { "id": "WE10", "from": "W04_ARTIFACT_SUMMARY", "to": "W05_CHANGED_FILES_COMPACT", "trigger": "Tap See changes primary CTA" },
     { "id": "WE11", "from": "W08_APPROVAL_NOTIFICATION", "to": "W07_VOICE_INPUT", "trigger": "Tap Reply by voice button" }
   ],
   "claims": [
-    { "id": "WCLAIM-01", "state": "W01_SESSIONS", "assertion": "Agents home shows online device button, mic CTA, active host label, and waiting/running/done session rows with zero horizontal overflow." },
+    { "id": "WCLAIM-01", "state": "W01_SESSIONS", "assertion": "Agents home maps top-left to device switcher and top-right to voice new task, rendering waiting/running/done rows with 0px horizontal overflow." },
     { "id": "WCLAIM-02", "state": "W02_DEVICES", "assertion": "Devices screen highlights selected online host with periwinkle stroke, renders Cloud and offline host timestamps, and switches host on tap." },
-    { "id": "WCLAIM-03", "state": "W03_CHAT_STREAM", "assertion": "Chat stream displays running step status, voice user bubble, concise agent reply, tappable Walkthrough card, diff pill, and floating mic FAB." },
-    { "id": "WCLAIM-04", "state": "W04_ARTIFACT_SUMMARY", "assertion": "Artifact summary displays numbered takeaways with monospace code and emerald metric highlights plus iPhone handoff and See changes CTA." },
-    { "id": "WCLAIM-05", "state": "W05_CHANGED_FILES_COMPACT", "assertion": "Compact changes (<= 6 files) lists A/M/D file rows with +/- counts, iPhone handoff button, and Accept all CTA." },
-    { "id": "WCLAIM-06", "state": "W06_CHANGED_FILES_GROUPED", "assertion": "Large changes (> 6 files) triages high-risk files under WORTH A LOOK, clusters mechanical edits under GROUPED, and offers iPhone handoff CTA." },
-    { "id": "WCLAIM-07", "state": "W07_VOICE_INPUT", "assertion": "Voice input supports session target switching, committed + muted partial transcript, waveform bars, Double tap to send hint, stop button, and Send CTA." },
-    { "id": "WCLAIM-08", "state": "W08_APPROVAL_NOTIFICATION", "assertion": "Approval notification displays Agents · now header, amber prompt, monospace command card, Allow (Double Tap), Deny, and Reply by voice actions." }
+    { "id": "WCLAIM-03", "state": "W03_CHAT_STREAM", "assertion": "Chat stream displays running step status, voice user bubble, concise agent reply, tappable artifact card, diff pill, and floating mic FAB." },
+    { "id": "WCLAIM-04", "state": "W04_ARTIFACT_SUMMARY", "assertion": "Artifact summary strictly renders title + <= 3 numbered points + a single Double-Tap primary action (See changes or wrist-unlocked Proceed)." },
+    { "id": "WCLAIM-05", "state": "W05_CHANGED_FILES_COMPACT", "assertion": "Compact changes (<= 5 files AND zero risk items) displays no source code, only A/M/D file rows with one-line summaries and wrist-unlocked Accept all." },
+    { "id": "WCLAIM-06", "state": "W06_CHANGED_FILES_GROUPED", "assertion": "Changes with > 5 files OR any risk item display WORTH A LOOK first, fold mechanical edits into GROUPED clusters, hide Accept all, and hand off to iPhone." },
+    { "id": "WCLAIM-07", "state": "W07_VOICE_INPUT", "assertion": "Voice input supports creating a New task (from W01 top-right) or replying to existing sessions, with waveform and Double-Tap Send CTA." },
+    { "id": "WCLAIM-08", "state": "W08_APPROVAL_NOTIFICATION", "assertion": "Approval notification displays command context, Double-Tap Allow gated by watchOS wrist-detection unlock, Deny, and Reply by voice." }
   ],
   "testCases": [
     "WTC-01", "WTC-02", "WTC-03", "WTC-04", "WTC-05", "WTC-06",
-    "WTC-07", "WTC-08", "WTC-09", "WTC-10", "WTC-11", "WTC-12"
+    "WTC-07", "WTC-08", "WTC-09", "WTC-10", "WTC-11", "WTC-12",
+    "WTC-13", "WTC-14"
   ]
 }

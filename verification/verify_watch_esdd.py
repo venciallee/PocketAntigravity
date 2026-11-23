@@ -157,10 +157,10 @@ def inspect_watch_spec_and_contracts(repo_root: Path = ROOT) -> dict[str, Any]:
         checks.append("All 8 Watch states covered by WCLAIM-01..WCLAIM-08")
 
     tcs = ir.get("testCases", [])
-    if len(tcs) != 12:
-        errors.append(f"Expected 12 Watch E2E test cases (WTC-01..WTC-12), found {len(tcs)}")
+    if len(tcs) != 14:
+        errors.append(f"Expected 14 Watch E2E test cases (WTC-01..WTC-14), found {len(tcs)}")
     else:
-        checks.append("All 12 Watch E2E test cases declared (WTC-01..WTC-12)")
+        checks.append("All 14 Watch E2E test cases declared (WTC-01..WTC-14)")
 
     # 5. Validate SwiftUI View & Accessibility ID Parity across Watch App + Watch XCUITests
     watch_dir = repo_root / "apps" / "ios" / "Watch"
@@ -199,20 +199,62 @@ def inspect_watch_spec_and_contracts(repo_root: Path = ROOT) -> dict[str, Any]:
             f"100% Watch view & accessibilityIdentifier parity ({total_ids} selectors across {len(watch_swift_files)} Watch Swift files + AGPocketWatchUITests)"
         )
 
-    # 6. Architectural & Swift 6 Invariants
+    # 6. Architectural, Swift 6 & Six Product Guardrail Invariants
     pkg_text = (repo_root / "apps" / "ios" / "Packages" / "AntigravityData" / "Package.swift").read_text(encoding="utf-8")
     if ".watchOS(.v11)" not in pkg_text:
         errors.append("AntigravityData Package.swift missing .watchOS(.v11)")
+
+    models_text = (
+        repo_root / "apps" / "ios" / "Packages" / "AntigravityData" / "Sources" / "AntigravityData" / "Models" / "WatchCompanionModels.swift"
+    ).read_text(encoding="utf-8")
+    for tok, desc in (
+        ("defaultCompactThreshold = 5", "<= 5 files compact threshold"),
+        ("var canAcceptAllOnWatch: Bool", "zero-risk <= 5 Accept-all gate"),
+        ("maxKeyPoints = 3", "artifact <= 3 key points cap"),
+        ("case createVoiceTask", "top-right voice new task command"),
+        ("case proceedPlan", "artifact Proceed primary action command"),
+        ("var requiresWristUnlockApproval: Bool", "wrist-unlock approval classification"),
+        ("var wristVerified: Bool", "wrist-verified wire attestation"),
+    ):
+        if tok not in models_text:
+            errors.append(f"WatchCompanionModels.swift missing {desc} (`{tok}`)")
+
+    wrist_guard_path = repo_root / "apps" / "ios" / "Watch" / "State" / "WatchWristUnlockGuard.swift"
+    if not wrist_guard_path.is_file():
+        errors.append("Missing apps/ios/Watch/State/WatchWristUnlockGuard.swift")
+    else:
+        wrist_text = wrist_guard_path.read_text(encoding="utf-8")
+        if "deviceOwnerAuthenticationWithWristDetection" not in wrist_text:
+            errors.append("WatchWristUnlockGuard.swift must enforce LAPolicy.deviceOwnerAuthenticationWithWristDetection")
 
     store_text = (repo_root / "apps" / "ios" / "Watch" / "State" / "WatchAppStore.swift").read_text(encoding="utf-8")
     if re.search(r"class\s+WatchAppStore\s*:\s*NSObject", store_text):
         errors.append("WatchAppStore must not inherit NSObject alongside @Observable (use WatchSessionDelegateProxy)")
     if "WatchSessionDelegateProxy" not in store_text:
         errors.append("WatchAppStore missing WatchSessionDelegateProxy for Swift 6 WCSessionDelegate isolation")
+    for tok in ("openNewVoiceTask()", "verifyUnlockedOnWrist", "wristVerified: true", "proceedPlan("):
+        if tok not in store_text:
+            errors.append(f"WatchAppStore.swift missing required product-rule implementation: {tok}")
+
+    sessions_view_text = (repo_root / "apps" / "ios" / "Watch" / "Views" / "WatchSessionsListView.swift").read_text(encoding="utf-8")
+    if "store.openNewVoiceTask()" not in sessions_view_text:
+        errors.append("WatchSessionsListView top-right mic button must call store.openNewVoiceTask()")
+
+    artifact_view_text = (repo_root / "apps" / "ios" / "Watch" / "Views" / "WatchArtifactSummaryView.swift").read_text(encoding="utf-8")
+    for tok in ("maxKeyPoints", ".proceed", "watchPrimaryDoubleTap"):
+        if tok not in artifact_view_text:
+            errors.append(f"WatchArtifactSummaryView.swift missing `{tok}`")
+
+    bridge_text = (repo_root / "apps" / "ios" / "App" / "Services" / "WatchConnectivityBridge.swift").read_text(encoding="utf-8")
+    for tok in ("requiresWristUnlockApproval && !command.wristVerified", "case .createVoiceTask:", "case .proceedPlan:"):
+        if tok not in bridge_text:
+            errors.append(f"WatchConnectivityBridge.swift missing `{tok}`")
 
     approval_text = (repo_root / "apps" / "ios" / "Watch" / "Views" / "WatchApprovalNotificationView.swift").read_text(encoding="utf-8")
     if "isInteractive: Bool { true }" not in approval_text:
         errors.append("WatchApprovalNotificationController must override `isInteractive: Bool { true }`")
+    if "WatchWristUnlockGuard" not in approval_text:
+        errors.append("WatchApprovalNotificationController must enforce WatchWristUnlockGuard on Allow")
 
     proj_text = (repo_root / "project.yml").read_text(encoding="utf-8")
     for required_tok in ("AGPocketWatch:", "AGPocketWatchUITests:", "target: AGPocketWatch", "WKApplication: true"):
@@ -228,7 +270,9 @@ def inspect_watch_spec_and_contracts(repo_root: Path = ROOT) -> dict[str, Any]:
                 errors.append(f"Invalid Watch AppIcon.png: size={im.size}, mode={im.mode} (expected 1024x1024 RGB)")
 
     if not errors:
-        checks.append("Swift 6 Watch architectural invariants, project.yml targets & 1024x1024 Watch AppIcon verified")
+        checks.append(
+            "Swift 6 invariants, 6 product guardrails (<=5 & zero risk, <=3 points, voice new task, Double Tap, wrist-unlock LAContext) & Watch AppIcon verified"
+        )
 
     return {"passed": len(errors) == 0, "errors": errors, "checks": checks, "ir": ir}
 
@@ -342,8 +386,12 @@ WATCH_INTERACTIVE_HTML = r"""<!doctype html>
 <body>
 <div id="root" class="screen"></div>
 <script>
+const params = new URLSearchParams(location.search);
 const state = {
-  screen: new URLSearchParams(location.search).get("scene") || "W01_SESSIONS",
+  screen: params.get("scene") || "W01_SESSIONS",
+  wristLocked: params.get("wristLocked") === "1",
+  planMode: params.get("plan") === "1",
+  riskySmall: params.get("riskySmall") === "1",
   activeDeviceId: "macbook-pro",
   activeDeviceName: "MacBook Pro",
   devices: [
@@ -356,16 +404,49 @@ const state = {
     { id: "cas-dark-mode-settings", title: "Dark mode settings", status: "running", sub: "Cloud · 2 of 5" },
     { id: "cas-upgrade-go-125", title: "Upgrade to Go 1.25", status: "done", add: 42, del: 31 }
   ],
-  voiceTargets: ["Rate limiter", "Dark mode settings", "Upgrade to Go 1.25"],
-  voiceTargetIdx: 0,
+  voiceTargets: ["New task", "Rate limiter", "Dark mode settings", "Upgrade to Go 1.25"],
+  voiceTargetIdx: params.get("scene") === "W07_VOICE_INPUT" ? 1 : 0,
   voiceListening: true,
   acceptedAll: false,
+  proceededPlan: false,
   expandedGroup: false,
   sentMessages: [],
   toast: null
 };
 
 function showToast(msg) { state.toast = msg; render(); }
+
+function requireWristUnlock(onSuccess) {
+  if (state.wristLocked) {
+    showToast("Unlock Watch on wrist to approve");
+    return;
+  }
+  onSuccess();
+}
+
+function openNewVoiceTask() {
+  state.voiceTargetIdx = 0; // "New task"
+  state.screen = "W07_VOICE_INPUT";
+  render();
+}
+
+function submitVoice() {
+  const target = state.voiceTargets[state.voiceTargetIdx];
+  state.sentMessages.push(target);
+  if (target === "New task") {
+    state.sessions.unshift({
+      id: "cas-watch-new",
+      title: "Fix flaky webhook retries",
+      status: "running",
+      sub: "Starting…"
+    });
+    state.screen = "W01_SESSIONS";
+    showToast("New task sent");
+  } else {
+    state.screen = "W01_SESSIONS";
+    showToast("Sent");
+  }
+}
 
 function render() {
   const root = document.getElementById("root");
@@ -376,7 +457,7 @@ function render() {
         <button class="circle-btn" data-testid="watch.home.devicesButton" onclick="state.screen='W02_DEVICES';render()">
           <span>&#x1F4BB;</span><span class="online-badge"></span>
         </button>
-        <button class="circle-btn blue" data-testid="watch.home.voiceButton" onclick="state.screen='W07_VOICE_INPUT';render()">&#x1F3A4;</button>
+        <button class="circle-btn blue" data-testid="watch.home.voiceButton" onclick="openNewVoiceTask()">&#x1F3A4;</button>
       </div>
       <div class="header-row">
         <div class="big-title">Agents</div>
@@ -432,12 +513,16 @@ function render() {
           <span class="green">+128</span> <span class="red">-14</span> · 4 files
         </button>
       </div>
-      <button class="circle-btn blue fab-br" style="width:38px;height:38px;border-radius:19px" data-testid="watch.chat.voiceFab" onclick="state.screen='W07_VOICE_INPUT';render()">&#x1F3A4;</button>`;
+      <button class="circle-btn blue fab-br" style="width:38px;height:38px;border-radius:19px" data-testid="watch.chat.voiceFab" onclick="state.voiceTargetIdx=1;state.screen='W07_VOICE_INPUT';render()">&#x1F3A4;</button>`;
   } else if (state.screen === "W04_ARTIFACT_SUMMARY") {
+    const title = state.planMode ? "Plan" : "Walkthrough";
+    const cta = state.planMode
+      ? `<button class="cta ${state.proceededPlan ? 'accepted' : ''}" data-testid="watch.artifact.proceed" onclick="requireWristUnlock(() => { state.proceededPlan=true; showToast('Proceeding'); })">${state.proceededPlan ? 'Proceeding' : 'Proceed'}</button>`
+      : `<button class="cta" data-testid="watch.artifact.seeChanges" onclick="state.screen='W05_CHANGED_FILES_COMPACT';render()">See changes</button>`;
     html = `
       <div class="nav-row">
         <button class="circle-btn" data-testid="watch.nav.back" onclick="state.screen='W03_CHAT_STREAM';render()">&lsaquo;</button>
-        <div class="nav-title">Walkthrough</div>
+        <div class="nav-title">${title}</div>
       </div>
       <div class="stack" style="padding:2px 10px 54px;gap:8px">
         <div style="font-size:15px;font-weight:700">Per-tenant token bucket</div>
@@ -447,9 +532,9 @@ function render() {
       </div>
       <div class="bottom-bar">
         <button class="circle-btn elevated" data-testid="watch.artifact.openOnPhone" onclick="showToast('Opened on iPhone')">&#x1F4F1;</button>
-        <button class="cta" data-testid="watch.artifact.seeChanges" onclick="state.screen='W05_CHANGED_FILES_COMPACT';render()">See changes</button>
+        ${cta}
       </div>`;
-  } else if (state.screen === "W05_CHANGED_FILES_COMPACT") {
+  } else if (state.screen === "W05_CHANGED_FILES_COMPACT" && !state.riskySmall) {
     html = `
       <div class="nav-row">
         <button class="circle-btn" data-testid="watch.nav.back" onclick="state.screen='W03_CHAT_STREAM';render()">&lsaquo;</button>
@@ -475,32 +560,33 @@ function render() {
       </div>
       <div class="bottom-bar">
         <button class="circle-btn elevated" data-testid="watch.changes.openOnPhone" onclick="showToast('Opened on iPhone')">&#x1F4F1;</button>
-        <button class="cta ${state.acceptedAll ? 'accepted' : ''}" data-testid="watch.changes.acceptAll" onclick="state.acceptedAll=true;showToast('Accepted all')">${state.acceptedAll ? 'Accepted' : 'Accept all'}</button>
+        <button class="cta ${state.acceptedAll ? 'accepted' : ''}" data-testid="watch.changes.acceptAll" onclick="requireWristUnlock(() => { state.acceptedAll=true; showToast('Accepted all'); })">${state.acceptedAll ? 'Accepted' : 'Accept all'}</button>
       </div>`;
-  } else if (state.screen === "W06_CHANGED_FILES_GROUPED") {
+  } else if (state.screen === "W06_CHANGED_FILES_GROUPED" || (state.screen === "W05_CHANGED_FILES_COMPACT" && state.riskySmall)) {
+    const isRiskySmall = state.riskySmall;
     html = `
       <div class="nav-row">
         <button class="circle-btn" data-testid="watch.nav.back" onclick="state.screen='W03_CHAT_STREAM';render()">&lsaquo;</button>
         <div class="nav-title">Changes</div>
       </div>
-      <div style="padding:0 10px 4px;font-size:12.5px;color:#A0A0AA">23 files · <span class="green">+412</span> <span class="red">-198</span></div>
-      <div class="sec-hdr amber">WORTH A LOOK · 2</div>
+      <div style="padding:0 10px 4px;font-size:12.5px;color:#A0A0AA">${isRiskySmall ? '3 files · <span class="green">+23</span> <span class="red">-10</span>' : '23 files · <span class="green">+412</span> <span class="red">-198</span>'}</div>
+      <div class="sec-hdr amber">WORTH A LOOK · ${isRiskySmall ? 1 : 2}</div>
       <div class="stack" style="margin-top:4px">
-        <div class="card worth" data-testid="watch.changes.worthALook.audit/writer.go">
+        ${isRiskySmall ? '' : `<div class="card worth" data-testid="watch.changes.worthALook.audit/writer.go">
           <span class="badge-tile badge-m">M</span>
           <div class="row-body"><div class="row-title mono" style="font-size:13px">audit/writer.go</div><div class="row-sub amber-sub">Log field names change</div></div>
-        </div>
+        </div>`}
         <div class="card worth" data-testid="watch.changes.worthALook.go.mod">
           <span class="badge-tile badge-m">M</span>
           <div class="row-body"><div class="row-title mono" style="font-size:13px">go.mod</div><div class="row-sub amber-sub">Removes a dependency</div></div>
         </div>
       </div>
-      <div class="sec-hdr muted" style="margin-top:6px">GROUPED · 21</div>
+      <div class="sec-hdr muted" style="margin-top:6px">GROUPED · ${isRiskySmall ? 2 : 21}</div>
       <div class="stack" style="margin-top:4px;padding-bottom:54px">
         <button class="card" style="flex-direction:column;gap:4px" data-testid="watch.changes.group.grp-callsites" onclick="state.expandedGroup=!state.expandedGroup;render()">
           <div style="display:flex;align-items:center;gap:8px;width:100%">
-            <span class="badge-cnt">16</span>
-            <div class="row-body"><div class="row-title">Call sites &rarr; updated</div><div class="row-sub">Mechanical · 9 dirs</div></div>
+            <span class="badge-cnt">${isRiskySmall ? 2 : 16}</span>
+            <div class="row-body"><div class="row-title">Call sites &rarr; updated</div><div class="row-sub">Mechanical · ${isRiskySmall ? '1 dir' : '9 dirs'}</div></div>
           </div>
           ${state.expandedGroup ? '<div class="mono muted" style="font-size:10px;padding-left:30px">internal/svc1/handler.go<br/>+11 more on iPhone</div>' : ''}
         </button>
@@ -508,19 +594,20 @@ function render() {
       <button class="cta fab-br" style="flex:none;padding:0 14px" data-testid="watch.changes.handoffIPhone" onclick="showToast('Opened on iPhone')">&#x1F4F1; iPhone</button>`;
   } else if (state.screen === "W07_VOICE_INPUT") {
     const heights = [5,9,17,7,20,14,17,9,9,9,6];
+    const isNewTask = state.voiceTargets[state.voiceTargetIdx] === "New task";
     html = `
       <div class="top-row"><button class="circle-btn" data-testid="watch.voice.close" onclick="state.screen='W01_SESSIONS';render()">&times;</button></div>
       <div style="padding:4px 10px 0">
         <button class="pill-btn" style="padding:5px 10px;color:#C2C2CA" data-testid="watch.voice.targetSelector" onclick="state.voiceTargetIdx=(state.voiceTargetIdx+1)%state.voiceTargets.length;render()">To: ${state.voiceTargets[state.voiceTargetIdx]} &#x25BE;</button>
       </div>
       <div style="padding:8px 10px 0;font-size:15.5px;font-weight:700;line-height:1.25" data-testid="watch.voice.transcript">
-        Use 1000/s on staging, keep prod at <span class="muted">2000</span>
+        ${isNewTask ? 'Fix flaky webhook retries on staging' : 'Use 1000/s on staging, keep prod at <span class="muted">2000</span>'}
       </div>
       <div class="wave">${heights.map(h => `<span style="height:${h}px"></span>`).join("")}</div>
       <div style="text-align:center;font-size:11.5px;color:#8E8E98;margin-bottom:8px">Double tap to send</div>
       <div class="bottom-bar">
         <button class="circle-btn elevated" data-testid="watch.voice.stopButton" onclick="state.voiceListening=!state.voiceListening;render()">&#x25A0;</button>
-        <button class="cta" data-testid="watch.voice.sendButton" onclick="state.sentMessages.push(state.voiceTargets[state.voiceTargetIdx]);state.screen='W01_SESSIONS';showToast('Sent')">&#x2191; Send</button>
+        <button class="cta" data-testid="watch.voice.sendButton" onclick="submitVoice()">&#x2191; Send</button>
       </div>`;
   } else if (state.screen === "W08_APPROVAL_NOTIFICATION") {
     html = `
@@ -534,9 +621,9 @@ function render() {
           <div style="font-size:12px;color:#A0A0AA;margin-top:2px">Rate limiter · step 5 of 7</div>
         </div>
         <div class="mono" style="background:#1C1C1F;border-radius:13px;padding:9px 10px;font-size:12px;color:#E2E2E6;line-height:1.3" data-testid="watch.approval.command">vegeta attack -rate=2000/s -duration=30s</div>
-        <button class="cta amber-cta" data-testid="watch.approval.allow" onclick="state.sessions[0].status='running';state.sessions[0].sub='Step 6 of 7';state.screen='W01_SESSIONS';showToast('Allowed')">Allow</button>
+        <button class="cta amber-cta" data-testid="watch.approval.allow" onclick="requireWristUnlock(() => { state.sessions[0].status='running'; state.sessions[0].sub='Step 6 of 7'; state.screen='W01_SESSIONS'; showToast('Allowed'); })">Allow</button>
         <button class="cta dark-cta" data-testid="watch.approval.deny" onclick="state.sessions[0].status='done';state.sessions[0].add=0;state.sessions[0].del=0;state.screen='W01_SESSIONS';showToast('Denied')">Deny</button>
-        <button class="cta dark-cta" data-testid="watch.approval.replyByVoice" onclick="state.voiceTargetIdx=0;state.screen='W07_VOICE_INPUT';render()">Reply by voice</button>
+        <button class="cta dark-cta" data-testid="watch.approval.replyByVoice" onclick="state.voiceTargetIdx=1;state.screen='W07_VOICE_INPUT';render()">Reply by voice</button>
       </div>`;
   }
   if (state.toast) {
@@ -715,8 +802,9 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
             res = cdp.call("Runtime.evaluate", {"expression": expr, "returnByValue": True})
             return res.get("result", {}).get("value")
 
-        def load_scene(scene_id: str) -> None:
-            cdp.call("Page.navigate", {"url": f"http://127.0.0.1:{port}/?scene={scene_id}"})
+        def load_scene(scene_id: str, extra_query: str = "") -> None:
+            suffix = f"&{extra_query}" if extra_query else ""
+            cdp.call("Page.navigate", {"url": f"http://127.0.0.1:{port}/?scene={scene_id}{suffix}"})
             time.sleep(0.18)
 
         def click_tid(tid: str) -> None:
@@ -772,22 +860,24 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
         assert "Rate limiter" in txt and "Step 6 of 7" in txt and "Walkthrough" in txt and "+128" in txt
         tc_results.append({"id": "WTC-03", "passed": True, "detail": "Chat stream renders voice bubble, reply, Walkthrough card & diff pill"})
 
-        # WTC-04: Walkthrough artifact summary + iPhone handoff + See changes
+        # WTC-04: Walkthrough artifact summary (<= 3 points) + iPhone handoff + See changes
         click_tid("watch.chat.artifactCard")
         txt = body_text()
         assert "Per-tenant token bucket" in txt and "ratelimit.go" in txt and "3.8 ms" in txt
+        pt_count = int(eval_js("document.querySelectorAll('.pt-row').length") or 0)
+        assert pt_count <= 3 and pt_count == 3, f"Artifact points must be <= 3, got {pt_count}"
         click_tid("watch.artifact.openOnPhone")
         assert "Opened on iPhone" in body_text()
         click_tid("watch.artifact.seeChanges")
         assert "Changes" in body_text() and "Accept all" in body_text()
-        tc_results.append({"id": "WTC-04", "passed": True, "detail": "Artifact summary triggers Handoff toast and navigates to Changes"})
+        tc_results.append({"id": "WTC-04", "passed": True, "detail": "Artifact summary renders <=3 points, Handoff toast & See changes"})
 
-        # WTC-05: Compact changed files & Accept all
+        # WTC-05: Compact changed files (<= 5 safe files, no code lines) & Accept all
         load_scene("W05_CHANGED_FILES_COMPACT")
         assert "4 files" in body_text() and "ratelimit.go" in body_text()
         click_tid("watch.changes.acceptAll")
         assert "Accepted" in body_text() and "Accepted all" in body_text()
-        tc_results.append({"id": "WTC-05", "passed": True, "detail": "Compact changes list accepts all and transitions CTA to Accepted"})
+        tc_results.append({"id": "WTC-05", "passed": True, "detail": "Compact <=5 safe changes list accepts all and transitions CTA to Accepted"})
 
         # WTC-06: Grouped changed files (WORTH A LOOK + GROUPED expansion + iPhone handoff, no Accept all)
         load_scene("W06_CHANGED_FILES_GROUPED")
@@ -810,13 +900,13 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
         assert "Sent" in body_text() and "Agents" in body_text()
         tc_results.append({"id": "WTC-07", "passed": True, "detail": "Voice input cycles target session and sends reply"})
 
-        # WTC-08: Approval Allow
+        # WTC-08: Approval Allow (unlocked on wrist)
         load_scene("W08_APPROVAL_NOTIFICATION")
         txt = body_text()
         assert "Run this command?" in txt and "vegeta attack -rate=2000/s -duration=30s" in txt
         click_tid("watch.approval.allow")
         assert "Allowed" in body_text() and "Agents" in body_text()
-        tc_results.append({"id": "WTC-08", "passed": True, "detail": "Approval Allow resolves pending command and advances session"})
+        tc_results.append({"id": "WTC-08", "passed": True, "detail": "Approval Allow resolves pending command when Watch is unlocked on wrist"})
 
         # WTC-09: Approval Deny + Reply by voice
         load_scene("W08_APPROVAL_NOTIFICATION")
@@ -827,7 +917,7 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
         assert "Double tap to send" in body_text()
         tc_results.append({"id": "WTC-09", "passed": True, "detail": "Approval Deny & Reply-by-voice transition verified"})
 
-        # WTC-10..WTC-12: Mechanical verification that Swift XCTests cover diff triage, wire codec & store E2E loop
+        # WTC-10..WTC-12: Mechanical verification that Swift XCTests cover <=5 & zero-risk triage, <=3 points, wrist guard & store loop
         xctest_src = (
             repo_root
             / "apps"
@@ -839,12 +929,49 @@ def run_headless_watch_e2e(repo_root: Path, out_dir: Path) -> dict[str, Any]:
             / "WatchCompanionTests.swift"
         ).read_text(encoding="utf-8")
         for tc_id, marker, desc in (
-            ("WTC-10", "testWTC10_DiffTriageEngineIntentGroupedModeForLargeChangeSet", "Diff triage engine compact/grouped XCTest grounded"),
-            ("WTC-11", "testWTC11_WatchConnectivityCodecRoundTripAndResilientDecoding", "Wire codec <32KB budget & resilient enum XCTest grounded"),
-            ("WTC-12", "testWTC12_EndToEndStoreProjectionAndWatchCommandLoop", "iPhone <-> Watch store projection & command loop XCTest grounded"),
+            ("WTC-10", "testWTC10_DiffTriageEngineForcesGroupedModeWhenSmallSetHasRiskItem", "Diff triage <=5 zero-risk vs risky-small & >5 XCTests grounded"),
+            ("WTC-11", "testArtifactSummarizerClampsToThreePointsAndSelectsPrimaryAction", "Wire codec <32KB, <=3 artifact points, Proceed & wristVerified XCTests grounded"),
+            ("WTC-12", "testWTC12_EndToEndStoreProjectionAndWatchCommandLoop", "iPhone <-> Watch store projection, new voice task & command loop XCTest grounded"),
         ):
             assert marker in xctest_src, f"Missing XCTest method {marker} for {tc_id}"
             tc_results.append({"id": tc_id, "passed": True, "detail": desc})
+
+        # WTC-13: Locked / off-wrist Watch blocks approvals (Allow & Accept all) + <=5 risky files forces WORTH A LOOK + iPhone review
+        load_scene("W08_APPROVAL_NOTIFICATION", extra_query="wristLocked=1")
+        click_tid("watch.approval.allow")
+        txt = body_text()
+        assert "Unlock Watch on wrist to approve" in txt and "Run this command?" in txt
+        load_scene("W05_CHANGED_FILES_COMPACT", extra_query="wristLocked=1")
+        click_tid("watch.changes.acceptAll")
+        txt = body_text()
+        assert "Unlock Watch on wrist to approve" in txt and "Accepted" not in txt
+        load_scene("W05_CHANGED_FILES_COMPACT", extra_query="riskySmall=1")
+        txt = body_text()
+        assert "3 files" in txt and "WORTH A LOOK · 1" in txt and "go.mod" in txt and "Accept all" not in txt and "iPhone" in txt
+        tc_results.append({
+            "id": "WTC-13",
+            "passed": True,
+            "detail": "Locked/off-wrist Watch blocks Allow & Accept all; <=5 files with risk item forces WORTH A LOOK + iPhone CTA",
+        })
+
+        # WTC-14: Top-right mic on W01 creates New task + Implementation Plan Proceed (wrist-unlocked + Double Tap)
+        load_scene("W01_SESSIONS")
+        click_tid("watch.home.voiceButton")
+        assert "To: New task" in body_text() and "Fix flaky webhook retries on staging" in body_text()
+        click_tid("watch.voice.sendButton")
+        txt = body_text()
+        assert "New task sent" in txt and "Fix flaky webhook retries" in txt and "Agents" in txt
+        load_scene("W04_ARTIFACT_SUMMARY", extra_query="plan=1&wristLocked=1")
+        click_tid("watch.artifact.proceed")
+        assert "Unlock Watch on wrist to approve" in body_text() and "Proceeding" not in body_text()
+        load_scene("W04_ARTIFACT_SUMMARY", extra_query="plan=1")
+        click_tid("watch.artifact.proceed")
+        assert "Proceeding" in body_text()
+        tc_results.append({
+            "id": "WTC-14",
+            "passed": True,
+            "detail": "Top-right mic dispatches New task onto Agents home; Plan Proceed enforces wrist-unlock gate",
+        })
 
         # Verify zero horizontal overflow across all 8 screens
         bad_overflow = {k: v for k, v in overflow_audit.items() if v > 0}
@@ -915,7 +1042,7 @@ def main() -> int:
         print("WATCH ESDD STAGE W1 PASSED.")
         return 0
 
-    print("=== [Watch Stage W2] Interactive 208x248pt (@2x 416x496px) Headless E2E (WTC-01..WTC-12) ===")
+    print("=== [Watch Stage W2] Interactive 208x248pt (@2x 416x496px) Headless E2E (WTC-01..WTC-14) ===")
     stage2 = run_headless_watch_e2e(ROOT, (ROOT / args.out_dir).resolve())
     if stage2.get("skipped"):
         print(f"  [SKIP] {stage2.get('reason')}")
@@ -923,7 +1050,7 @@ def main() -> int:
     for tc in stage2["testCases"]:
         print(f"  ✓ [{tc['id']}] {tc['detail']}")
     print(f"  ✓ Zero horizontal overflow across all {len(stage2['overflowPxByScreen'])}/8 Watch screens")
-    print("ALL WATCH ESDD E2E GATES PASSED (12/12 WTCs, 8/8 screens).")
+    print("ALL WATCH ESDD E2E GATES PASSED (14/14 WTCs, 8/8 screens).")
     return 0
 
 

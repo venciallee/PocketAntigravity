@@ -282,6 +282,41 @@ public enum WatchVerificationFixtures {
         )
     }
 
+    /// Sample Implementation Plan summary demonstrating `<= 3` points + `Proceed` primary CTA (Double Tap + wrist-unlock gated).
+    public static func makeImplementationPlanSummary() -> WatchArtifactSummarySnapshot {
+        WatchArtifactSummarySnapshot(
+            id: "plan-rate-limiter",
+            title: "Plan",
+            headline: "Per-tenant rate limiter",
+            artifactPath: "/brain/implementation_plan.md",
+            points: [
+                WatchArtifactPoint(
+                    index: 1,
+                    spans: [
+                        WatchStyledTextSpan(text: "Add token bucket in ", kind: .plain),
+                        WatchStyledTextSpan(text: "ratelimit.go", kind: .code),
+                    ]
+                ),
+                WatchArtifactPoint(
+                    index: 2,
+                    spans: [
+                        WatchStyledTextSpan(text: "Wire middleware on ", kind: .plain),
+                        WatchStyledTextSpan(text: "POST /transfers", kind: .code),
+                    ]
+                ),
+                WatchArtifactPoint(
+                    index: 3,
+                    spans: [
+                        WatchStyledTextSpan(text: "Target p99 under ", kind: .plain),
+                        WatchStyledTextSpan(text: "5 ms", kind: .metricHighlight),
+                    ]
+                ),
+            ],
+            primaryAction: .proceed
+        )
+    }
+
     public static let sampleVoiceCommittedTranscript = "Use 1000/s on staging, keep prod at "
     public static let sampleVoicePartialWord = "2000"
+    public static let sampleNewTaskVoiceTranscript = "Fix flaky webhook retries on staging"
 }

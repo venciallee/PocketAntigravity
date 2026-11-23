@@ -31,22 +31,37 @@ public final class WatchAppStore {
     // MARK: - Navigation & Sheet State
     public var navigationPath: [WatchNavigationDestination] = []
     public var isVoiceSheetPresented: Bool = false
+    /// `nil` means creating a brand-new task (`To: New task`), matching the top-right mic CTA on `W01_SESSIONS`.
+    /// Non-nil targets an existing session (from `W03` chat FAB or `W08` Reply by voice).
     public var voiceTargetCascadeId: String? = nil
     public var voiceCommittedText: String = ""
     public var voicePartialWord: String = ""
     public var isVoiceListening: Bool = false
     public var activeApprovalSheet: WatchPendingApproval? = nil
     public var acceptedChangesCascadeIds: Set<String> = []
+    public var proceededArtifactIds: Set<String> = []
+    public var isAuthorizingApproval: Bool = false
 
-    // MARK: - Handoff Activity & Connectivity Proxy
+    // MARK: - Wrist-Unlock Guard, Handoff Activity & Connectivity Proxy
+    private let wristAuthorizer: any WatchWristUnlockAuthorizing
     private var currentHandoffActivity: NSUserActivity?
     private var toastClearTask: Task<Void, Never>?
     #if canImport(WatchConnectivity) && os(watchOS)
     private var sessionDelegateProxy: WatchSessionDelegateProxy?
     #endif
 
-    public init() {
+    public init(wristAuthorizer: (any WatchWristUnlockAuthorizing)? = nil) {
         let launchScene = Self.detectLaunchVerifyScene()
+        if let wristAuthorizer {
+            self.wristAuthorizer = wristAuthorizer
+        } else if launchScene != nil {
+            self.wristAuthorizer = Self.detectVerifyWristLocked()
+                ? LockedOffWristVerifier()
+                : AlwaysAuthorizedWristVerifier()
+        } else {
+            self.wristAuthorizer = WatchWristUnlockGuard()
+        }
+
         if let launchScene {
             self.snapshot = WatchVerificationFixtures.makeSnapshot(for: launchScene)
             self.isVerificationMode = true
@@ -66,7 +81,7 @@ public final class WatchAppStore {
         }
     }
 
-    // MARK: - Launch Verification Detection (`--watch-verify` or `AGPOCKET_WATCH_VERIFY`)
+    // MARK: - Launch Verification Detection (`--watch-verify` / `AGPOCKET_WATCH_VERIFY`)
 
     public static func detectLaunchVerifyScene() -> WatchVerifySceneCase? {
         if let envVal = ProcessInfo.processInfo.environment["AGPOCKET_WATCH_VERIFY"]?
@@ -79,6 +94,16 @@ public final class WatchAppStore {
             return parseSceneCase(args[idx + 1])
         }
         return nil
+    }
+
+    public static func detectVerifyWristLocked() -> Bool {
+        if let envVal = ProcessInfo.processInfo.environment["AGPOCKET_WATCH_WRIST_LOCKED"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+           envVal == "1" || envVal == "true" || envVal == "yes" {
+            return true
+        }
+        return CommandLine.arguments.contains("--watch-wrist-locked")
     }
 
     public static func parseSceneCase(_ raw: String) -> WatchVerifySceneCase? {
@@ -141,11 +166,17 @@ public final class WatchAppStore {
         snapshot.sessions.first(where: { $0.cascadeId == cascadeId })
     }
 
+    public var isVoiceNewTask: Bool {
+        voiceTargetCascadeId == nil
+    }
+
     public var voiceTargetSession: WatchSessionSnapshot? {
-        if let id = voiceTargetCascadeId, let match = session(for: id) {
-            return match
-        }
-        return snapshot.sessions.first
+        guard let id = voiceTargetCascadeId else { return nil }
+        return session(for: id)
+    }
+
+    public var voiceTargetDisplayTitle: String {
+        voiceTargetSession?.title ?? "New task"
     }
 
     public var combinedVoiceDraftText: String {
@@ -174,24 +205,52 @@ public final class WatchAppStore {
         }
     }
 
+    /// Top-right mic CTA on `W01_SESSIONS`: opens Voice Input targeting **New task** creation.
+    public func openNewVoiceTask() {
+        voiceTargetCascadeId = nil
+        if isVerificationMode {
+            voiceCommittedText = WatchVerificationFixtures.sampleNewTaskVoiceTranscript
+            voicePartialWord = ""
+        } else {
+            voiceCommittedText = ""
+            voicePartialWord = ""
+        }
+        isVoiceListening = true
+        isVoiceSheetPresented = true
+    }
+
+    /// Chat FAB (`W03`) or Approval Reply (`W08`): opens Voice Input targeting a specific session.
     public func openVoiceInput(for cascadeId: String? = nil) {
-        voiceTargetCascadeId = cascadeId ?? snapshot.sessions.first?.cascadeId
+        voiceTargetCascadeId = cascadeId
         if !isVerificationMode {
             voiceCommittedText = ""
             voicePartialWord = ""
-            isVoiceListening = true
+        } else if voiceCommittedText.isEmpty && voicePartialWord.isEmpty {
+            voiceCommittedText = WatchVerificationFixtures.sampleVoiceCommittedTranscript
+            voicePartialWord = WatchVerificationFixtures.sampleVoicePartialWord
         }
+        isVoiceListening = true
         isVoiceSheetPresented = true
     }
 
     public func cycleVoiceTargetSession() {
-        guard snapshot.sessions.count > 1 else { return }
-        let currentId = voiceTargetSession?.cascadeId
-        if let idx = snapshot.sessions.firstIndex(where: { $0.cascadeId == currentId }) {
-            let nextIdx = (idx + 1) % snapshot.sessions.count
-            voiceTargetCascadeId = snapshot.sessions[nextIdx].cascadeId
-        } else {
+        guard !snapshot.sessions.isEmpty else {
+            voiceTargetCascadeId = nil
+            return
+        }
+        guard let currentId = voiceTargetCascadeId else {
             voiceTargetCascadeId = snapshot.sessions.first?.cascadeId
+            return
+        }
+        if let idx = snapshot.sessions.firstIndex(where: { $0.cascadeId == currentId }) {
+            let nextIdx = idx + 1
+            if nextIdx < snapshot.sessions.count {
+                voiceTargetCascadeId = snapshot.sessions[nextIdx].cascadeId
+            } else {
+                voiceTargetCascadeId = nil
+            }
+        } else {
+            voiceTargetCascadeId = nil
         }
     }
 
@@ -201,48 +260,97 @@ public final class WatchAppStore {
             isVoiceSheetPresented = false
             return
         }
-        let targetId = voiceTargetSession?.cascadeId ?? WatchVerificationFixtures.rateLimiterCascadeId
-        if let idx = snapshot.sessions.firstIndex(where: { $0.cascadeId == targetId }) {
+
+        if let targetId = voiceTargetCascadeId,
+           let idx = snapshot.sessions.firstIndex(where: { $0.cascadeId == targetId }) {
             snapshot.sessions[idx].recentMessages.append(
                 WatchChatBubbleItem(isUser: true, isVoiceInput: true, text: text)
             )
             snapshot.sessions[idx].status = .running
             snapshot.sessions[idx].statusSubtitle = "Running"
+            isVoiceListening = false
+            voiceCommittedText = ""
+            voicePartialWord = ""
+            isVoiceSheetPresented = false
+            WatchHaptics.success()
+            persistCachedSnapshot()
+            sendCommand(WatchRemoteCommand(kind: .sendVoiceReply, cascadeId: targetId, text: text))
+            showToast("Sent")
+        } else {
+            let newId = "cas-watch-\(UUID().uuidString.prefix(6).lowercased())"
+            let newTitle = WatchRemoteCommand.derivedTaskTitle(from: text)
+            let isCloud = snapshot.activeDeviceKind == .cloud
+            let newSession = WatchSessionSnapshot(
+                cascadeId: newId,
+                title: newTitle,
+                status: .running,
+                isCloud: isCloud,
+                currentStepIndex: 1,
+                totalSteps: 1,
+                statusSubtitle: isCloud ? "Cloud · Starting" : "Starting…",
+                hostName: snapshot.activeDeviceName,
+                recentMessages: [
+                    WatchChatBubbleItem(isUser: true, isVoiceInput: true, text: text)
+                ]
+            )
+            snapshot.sessions.insert(newSession, at: 0)
+            isVoiceListening = false
+            voiceCommittedText = ""
+            voicePartialWord = ""
+            isVoiceSheetPresented = false
+            WatchHaptics.success()
+            persistCachedSnapshot()
+            sendCommand(
+                WatchRemoteCommand(
+                    kind: .createVoiceTask,
+                    deviceId: snapshot.activeDeviceId,
+                    text: text
+                )
+            )
+            showToast("New task sent")
         }
-        isVoiceListening = false
-        voiceCommittedText = ""
-        voicePartialWord = ""
-        isVoiceSheetPresented = false
-        WatchHaptics.success()
-        persistCachedSnapshot()
-        sendCommand(WatchRemoteCommand(kind: .sendVoiceReply, cascadeId: targetId, text: text))
-        showToast("Sent")
     }
 
+    /// Approval action (`W08` Allow): requires Watch to be unlocked AND worn on wrist.
     public func approveCommand(_ approval: WatchPendingApproval) {
-        if let idx = snapshot.sessions.firstIndex(where: { $0.cascadeId == approval.cascadeId }) {
-            snapshot.sessions[idx].status = .running
-            snapshot.sessions[idx].currentStepIndex = min(
-                snapshot.sessions[idx].totalSteps,
-                approval.stepIndex + 1
+        guard !isAuthorizingApproval else { return }
+        isAuthorizingApproval = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isAuthorizingApproval = false }
+            let verified = await self.wristAuthorizer.verifyUnlockedOnWrist(
+                reason: "Approve \(approval.cascadeTitle) command"
             )
-            snapshot.sessions[idx].statusSubtitle = "Step \(snapshot.sessions[idx].currentStepIndex) of \(snapshot.sessions[idx].totalSteps)"
-            snapshot.sessions[idx].pendingApproval = nil
-        }
-        if snapshot.activeApproval?.id == approval.id {
-            snapshot.activeApproval = nil
-        }
-        activeApprovalSheet = nil
-        WatchHaptics.success()
-        persistCachedSnapshot()
-        sendCommand(
-            WatchRemoteCommand(
-                kind: .approveCommand,
-                cascadeId: approval.cascadeId,
-                stepIndex: approval.stepIndex
+            guard verified else {
+                WatchHaptics.failure()
+                self.showToast("Unlock Watch on wrist to approve")
+                return
+            }
+            if let idx = self.snapshot.sessions.firstIndex(where: { $0.cascadeId == approval.cascadeId }) {
+                self.snapshot.sessions[idx].status = .running
+                self.snapshot.sessions[idx].currentStepIndex = min(
+                    self.snapshot.sessions[idx].totalSteps,
+                    approval.stepIndex + 1
+                )
+                self.snapshot.sessions[idx].statusSubtitle = "Step \(self.snapshot.sessions[idx].currentStepIndex) of \(self.snapshot.sessions[idx].totalSteps)"
+                self.snapshot.sessions[idx].pendingApproval = nil
+            }
+            if self.snapshot.activeApproval?.id == approval.id {
+                self.snapshot.activeApproval = nil
+            }
+            self.activeApprovalSheet = nil
+            WatchHaptics.success()
+            self.persistCachedSnapshot()
+            self.sendCommand(
+                WatchRemoteCommand(
+                    kind: .approveCommand,
+                    cascadeId: approval.cascadeId,
+                    stepIndex: approval.stepIndex,
+                    wristVerified: true
+                )
             )
-        )
-        showToast("Allowed")
+            self.showToast("Allowed")
+        }
     }
 
     public func denyCommand(_ approval: WatchPendingApproval) {
@@ -272,16 +380,76 @@ public final class WatchAppStore {
         openVoiceInput(for: approval.cascadeId)
     }
 
-    public func acceptAllChanges(for cascadeId: String) {
-        acceptedChangesCascadeIds.insert(cascadeId)
-        if let idx = snapshot.sessions.firstIndex(where: { $0.cascadeId == cascadeId }) {
-            snapshot.sessions[idx].status = .done
-            snapshot.sessions[idx].statusSubtitle = "Done"
+    /// Approval action (`W04` Proceed on Implementation Plan): requires Watch to be unlocked AND worn on wrist.
+    public func proceedPlan(cascadeId: String, artifact: WatchArtifactSummarySnapshot) {
+        guard !isAuthorizingApproval else { return }
+        isAuthorizingApproval = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isAuthorizingApproval = false }
+            let verified = await self.wristAuthorizer.verifyUnlockedOnWrist(
+                reason: "Proceed with \(artifact.title)"
+            )
+            guard verified else {
+                WatchHaptics.failure()
+                self.showToast("Unlock Watch on wrist to approve")
+                return
+            }
+            self.proceededArtifactIds.insert(artifact.id)
+            if let idx = self.snapshot.sessions.firstIndex(where: { $0.cascadeId == cascadeId }) {
+                self.snapshot.sessions[idx].status = .running
+                self.snapshot.sessions[idx].statusSubtitle = "Running"
+            }
+            WatchHaptics.success()
+            self.persistCachedSnapshot()
+            self.sendCommand(
+                WatchRemoteCommand(
+                    kind: .proceedPlan,
+                    cascadeId: cascadeId,
+                    artifactPath: artifact.artifactPath,
+                    wristVerified: true
+                )
+            )
+            self.showToast("Proceeding")
         }
-        WatchHaptics.success()
-        persistCachedSnapshot()
-        sendCommand(WatchRemoteCommand(kind: .acceptAllChanges, cascadeId: cascadeId))
-        showToast("Accepted all")
+    }
+
+    /// Approval action (`W05` Accept all): allowed ONLY when `<= 5` files with zero risk items AND Watch unlocked on wrist.
+    public func acceptAllChanges(for cascadeId: String) {
+        if let changes = session(for: cascadeId)?.changes, !changes.canAcceptAllOnWatch {
+            WatchHaptics.failure()
+            openOnPhone(cascadeId: cascadeId, target: .changes)
+            return
+        }
+        guard !isAuthorizingApproval else { return }
+        isAuthorizingApproval = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isAuthorizingApproval = false }
+            let verified = await self.wristAuthorizer.verifyUnlockedOnWrist(
+                reason: "Accept all file changes"
+            )
+            guard verified else {
+                WatchHaptics.failure()
+                self.showToast("Unlock Watch on wrist to approve")
+                return
+            }
+            self.acceptedChangesCascadeIds.insert(cascadeId)
+            if let idx = self.snapshot.sessions.firstIndex(where: { $0.cascadeId == cascadeId }) {
+                self.snapshot.sessions[idx].status = .done
+                self.snapshot.sessions[idx].statusSubtitle = "Done"
+            }
+            WatchHaptics.success()
+            self.persistCachedSnapshot()
+            self.sendCommand(
+                WatchRemoteCommand(
+                    kind: .acceptAllChanges,
+                    cascadeId: cascadeId,
+                    wristVerified: true
+                )
+            )
+            self.showToast("Accepted all")
+        }
     }
 
     public func openOnPhone(cascadeId: String, target: WatchPhoneHandoffTarget) {

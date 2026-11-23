@@ -15,7 +15,7 @@ public struct WatchVoiceInputView: View {
     }
 
     private var targetTitle: String {
-        store.voiceTargetSession?.title ?? "Rate limiter"
+        store.voiceTargetDisplayTitle
     }
 
     public var body: some View {

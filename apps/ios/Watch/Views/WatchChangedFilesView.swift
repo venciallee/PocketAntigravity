@@ -1,7 +1,9 @@
 import SwiftUI
 import AntigravityData
 
-/// Screens `W05_CHANGED_FILES_COMPACT` (<= 6 files) & `W06_CHANGED_FILES_GROUPED` (> 6 files, intent-grouped triage).
+/// Screens `W05_CHANGED_FILES_COMPACT` (<= 5 files AND zero risk items -> Watch `Accept all`)
+/// & `W06_CHANGED_FILES_GROUPED` (> 5 files OR any risk item -> `WORTH A LOOK` + intent groups + iPhone review).
+/// Never displays source code diffs on Apple Watch—only file path, `A`/`M`/`D` badge, and a one-line summary.
 public struct WatchChangedFilesView: View {
     @Bindable public var store: WatchAppStore
     public let cascadeId: String
@@ -26,8 +28,12 @@ public struct WatchChangedFilesView: View {
         store.acceptedChangesCascadeIds.contains(cascadeId)
     }
 
+    private var showsCompactAcceptBar: Bool {
+        changes.canAcceptAllOnWatch
+    }
+
     public var body: some View {
-        ZStack(alignment: changes.isGroupedMode ? .bottomTrailing : .bottom) {
+        ZStack(alignment: showsCompactAcceptBar ? .bottom : .bottomTrailing) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     WatchNavigationHeader(title: "Changes", onBack: onBack)
@@ -36,7 +42,7 @@ public struct WatchChangedFilesView: View {
                         .padding(.horizontal, 10)
                         .padding(.bottom, 2)
 
-                    if changes.isGroupedMode {
+                    if changes.isGroupedMode || !changes.worthALookFiles.isEmpty {
                         groupedChangesContent
                     } else {
                         compactChangesContent
@@ -46,10 +52,10 @@ public struct WatchChangedFilesView: View {
             }
             .background(WatchTheme.canvas.ignoresSafeArea())
 
-            if changes.isGroupedMode {
-                floatingPhoneHandoffButton
-            } else {
+            if showsCompactAcceptBar {
                 compactBottomActionBar
+            } else {
+                floatingPhoneHandoffButton
             }
         }
         .navigationBarBackButtonHidden(true)
@@ -74,7 +80,7 @@ public struct WatchChangedFilesView: View {
         .lineLimit(1)
     }
 
-    // MARK: - W05 Compact Mode (<= 6 files)
+    // MARK: - W05 Compact Mode (<= 5 files AND zero risk items)
 
     private var compactChangesContent: some View {
         VStack(spacing: 6) {
@@ -176,7 +182,7 @@ public struct WatchChangedFilesView: View {
         )
     }
 
-    // MARK: - W06 Intent-Grouped Triage Mode (> 6 files)
+    // MARK: - W06 Intent-Grouped Triage Mode (> 5 files OR any risk item)
 
     private var groupedChangesContent: some View {
         VStack(alignment: .leading, spacing: 6) {

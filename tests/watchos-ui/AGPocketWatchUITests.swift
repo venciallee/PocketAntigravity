@@ -1,16 +1,22 @@
 import XCTest
 
-/// Real watchOS Interactive XCUITest E2E Suite covering all 8 Apple Watch companion screens (`W01`..`W08`)
-/// and interactive journeys (`WTC-01`..`WTC-09`) on Apple Watch Simulator (`AGPocketWatch.app`).
+/// Real watchOS Interactive XCUITest E2E Suite covering all 8 Apple Watch companion screens (`W01`..`W08`),
+/// interactive journeys (`WTC-01`..`WTC-09`), wrist-unlock approval gating (`WTC-13`),
+/// and top-right Voice New Task dispatch (`WTC-14`) on Apple Watch Simulator (`AGPocketWatch.app`).
 @MainActor
 final class AGPocketWatchUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
 
-    private func launchWatchApp(verifyScene: String) -> XCUIApplication {
+    private func launchWatchApp(verifyScene: String, wristLocked: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["--watch-verify", verifyScene]
+        var args = ["--watch-verify", verifyScene]
+        if wristLocked {
+            args.append("--watch-wrist-locked")
+            app.launchEnvironment["AGPOCKET_WATCH_WRIST_LOCKED"] = "1"
+        }
+        app.launchArguments = args
         app.launchEnvironment["AGPOCKET_WATCH_VERIFY"] = verifyScene
         app.launch()
         return app
@@ -55,7 +61,7 @@ final class AGPocketWatchUITests: XCTestCase {
         XCTAssertTrue(app.buttons["watch.chat.artifactCard"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["watch.chat.diffPill"].exists)
 
-        // Tap Walkthrough card -> W04_ARTIFACT_SUMMARY
+        // Tap Walkthrough card -> W04_ARTIFACT_SUMMARY (<= 3 key points + single primary CTA)
         app.buttons["watch.chat.artifactCard"].tap()
         XCTAssertTrue(app.staticTexts["Per-tenant token bucket"].waitForExistence(timeout: 6))
         XCTAssertTrue(app.buttons["watch.artifact.openOnPhone"].exists)
@@ -71,7 +77,7 @@ final class AGPocketWatchUITests: XCTestCase {
         XCTAssertTrue(app.buttons["watch.changes.acceptAll"].waitForExistence(timeout: 5))
     }
 
-    // MARK: - WTC-05: Compact Changed Files & Accept All
+    // MARK: - WTC-05: Compact Changed Files (<= 5 files, zero risk items) & Accept All
 
     func testWTC05_CompactChangedFilesAndAcceptAll() {
         let app = launchWatchApp(verifyScene: "W05_CHANGED_FILES_COMPACT")
@@ -86,7 +92,7 @@ final class AGPocketWatchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Accepted"].waitForExistence(timeout: 5))
     }
 
-    // MARK: - WTC-06: Large Intent-Grouped Changed Files & iPhone Handoff
+    // MARK: - WTC-06: Large / Risky Intent-Grouped Changed Files & iPhone Handoff
 
     func testWTC06_GroupedChangedFilesTriageAndPhoneHandoff() {
         let app = launchWatchApp(verifyScene: "W06_CHANGED_FILES_GROUPED")
@@ -133,7 +139,7 @@ final class AGPocketWatchUITests: XCTestCase {
     // MARK: - WTC-08 & WTC-09: Approval Notification Allow / Deny / Reply by Voice
 
     func testWTC08_WTC09_ApprovalNotificationAllowDenyAndReplyByVoice() {
-        // Branch 1: Allow
+        // Branch 1: Allow (Watch unlocked on wrist)
         let appAllow = launchWatchApp(verifyScene: "W08_APPROVAL_NOTIFICATION")
         XCTAssertTrue(appAllow.staticTexts["watch.approval.title"].waitForExistence(timeout: 8))
         XCTAssertTrue(appAllow.staticTexts["watch.approval.command"].exists)
@@ -149,5 +155,41 @@ final class AGPocketWatchUITests: XCTestCase {
         XCTAssertTrue(appReply.buttons["watch.approval.replyByVoice"].waitForExistence(timeout: 8))
         appReply.buttons["watch.approval.replyByVoice"].tap()
         XCTAssertTrue(appReply.buttons["watch.voice.sendButton"].waitForExistence(timeout: 6))
+    }
+
+    // MARK: - WTC-13: Locked / Off-Wrist Apple Watch Blocks Approval Actions
+
+    func testWTC13_WristLockedBlocksApprovals() {
+        // 1. Approval notification Allow is blocked when Watch is locked or off-wrist
+        let appLockedApproval = launchWatchApp(verifyScene: "W08_APPROVAL_NOTIFICATION", wristLocked: true)
+        XCTAssertTrue(appLockedApproval.buttons["watch.approval.allow"].waitForExistence(timeout: 8))
+        appLockedApproval.buttons["watch.approval.allow"].tap()
+        XCTAssertTrue(appLockedApproval.staticTexts["Unlock Watch on wrist to approve"].waitForExistence(timeout: 5))
+        // Pending approval sheet stays open (not dismissed!)
+        XCTAssertTrue(appLockedApproval.buttons["watch.approval.allow"].exists)
+
+        // 2. Compact changes Accept all is also blocked when Watch is locked or off-wrist
+        let appLockedChanges = launchWatchApp(verifyScene: "W05_CHANGED_FILES_COMPACT", wristLocked: true)
+        let acceptAll = appLockedChanges.buttons["watch.changes.acceptAll"]
+        XCTAssertTrue(acceptAll.waitForExistence(timeout: 8))
+        acceptAll.tap()
+        XCTAssertTrue(appLockedChanges.staticTexts["Unlock Watch on wrist to approve"].waitForExistence(timeout: 5))
+        XCTAssertFalse(appLockedChanges.staticTexts["Accepted"].exists)
+    }
+
+    // MARK: - WTC-14: Top-Right Mic Button Creates New Voice Task
+
+    func testWTC14_HomeTopRightVoiceCreatesNewTask() {
+        let app = launchWatchApp(verifyScene: "W01_SESSIONS")
+        XCTAssertTrue(app.buttons["watch.home.voiceButton"].waitForExistence(timeout: 8))
+
+        // Top-right mic opens Voice Input targeting "To: New task"
+        app.buttons["watch.home.voiceButton"].tap()
+        XCTAssertTrue(app.buttons["watch.voice.targetSelector"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.staticTexts["To: New task"].waitForExistence(timeout: 5) || app.buttons["watch.voice.targetSelector"].label.contains("New task"))
+
+        app.buttons["watch.voice.sendButton"].tap()
+        XCTAssertTrue(app.staticTexts["Agents"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.staticTexts["Fix flaky webhook retries"].waitForExistence(timeout: 5))
     }
 }

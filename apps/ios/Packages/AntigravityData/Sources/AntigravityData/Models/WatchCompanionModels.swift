@@ -73,17 +73,69 @@ public enum WatchPhoneHandoffTarget: String, ResilientStringEnum, CaseIterable {
     public static var unknownFallback: WatchPhoneHandoffTarget { .chat }
 }
 
+/// Primary CTA shown on Watch Artifact Summary (`W04`): `See changes` (Walkthrough) or `Proceed` (Implementation Plan).
+public enum WatchArtifactPrimaryAction: String, ResilientStringEnum, CaseIterable {
+    case seeChanges
+    case proceed
+
+    public static var unknownFallback: WatchArtifactPrimaryAction { .seeChanges }
+
+    public var buttonTitle: String {
+        switch self {
+        case .seeChanges: return "See changes"
+        case .proceed: return "Proceed"
+        }
+    }
+}
+
 /// Action kinds dispatched from Apple Watch back to the paired iPhone companion over `WatchConnectivity`.
 public enum WatchRemoteCommandKind: String, ResilientStringEnum, CaseIterable {
     case selectDevice
     case approveCommand
     case denyCommand
     case sendVoiceReply
+    case createVoiceTask
+    case proceedPlan
     case acceptAllChanges
     case openOnPhone
     case requestRefresh
 
     public static var unknownFallback: WatchRemoteCommandKind { .requestRefresh }
+
+    /// Approval-class actions require an unlocked Apple Watch worn on the user's wrist.
+    public var requiresWristUnlockApproval: Bool {
+        switch self {
+        case .approveCommand, .proceedPlan, .acceptAllChanges:
+            return true
+        case .selectDevice, .denyCommand, .sendVoiceReply, .createVoiceTask, .openOnPhone, .requestRefresh:
+            return false
+        }
+    }
+}
+
+/// Pure-Swift authorization contract implemented on watchOS via `LAContext`
+/// (`LAPolicy.deviceOwnerAuthenticationWithWristDetection`) so approval actions require
+/// an unlocked Apple Watch worn on the user's wrist.
+public protocol WatchWristUnlockAuthorizing: Sendable {
+    func verifyUnlockedOnWrist(reason: String) async -> Bool
+}
+
+/// Deterministic test/verification verifier representing an unlocked Apple Watch on wrist.
+public struct AlwaysAuthorizedWristVerifier: WatchWristUnlockAuthorizing {
+    public init() {}
+
+    public func verifyUnlockedOnWrist(reason: String) async -> Bool {
+        true
+    }
+}
+
+/// Deterministic test/verification verifier representing a locked or off-wrist Apple Watch.
+public struct LockedOffWristVerifier: WatchWristUnlockAuthorizing {
+    public init() {}
+
+    public func verifyUnlockedOnWrist(reason: String) async -> Bool {
+        false
+    }
 }
 
 // MARK: - Apple Watch Compact Snapshot Models
@@ -183,25 +235,46 @@ public struct WatchArtifactPoint: Codable, Sendable, Equatable, Identifiable, Ha
 }
 
 /// Distilled walkthrough / implementation-plan artifact summary rendered on `W03` card and `W04` screen.
+/// Strictly limited to title + headline + `<= 3` numbered key points + single primary action (`See changes` or `Proceed`).
 public struct WatchArtifactSummarySnapshot: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public static let maxKeyPoints = 3
+
     public var id: String
     public var title: String
     public var headline: String
     public var artifactPath: String
     public var points: [WatchArtifactPoint]
+    public var primaryAction: WatchArtifactPrimaryAction
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, headline, artifactPath, points, primaryAction
+    }
 
     public init(
         id: String = "artifact-summary",
         title: String = "Walkthrough",
         headline: String,
         artifactPath: String = "/brain/walkthrough.md",
-        points: [WatchArtifactPoint]
+        points: [WatchArtifactPoint],
+        primaryAction: WatchArtifactPrimaryAction = .seeChanges
     ) {
         self.id = id
         self.title = title
         self.headline = headline
         self.artifactPath = artifactPath
-        self.points = points
+        self.points = Array(points.prefix(Self.maxKeyPoints))
+        self.primaryAction = primaryAction
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.headline = try container.decode(String.self, forKey: .headline)
+        self.artifactPath = try container.decode(String.self, forKey: .artifactPath)
+        let decodedPoints = try container.decode([WatchArtifactPoint].self, forKey: .points)
+        self.points = Array(decodedPoints.prefix(Self.maxKeyPoints))
+        self.primaryAction = try container.decodeIfPresent(WatchArtifactPrimaryAction.self, forKey: .primaryAction) ?? .seeChanges
     }
 
     public var pointsCountLabel: String {
@@ -274,9 +347,10 @@ public struct WatchFileIntentGroup: Codable, Sendable, Equatable, Identifiable, 
     }
 }
 
-/// Complete changed-files triage snapshot driving both `W05` (≤ 6 files) and `W06` (> 6 files, intent-grouped).
+/// Complete changed-files triage snapshot driving both `W05` (≤ 5 files AND zero risk items -> Watch `Accept all`)
+/// and `W06` (> 5 files OR any risk item -> `WORTH A LOOK` + intent-grouped clusters + iPhone review CTA).
 public struct WatchChangesSnapshot: Codable, Sendable, Equatable, Hashable {
-    public static let defaultCompactThreshold = 6
+    public static let defaultCompactThreshold = 5
 
     public var totalFiles: Int
     public var totalAdditions: Int
@@ -301,7 +375,18 @@ public struct WatchChangesSnapshot: Codable, Sendable, Equatable, Hashable {
         self.compactFiles = compactFiles
         self.worthALookFiles = worthALookFiles
         self.intentGroups = intentGroups
-        self.isGroupedMode = isGroupedMode ?? (totalFiles > Self.defaultCompactThreshold || !intentGroups.isEmpty)
+        self.isGroupedMode = isGroupedMode
+            ?? (totalFiles > Self.defaultCompactThreshold || !worthALookFiles.isEmpty || !intentGroups.isEmpty)
+    }
+
+    /// Only allow one-tap `Accept all` on Watch when `totalFiles <= 5`, zero risk items exist,
+    /// and all changed files have been explicitly triaged in compact mode.
+    public var canAcceptAllOnWatch: Bool {
+        !isGroupedMode
+            && worthALookFiles.isEmpty
+            && !compactFiles.isEmpty
+            && totalFiles > 0
+            && totalFiles <= Self.defaultCompactThreshold
     }
 
     public var groupedFileCount: Int {
@@ -459,9 +544,17 @@ public struct WatchRemoteCommand: Codable, Sendable, Equatable, Identifiable {
     public var deviceId: String?
     public var cascadeId: String?
     public var stepIndex: Int?
+    public var artifactPath: String?
     public var text: String?
     public var handoffTarget: WatchPhoneHandoffTarget?
+    /// Indicates watchOS verified the watch was unlocked and worn on wrist via
+    /// `LAPolicy.deviceOwnerAuthenticationWithWristDetection` before dispatching an approval command.
+    public var wristVerified: Bool
     public var createdAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, deviceId, cascadeId, stepIndex, artifactPath, text, handoffTarget, wristVerified, createdAt
+    }
 
     public init(
         id: String = UUID().uuidString,
@@ -469,8 +562,10 @@ public struct WatchRemoteCommand: Codable, Sendable, Equatable, Identifiable {
         deviceId: String? = nil,
         cascadeId: String? = nil,
         stepIndex: Int? = nil,
+        artifactPath: String? = nil,
         text: String? = nil,
         handoffTarget: WatchPhoneHandoffTarget? = nil,
+        wristVerified: Bool = false,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -478,9 +573,39 @@ public struct WatchRemoteCommand: Codable, Sendable, Equatable, Identifiable {
         self.deviceId = deviceId
         self.cascadeId = cascadeId
         self.stepIndex = stepIndex
+        self.artifactPath = artifactPath
         self.text = text
         self.handoffTarget = handoffTarget
+        self.wristVerified = wristVerified
         self.createdAt = createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.kind = try container.decode(WatchRemoteCommandKind.self, forKey: .kind)
+        self.deviceId = try container.decodeIfPresent(String.self, forKey: .deviceId)
+        self.cascadeId = try container.decodeIfPresent(String.self, forKey: .cascadeId)
+        self.stepIndex = try container.decodeIfPresent(Int.self, forKey: .stepIndex)
+        self.artifactPath = try container.decodeIfPresent(String.self, forKey: .artifactPath)
+        self.text = try container.decodeIfPresent(String.self, forKey: .text)
+        self.handoffTarget = try container.decodeIfPresent(WatchPhoneHandoffTarget.self, forKey: .handoffTarget)
+        self.wristVerified = try container.decodeIfPresent(Bool.self, forKey: .wristVerified) ?? false
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    /// Derives a concise task title from a spoken voice prompt when creating a new task from Apple Watch.
+    public static func derivedTaskTitle(from prompt: String) -> String {
+        let cleaned = prompt
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return "New voice task" }
+        let words = cleaned.split(whereSeparator: \.isWhitespace)
+        let candidate = words.prefix(4).joined(separator: " ")
+        if candidate.count <= 28 {
+            return candidate
+        }
+        return String(candidate.prefix(27)) + "…"
     }
 }
 
@@ -576,8 +701,9 @@ public enum WatchConnectivityCodec {
 
 // MARK: - Watch Diff Intent-Grouping Triage Engine (`W05` / `W06`)
 
-/// Automatically chooses compact per-file listing (`<= 6` files, `W05`) or high-signal intent-grouped triage
-/// (`> 6` files, `W06`: `WORTH A LOOK` + `GROUPED` clusters) for Apple Watch's small screen.
+/// Automatically chooses compact per-file listing (`<= 5` files AND zero risk items, `W05`, allowing Watch `Accept all`)
+/// or high-signal intent-grouped triage (`> 5` files OR any risk item, `W06`: `WORTH A LOOK` + `GROUPED` clusters + iPhone CTA).
+/// Never exposes source code lines on Apple Watch—strictly file path, `A`/`M`/`D` badge, and one-line summary.
 public enum WatchDiffTriageEngine {
     private static let highSignalBasenames: Set<String> = [
         "go.mod", "go.sum", "package.json", "package-lock.json", "pnpm-lock.yaml",
@@ -610,7 +736,29 @@ public enum WatchDiffTriageEngine {
             )
         }
 
-        if totalFiles <= compactThreshold {
+        // Always inspect risk / high-signal items first, even when `totalFiles <= 5`.
+        var worthALook: [WatchChangedFileItem] = []
+        var remainder: [FilePatchDiff] = []
+
+        for diff in diffs {
+            if let riskReason = classifyHighSignalReason(for: diff), worthALook.count < 4 {
+                worthALook.append(
+                    WatchChangedFileItem(
+                        filePath: diff.filePath,
+                        statusLetter: mapStatusLetter(diff.statusLetter),
+                        summary: riskReason,
+                        additions: diff.additions,
+                        deletions: diff.deletions,
+                        isWorthALook: true
+                    )
+                )
+            } else {
+                remainder.append(diff)
+            }
+        }
+
+        // Only allow compact `Accept all` mode when `<= 5` files AND zero risk items were flagged.
+        if totalFiles <= compactThreshold && worthALook.isEmpty {
             let items = diffs.map { diff in
                 WatchChangedFileItem(
                     filePath: diff.filePath,
@@ -632,27 +780,7 @@ public enum WatchDiffTriageEngine {
             )
         }
 
-        var worthALook: [WatchChangedFileItem] = []
-        var remainder: [FilePatchDiff] = []
-
-        for diff in diffs {
-            if let riskReason = classifyHighSignalReason(for: diff), worthALook.count < 4 {
-                worthALook.append(
-                    WatchChangedFileItem(
-                        filePath: diff.filePath,
-                        statusLetter: mapStatusLetter(diff.statusLetter),
-                        summary: riskReason,
-                        additions: diff.additions,
-                        deletions: diff.deletions,
-                        isWorthALook: true
-                    )
-                )
-            } else {
-                remainder.append(diff)
-            }
-        }
-
-        // Ensure at least one high-signal file is surfaced if the change set is large.
+        // For large change sets (> 5 files) without explicit risk hits, surface the largest change under WORTH A LOOK.
         if worthALook.isEmpty, let largest = remainder.max(by: { ($0.additions + $0.deletions) < ($1.additions + $1.deletions) }) {
             worthALook.append(
                 WatchChangedFileItem(
@@ -803,10 +931,14 @@ public enum WatchDiffTriageEngine {
 
 // MARK: - Watch Artifact Markdown Summarizer (`W04`)
 
-/// Distills rich Markdown artifacts (`Walkthrough`, `Implementation Plan`) into 1–4 concise numbered points
-/// with inline monospace code and emerald performance metric spans tailored for Apple Watch.
+/// Distills rich Markdown artifacts (`Walkthrough`, `Implementation Plan`) into title + `<= 3` concise numbered points
+/// with inline monospace code and emerald performance metric spans plus a single primary action (`See changes` or `Proceed`).
 public enum WatchArtifactSummarizer {
-    public static func buildSummary(from artifact: ArtifactSnapshot, maxPoints: Int = 3) -> WatchArtifactSummarySnapshot {
+    public static func buildSummary(
+        from artifact: ArtifactSnapshot,
+        maxPoints: Int = WatchArtifactSummarySnapshot.maxKeyPoints
+    ) -> WatchArtifactSummarySnapshot {
+        let clampedMax = max(1, min(WatchArtifactSummarySnapshot.maxKeyPoints, maxPoints))
         let rawLines = artifact.content.components(separatedBy: .newlines)
         var headline = artifact.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         var candidateBullets: [String] = []
@@ -847,14 +979,14 @@ public enum WatchArtifactSummarizer {
                 .split(separator: ".")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { $0.count >= 6 }
-            candidateBullets = Array(sentences.prefix(maxPoints))
+            candidateBullets = Array(sentences.prefix(clampedMax))
         }
 
         if candidateBullets.isEmpty && !artifact.summary.isEmpty {
             candidateBullets = [artifact.summary]
         }
 
-        let points = candidateBullets.prefix(maxPoints).enumerated().map { idx, text in
+        let points = candidateBullets.prefix(clampedMax).enumerated().map { idx, text in
             WatchArtifactPoint(
                 index: idx + 1,
                 spans: parseInlineSpans(from: text)
@@ -871,12 +1003,17 @@ public enum WatchArtifactSummarizer {
             }
         }()
 
+        let primaryAction: WatchArtifactPrimaryAction = (artifact.kind == .implementationPlan || artifact.requestFeedback)
+            ? .proceed
+            : .seeChanges
+
         return WatchArtifactSummarySnapshot(
             id: artifact.id,
             title: shortTitle,
             headline: headline,
             artifactPath: artifact.artifactPath,
-            points: points
+            points: points,
+            primaryAction: primaryAction
         )
     }
 
@@ -1039,7 +1176,8 @@ public enum WatchCompanionProjector {
             let recentMessages = extractRecentMessages(from: steps, fallbackPreview: summary.lastMessagePreview)
             let artifactSummary: WatchArtifactSummarySnapshot? = {
                 if summary.cascadeId == store.activeCascadeId,
-                   let artifact = store.activeArtifacts.first(where: { $0.kind == .walkthrough })
+                   let artifact = store.activeArtifacts.first(where: { $0.kind == .implementationPlan && $0.requestFeedback })
+                    ?? store.activeArtifacts.first(where: { $0.kind == .walkthrough })
                     ?? store.activeArtifacts.first {
                     return WatchArtifactSummarizer.buildSummary(from: artifact)
                 }
@@ -1051,6 +1189,7 @@ public enum WatchCompanionProjector {
                     return WatchDiffTriageEngine.buildChangesSnapshot(from: store.activeTurnDiffs)
                 }
                 if summary.totalAdditions > 0 || summary.totalDeletions > 0 {
+                    // Without full per-file risk triage, route to grouped/iPhone review rather than blind Accept all.
                     return WatchChangesSnapshot(
                         totalFiles: max(1, steps.filter { $0.type == .codeAction }.count),
                         totalAdditions: summary.totalAdditions,
@@ -1058,7 +1197,7 @@ public enum WatchCompanionProjector {
                         compactFiles: [],
                         worthALookFiles: [],
                         intentGroups: [],
-                        isGroupedMode: false
+                        isGroupedMode: true
                     )
                 }
                 return nil

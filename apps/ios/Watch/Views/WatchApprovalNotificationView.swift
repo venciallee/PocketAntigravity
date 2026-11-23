@@ -133,14 +133,24 @@ public final class WatchApprovalNotificationController: WKUserNotificationHostin
         WatchApprovalNotificationView(
             approval: approval,
             onAllow: { [approval] in
-                WatchHaptics.success()
-                Self.dispatchNotificationCommand(
-                    WatchRemoteCommand(
-                        kind: .approveCommand,
-                        cascadeId: approval.cascadeId,
-                        stepIndex: approval.stepIndex
+                Task { @MainActor in
+                    let verified = await WatchWristUnlockGuard().verifyUnlockedOnWrist(
+                        reason: "Approve \(approval.cascadeTitle) command"
                     )
-                )
+                    guard verified else {
+                        WatchHaptics.failure()
+                        return
+                    }
+                    WatchHaptics.success()
+                    Self.dispatchNotificationCommand(
+                        WatchRemoteCommand(
+                            kind: .approveCommand,
+                            cascadeId: approval.cascadeId,
+                            stepIndex: approval.stepIndex,
+                            wristVerified: true
+                        )
+                    )
+                }
             },
             onDeny: { [approval] in
                 WatchHaptics.click()

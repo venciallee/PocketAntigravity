@@ -78,19 +78,14 @@ public final class WatchConnectivityBridge: NSObject {
     public func handleIncomingCommand(_ command: WatchRemoteCommand) {
         guard let store = attachedStore else { return }
 
+        // Defense-in-depth: approval-class commands MUST be verified on an unlocked Watch worn on wrist.
+        if command.kind.requiresWristUnlockApproval && !command.wristVerified {
+            return
+        }
+
         switch command.kind {
         case .selectDevice:
-            if let deviceId = command.deviceId, !deviceId.isEmpty {
-                if deviceId.lowercased() == "cloud" {
-                    store.selectHostScope(.antigravityCloud)
-                } else if deviceId.lowercased() == "all" {
-                    store.selectHostScope(.allHosts)
-                } else if let host = store.pairedLocalHosts.first(where: { $0.instanceId == deviceId || $0.hostname == deviceId }) {
-                    store.selectHostScope(.localHost(id: host.instanceId, name: host.hostname))
-                } else {
-                    store.selectHostScope(.localHost(id: deviceId, name: deviceId))
-                }
-            }
+            applyDeviceSelection(command.deviceId, in: store)
 
         case .approveCommand:
             if let cascadeId = command.cascadeId, !cascadeId.isEmpty, store.activeCascadeId != cascadeId {
@@ -113,9 +108,33 @@ public final class WatchConnectivityBridge: NSObject {
             store.composerDraftText = trimmed
             store.sendCurrentDraft()
 
+        case .createVoiceTask:
+            let trimmed = command.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty else { return }
+            if let deviceId = command.deviceId, !deviceId.isEmpty {
+                applyDeviceSelection(deviceId, in: store)
+            }
+            let title = WatchRemoteCommand.derivedTaskTitle(from: trimmed)
+            store.createNewCascade(title: title, initialPrompt: trimmed)
+
+        case .proceedPlan:
+            if let cascadeId = command.cascadeId, !cascadeId.isEmpty, store.activeCascadeId != cascadeId {
+                store.selectCascade(cascadeId)
+            }
+            let path = (command.artifactPath?.isEmpty == false)
+                ? command.artifactPath!
+                : "/brain/implementation_plan.md"
+            store.approveArtifactPlan(artifactPath: path)
+
         case .acceptAllChanges:
             if let cascadeId = command.cascadeId, !cascadeId.isEmpty, store.activeCascadeId != cascadeId {
                 store.selectCascade(cascadeId)
+            }
+            // Enforce the same <= 5 files & zero risk items gate on iPhone before accepting all diffs.
+            let triage = WatchDiffTriageEngine.buildChangesSnapshot(from: store.activeTurnDiffs)
+            guard triage.canAcceptAllOnWatch else {
+                store.activeRoute = .turnDiffReview
+                break
             }
             store.acceptAllTurnDiffs()
 
@@ -145,6 +164,19 @@ public final class WatchConnectivityBridge: NSObject {
         // Push updated state back to Apple Watch immediately after applying mutation.
         lastEncodedSnapshotHash = nil
         pushSnapshotNow(from: store)
+    }
+
+    private func applyDeviceSelection(_ deviceId: String?, in store: AntigravitySessionStore) {
+        guard let deviceId, !deviceId.isEmpty else { return }
+        if deviceId.lowercased() == "cloud" {
+            store.selectHostScope(.antigravityCloud)
+        } else if deviceId.lowercased() == "all" {
+            store.selectHostScope(.allHosts)
+        } else if let host = store.pairedLocalHosts.first(where: { $0.instanceId == deviceId || $0.hostname == deviceId }) {
+            store.selectHostScope(.localHost(id: host.instanceId, name: host.hostname))
+        } else {
+            store.selectHostScope(.localHost(id: deviceId, name: deviceId))
+        }
     }
 
     /// Handles Handoff (`NSUserActivity`) opened on iPhone from Apple Watch ("Open on iPhone").

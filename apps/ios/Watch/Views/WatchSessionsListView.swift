@@ -75,7 +75,7 @@ public struct WatchSessionsListView: View {
                 iconSize: 15,
                 accessibilityId: "watch.home.voiceButton"
             ) {
-                store.openVoiceInput(for: store.snapshot.sessions.first?.cascadeId)
+                store.openNewVoiceTask()
             }
         }
     }
