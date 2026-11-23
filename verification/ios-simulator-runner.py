@@ -269,6 +269,7 @@ def _resolve_execution_config(args: argparse.Namespace, repo_root: Path, all_sta
         xcuitests = list(plan.get("xcuitests", []))
         screens = list(plan.get("simulatorScreens", []))
         run_live_rpc = bool(gates.get("runLiveAppRPC", False))
+        run_watchos_sim = bool(gates.get("runWatchOSSim", False))
         is_release = bool(plan.get("isRelease", False))
         mode = plan.get("mode", "scoped")
     else:
@@ -279,16 +280,19 @@ def _resolve_execution_config(args: argparse.Namespace, repo_root: Path, all_sta
             xcuitests = []
             screens = []
             run_live_rpc = False
+            run_watchos_sim = False
         elif mode == "build-only":
             sim_mode = "build-only"
             xcuitests = []
             screens = []
             run_live_rpc = False
+            run_watchos_sim = False
         else:
             sim_mode = "full" if mode in ("full", "release") else "scoped"
             xcuitests = list(planner.ALL_XCUITESTS)
             screens = list(all_state_ids)
             run_live_rpc = True
+            run_watchos_sim = True
 
     # CLI overrides
     if args.only_testing is not None:
@@ -329,6 +333,7 @@ def _resolve_execution_config(args: argparse.Namespace, repo_root: Path, all_sta
         "totalXcuitests": len(planner.ALL_XCUITESTS),
         "allTestsSelected": all_tests_selected,
         "runLiveAppRPC": run_live_rpc,
+        "runWatchOSSim": run_watchos_sim,
         "screens": screens,
         "skippedScreens": [s for s in all_state_ids if s not in screens],
         "allScreensSelected": all_screens_selected,
@@ -439,8 +444,6 @@ def main() -> None:
             "PocketAntigravity.xcodeproj",
             "-scheme",
             APP_SCHEME,
-            "-sdk",
-            "iphonesimulator",
             "-destination",
             "generic/platform=iOS Simulator",
             "-derivedDataPath",
@@ -453,12 +456,27 @@ def main() -> None:
         ]
         _stream_command(build_cmd, repo_root, out_dir / "xcodebuild-only.log")
         timings["xcodeBuild"] = round(time.monotonic() - t_build, 2)
+        if cfg.get("runWatchOSSim"):
+            t_watch = time.monotonic()
+            print("=== [2b/5] Running Apple Watch Simulator E2E (W01–W08) ===", flush=True)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(repo_root / "verification" / "watchos-simulator-runner.py"),
+                    "--out-dir",
+                    str(out_dir / "watch"),
+                ],
+                cwd=repo_root,
+                check=True,
+            )
+            timings["watchOSSim"] = round(time.monotonic() - t_watch, 2)
         timings["total"] = round(time.monotonic() - t_start, 2)
         manifest = {
             "mode": cfg["mode"],
             "simMode": "build-only",
             "isRelease": cfg["isRelease"],
             "buildSucceeded": True,
+            "ranWatchOSSim": bool(cfg.get("runWatchOSSim")),
             "executedUITests": [],
             "skippedUITests": cfg["skippedXcuitests"],
             "ranLiveConnectRPC": False,
@@ -500,8 +518,6 @@ def main() -> None:
         "PocketAntigravity.xcodeproj",
         "-scheme",
         APP_SCHEME,
-        "-sdk",
-        "iphonesimulator",
         "-destination",
         f"id={udid}",
         "-derivedDataPath",
@@ -563,8 +579,6 @@ def main() -> None:
             "PocketAntigravity.xcodeproj",
             "-scheme",
             APP_SCHEME,
-            "-sdk",
-            "iphonesimulator",
             "-destination",
             f"id={udid}",
             "-derivedDataPath",
@@ -622,21 +636,28 @@ def main() -> None:
         threading.Thread(target=bridge_srv.serve_forever, daemon=True).start()
 
         try:
-            subprocess.run(["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID], check=False)
             launch_env = os.environ.copy()
             launch_env["SIMCTL_CHILD_NO_PROXY"] = "127.0.0.1,localhost,::1"
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_BACKEND_URL"] = f"http://127.0.0.1:{bridge_port}"
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_CSRF_TOKEN"] = csrf_token
             launch_env["SIMCTL_CHILD_ANTIGRAVITY_HOST_NAME"] = "Cloud Mac Runner"
-            subprocess.run(
-                ["xcrun", "simctl", "launch", udid, APP_BUNDLE_ID],
-                env=launch_env,
-                check=True,
-            )
-            for _ in range(20):
+            for attempt in range(2):
+                subprocess.run(["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID], check=False)
+                if attempt > 0:
+                    time.sleep(1.5)
+                subprocess.run(
+                    ["xcrun", "simctl", "launch", udid, APP_BUNDLE_ID],
+                    env=launch_env,
+                    check=True,
+                )
+                for _ in range(30):
+                    if any("GetWorkspaceInfos" in p for p in rpc_hits) and any("GetAllCascadeTrajectories" in p for p in rpc_hits):
+                        break
+                    time.sleep(0.5)
                 if any("GetWorkspaceInfos" in p for p in rpc_hits) and any("GetAllCascadeTrajectories" in p for p in rpc_hits):
                     break
-                time.sleep(0.5)
+                if attempt == 0:
+                    print("  [LIVE RPC] No Connect-RPC hits after 15s; relaunching app once on Simulator...", flush=True)
             time.sleep(1.5)
 
             live_shot = out_dir / "LIVE_CONNECTED_HOME.png"
@@ -750,6 +771,26 @@ def main() -> None:
         timings["screenshots"] = 0.0
         print(f"=== [5/5] Skipping UE Screen Captures (0/{total_screens} screens impacted by change scope) ===", flush=True)
 
+    if cfg.get("runWatchOSSim"):
+        t_watch = time.monotonic()
+        print("=== [5c/5] Running Real Apple Watch Simulator Build + XCUITests + 8 Native watchOS Screens (W01–W08) ===", flush=True)
+        subprocess.run(["xcrun", "simctl", "shutdown", udid], check=False)
+        subprocess.run(
+            [
+                sys.executable,
+                str(repo_root / "verification" / "watchos-simulator-runner.py"),
+                "--out-dir",
+                str(out_dir / "watch"),
+                "--preferred-phone-udid",
+                udid,
+            ],
+            cwd=repo_root,
+            check=True,
+        )
+        timings["watchOSSim"] = round(time.monotonic() - t_watch, 2)
+    else:
+        timings["watchOSSim"] = 0.0
+
     timings["total"] = round(time.monotonic() - t_start, 2)
     manifest = {
         "mode": cfg["mode"],
@@ -759,6 +800,7 @@ def main() -> None:
         "simulatorRuntime": sim_runtime,
         "simulatorUDID": udid,
         "uiTestsPassed": True,
+        "ranWatchOSSim": bool(cfg.get("runWatchOSSim")),
         "executedUITests": cfg["xcuitests"],
         "skippedUITests": cfg["skippedXcuitests"],
         "ranLiveConnectRPC": cfg["runLiveAppRPC"],

@@ -70,6 +70,8 @@ PY_COMPILE_FILES = [
     "verification/verify_advisory_hygiene.py",
     "verification/verify-compat-matrix.py",
     "verification/e2e_impact_planner.py",
+    "verification/watchos-simulator-runner.py",
+    "verification/verify_watch_esdd.py",
     "verification/android_visual_compare.py",
     "verification/esdd_inspector.py",
 ]
@@ -331,6 +333,19 @@ def run_spec_gate(args: argparse.Namespace) -> GateResult:
                 command="python3 verification/e2e_impact_planner.py --self-test",
                 summary="e2e_impact_planner --self-test failed",
                 tail_log=filter_noise_lines(planner_out)[-args.tail_lines :],
+            )
+
+    watch_esdd_path = VERIFICATION_DIR / "verify_watch_esdd.py"
+    if watch_esdd_path.exists():
+        w_rc, w_out = run_subprocess([sys.executable, str(watch_esdd_path), "--stage1-only"])
+        if w_rc != 0:
+            return GateResult(
+                name="spec",
+                status="failed",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                command="python3 verification/verify_watch_esdd.py --stage1-only",
+                summary="Watch ESDD Stage W1 contract audit failed",
+                tail_log=filter_noise_lines(w_out)[-args.tail_lines :],
             )
 
     advisory_warnings: list[str] = []

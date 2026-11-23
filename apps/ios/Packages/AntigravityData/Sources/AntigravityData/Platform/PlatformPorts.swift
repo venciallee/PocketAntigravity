@@ -71,7 +71,7 @@ public struct SystemPowerStateProvider: PowerStateProviding, Sendable {
     public init() {}
 
     public var isLowPowerModeEnabled: Bool {
-        #if os(iOS) || os(macOS)
+        #if os(iOS) || os(macOS) || os(watchOS)
         return ProcessInfo.processInfo.isLowPowerModeEnabled
         #else
         return false

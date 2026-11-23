@@ -91,6 +91,7 @@ def _empty_impact(domain: str, reason: str) -> dict[str, Any]:
         "esdd_tcs": [],
         "esdd_screens": [],
         "esdd_full": False,
+        "watchos_sim": False,
         "android_unit_and_roborazzi": False,
         "android_emulator_e2e": False,
     }
@@ -124,10 +125,24 @@ def classify_file(path: str) -> dict[str, Any]:
         res["android_unit_and_roborazzi"] = True
         return res
 
+    # 3b. Apple Watch specs & reference mockups -> Watch Simulator visual comparison
+    if norm.startswith("specs/watch/"):
+        res = _empty_impact("watchos-specs", "Apple Watch reference specification/mockups changed")
+        res["esdd_stages"] = [1]
+        res["gate3_ios_build"] = True
+        res["watchos_sim"] = True
+        return res
+
     # 3. Specs -> ESDD Stage 1 Spec-DAG & selector parity only
     if norm.startswith("specs/"):
         res = _empty_impact("specs", "ESDD / product specification changed")
         res["esdd_stages"] = [1]
+        return res
+
+    if norm in {"verification/watchos-simulator-runner.py", "verification/verify_watch_esdd.py"}:
+        res = _empty_impact("watchos-runner", "Apple Watch Simulator or ESDD verification runner changed")
+        res["gate3_ios_build"] = True
+        res["watchos_sim"] = True
         return res
 
     # 4. Doc-sync automation & workflow
@@ -328,6 +343,16 @@ def classify_file(path: str) -> dict[str, Any]:
             res["run_live_app_rpc"] = True
             res["esdd_stages"] = [1, 3]
             res["esdd_tcs"] = ["TC-07", "TC-08", "TC-11", "TC-15"]
+            return res
+
+        if rel in {
+            "Models/WatchCompanionModels.swift",
+            "Fixtures/WatchVerificationFixtures.swift",
+        }:
+            res = _empty_impact("watchos-data", "Apple Watch companion data models or fixtures changed")
+            res["gate1_swift_data_tests"] = True
+            res["gate3_ios_build"] = True
+            res["watchos_sim"] = True
             return res
 
         if rel in {
@@ -652,12 +677,30 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_screens"] = ["UE13_LIVE_ACTIVITY_SPEC"]
         return res
 
+    if norm == "apps/ios/App/Services/WatchConnectivityBridge.swift":
+        res = _empty_impact("watchos-bridge", "iPhone <-> Apple Watch WatchConnectivity bridge changed")
+        res["gate3_ios_build"] = True
+        res["watchos_sim"] = True
+        return res
+
+    if norm.startswith("apps/ios/Watch/"):
+        res = _empty_impact("watchos-app", "Native watchOS companion app changed")
+        res["gate3_ios_build"] = True
+        res["watchos_sim"] = True
+        return res
+
     if norm.startswith("apps/ios/Extensions/Share/"):
         res = _empty_impact("share-extension", "Share Extension changed (verified via iOS scheme compile)")
         res["gate3_ios_build"] = True
         return res
 
     # 13. UI Tests harness itself -> run all XCUITests (static 13-screen screenshots unaffected)
+    if norm.startswith("tests/watchos-ui/"):
+        res = _empty_impact("watchos-uitests", "Apple Watch XCUITest suite changed")
+        res["gate3_ios_build"] = True
+        res["watchos_sim"] = True
+        return res
+
     if norm.startswith("tests/ios-ui/"):
         res = _empty_impact("ios-uitests", "XCUITest suite changed (running all XCUITest cases)")
         res["gate3_ios_build"] = True
@@ -746,6 +789,14 @@ def detect_version_bump_in_git_diff(
             continue
         for line in diff_text.splitlines():
             if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+                stripped = line[1:].strip()
+                if stripped in {
+                    'CFBundleShortVersionString: "$(MARKETING_VERSION)"',
+                    'CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"',
+                    'CFBundleShortVersionString: $(MARKETING_VERSION)',
+                    'CFBundleVersion: $(CURRENT_PROJECT_VERSION)',
+                }:
+                    continue
                 if any(key in line for key in VERSION_BUMP_KEYS):
                     return True
     return False
@@ -805,6 +856,7 @@ def build_verification_plan(
     esdd_tcs: set[str] = set()
     esdd_screens: set[str] = set()
     esdd_full = False
+    run_watchos_sim = False
     android_unit_and_roborazzi = False
     android_emulator_e2e = False
 
@@ -848,6 +900,7 @@ def build_verification_plan(
         esdd_tcs.update(imp["esdd_tcs"])
         esdd_screens.update(imp["esdd_screens"])
         esdd_full = esdd_full or imp["esdd_full"]
+        run_watchos_sim = run_watchos_sim or imp["watchos_sim"]
         android_unit_and_roborazzi = android_unit_and_roborazzi or imp["android_unit_and_roborazzi"]
         android_emulator_e2e = android_emulator_e2e or imp["android_emulator_e2e"]
 
@@ -857,6 +910,7 @@ def build_verification_plan(
         gate2_live_rpc = True
         gate2_v233 = True
         gate3_ios_build = True
+        run_watchos_sim = True
         ordered_xcuitests = list(ALL_XCUITESTS)
         run_live_app_rpc = True
         ordered_sim_screens = list(ALL_UE_STATES)
@@ -888,7 +942,7 @@ def build_verification_plan(
     else:
         ios_simulator_mode = "scoped"
 
-    needs_macos = bool(gate1 or gate3_ios_build)
+    needs_macos = bool(gate1 or gate3_ios_build or run_watchos_sim)
     needs_android = bool(android_unit_and_roborazzi or android_emulator_e2e)
     skipped_xcuitests = [t for t in ALL_XCUITESTS if t not in ordered_xcuitests]
     skipped_sim_screens = [s for s in ALL_UE_STATES if s not in ordered_sim_screens]
@@ -908,6 +962,7 @@ def build_verification_plan(
             "gate2V233Capabilities": gate2_v233,
             "gate3IOSBuild": gate3_ios_build,
             "iosSimulatorMode": ios_simulator_mode,
+            "runWatchOSSim": run_watchos_sim,
             "runLiveAppRPC": run_live_app_rpc,
             "needsMacOS": needs_macos,
             "needsAndroid": needs_android,
@@ -954,6 +1009,7 @@ def render_markdown_summary(plan: dict[str, Any]) -> str:
         f"- **macOS Runner Required**: `{'YES' if gates['needsMacOS'] else 'NO (fast Ubuntu-only verification)'}`",
         f"- **Android Runner Required**: `{'YES' if gates['needsAndroid'] else 'NO (Android unaffected)'}`",
         f"- **iOS Simulator Mode**: `{gates['iosSimulatorMode']}`",
+        f"- **watchOS Simulator Verification**: `{'YES (8 screens W01..W08)' if gates.get('runWatchOSSim') else 'SKIP'}`",
     ]
     if plan["escalationReasons"]:
         lines.append("- **Full/Release Escalation Reasons**:")
@@ -972,6 +1028,7 @@ def render_markdown_summary(plan: dict[str, Any]) -> str:
             f"| `[Gate 1]` Swift 6 `AntigravityData` XCTests | {'✅ RUN' if gates['gate1SwiftDataTests'] else '⏭️ SKIP'} | {'apps/ios/Packages/AntigravityData impacted or full' if gates['gate1SwiftDataTests'] else 'apps/ios/Packages/AntigravityData untouched'} |",
             f"| `[Gate 2]` Live Connect-RPC + v2.33 Capabilities + Compat Matrix | {'✅ RUN' if (gates['gate2LiveRPC'] or gates['gate2V233Capabilities']) else '⏭️ SKIP'} | LiveRPC/Matrix=`{gates['gate2LiveRPC']}`, v2.33=`{gates['gate2V233Capabilities']}` |",
             f"| `[Gate 3]` Xcode iOS Build (`AGPocket.app`) | {'✅ RUN' if gates['gate3IOSBuild'] else '⏭️ SKIP'} | Mode=`{gates['iosSimulatorMode']}` |",
+            f"| `[Gate 3c]` Apple Watch Simulator (`AGPocketWatch.app`, W01–W08) | {'✅ RUN' if gates.get('runWatchOSSim') else '⏭️ SKIP'} | {'Watch app/bridge/specs impacted or full' if gates.get('runWatchOSSim') else 'Watch target unaffected'} |",
             f"| `[Gate 3b]` Real Simulator XCUITests | {'✅ RUN (' + str(len(plan['xcuitests'])) + '/' + str(len(ALL_XCUITESTS)) + ')' if plan['xcuitests'] else '⏭️ SKIP (0/' + str(len(ALL_XCUITESTS)) + ')'} | {', '.join(f'`{t}`' for t in plan['xcuitests']) or 'None impacted'} |",
             f"| `[Gate 4]` Live Simulator App Connect-RPC Handshake | {'✅ RUN' if gates['runLiveAppRPC'] else '⏭️ SKIP'} | {'Connection/RPC impacted or full' if gates['runLiveAppRPC'] else 'Unaffected'} |",
             f"| `[Gate 5]` Native Simulator UE Screenshots | {'✅ RUN (' + str(len(plan['simulatorScreens'])) + '/13)' if plan['simulatorScreens'] else '⏭️ SKIP (0/13)'} | {', '.join(f'`{s}`' for s in plan['simulatorScreens']) or 'None impacted'} |",
@@ -1123,6 +1180,7 @@ def write_github_outputs(github_output_path: Path, plan: dict[str, Any]) -> None
         "run_gate2_v233": "true" if gates["gate2V233Capabilities"] else "false",
         "run_gate3_ios_build": "true" if gates["gate3IOSBuild"] else "false",
         "ios_simulator_mode": gates["iosSimulatorMode"],
+        "run_watchos_sim": "true" if gates.get("runWatchOSSim", False) else "false",
         "run_live_app_rpc": "true" if gates["runLiveAppRPC"] else "false",
         "run_kmp_full_release": "true" if gates["runKmpFullRelease"] else "false",
         "esdd_full": "true" if esdd["full"] else "false",
@@ -1390,7 +1448,17 @@ def run_self_tests() -> None:
     assert p17["xcuitests"] == ["testDisplayOptionsPopoverDismissAndStoreSync"]
     assert p17["simulatorScreens"] == ["UE02_DISPLAY_OPTIONS"]
 
-    print("✓ e2e_impact_planner self-test PASSED (17/17 scenarios + Android scoping + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
+    # 18. Apple Watch app only -> macOS Watch Simulator verification (iOS build-only, zero iOS XCUITests, zero Android)
+    p18 = build_verification_plan(
+        changed_files=["apps/ios/Watch/Views/WatchSessionsListView.swift"]
+    )
+    assert p18["mode"] == "scoped" and not p18["isRelease"]
+    assert p18["gates"]["needsMacOS"] is True
+    assert p18["gates"]["needsAndroid"] is False
+    assert p18["gates"]["runWatchOSSim"] is True
+    assert p18["gates"]["iosSimulatorMode"] == "build-only"
+
+    print("✓ e2e_impact_planner self-test PASSED (18/18 scenarios + Watch + Android scoping + 8/8 release triggers + compat-guardrails scoping + XCUITest parity verified)")
 
 
 def main() -> int:
