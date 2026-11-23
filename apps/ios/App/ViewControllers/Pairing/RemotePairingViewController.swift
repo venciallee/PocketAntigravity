@@ -48,7 +48,7 @@ public struct RemotePairingViewController: View {
                     name: "Office iMac",
                     version: "2.32.0",
                     supportsChunking: true,
-                    status: .offline
+                    status: .disconnected
                 )
             ]
         }
