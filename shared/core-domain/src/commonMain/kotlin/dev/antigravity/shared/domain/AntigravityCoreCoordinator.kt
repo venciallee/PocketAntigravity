@@ -14,6 +14,7 @@ import dev.antigravity.shared.model.InteractionDecision
 import dev.antigravity.shared.model.LiveProgressAgentSummary
 import dev.antigravity.shared.model.LiveProgressPhase
 import dev.antigravity.shared.model.LiveProgressSnapshot
+import dev.antigravity.shared.model.RemoteConnectionChannel
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.model.ThinkingEffortLevel
 import dev.antigravity.shared.platform.InMemoryPreferencesStore
@@ -645,7 +646,9 @@ public class AntigravityCoreCoordinator(
             if (startSummaryStream) {
                 conversationSyncStore.startSummarySubscriptionStream(client, host)
             }
-            if (handshake.summaries.isEmpty() || handshake.workspaces.isEmpty()) {
+            if (host.channel == RemoteConnectionChannel.CLOUD_RELAY &&
+                (handshake.summaries.isEmpty() || handshake.workspaces.isEmpty())
+            ) {
                 val activeScope = connectionStore.state.value.selectedHostScope
                 scope.launch {
                     try {
