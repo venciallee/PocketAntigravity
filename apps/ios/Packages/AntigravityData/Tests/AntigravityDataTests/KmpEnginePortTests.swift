@@ -439,7 +439,8 @@ final class KmpEnginePortTests: XCTestCase {
             kmpEngine: engine
         )
 
-        // Before preload resolves, an unhydrated server summary shows Loading...
+        // Before connecting, an unhydrated server summary falls back to Untitled (never "New Conversation"),
+        // and while connecting / hydrating displays "Loading..."
         let previewUnresolved = CascadeSummary(
             cascadeId: unhydratedId,
             title: "New Conversation",
@@ -449,8 +450,12 @@ final class KmpEnginePortTests: XCTestCase {
             status: .done,
             stepCount: 2
         )
+        XCTAssertFalse(store.isSummaryTitleLoading(previewUnresolved))
+        XCTAssertEqual(store.displayTitle(for: previewUnresolved), "Untitled conversation")
+        store.isConnectingToBackend = true
         XCTAssertTrue(store.isSummaryTitleLoading(previewUnresolved))
         XCTAssertEqual(store.displayTitle(for: previewUnresolved), "Loading...")
+        store.isConnectingToBackend = false
 
         let connected = await store.connectDirectLAN(
             endpointURLString: "http://127.0.0.1:18787",

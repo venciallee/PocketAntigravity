@@ -435,8 +435,8 @@ public class AntigravityCoreCoordinator(
         if (summary.cascadeId in sync.hydratingCascadeIds) return true
         if (summary.cascadeId in sync.settledEmptyTitleCascadeIds) return false
         if (!conn.isDeviceNetworkReachable) return false
-        if (!isSummaryHostReachable(summary, conn)) return false
-        return conn.isConnected || conn.isConnecting
+        if (!conn.isConnected && conn.isConnecting) return true
+        return isSummaryHostReachable(summary, conn) && (conn.isConnected || conn.hasPairedBackend)
     }
 
     /**

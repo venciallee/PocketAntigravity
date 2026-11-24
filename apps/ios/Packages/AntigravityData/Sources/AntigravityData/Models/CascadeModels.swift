@@ -741,10 +741,12 @@ public enum CascadeSummaryTitleResolver {
     }
 
     public static func deriveTitle(from steps: [CascadeStep], maxLength: Int = 64) -> String? {
-        if let firstPrompt = steps.first(where: { $0.type == .userInput })?.userInput.flatMap(cleanSingleLine) {
+        if let rawPrompt = steps.first(where: { $0.type == .userInput })?.userInput,
+           let firstPrompt = cleanSingleLine(rawPrompt) {
             return truncateTitle(firstPrompt, maxLength: maxLength)
         }
-        if let firstTask = steps.first(where: { $0.type == .taskBoundary })?.taskBoundary?.taskName.flatMap(cleanSingleLine) {
+        if let rawTask = steps.first(where: { $0.type == .taskBoundary })?.taskBoundary?.taskName,
+           let firstTask = cleanSingleLine(rawTask) {
             return truncateTitle(firstTask, maxLength: maxLength)
         }
         if let replyRaw = steps.first(where: { $0.type == .plannerResponse || $0.type == .notifyUser })?.plannerResponse?.response {

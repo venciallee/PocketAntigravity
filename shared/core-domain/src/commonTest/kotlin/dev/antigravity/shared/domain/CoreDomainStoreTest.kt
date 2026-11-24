@@ -588,7 +588,8 @@ class CoreDomainStoreTest {
                 }
             }
 
-            // 1. Before hydration, an unhydrated server summary displays Loading... (never "New Conversation")
+            // 1. Before hydration, an unhydrated server summary never displays "New Conversation":
+            //    unpaired falls back to "Untitled conversation", and while hydrating displays "Loading..."
             val previewCoordinator = AntigravityCoreCoordinator(
                 preferencesStore = prefs,
                 projectionStorage = storage,
@@ -603,6 +604,9 @@ class CoreDomainStoreTest {
                 status = CortexStepStatus.DONE,
                 stepCount = 2,
             )
+            assertFalse(previewCoordinator.isSummaryTitleLoading(unhydratedSummary))
+            assertEquals("Untitled conversation", previewCoordinator.displayTitleForSummary(unhydratedSummary))
+            previewCoordinator.conversationSyncStore.markHydrating(unhydratedId)
             assertTrue(previewCoordinator.isSummaryTitleLoading(unhydratedSummary))
             assertEquals("Loading...", previewCoordinator.displayTitleForSummary(unhydratedSummary))
 
@@ -680,7 +684,6 @@ class CoreDomainStoreTest {
             )
             assertTrue(restartedAfterCollapse.workspaceStore.isProjectCollapsed("slardar_app_ai"))
 
-            coordinator.close()
             previewCoordinator.close()
             coldStarted.close()
             restartedAfterCollapse.close()

@@ -700,7 +700,7 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("project-toggle-ledger-svc").performClick()
         assertTrue(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
         assertEquals(0, composeRule.onAllNodesWithTag("conversation-row-cas-rate-limiter").fetchSemanticsNodes().size)
-        composeRule.onNodeWithTag("project-collapsed-count-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-collapsed-count-ledger-svc", useUnmergedTree = true).assertIsDisplayed()
 
         // Tap collapse toggle again -> conversations expand back into view
         composeRule.onNodeWithTag("project-toggle-ledger-svc").performClick()
@@ -747,7 +747,10 @@ class AndroidInteractiveE2eTest {
                 ),
             ),
         )
+        coordinator.conversationSyncStore.markHydrating(unhydratedId)
 
+        // Disable auto-advance while indeterminate CircularProgressIndicator is visible
+        composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             dev.antigravity.android.core.ui.theme.AntigravityTheme {
                 dev.antigravity.android.ui.home.AgentsSidebarDrawerContent(
@@ -765,10 +768,11 @@ class AndroidInteractiveE2eTest {
                 )
             }
         }
+        composeRule.mainClock.advanceTimeByFrame()
 
         // Unhydrated row renders Loading... indicator instead of placeholder "New Conversation"
-        composeRule.onNodeWithTag("conversation-loading-$unhydratedId").assertIsDisplayed()
-        composeRule.onNodeWithText("Loading...").assertIsDisplayed()
+        composeRule.onNodeWithTag("conversation-loading-$unhydratedId", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Loading...", useUnmergedTree = true).assertIsDisplayed()
 
         // Once hydrated metadata arrives, the real derived title immediately replaces Loading...
         kotlinx.coroutines.runBlocking {
@@ -787,8 +791,12 @@ class AndroidInteractiveE2eTest {
                 persist = false,
             )
         }
+        composeRule.mainClock.autoAdvance = true
         composeRule.waitForIdle()
-        assertEquals(0, composeRule.onAllNodesWithTag("conversation-loading-$unhydratedId").fetchSemanticsNodes().size)
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithTag("conversation-loading-$unhydratedId", useUnmergedTree = true).fetchSemanticsNodes().size,
+        )
         composeRule.onNodeWithText("Fix Slardar startup cold cache").assertIsDisplayed()
     }
 }
