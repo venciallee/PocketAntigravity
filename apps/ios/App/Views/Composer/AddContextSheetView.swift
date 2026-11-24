@@ -63,6 +63,7 @@ public struct AddContextSheetView: View {
     @State private var isExpandedToPicker: Bool
 
     public var showHomeBackdrop: Bool
+    public var isPresentedAsNativeSheet: Bool
 
     private let verificationRows: [ContextRowSpec] = [
         ContextRowSpec(
@@ -136,8 +137,10 @@ public struct AddContextSheetView: View {
     private var effectiveRows: [ContextRowSpec] {
         guard !store.isVerificationMode else { return verificationRows }
         var rows: [ContextRowSpec] = []
+        var seenIds = Set<String>()
         for ws in store.workspaces {
             for filePath in ws.indexedFiles.prefix(20) {
+                guard seenIds.insert(filePath).inserted else { continue }
                 let fileName = filePath.split(separator: "/").last.map(String.init) ?? filePath
                 rows.append(
                     ContextRowSpec(
@@ -155,9 +158,11 @@ public struct AddContextSheetView: View {
             }
         }
         for summary in store.summaries.prefix(12) {
+            let rowId = "conv:\(summary.cascadeId)"
+            guard seenIds.insert(rowId).inserted else { continue }
             rows.append(
                 ContextRowSpec(
-                    id: "conv:\(summary.cascadeId)",
+                    id: rowId,
                     section: "MENTIONS",
                     category: .mentions,
                     iconName: "bubble.left",
@@ -169,32 +174,36 @@ public struct AddContextSheetView: View {
                 )
             )
         }
-        rows.append(
-            ContextRowSpec(
-                id: "/plan",
-                section: "ACTIONS & SKILLS",
-                category: .actions,
-                iconName: "slash.circle",
-                title: "/plan",
-                subtitle: "Action · step-by-step implementation plan",
-                isMonospacedTitle: true,
-                usesPlusAffordance: true,
-                testId: "ctx-row-plan"
+        if seenIds.insert("/plan").inserted {
+            rows.append(
+                ContextRowSpec(
+                    id: "/plan",
+                    section: "ACTIONS & SKILLS",
+                    category: .actions,
+                    iconName: "slash.circle",
+                    title: "/plan",
+                    subtitle: "Action · step-by-step implementation plan",
+                    isMonospacedTitle: true,
+                    usesPlusAffordance: true,
+                    testId: "ctx-row-plan"
+                )
             )
-        )
-        rows.append(
-            ContextRowSpec(
-                id: "/goal",
-                section: "ACTIONS & SKILLS",
-                category: .actions,
-                iconName: "slash.circle",
-                title: "/goal",
-                subtitle: "Action · thorough autonomous execution",
-                isMonospacedTitle: true,
-                usesPlusAffordance: true,
-                testId: "ctx-row-goal"
+        }
+        if seenIds.insert("/goal").inserted {
+            rows.append(
+                ContextRowSpec(
+                    id: "/goal",
+                    section: "ACTIONS & SKILLS",
+                    category: .actions,
+                    iconName: "slash.circle",
+                    title: "/goal",
+                    subtitle: "Action · thorough autonomous execution",
+                    isMonospacedTitle: true,
+                    usesPlusAffordance: true,
+                    testId: "ctx-row-goal"
+                )
             )
-        )
+        }
         return rows
     }
 
@@ -202,6 +211,7 @@ public struct AddContextSheetView: View {
         store: AntigravitySessionStore,
         startExpanded: Bool = false,
         showHomeBackdrop: Bool = true,
+        isPresentedAsNativeSheet: Bool = false,
         onAddLabels: (([String]) -> Void)? = nil,
         onPickPhotos: (() -> Void)? = nil,
         onPickDeviceFile: (() -> Void)? = nil,
@@ -209,6 +219,7 @@ public struct AddContextSheetView: View {
     ) {
         self.store = store
         self.showHomeBackdrop = showHomeBackdrop
+        self.isPresentedAsNativeSheet = isPresentedAsNativeSheet
         self.onAddLabels = onAddLabels
         self.onPickPhotos = onPickPhotos
         self.onPickDeviceFile = onPickDeviceFile
@@ -221,13 +232,13 @@ public struct AddContextSheetView: View {
         }
     }
 
-    private func filteredRows(in section: String) -> [ContextRowSpec] {
-        effectiveRows.filter { row in
+    private func filteredRows(in section: String, from allRows: [ContextRowSpec]) -> [ContextRowSpec] {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return allRows.filter { row in
             guard row.section == section else { return false }
             if let cat = activeCategoryFilter, row.category != cat {
                 return false
             }
-            let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard !q.isEmpty else { return true }
             return row.title.lowercased().contains(q) || row.subtitle.lowercased().contains(q)
         }
@@ -362,16 +373,21 @@ public struct AddContextSheetView: View {
     }
 
     private var fullMultiSelectPickerBody: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 18)
+        let allRows = effectiveRows
+        return VStack(spacing: 0) {
+            if !isPresentedAsNativeSheet {
+                Spacer(minLength: 18)
+            }
 
             VStack(spacing: 0) {
-                // Sheet Grabber
-                Capsule()
-                    .fill(AntigravityTheme.sheetHandle)
-                    .frame(width: 38, height: 5)
-                    .padding(.top, 10)
-                    .padding(.bottom, 6)
+                // Sheet Grabber (only needed outside native .sheet which draws its own drag indicator)
+                if !isPresentedAsNativeSheet {
+                    Capsule()
+                        .fill(AntigravityTheme.sheetHandle)
+                        .frame(width: 38, height: 5)
+                        .padding(.top, 10)
+                        .padding(.bottom, 6)
+                }
 
                 // Header Bar
                 ZStack {
@@ -399,6 +415,7 @@ public struct AddContextSheetView: View {
                     }
                 }
                 .padding(.horizontal, 14)
+                .padding(.top, isPresentedAsNativeSheet ? 10 : 0)
 
                 // Search Bar
                 HStack(spacing: 10) {
@@ -529,7 +546,7 @@ public struct AddContextSheetView: View {
                         }
 
                         ForEach(["FILES & FOLDERS", "MENTIONS", "ACTIONS & SKILLS"], id: \.self) { sectionTitle in
-                            let rows = filteredRows(in: sectionTitle)
+                            let rows = filteredRows(in: sectionTitle, from: allRows)
                             if !rows.isEmpty {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(sectionTitle)
@@ -591,9 +608,14 @@ public struct AddContextSheetView: View {
                 .padding(.vertical, 12)
             }
             .background(AntigravityTheme.surfaceSheet)
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: isPresentedAsNativeSheet ? 0 : 28,
+                    style: .continuous
+                )
+            )
         }
-        .background(AntigravityTheme.canvasObsidian)
+        .background(isPresentedAsNativeSheet ? AntigravityTheme.surfaceSheet : AntigravityTheme.canvasObsidian)
     }
 
     private func contextRowButton(_ row: ContextRowSpec) -> some View {

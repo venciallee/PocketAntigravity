@@ -1299,4 +1299,90 @@ extension AntigravityRPCClient {
             return stepCount > 0 ? "Idle · \(stepCount) steps" : "Idle"
         }
     }
+
+    public struct AgentStateStepsUpdate: Sendable {
+        public let steps: [CascadeStep]
+        public let totalLength: Int?
+        public let hasMainTrajectoryUpdate: Bool
+        public let runStatus: String?
+
+        public init(
+            steps: [CascadeStep] = [],
+            totalLength: Int? = nil,
+            hasMainTrajectoryUpdate: Bool = false,
+            runStatus: String? = nil
+        ) {
+            self.steps = steps
+            self.totalLength = totalLength
+            self.hasMainTrajectoryUpdate = hasMainTrajectoryUpdate
+            self.runStatus = runStatus
+        }
+    }
+
+    /// Decodes a `StreamAgentStateUpdatesResponse` frame (`update.mainTrajectoryUpdate.stepsUpdate`
+    /// with sparse `indices`, `steps`, and `totalLength`, plus defensive fallback layouts).
+    public static func decodeAgentStateStepsUpdate(
+        _ event: [String: JSONValue],
+        cascadeId: String
+    ) -> AgentStateStepsUpdate {
+        let updateObj = event["update"]?.objectValue ?? event
+        let runStatus = nonEmptyString(updateObj["status"]?.stringValue)
+            ?? nonEmptyString(updateObj["executableStatus"]?.stringValue)
+            ?? nonEmptyString(updateObj["executable_status"]?.stringValue)
+
+        let mainTraj = updateObj["mainTrajectoryUpdate"]?.objectValue
+            ?? updateObj["main_trajectory_update"]?.objectValue
+        let stepsUpdate = mainTraj?["stepsUpdate"]?.objectValue
+            ?? mainTraj?["steps_update"]?.objectValue
+            ?? updateObj["stepsUpdate"]?.objectValue
+            ?? updateObj["steps_update"]?.objectValue
+
+        let hasMainTrajectoryUpdate = mainTraj != nil
+            || stepsUpdate != nil
+            || updateObj["trajectory"]?.objectValue != nil
+            || updateObj["steps"]?.arrayValue != nil
+
+        let rawSteps = stepsUpdate?["steps"]?.arrayValue
+            ?? mainTraj?["steps"]?.arrayValue
+            ?? updateObj["trajectory"]?.objectValue?["steps"]?.arrayValue
+            ?? updateObj["steps"]?.arrayValue
+            ?? []
+
+        let indices: [Int] = (stepsUpdate?["indices"]?.arrayValue ?? []).compactMap { val in
+            if let i = val.intValue { return i }
+            if let s = val.stringValue { return Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            return nil
+        }
+
+        func parseIntValue(_ value: JSONValue?) -> Int? {
+            if let i = value?.intValue { return i }
+            if let s = value?.stringValue { return Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            return nil
+        }
+
+        let totalLength = parseIntValue(stepsUpdate?["totalLength"])
+            ?? parseIntValue(stepsUpdate?["total_length"])
+            ?? parseIntValue(mainTraj?["totalLength"])
+            ?? parseIntValue(mainTraj?["total_length"])
+
+        let useExplicitIndices = !indices.isEmpty && indices.count == rawSteps.count
+        var decoded: [CascadeStep] = []
+        decoded.reserveCapacity(rawSteps.count)
+        for (idx, stepVal) in rawSteps.enumerated() {
+            let targetIdx = useExplicitIndices ? indices[idx] : idx
+            if var step = decodeJSONStep(stepVal, cascadeId: cascadeId, fallbackIndex: targetIdx) {
+                if useExplicitIndices && step.stepIndex != targetIdx {
+                    step.stepIndex = targetIdx
+                }
+                decoded.append(step)
+            }
+        }
+
+        return AgentStateStepsUpdate(
+            steps: decoded,
+            totalLength: totalLength,
+            hasMainTrajectoryUpdate: hasMainTrajectoryUpdate,
+            runStatus: runStatus
+        )
+    }
 }

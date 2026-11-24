@@ -799,4 +799,29 @@ class AndroidInteractiveE2eTest {
         )
         composeRule.onNodeWithText("Fix Slardar startup cold cache").assertIsDisplayed()
     }
+
+    @Test
+    fun atc29_plusButtonsOpenContextAndCreateProjectDraftCleanly() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.CHAT_AND_COMPOSER,
+            )
+        }
+
+        // 1. Tapping composer '+' opens Add Context popover cleanly and dismisses cleanly
+        composeRule.onNodeWithTag("composer-btn-add-context").performClick()
+        composeRule.onNodeWithTag("add-context-popover").assertIsDisplayed()
+        composeRule.onNodeWithTag("ctx-menu-files").performClick()
+        composeRule.onNodeWithTag("add-context-picker-sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-add-context-apply").performClick()
+        composeRule.onNodeWithTag("chat-steps-list").assertIsDisplayed()
+
+        // 2. Opening sidebar and tapping '+' on a project transitions cleanly without duplicate-key crashes
+        composeRule.onNodeWithTag("btn-chat-back").performClick()
+        composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-add-ledger-svc").performClick()
+        composeRule.onNodeWithTag("home-composer-card").assertIsDisplayed()
+    }
 }

@@ -347,6 +347,33 @@ extension AntigravityRPCClient {
         let wakeKey = "\(targetUuid ?? "direct")|\(cascadeId)"
         var lastError: Error? = nil
 
+        // Path 0 (Antigravity 2.x Cloud Primary): Remote Cloud (`v1/...`) conversations live on
+        // Google's remote backend rather than local `.pb` files, so `GetCascadeTrajectorySteps` /
+        // `LoadTrajectory` / `GetCascadeTrajectory` often return `not_found: trajectory not found`
+        // even for actively running Cloud chats. `StreamAgentStateUpdates` is the authoritative
+        // Antigravity 2.x streaming RPC that delivers live & historical Cloud trajectories.
+        if isRemoteCloud {
+            do {
+                if let streamedSteps = try await fetchStepsViaAgentStateStream(
+                    cascadeId: cascadeId,
+                    isRemoteCloud: true,
+                    targetUuid: targetUuid,
+                    timeoutSeconds: 5.0
+                ), !streamedSteps.isEmpty {
+                    wokenInstanceCascadeKeys.insert(wakeKey)
+                    return streamedSteps
+                }
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if !ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+                    lastError = error
+                }
+            }
+        }
+
         // Path 1 (Default for Local PC Hosts): Binary Protobuf (`application/proto`) first.
         // Saves ~65% mobile bandwidth, avoids any server-side JSON step truncation, wakes dormant
         // disk sessions on empty OR 404 `not_found`, and repairs unknown wire interactions via JSON.
@@ -412,16 +439,223 @@ extension AntigravityRPCClient {
         }
 
         // Path 2: JSON (`GetCascadeTrajectorySteps` + `LoadTrajectory` + `GetCascadeTrajectory`)
-        // for Cloud (`v1/...`) sessions or when Binary Protobuf is unsupported/unavailable —
+        // for Cloud fallback or when Binary Protobuf is unsupported/unavailable —
         // with zero hardcoded thresholds and runtime per-host ceiling learning.
-        return try await fetchStepsViaAdaptiveJSON(
-            cascadeId: cascadeId,
-            knownStepCount: knownStepCount,
-            isRemoteCloud: isRemoteCloud,
-            targetUuid: targetUuid,
-            wakeKey: wakeKey,
-            initialError: lastError
+        var adaptiveError: Error? = nil
+        let adaptiveSteps: [CascadeStep]
+        do {
+            adaptiveSteps = try await fetchStepsViaAdaptiveJSON(
+                cascadeId: cascadeId,
+                knownStepCount: knownStepCount,
+                isRemoteCloud: isRemoteCloud,
+                targetUuid: targetUuid,
+                wakeKey: wakeKey,
+                initialError: lastError
+            )
+        } catch let AntigravityRPCError.unauthorized(msg) {
+            throw AntigravityRPCError.unauthorized(msg)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            adaptiveError = error
+            adaptiveSteps = []
+        }
+
+        if !adaptiveSteps.isEmpty {
+            return adaptiveSteps
+        }
+
+        // Path 3 (Local Antigravity 2.x Fallback): If local checkpoint RPCs failed (`not_found`)
+        // or returned empty on a session with live un-checkpointed turns or SQLite-backed state,
+        // fall back to `StreamAgentStateUpdates` before surfacing an error.
+        if !isRemoteCloud && (adaptiveError != nil || knownStepCount > 0) {
+            do {
+                if let streamedSteps = try await fetchStepsViaAgentStateStream(
+                    cascadeId: cascadeId,
+                    isRemoteCloud: false,
+                    targetUuid: targetUuid,
+                    timeoutSeconds: 3.5
+                ), !streamedSteps.isEmpty {
+                    wokenInstanceCascadeKeys.insert(wakeKey)
+                    return streamedSteps
+                }
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Preserve original adaptiveError below.
+            }
+        }
+
+        if let adaptiveError {
+            throw adaptiveError
+        }
+        return adaptiveSteps
+    }
+
+    /// Reads the initial trajectory snapshot from Antigravity 2.x's authoritative
+    /// `StreamAgentStateUpdates` server-streaming Connect-RPC (`mainTrajectoryUpdate.stepsUpdate`),
+    /// merging sparse `indices` + `steps` up to `totalLength` and immediately closing the stream.
+    /// Returns `nil` when this host does not implement `StreamAgentStateUpdates` (negative-cached).
+    internal func fetchStepsViaAgentStateStream(
+        cascadeId: String,
+        isRemoteCloud: Bool,
+        targetUuid: String?,
+        timeoutSeconds: TimeInterval = 5.0
+    ) async throws -> [CascadeStep]? {
+        let profile = capabilityProfile(forHostKey: capabilityHostKey(for: targetUuid))
+        if profile.isMethodKnownUnsupported("StreamAgentStateUpdates") {
+            return nil
+        }
+
+        let strippedFields = profile.strippedFieldsByMethod["StreamAgentStateUpdates"] ?? []
+        var payloadVariants: [[String: JSONValue]] = [
+            [
+                "conversationId": .string(cascadeId),
+                "subscriberId": .string("pocket-\(UUID().uuidString.lowercased())")
+            ]
+        ]
+        if isRemoteCloud && !strippedFields.contains("backend") {
+            payloadVariants.append([
+                "conversationId": .string(cascadeId),
+                "subscriberId": .string("pocket-\(UUID().uuidString.lowercased())"),
+                "backend": .string("BACKEND_TYPE_REMOTE_AICODE")
+            ])
+        }
+
+        var lastError: Error? = nil
+        for variant in payloadVariants {
+            do {
+                let result = try await readAgentStateSnapshotOnce(
+                    cascadeId: cascadeId,
+                    requestPayload: variant,
+                    isRemoteCloud: isRemoteCloud,
+                    targetUuid: targetUuid,
+                    timeoutSeconds: timeoutSeconds
+                )
+                if !result.steps.isEmpty || (result.sawMainTrajectory && result.reportedTotalLength == 0) {
+                    mutateCapabilityProfile(for: targetUuid) { p in
+                        p.recordMethodSupported("StreamAgentStateUpdates")
+                    }
+                    return result.steps
+                }
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+                    mutateCapabilityProfile(for: targetUuid) { p in
+                        p.recordMethodUnsupported("StreamAgentStateUpdates")
+                    }
+                    return nil
+                }
+                if case let AntigravityRPCError.httpError(_, body) = error,
+                   let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) {
+                    mutateCapabilityProfile(for: targetUuid) { p in
+                        p.recordStrippedField(unknownField, forMethod: "StreamAgentStateUpdates")
+                    }
+                }
+                lastError = error
+                let shouldTryNext: Bool = {
+                    if case let AntigravityRPCError.httpError(code, body) = error {
+                        return code == 400
+                            || ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) != nil
+                            || ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(statusCode: code, body: body)
+                    }
+                    return false
+                }()
+                if !shouldTryNext {
+                    break
+                }
+            }
+        }
+        if let lastError {
+            throw lastError
+        }
+        return []
+    }
+
+    private func readAgentStateSnapshotOnce(
+        cascadeId: String,
+        requestPayload: [String: JSONValue],
+        isRemoteCloud: Bool,
+        targetUuid: String?,
+        timeoutSeconds: TimeInterval
+    ) async throws -> (steps: [CascadeStep], sawMainTrajectory: Bool, reportedTotalLength: Int?) {
+        let stream = try subscribeEnvelopeStream(
+            method: "StreamAgentStateUpdates",
+            requestPayload: requestPayload,
+            instanceUuidOverride: targetUuid,
+            allowCrossHostFailover: isRemoteCloud
         )
+
+        final class SnapshotState: @unchecked Sendable {
+            private let lock = NSLock()
+            var stepsByIndex: [Int: CascadeStep] = [:]
+            var reportedTotalLength: Int? = nil
+            var sawMainTrajectory: Bool = false
+
+            func apply(_ update: AgentStateStepsUpdate) -> Bool {
+                lock.lock()
+                defer { lock.unlock() }
+                if update.hasMainTrajectoryUpdate {
+                    sawMainTrajectory = true
+                }
+                if let total = update.totalLength {
+                    reportedTotalLength = total
+                }
+                for step in update.steps {
+                    stepsByIndex[step.stepIndex] = step
+                }
+                if let total = reportedTotalLength, total >= 0 {
+                    stepsByIndex = stepsByIndex.filter { $0.key < total }
+                }
+                if !stepsByIndex.isEmpty {
+                    if let total = reportedTotalLength {
+                        return stepsByIndex.count >= total
+                    }
+                    return true
+                }
+                return sawMainTrajectory && reportedTotalLength == 0
+            }
+
+            func snapshot() -> (steps: [CascadeStep], sawMainTrajectory: Bool, reportedTotalLength: Int?) {
+                lock.lock()
+                defer { lock.unlock() }
+                let sorted = stepsByIndex.values.sorted { $0.stepIndex < $1.stepIndex }
+                return (sorted, sawMainTrajectory, reportedTotalLength)
+            }
+        }
+
+        let state = SnapshotState()
+        let readerTask = Task<Void, Error> {
+            for try await frameObj in stream {
+                if Task.isCancelled { break }
+                let decoded = Self.decodeAgentStateStepsUpdate(frameObj, cascadeId: cascadeId)
+                if state.apply(decoded) {
+                    break
+                }
+            }
+        }
+
+        let timeoutTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(max(0.5, timeoutSeconds) * 1_000_000_000))
+            readerTask.cancel()
+        }
+
+        defer {
+            timeoutTask.cancel()
+            readerTask.cancel()
+        }
+
+        do {
+            try await readerTask.value
+        } catch is CancellationError {
+            // Bounded snapshot timeout elapsed cleanly; return whatever frames were collected.
+        }
+        return state.snapshot()
     }
 
     /// Fetches trajectory steps over JSON with dynamic truncation detection (`truncatedAt`, payload-limit errors,

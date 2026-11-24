@@ -1184,10 +1184,12 @@ fun AgentsSidebarDrawerContent(
         connectionState.knownHosts,
         connectionState.activeHost,
     ) {
-        val filtered = syncState.summaries.filter { s ->
-            coordinator.summaryMatchesHostScope(s, hostScope) &&
-                if (displayOptions.archivedOnly) s.isArchived else !s.isArchived
-        }
+        val filtered = syncState.summaries
+            .distinctBy { it.cascadeId }
+            .filter { s ->
+                coordinator.summaryMatchesHostScope(s, hostScope) &&
+                    if (displayOptions.archivedOnly) s.isArchived else !s.isArchived
+            }
         val comparator: Comparator<CascadeSummary> = when (displayOptions.sortBy) {
             ConversationSortField.LAST_UPDATED -> compareBy { it.updatedAtEpochMs }
             ConversationSortField.DATE_CREATED -> compareBy { it.updatedAtEpochMs }

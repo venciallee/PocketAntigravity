@@ -347,6 +347,13 @@ class AdaptiveTrajectorySyncTest {
             val ct = request.body.contentType?.toString()
                 ?: request.headers[HttpHeaders.ContentType].orEmpty()
             val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            if (request.url.encodedPath.endsWith("/StreamAgentStateUpdates")) {
+                return@MockEngine respond(
+                    content = """{"code":"unimplemented","message":"unknown method StreamAgentStateUpdates"}""",
+                    status = HttpStatusCode.NotImplemented,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            }
             recorded.add(RecordedRequest(request.url.encodedPath, ct, bytes))
 
             if (ct.contains("application/proto")) {
@@ -409,6 +416,13 @@ class AdaptiveTrajectorySyncTest {
             val ct = request.body.contentType?.toString()
                 ?: request.headers[HttpHeaders.ContentType].orEmpty()
             val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            if (request.url.encodedPath.endsWith("/StreamAgentStateUpdates")) {
+                return@MockEngine respond(
+                    content = """{"code":"unimplemented","message":"unknown method StreamAgentStateUpdates"}""",
+                    status = HttpStatusCode.NotImplemented,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            }
             recorded.add(RecordedRequest(request.url.encodedPath, ct, bytes))
 
             if (ct.contains("application/proto")) {
@@ -455,6 +469,13 @@ class AdaptiveTrajectorySyncTest {
             val ct = request.body.contentType?.toString()
                 ?: request.headers[HttpHeaders.ContentType].orEmpty()
             val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            if (request.url.encodedPath.endsWith("/StreamAgentStateUpdates")) {
+                return@MockEngine respond(
+                    content = """{"code":"unimplemented","message":"unknown method StreamAgentStateUpdates"}""",
+                    status = HttpStatusCode.NotImplemented,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            }
             recorded.add(RecordedRequest(request.url.encodedPath, ct, bytes))
 
             if (ct.contains("application/proto")) {
@@ -814,5 +835,154 @@ class AdaptiveTrajectorySyncTest {
         assertFalse(formatted.contains("HTTP 404: HTTP 404:"), "Must never double HTTP status prefix")
         assertFalse(formatted.contains("[5,"), "Must unwrap Boq JSPB array envelope")
         assertTrue(formatted.contains("not_found: trajectory not found"))
+    }
+
+    @Test
+    fun testCloudStreamAgentStateUpdatesLoadsActiveCloudTrajectoryWhenLegacyStepsReturns404() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            val cloudCascadeId = "v1/default/jetski_remote_agents_3p_devbox/356aa3f9-503f-447a-8319-3e1baae4c634"
+            var streamCalls = 0
+            var proxyCommandCalls = 0
+
+            val metaFrameJson = """{"update":{"conversationId":"$cloudCascadeId","status":"CASCADE_RUN_STATUS_RUNNING"}}"""
+            val stepsFrameJson = """{"update":{"conversationId":"$cloudCascadeId","status":"CASCADE_RUN_STATUS_RUNNING","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"items":[{"text":"聊天记录加载优化建议"}]}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_IN_PROGRESS","plannerResponse":{"response":"正在分析聊天记录加载路径..."}}]}}}}"""
+            val connectStreamBytes = ConnectEnvelope.encode(metaFrameJson.encodeToByteArray()) +
+                ConnectEnvelope.encode(stepsFrameJson.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val boqChunk = """["${connectStreamBytes.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.34.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        streamCalls += 1
+                        respond(
+                            content = boqChunk,
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        proxyCommandCalls += 1
+                        respond(
+                            content = """[5,"not_found: trajectory not found (error ID: 356aa3f9503f447a83193e1baae4c634)"]""",
+                            status = HttpStatusCode.NotFound,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(
+                cascadeId = cloudCascadeId,
+                knownStepCount = 2,
+                isCloud = true,
+            )
+            assertEquals(2, steps.size)
+            assertEquals(0, steps[0].stepIndex)
+            assertEquals("聊天记录加载优化建议", steps[0].userInput)
+            assertEquals(1, steps[1].stepIndex)
+            assertEquals("正在分析聊天记录加载路径...", steps[1].plannerResponse?.response)
+            assertEquals(1, streamCalls)
+            assertEquals(0, proxyCommandCalls, "Cloud StreamAgentStateUpdates primary path must succeed without calling legacy ProxyCommand")
+        }
+    }
+
+    @Test
+    fun testLocalTrajectoryFallsBackToStreamAgentStateUpdatesWhenLegacyStepsReturns404() = runTest {
+        withContext(Dispatchers.Default) {
+            val localCid = "cas-local-sqlite-234"
+            val frame1Json = """{"update":{"conversationId":"$localCid","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Inspect live turn"}}]}}}}"""
+            val frame2Json = """{"update":{"conversationId":"$localCid","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Recovered via StreamAgentStateUpdates"}}]}}}}"""
+            val streamBytes = ConnectEnvelope.encode(frame1Json.encodeToByteArray()) +
+                ConnectEnvelope.encode(frame2Json.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+
+            val engine = MockEngine { request ->
+                if (request.url.encodedPath.endsWith("/StreamAgentStateUpdates")) {
+                    respond(
+                        content = streamBytes,
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/connect+json"),
+                    )
+                } else {
+                    respond(
+                        content = """{"code":"not_found","message":"trajectory not found"}""",
+                        status = HttpStatusCode.NotFound,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = testHost("mac-local-stream-fallback"),
+                csrfToken = "test-csrf",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(
+                cascadeId = localCid,
+                knownStepCount = 2,
+                isCloud = false,
+            )
+            assertEquals(2, steps.size)
+            assertEquals(0, steps[0].stepIndex)
+            assertEquals("Inspect live turn", steps[0].userInput)
+            assertEquals(1, steps[1].stepIndex)
+            assertEquals("Recovered via StreamAgentStateUpdates", steps[1].plannerResponse?.response)
+        }
+    }
+
+    @Test
+    fun testDecodeAgentStateStepsUpdateHandlesSparseIndicesAndSnakeCase() {
+        val json = Json { ignoreUnknownKeys = true }
+        val raw = json.parseToJsonElement(
+            """
+            {
+              "update": {
+                "status": "CASCADE_RUN_STATUS_RUNNING",
+                "main_trajectory_update": {
+                  "steps_update": {
+                    "indices": [2, 5],
+                    "total_length": 6,
+                    "steps": [
+                      {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "userInput": {"text": "Second turn"}},
+                      {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE", "plannerResponse": {"response": "Fifth step answer"}}
+                    ]
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        ) as JsonObject
+
+        val decoded = JsonStepAndSummaryDecoder.decodeAgentStateStepsUpdate(raw, cascadeId = "v1/sparse")
+        assertTrue(decoded.hasMainTrajectoryUpdate)
+        assertEquals(6, decoded.totalLength)
+        assertEquals(2, decoded.steps.size)
+        assertEquals(2, decoded.steps[0].stepIndex)
+        assertEquals("Second turn", decoded.steps[0].userInput)
+        assertEquals(5, decoded.steps[1].stepIndex)
+        assertEquals("Fifth step answer", decoded.steps[1].plannerResponse?.response)
     }
 }

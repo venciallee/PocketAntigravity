@@ -1603,23 +1603,28 @@ public actor AntigravityRPCClient {
         }
     }
 
-    internal static func extractConnectEndStreamError(from data: Data, decoder: JSONDecoder) -> String? {
+    internal static func extractConnectEndStreamError(from data: Data, decoder: JSONDecoder) -> AntigravityRPCError? {
         guard !data.isEmpty,
               let obj = try? decoder.decode([String: JSONValue].self, from: data) else {
             return nil
         }
-        if let errObj = obj["error"]?.objectValue {
-            let code = nonEmptyString(errObj["code"]?.stringValue)
-            let msg = nonEmptyString(errObj["message"]?.stringValue)
-            if code != nil || msg != nil {
-                return [code, msg].compactMap { $0 }.joined(separator: ": ")
-            }
+        let errObj = obj["error"]?.objectValue
+        let code = nonEmptyString(errObj?["code"]?.stringValue) ?? nonEmptyString(obj["code"]?.stringValue)
+        let msg = nonEmptyString(errObj?["message"]?.stringValue) ?? nonEmptyString(obj["message"]?.stringValue)
+        guard code != nil || msg != nil else { return nil }
+        let combined = [code, msg].compactMap { $0 }.joined(separator: ": ")
+        let lowerCode = (code ?? "").lowercased()
+        if lowerCode == "unauthenticated" || lowerCode == "permission_denied" {
+            return .unauthorized(combined)
         }
-        if let code = nonEmptyString(obj["code"]?.stringValue),
-           let msg = nonEmptyString(obj["message"]?.stringValue) {
-            return "\(code): \(msg)"
+        if lowerCode == "unimplemented"
+            || ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: combined) {
+            return .httpError(statusCode: 501, body: combined)
         }
-        return nil
+        if lowerCode == "not_found" {
+            return .httpError(statusCode: 404, body: combined)
+        }
+        return .httpError(statusCode: 400, body: combined)
     }
 
     /// Subscribes to a Connect-RPC server-streaming method (`JetboxSubscribeToSummaries`, `StreamCascadeReactiveUpdates`, etc.)
@@ -1635,15 +1640,11 @@ public actor AntigravityRPCClient {
         if channel == .cloudRelay {
             let isCloudRequest = requestPayload["backend"]?.stringValue == "BACKEND_TYPE_REMOTE_AICODE"
                 || requestPayload["backendType"]?.stringValue == "BACKEND_TYPE_REMOTE_AICODE"
-            let effectiveUuid = selectReachableRelayUuid(
+            let effectiveAllowCrossHost = allowCrossHostFailover || isCloudRequest
+            let initialUuid = selectReachableRelayUuid(
                 preferred: instanceUuidOverride,
-                allowCrossHostFailover: allowCrossHostFailover || isCloudRequest
+                allowCrossHostFailover: effectiveAllowCrossHost
             )
-            guard let targetUuid = effectiveUuid, !targetUuid.isEmpty else {
-                return AsyncThrowingStream { continuation in
-                    continuation.finish()
-                }
-            }
             let originStr = SAPISIDHashGenerator.normalizeOrigin(relayOriginURL.absoluteString)
             guard var comps = URLComponents(string: "\(originStr)\(SAPISIDHashGenerator.apiServicePrefix)/StreamProxyCommand") else {
                 throw AntigravityRPCError.invalidEndpoint
@@ -1652,20 +1653,46 @@ public actor AntigravityRPCClient {
             guard let relayURL = comps.url else {
                 throw AntigravityRPCError.invalidEndpoint
             }
-            let encodedStreamBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
-                targetInstanceUuid: targetUuid,
-                rpcPath: "\(Self.servicePrefix)/\(method)",
-                payload: framedPayload,
-                contentType: "application/connect+json",
-                isStreaming: true
-            )
             let capturedCookie = sessionCookie ?? ""
             let capturedAuthUser = authUser
             let cachedApiKey = relayApiKey
             let session = self.streamingURLSession
+            let capturedTargetIdentifier = targetInstanceIdentifier
+            let rpcPath = "\(Self.servicePrefix)/\(method)"
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {
+                        let targetUuid: String
+                        if let initialUuid, !initialUuid.isEmpty {
+                            targetUuid = initialUuid
+                        } else if instanceUuidOverride == nil {
+                            let resolved = try await self.resolveCloudRelayInstance(
+                                preferredIdentifier: capturedTargetIdentifier,
+                                allowCrossHostFallback: effectiveAllowCrossHost,
+                                timeoutInterval: 6.0
+                            )
+                            guard !resolved.selected.uuid.isEmpty else {
+                                throw AntigravityRPCError.httpError(
+                                    statusCode: 503,
+                                    body: "Selected Antigravity Desktop host is offline"
+                                )
+                            }
+                            targetUuid = resolved.selected.uuid
+                        } else {
+                            throw AntigravityRPCError.httpError(
+                                statusCode: 503,
+                                body: "Selected Antigravity Desktop host is offline"
+                            )
+                        }
+
+                        let encodedStreamBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
+                            targetInstanceUuid: targetUuid,
+                            rpcPath: rpcPath,
+                            payload: framedPayload,
+                            contentType: "application/connect+json",
+                            isStreaming: true
+                        )
+
                         func makeStreamRequest(apiKey: String?) -> URLRequest {
                             var req = URLRequest(url: relayURL)
                             req.httpMethod = "POST"
@@ -1757,8 +1784,8 @@ public actor AntigravityRPCClient {
                                             ? CloudRelayJSPBCodec.decompressPayloadIfNeeded(frame.payload)
                                             : frame.payload
                                         if frame.flags.contains(.endStream) {
-                                            if let errMsg = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
-                                                throw AntigravityRPCError.httpError(statusCode: 400, body: errMsg)
+                                            if let streamErr = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
+                                                throw streamErr
                                             }
                                             continuation.finish()
                                             return false
@@ -1864,9 +1891,15 @@ public actor AntigravityRPCClient {
                         throw AntigravityRPCError.unauthorized("Stream HTTP \(http.statusCode)")
                     }
                     guard (200..<300).contains(http.statusCode) else {
+                        var errBytes: [UInt8] = []
+                        for try await byte in bytes {
+                            errBytes.append(byte)
+                            if errBytes.count >= 2048 { break }
+                        }
+                        let errText = String(decoding: errBytes, as: UTF8.self)
                         throw AntigravityRPCError.httpError(
                             statusCode: http.statusCode,
-                            body: "Stream HTTP \(http.statusCode)"
+                            body: errText.isEmpty ? "Stream HTTP \(http.statusCode)" : errText
                         )
                     }
                     var parser = ConnectStreamParser()
@@ -1877,8 +1910,8 @@ public actor AntigravityRPCClient {
                                 ? CloudRelayJSPBCodec.decompressPayloadIfNeeded(frame.payload)
                                 : frame.payload
                             if frame.flags.contains(.endStream) {
-                                if let errMsg = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
-                                    throw AntigravityRPCError.httpError(statusCode: 400, body: errMsg)
+                                if let streamErr = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
+                                    throw streamErr
                                 }
                                 continuation.finish()
                                 return

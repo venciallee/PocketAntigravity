@@ -464,6 +464,82 @@ public object JsonStepAndSummaryDecoder {
         return JetboxDecodedEvent(summaries = summaries, removedCascadeIds = removedIds)
     }
 
+    public data class AgentStateStepsUpdate(
+        public val steps: List<CascadeStep> = emptyList(),
+        public val totalLength: Int? = null,
+        public val hasMainTrajectoryUpdate: Boolean = false,
+        public val runStatus: String? = null,
+    )
+
+    /**
+     * Decodes a `StreamAgentStateUpdatesResponse` frame (`update.mainTrajectoryUpdate.stepsUpdate`
+     * with sparse `indices`, `steps`, and `totalLength`, plus defensive fallback layouts).
+     */
+    public fun decodeAgentStateStepsUpdate(
+        obj: JsonObject,
+        cascadeId: String,
+        nowEpochMs: Long = currentTimeMillis(),
+    ): AgentStateStepsUpdate {
+        val updateObj = obj.obj("update") ?: obj
+        val runStatus = nonEmpty(updateObj.str("status"))
+            ?: nonEmpty(updateObj.str("executableStatus"))
+            ?: nonEmpty(updateObj.str("executable_status"))
+
+        val mainTraj = updateObj.obj("mainTrajectoryUpdate")
+            ?: updateObj.obj("main_trajectory_update")
+        val stepsUpdate = mainTraj?.obj("stepsUpdate")
+            ?: mainTraj?.obj("steps_update")
+            ?: updateObj.obj("stepsUpdate")
+            ?: updateObj.obj("steps_update")
+
+        val hasMainTrajectoryUpdate = mainTraj != null || stepsUpdate != null ||
+            updateObj.obj("trajectory") != null || updateObj.arr("steps") != null
+
+        val rawSteps = stepsUpdate?.arr("steps")
+            ?: mainTraj?.arr("steps")
+            ?: updateObj.obj("trajectory")?.arr("steps")
+            ?: updateObj.arr("steps")
+            ?: JsonArray(emptyList())
+
+        val indices = stepsUpdate?.arr("indices")
+            ?.mapNotNull { el ->
+                val prim = el as? JsonPrimitive ?: return@mapNotNull null
+                prim.intOrNull ?: prim.contentOrNull?.toIntOrNull()
+            }
+            .orEmpty()
+
+        val totalLength = stepsUpdate?.int("totalLength")
+            ?: stepsUpdate?.int("total_length")
+            ?: mainTraj?.int("totalLength")
+            ?: mainTraj?.int("total_length")
+
+        val decoded = ArrayList<CascadeStep>(rawSteps.size)
+        val useExplicitIndices = indices.isNotEmpty() && indices.size == rawSteps.size
+        rawSteps.forEachIndexed { idx, stepEl ->
+            val targetIdx = if (useExplicitIndices) indices[idx] else idx
+            decodeJsonStep(
+                element = stepEl,
+                cascadeId = cascadeId,
+                fallbackIndex = targetIdx,
+                nowEpochMs = nowEpochMs,
+            )?.let { step ->
+                val normalized = if (useExplicitIndices && step.stepIndex != targetIdx) {
+                    step.copy(stepIndex = targetIdx)
+                } else {
+                    step
+                }
+                decoded.add(normalized)
+            }
+        }
+
+        return AgentStateStepsUpdate(
+            steps = decoded,
+            totalLength = totalLength,
+            hasMainTrajectoryUpdate = hasMainTrajectoryUpdate,
+            runStatus = runStatus,
+        )
+    }
+
     public fun decodeSingleStepJson(
         raw: JsonObject,
         cascadeId: String,

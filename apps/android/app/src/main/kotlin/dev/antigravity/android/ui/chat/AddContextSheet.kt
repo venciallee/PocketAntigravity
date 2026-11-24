@@ -294,11 +294,13 @@ fun AddContextSheetScreen(
             // Interactive multi-select drilldown sheet when a category is chosen
             val filtered = remember(workspaceState.contextCandidates, drilldownCategory, searchQuery) {
                 val q = searchQuery.trim().lowercase()
-                workspaceState.contextCandidates.filter { item ->
-                    val catMatch = drilldownCategory == null || item.category == drilldownCategory
-                    val qMatch = q.isEmpty() || item.title.lowercase().contains(q) || item.subtitle.lowercase().contains(q)
-                    catMatch && qMatch
-                }
+                workspaceState.contextCandidates
+                    .distinctBy { it.id }
+                    .filter { item ->
+                        val catMatch = drilldownCategory == null || item.category == drilldownCategory
+                        val qMatch = q.isEmpty() || item.title.lowercase().contains(q) || item.subtitle.lowercase().contains(q)
+                        catMatch && qMatch
+                    }
             }
             val selectedCount = workspaceState.contextCandidates.count { it.isSelected }
 
