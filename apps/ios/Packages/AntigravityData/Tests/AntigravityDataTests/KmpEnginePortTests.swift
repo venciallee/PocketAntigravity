@@ -444,11 +444,11 @@ final class KmpEnginePortTests: XCTestCase {
         let previewUnresolved = CascadeSummary(
             cascadeId: unhydratedId,
             title: "New Conversation",
-            hasResolvedTitle: false,
             projectSlug: "slardar_app_ai",
             workspaceUri: "file:///Users/dev/slardar_app_ai",
             status: .done,
-            stepCount: 2
+            stepCount: 2,
+            hasResolvedTitle: false
         )
         XCTAssertFalse(store.isSummaryTitleLoading(previewUnresolved))
         XCTAssertEqual(store.displayTitle(for: previewUnresolved), "Untitled conversation")
@@ -559,11 +559,11 @@ private actor PreloadTestingKmpEngineDouble: AntigravityKmpEnginePort {
                 CascadeSummary(
                     cascadeId: unhydratedCascadeId,
                     title: "New Conversation",
-                    hasResolvedTitle: false,
                     projectSlug: "slardar_app_ai",
                     workspaceUri: "file:///Users/dev/slardar_app_ai",
                     status: .done,
-                    stepCount: 2
+                    stepCount: 2,
+                    hasResolvedTitle: false
                 )
             ],
             resolvedHostname: hostName,
