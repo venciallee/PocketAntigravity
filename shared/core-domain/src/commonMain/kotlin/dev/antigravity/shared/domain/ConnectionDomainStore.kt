@@ -3,6 +3,7 @@ package dev.antigravity.shared.domain
 import dev.antigravity.shared.model.AgentsHostFilterScope
 import dev.antigravity.shared.model.RemoteConnectionChannel
 import dev.antigravity.shared.model.RemoteHostInstance
+import dev.antigravity.shared.model.UserGreetingFormatter
 import dev.antigravity.shared.platform.KeyValuePreferencesStore
 import dev.antigravity.shared.platform.NetworkReachabilityMonitoring
 import dev.antigravity.shared.platform.NetworkReachabilityStatus
@@ -42,6 +43,7 @@ public data class ConnectionState(
     public val knownHosts: List<RemoteHostInstance> = emptyList(),
     public val availableRelayInstances: List<RelayInstanceInfo> = emptyList(),
     public val activeAuthUser: String = "0",
+    public val userDisplayName: String? = null,
     public val lastPingLatencyMs: Int? = null,
     public val isDeviceNetworkReachable: Boolean = true,
     public val isNetworkExpensiveOrConstrained: Boolean = false,
@@ -100,7 +102,13 @@ public class ConnectionDomainStore(
         activeHandshakeClient?.currentHandshakeDiagnostic()?.takeIf { it.isNotBlank() }
             ?: lastHandshakeDiagnostic
 
-    private val _state = MutableStateFlow(ConnectionState())
+    private val _state = MutableStateFlow(
+        ConnectionState(
+            userDisplayName = UserGreetingFormatter.formatGreetingName(
+                preferencesStore.getString(KEY_USER_DISPLAY_NAME),
+            ),
+        ),
+    )
     public val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
     public suspend fun activeClient(): AntigravityKmpRpcClient? = clientMutex.withLock { currentClient }
@@ -529,10 +537,22 @@ public class ConnectionDomainStore(
         }
     }
 
+    public fun setUserDisplayName(
+        rawName: String?,
+        persist: Boolean = true,
+    ) {
+        val clean = UserGreetingFormatter.formatGreetingName(rawName)
+        _state.update { it.copy(userDisplayName = clean) }
+        if (persist) {
+            preferencesStore.putString(KEY_USER_DISPLAY_NAME, clean)
+        }
+    }
+
     public fun seedVerificationConnection(
         activeHost: RemoteHostInstance,
         knownHosts: List<RemoteHostInstance>,
         statusText: String = "Demo Sandbox · Offline ESDD Fixtures",
+        userDisplayName: String? = "Alex",
     ) {
         _state.update {
             it.copy(
@@ -544,6 +564,7 @@ public class ConnectionDomainStore(
                 errorText = null,
                 activeHost = activeHost,
                 knownHosts = knownHosts,
+                userDisplayName = UserGreetingFormatter.formatGreetingName(userDisplayName),
                 lastPingLatencyMs = activeHost.latencyMs,
             )
         }
@@ -585,6 +606,7 @@ public class ConnectionDomainStore(
         replaceClient(null)
         reconnectAttempt = 0
         preferencesStore.putString(KEY_SELECTED_HOST_SCOPE, null)
+        preferencesStore.putString(KEY_USER_DISPLAY_NAME, null)
         secretStore.clearCredentials()
         projectionStorage.clearAll()
         _state.value = ConnectionState()
@@ -711,6 +733,7 @@ public class ConnectionDomainStore(
 
     private companion object {
         private const val KEY_SELECTED_HOST_SCOPE = "antigravity.kmp.selectedHostScope.v1"
+        private const val KEY_USER_DISPLAY_NAME = "antigravity.userDisplayName.v1"
         private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 22_000L
     }
 }

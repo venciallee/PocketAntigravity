@@ -283,12 +283,24 @@ public class AntigravityCoreCoordinator(
         val host = connectionStore.state.value.activeHost
             ?: throw AntigravityRpcError.HttpError(503, "No active paired host")
         val effectiveScope = hostScope ?: connectionStore.state.value.selectedHostScope
-        return conversationSyncStore.refreshWorkspacesAndSummaries(
+        val result = conversationSyncStore.refreshWorkspacesAndSummaries(
             client = client,
             host = host,
             hostScope = effectiveScope,
             skipRelayListRefresh = skipRelayListRefresh,
         )
+        if (!isVerificationMode && connectionStore.state.value.userDisplayName == null) {
+            scope.launch {
+                try {
+                    refreshUserProfile()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    // Best-effort profile refresh; greeting falls back cleanly without failing sync.
+                }
+            }
+        }
+        return result
     }
 
     @Throws(Throwable::class)
@@ -635,6 +647,19 @@ public class AntigravityCoreCoordinator(
         scope.cancel()
     }
 
+    @Throws(Throwable::class)
+    public suspend fun refreshUserProfile(): String? {
+        if (isVerificationMode && !connectionStore.state.value.hasPairedBackend) {
+            return connectionStore.state.value.userDisplayName
+        }
+        val client = connectionStore.activeClient() ?: return connectionStore.state.value.userDisplayName
+        val profile = client.fetchUserProfile()
+        if (profile?.displayName != null) {
+            connectionStore.setUserDisplayName(profile.displayName, persist = !isVerificationMode)
+        }
+        return connectionStore.state.value.userDisplayName
+    }
+
     private suspend fun onHandshakeSucceeded(
         handshake: BackendHandshakeResult,
         startSummaryStream: Boolean,
@@ -663,6 +688,15 @@ public class AntigravityCoreCoordinator(
                     } catch (_: Throwable) {
                         // Best-effort deferred hydration after fast handshake; UI stays connected and pull-to-refresh can retry.
                     }
+                }
+            }
+            scope.launch {
+                try {
+                    refreshUserProfile()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    // Best-effort signed-in user profile hydration; greeting falls back cleanly without blocking handshake.
                 }
             }
             scope.launch {

@@ -147,10 +147,14 @@ public protocol AntigravityKmpEnginePort: Sendable {
     func onForeground() async
     func disconnectAndClearCredentials() async
 
+    /// Fetches the real signed-in user's greeting display name via KMP `GetUserStatus` (`refreshUserProfile`).
+    func fetchUserDisplayName() async -> String?
+
     /// Zero-secret stage-by-stage diagnostic breadcrumb from the active or latest KMP handshake attempt.
     var lastHandshakeDiagnostic: String { get }
 }
 
 public extension AntigravityKmpEnginePort {
     var lastHandshakeDiagnostic: String { "" }
+    func fetchUserDisplayName() async -> String? { nil }
 }

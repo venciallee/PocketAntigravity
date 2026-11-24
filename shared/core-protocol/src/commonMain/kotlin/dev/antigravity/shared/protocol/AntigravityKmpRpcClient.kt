@@ -23,6 +23,7 @@ import dev.antigravity.shared.model.GitCommitDraft
 import dev.antigravity.shared.model.GitCommitResult
 import dev.antigravity.shared.model.GitHubRepoItem
 import dev.antigravity.shared.model.LiveModelCatalogResult
+import dev.antigravity.shared.model.LiveUserProfile
 import dev.antigravity.shared.model.ModelUsageQuota
 import dev.antigravity.shared.model.NewProjectDraft
 import dev.antigravity.shared.model.PlanInlineComment
@@ -3173,6 +3174,36 @@ public class AntigravityKmpRpcClient(
                 throw e
             }
         }
+    }
+
+    // MARK: - Signed-In User Profile (`GetUserStatus`)
+
+    @Throws(Throwable::class)
+    public suspend fun fetchUserProfile(instanceUuidOverride: String? = null): LiveUserProfile? {
+        val metaReq = buildJsonObject {
+            put(
+                "metadata",
+                buildJsonObject {
+                    put("ideName", "antigravity")
+                    put("extensionName", "antigravity")
+                    put("locale", "en")
+                },
+            )
+        }
+        val resp = try {
+            callUnaryJson(
+                method = "GetUserStatus",
+                body = metaReq,
+                instanceUuidOverride = instanceUuidOverride,
+                respectNegativeCache = false,
+                perCallTimeoutMs = 5_000L,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            return null
+        }
+        return V233RpcPayloadCodec.parseUserProfileResponse(resp)
     }
 
     // MARK: - Models, Quota & Custom Agents (`GetCascadeModelConfigs` / `GetAvailableModels`)

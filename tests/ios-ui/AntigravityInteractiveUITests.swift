@@ -450,6 +450,15 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
                     ]
                 ]
             ]
+        } else if path.hasSuffix("/GetUserStatus") {
+            responseDict = [
+                "serverInfo": ["version": "v2.33.0"],
+                "userStatus": [
+                    "name": "Vencial Lee",
+                    "email": "venciallee@gmail.com",
+                    "userTier": ["name": "Google AI Ultra"]
+                ]
+            ]
         } else if path.hasSuffix("/GetAllCascadeTrajectories") {
             responseDict = ["trajectorySummaries": summariesMap]
         } else if path.hasSuffix("/GetCascadeTrajectorySteps") {
@@ -597,9 +606,21 @@ final class AntigravityInteractiveUITests: XCTestCase {
             sidebarButton.waitForExistence(timeout: 8),
             "New Conversation Home must render left sidebar trigger btn-sidebar"
         )
+        let heroGreeting = app.descendants(matching: .any)["home-hero-greeting"].firstMatch
         XCTAssertTrue(
-            app.descendants(matching: .any)["home-hero-greeting"].firstMatch.waitForExistence(timeout: 5),
+            heroGreeting.waitForExistence(timeout: 5),
             "New Conversation Home must render hero greeting"
+        )
+        let resolvedNamePredicate = NSPredicate(format: "label CONTAINS[c] %@", "Vencial")
+        let resolvedNameExpectation = XCTNSPredicateExpectation(predicate: resolvedNamePredicate, object: heroGreeting)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [resolvedNameExpectation], timeout: 10),
+            .completed,
+            "Live hero greeting must display the signed-in user name from GetUserStatus (saw: \(heroGreeting.label))"
+        )
+        XCTAssertFalse(
+            heroGreeting.label.contains("Alex"),
+            "Live hero greeting must never show hardcoded mock name 'Alex' (saw: \(heroGreeting.label))"
         )
         attachScreenshot(named: "01_Live_Agents_Home")
 

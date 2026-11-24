@@ -561,4 +561,29 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("input-remote-control-link").assertIsDisplayed()
         composeRule.onNodeWithTag("btn-submit-remote-link").assertIsDisplayed()
     }
+
+    @Test
+    fun atc24_liveHomeGreetingUsesRealUserNameAndNeverShowsMockAlex() {
+        val coordinator = AntigravityCoreCoordinator()
+        assertFalse(coordinator.isVerificationMode)
+
+        composeRule.setContent {
+            dev.antigravity.android.core.ui.theme.AntigravityTheme(darkTheme = true) {
+                dev.antigravity.android.ui.home.AgentsHomeScreen(
+                    coordinator = coordinator,
+                    onOpenSidebar = {},
+                    onOpenConversation = {},
+                )
+            }
+        }
+
+        // Before GetUserStatus resolves, live Home shows clean nameless greeting (never "Alex")
+        composeRule.onNodeWithText("Welcome back.\nWhere should\nwe pick up?").assertIsDisplayed()
+        composeRule.onNodeWithText("Alex", substring = true).assertDoesNotExist()
+
+        // Once GetUserStatus populates the real user name, greeting updates dynamically
+        coordinator.connectionStore.setUserDisplayName("Vencial Lee", persist = false)
+        composeRule.onNodeWithText("Welcome back,\nVencial. Where\nshould we pick up?").assertIsDisplayed()
+        composeRule.onNodeWithText("Alex", substring = true).assertDoesNotExist()
+    }
 }

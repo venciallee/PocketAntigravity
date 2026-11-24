@@ -257,7 +257,7 @@ public struct PermissionsPresetPopoverView: View {
                 if showHomeBackdrop {
                     VStack {
                         Spacer()
-                        Text("Welcome back, Alex.")
+                        Text(store.homeCompactBackdropGreetingText)
                             .font(.system(size: 30, weight: .bold))
                             .foregroundStyle(AntigravityTheme.textPrimary.opacity(0.32))
                             .padding(.bottom, 120)

@@ -23,6 +23,7 @@ import dev.antigravity.shared.model.GitFileStatusLetter
 import dev.antigravity.shared.model.GitHubPullRequestInfo
 import dev.antigravity.shared.model.GitHubRepoItem
 import dev.antigravity.shared.model.LifecycleHookItem
+import dev.antigravity.shared.model.LiveUserProfile
 import dev.antigravity.shared.model.McpServerStatusItem
 import dev.antigravity.shared.model.ModelUsageQuota
 import dev.antigravity.shared.model.PlanInlineComment
@@ -34,6 +35,7 @@ import dev.antigravity.shared.model.RuleSummary
 import dev.antigravity.shared.model.SkillSummary
 import dev.antigravity.shared.model.SubagentPayload
 import dev.antigravity.shared.model.ThinkingEffortLevel
+import dev.antigravity.shared.model.UserGreetingFormatter
 import dev.antigravity.shared.model.decodeResilientEnumOrDefault
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -991,6 +993,71 @@ internal object V233RpcPayloadCodec {
             cronExpression = cronExpr,
             modelLabel = nonEmpty(autoObj.str("model")) ?: "Flash",
             originInstanceUuid = originInstanceUuid,
+        )
+    }
+
+    // MARK: - Signed-In User Profile (`GetUserStatus`)
+
+    fun parseUserProfileResponse(resp: JsonObject): LiveUserProfile? {
+        val statusObj = resp.obj("userStatus") ?: resp.obj("user_status")
+        val containers = buildList {
+            if (statusObj != null) {
+                add(statusObj)
+                statusObj.obj("user")?.let { add(it) }
+                statusObj.obj("profile")?.let { add(it) }
+                statusObj.obj("account")?.let { add(it) }
+            }
+            resp.obj("user")?.let { add(it) }
+            resp.obj("profile")?.let { add(it) }
+            resp.obj("account")?.let { add(it) }
+            add(resp)
+        }
+
+        val givenNameKeys = listOf("givenName", "given_name", "firstName", "first_name")
+        val fullNameKeys = listOf(
+            "name",
+            "displayName",
+            "display_name",
+            "fullName",
+            "full_name",
+            "userName",
+            "user_name",
+            "accountName",
+            "account_name",
+        )
+        val emailKeys = listOf("email", "userEmail", "user_email", "accountEmail", "account_email")
+
+        fun firstString(keys: List<String>): String? {
+            for (container in containers) {
+                for (key in keys) {
+                    val value = nonEmpty(container.str(key))
+                    if (value != null) return value
+                }
+            }
+            return null
+        }
+
+        val rawName = firstString(givenNameKeys) ?: firstString(fullNameKeys)
+        val rawEmail = firstString(emailKeys)
+        val tierObj = statusObj?.obj("userTier") ?: statusObj?.obj("user_tier") ?: resp.obj("userTier")
+        val planInfoObj = statusObj?.obj("planStatus")?.obj("planInfo")
+            ?: statusObj?.obj("plan_status")?.obj("plan_info")
+            ?: resp.obj("planStatus")?.obj("planInfo")
+        val planDisplayName = nonEmpty(tierObj?.str("name"))
+            ?: nonEmpty(planInfoObj?.str("planName"))
+            ?: nonEmpty(planInfoObj?.str("plan_name"))
+
+        val displayName = UserGreetingFormatter.formatGreetingName(
+            rawName = rawName,
+            fallbackEmail = rawEmail,
+        )
+        if (displayName == null && rawEmail == null && planDisplayName == null) {
+            return null
+        }
+        return LiveUserProfile(
+            displayName = displayName,
+            email = rawEmail,
+            planDisplayName = planDisplayName,
         )
     }
 
