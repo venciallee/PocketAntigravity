@@ -6,9 +6,13 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import dev.antigravity.android.ui.AntigravityAppRoot
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentPermissionPreset
@@ -560,5 +564,81 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("btn-welcome-scan-qr").performClick()
         composeRule.onNodeWithTag("input-remote-control-link").assertIsDisplayed()
         composeRule.onNodeWithTag("btn-submit-remote-link").assertIsDisplayed()
+    }
+
+    @Test
+    fun atc24_sidebarDrawerOpensOnLeftToRightSwipeAndClosesOnRightToLeftSwipe() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.AGENTS_HOME,
+            )
+        }
+
+        assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
+
+        // Swipe left-to-right from the left edge on Home -> opens Sidebar Drawer
+        composeRule.onRoot().performTouchInput {
+            swipeRight(startX = width * 0.03f, endX = width * 0.85f, durationMillis = 220)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-new-conversation").assertIsDisplayed()
+
+        // Swipe right-to-left on the open Sidebar Drawer -> closes cleanly back to Home
+        composeRule.onRoot().performTouchInput {
+            swipeLeft(startX = width * 0.72f, endX = width * 0.08f, durationMillis = 220)
+        }
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("home-greeting").assertIsDisplayed()
+    }
+
+    @Test
+    fun atc25_sidebarDrawerSwipeInChatPreservesActiveConversationOnDismiss() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.CHAT_AND_COMPOSER,
+            )
+        }
+
+        composeRule.onNodeWithTag("chat-diff-pill").assertIsDisplayed()
+
+        // Swipe left-to-right inside CascadeChat -> opens Sidebar Drawer over active conversation
+        composeRule.onRoot().performTouchInput {
+            swipeRight(startX = width * 0.03f, endX = width * 0.85f, durationMillis = 220)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
+
+        // Swipe right-to-left -> closes drawer without losing the active conversation
+        composeRule.onRoot().performTouchInput {
+            swipeLeft(startX = width * 0.72f, endX = width * 0.08f, durationMillis = 220)
+        }
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("chat-diff-pill").assertIsDisplayed()
+    }
+
+    @Test
+    fun atc26_pushedProjectDetailDoesNotOpenSidebarOnLeftSwipe() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.PROJECT_DETAIL,
+            )
+        }
+
+        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
+        composeRule.onRoot().performTouchInput {
+            swipeRight(startX = width * 0.03f, endX = width * 0.85f, durationMillis = 220)
+        }
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
     }
 }

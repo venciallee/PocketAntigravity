@@ -757,7 +757,9 @@ public struct AgentsHomeViewController: View {
 
 public struct AgentsSidebarDrawerView: View {
     @Bindable public var store: AntigravitySessionStore
+    @Environment(\.layoutDirection) private var layoutDirection
     public var showWelcomeBackdrop: Bool
+    public var presentationProgress: CGFloat
     public var onClose: (() -> Void)?
     public var onNewConversation: (() -> Void)?
     public var onOpenAutomations: (() -> Void)?
@@ -775,6 +777,7 @@ public struct AgentsSidebarDrawerView: View {
     public init(
         store: AntigravitySessionStore,
         showWelcomeBackdrop: Bool = false,
+        presentationProgress: CGFloat = 1.0,
         onClose: (() -> Void)? = nil,
         onNewConversation: (() -> Void)? = nil,
         onOpenAutomations: (() -> Void)? = nil,
@@ -788,6 +791,7 @@ public struct AgentsSidebarDrawerView: View {
     ) {
         self.store = store
         self.showWelcomeBackdrop = showWelcomeBackdrop
+        self.presentationProgress = presentationProgress
         self.onClose = onClose
         self.onNewConversation = onNewConversation
         self.onOpenAutomations = onOpenAutomations
@@ -997,8 +1001,11 @@ public struct AgentsSidebarDrawerView: View {
     }
 
     public var body: some View {
+        let clampedProgress = min(max(presentationProgress, 0.0), 1.0)
+
         GeometryReader { geo in
             let drawerWidth = min(334, geo.size.width * 0.83)
+            let hiddenOffsetX: CGFloat = (layoutDirection == .rightToLeft ? drawerWidth : -drawerWidth) * (1.0 - clampedProgress)
 
             ZStack(alignment: .leading) {
                 // Dimmed scrim & subtle right-edge peek of Home (`ios-drawer.png`)
@@ -1013,10 +1020,13 @@ public struct AgentsSidebarDrawerView: View {
                             .offset(y: -48)
                     }
                 }
+                .opacity(clampedProgress)
                 .contentShape(Rectangle())
+                .allowsHitTesting(clampedProgress > 0.01)
                 .onTapGesture {
                     dismissDrawer()
                 }
+                .accessibilityIdentifier("sidebar-drawer-scrim")
 
                 // Left Sidebar Drawer Panel (`#101012`)
                 VStack(alignment: .leading, spacing: 0) {
@@ -1301,10 +1311,13 @@ public struct AgentsSidebarDrawerView: View {
                         .frame(width: 1)
                         .ignoresSafeArea()
                 }
+                .offset(x: hiddenOffsetX)
+                .allowsHitTesting(clampedProgress > 0.01)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("sidebar-drawer-panel")
             }
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     private func drawerPrimaryNavRow(
