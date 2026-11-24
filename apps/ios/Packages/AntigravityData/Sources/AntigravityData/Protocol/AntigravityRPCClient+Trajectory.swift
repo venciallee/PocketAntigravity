@@ -274,7 +274,7 @@ extension AntigravityRPCClient {
                 } else {
                     let shouldRefreshInstances: Bool = {
                         if cachedRelayInstances.isEmpty { return true }
-                        if case let AntigravityRPCError.httpError(code, _) = primaryError {
+                        if let err = primaryError, case let AntigravityRPCError.httpError(code, _) = err {
                             return code == 404 || code == 502 || code == 503 || code == 504
                         }
                         return false
