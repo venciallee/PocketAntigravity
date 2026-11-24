@@ -21,6 +21,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -198,7 +199,7 @@ fun AntigravityAppRoot(
             } else {
                 drawerProgress.animateTo(
                     targetValue = 1f,
-                    animationSpec = spring(dampingRatio = 0.92f, stiffness = 420f),
+                    animationSpec = spring(dampingRatio = 0.94f, stiffness = 380f),
                 )
             }
         }
@@ -220,7 +221,7 @@ fun AntigravityAppRoot(
             } else {
                 drawerProgress.animateTo(
                     targetValue = 0f,
-                    animationSpec = spring(dampingRatio = 0.92f, stiffness = 460f),
+                    animationSpec = spring(dampingRatio = 0.94f, stiffness = 440f),
                 )
             }
         }
@@ -493,12 +494,14 @@ fun AntigravityAppRoot(
                                         !(finalProgress <= 0.72f || (signedVx <= -600f && finalProgress < 0.96f))
                                     }
                                     isDrawerOpen = shouldOpen
+                                    val normalizedVelocity = (signedVx / drawerWidthPx).coerceIn(-12f, 12f)
                                     scope.launch {
                                         drawerProgress.snapTo(finalProgress)
                                         dragDrawerProgress = null
                                         drawerProgress.animateTo(
                                             targetValue = if (shouldOpen) 1f else 0f,
-                                            animationSpec = spring(dampingRatio = 0.92f, stiffness = 420f),
+                                            initialVelocity = normalizedVelocity,
+                                            animationSpec = spring(dampingRatio = 0.94f, stiffness = 400f),
                                         )
                                     }
                                     break
@@ -921,8 +924,16 @@ fun AntigravityAppRoot(
                 }
 
                 // Interactive Slide-Over Left Sidebar Drawer Overlay (`UE01B_SIDEBAR_DRAWER`)
-                val effectiveDrawerProgress = (dragDrawerProgress ?: drawerProgress.value).coerceIn(0f, 1f)
-                val showDrawerLayer = isDrawerOpen || dragDrawerProgress != null || effectiveDrawerProgress > 0.001f
+                val showDrawerLayer by remember(initialVerifyScene) {
+                    derivedStateOf {
+                        isDrawerOpen || dragDrawerProgress != null || drawerProgress.value > 0.001f
+                    }
+                }
+                val scrimClickable by remember(initialVerifyScene) {
+                    derivedStateOf {
+                        isDrawerOpen || (dragDrawerProgress ?: drawerProgress.value) > 0.05f
+                    }
+                }
 
                 if (showDrawerLayer) {
                     val baseScrimAlpha = if (colors.isDark) 0.62f else 0.36f
@@ -931,10 +942,13 @@ fun AntigravityAppRoot(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.Black.copy(alpha = baseScrimAlpha * effectiveDrawerProgress))
+                            .graphicsLayer {
+                                alpha = (dragDrawerProgress ?: drawerProgress.value).coerceIn(0f, 1f)
+                            }
+                            .background(Color.Black.copy(alpha = baseScrimAlpha))
                             .testTag("sidebar-scrim")
                             .clickable(
-                                enabled = effectiveDrawerProgress > 0.05f,
+                                enabled = scrimClickable,
                                 interactionSource = scrimInteraction,
                                 indication = null,
                                 onClick = { closeDrawer() },
@@ -947,8 +961,9 @@ fun AntigravityAppRoot(
                             .fillMaxWidth(0.815f)
                             .align(Alignment.CenterStart)
                             .graphicsLayer {
+                                val progress = (dragDrawerProgress ?: drawerProgress.value).coerceIn(0f, 1f)
                                 val sign = if (isRtl) 1f else -1f
-                                translationX = sign * drawerWidthPx * (1f - effectiveDrawerProgress)
+                                translationX = sign * drawerWidthPx * (1f - progress)
                             }
                             .testTag("sidebar-drawer"),
                         shape = RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp),

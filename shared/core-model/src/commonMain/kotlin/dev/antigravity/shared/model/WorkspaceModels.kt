@@ -191,11 +191,24 @@ public object AntigravityCloudDetector {
         "/root",
     )
 
-    public fun isNoProjectSlug(rawSlug: String): Boolean {
-        var cleaned = rawSlug.trim()
-        if (cleaned.lowercase().startsWith("cloud:")) {
-            cleaned = cleaned.drop("cloud:".length).trim()
+    public fun stripProjectScopePrefix(rawSlug: String): String {
+        val trimmed = rawSlug.trim()
+        val lower = trimmed.lowercase()
+        if (lower.startsWith("cloud:")) {
+            return trimmed.drop("cloud:".length).trim()
         }
+        if (lower.startsWith("host:")) {
+            val rest = trimmed.drop("host:".length)
+            val colonIdx = rest.indexOf(':')
+            if (colonIdx >= 0) {
+                return rest.substring(colonIdx + 1).trim()
+            }
+        }
+        return trimmed
+    }
+
+    public fun isNoProjectSlug(rawSlug: String): Boolean {
+        val cleaned = stripProjectScopePrefix(rawSlug)
         val lower = cleaned.lowercase()
         return lower.isEmpty() ||
             lower == "no project" ||

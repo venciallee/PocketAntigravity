@@ -1974,6 +1974,10 @@ extension AntigravitySessionStore {
                    let wsUuid = ws.originInstanceUuid, !wsUuid.isEmpty {
                     return eUuid == wsUuid
                 }
+                if !existing.hostName.isEmpty,
+                   let wsHost = ws.originHostName, !wsHost.isEmpty {
+                    return existing.hostName == wsHost
+                }
                 return true
             }) {
                 continue

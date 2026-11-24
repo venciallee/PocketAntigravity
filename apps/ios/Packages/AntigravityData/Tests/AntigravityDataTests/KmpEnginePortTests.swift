@@ -388,6 +388,78 @@ final class KmpEnginePortTests: XCTestCase {
     }
 
     @MainActor
+    func testHostScopeSwitchRoutesRefreshThroughKmpEngineAndIsolatesScopedProjects() async throws {
+        let engine = MultiHostKmpEngineDouble()
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+
+        let connected = await store.connectCloudRelay(
+            relayURLString: "https://antigravity.google/r/uuid-mbp",
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyTESTMULTIHOST0000000000000000000",
+            hostName: "MacBook Pro"
+        )
+        XCTAssertTrue(connected)
+        XCTAssertEqual(store.pairedLocalHosts.count, 2)
+
+        // Initially scoped to MacBook Pro: MacBook Pro repo should match, Cloud and Mac mini repos must not
+        let mbpScope = AgentsHostFilterScope.localHost(id: "uuid-mbp", name: "MacBook Pro")
+        let miniScope = AgentsHostFilterScope.localHost(id: "uuid-macmini", name: "huangjiafandemac-mini-local-swift-vapor")
+
+        // Legacy/untagged project with hostName == "MacBook Pro" must NOT leak into Mac mini scope
+        let untaggedMbpProject = ProjectWorkspace(
+            id: "legacy-mbp-only",
+            name: "legacy-mbp-only",
+            pathDisplay: "~/legacy-mbp-only",
+            workspaceUri: "file:///Users/mbp/legacy-mbp-only",
+            runtime: .macBookPro,
+            hostName: "MacBook Pro",
+            originInstanceUuid: nil
+        )
+        XCTAssertTrue(store.projectMatchesHostScope(untaggedMbpProject, scope: mbpScope))
+        XCTAssertFalse(
+            store.projectMatchesHostScope(untaggedMbpProject, scope: miniScope),
+            "Project with hostName='MacBook Pro' must not leak into a different local host when multiple Macs are paired"
+        )
+
+        // Switch device to Mac mini -> must route scoped refresh through kmpEngine and update selectedProjectId
+        store.selectHostScope(miniScope)
+        for _ in 0..<40 {
+            let scoped = store.projects.filter { !$0.isNoProject && store.projectMatchesHostScope($0) }
+            if scoped.contains(where: { $0.name == "vapor-backend" }) &&
+                scoped.contains(where: { $0.id == store.selectedProjectId }) {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        let refreshedScopes = await engine.refreshedScopes
+        XCTAssertTrue(
+            refreshedScopes.contains(miniScope),
+            "Switching local host must trigger KMP-backed scoped refresh for the target device"
+        )
+        let miniScopedProjects = store.projects.filter { !$0.isNoProject && store.projectMatchesHostScope($0) }
+        XCTAssertEqual(Set(miniScopedProjects.map(\.name)), Set(["vapor-backend", "PocketAntigravity"]))
+        XCTAssertTrue(
+            miniScopedProjects.contains(where: { $0.id == store.selectedProjectId }),
+            "selectedProjectId must update to a repo belonging to the newly selected device"
+        )
+
+        // Switch to Antigravity Cloud -> must surface preserved Cloud project and update selectedProjectId
+        store.selectHostScope(.antigravityCloud)
+        for _ in 0..<40 {
+            let cloudScoped = store.projects.filter { !$0.isNoProject && store.projectMatchesHostScope($0) }
+            if cloudScoped.contains(where: { $0.name == "venciallee/PocketAntigravity" }) &&
+                cloudScoped.contains(where: { $0.id == store.selectedProjectId }) {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let cloudScopedProjects = store.projects.filter { !$0.isNoProject && store.projectMatchesHostScope($0) }
+        XCTAssertTrue(cloudScopedProjects.contains(where: { $0.name == "venciallee/PocketAntigravity" }))
+        XCTAssertTrue(cloudScopedProjects.contains(where: { $0.id == store.selectedProjectId }))
+    }
+
+    @MainActor
     func testConversationPreloadLoadingTitleDiskCacheWarmupAndReconnectPreservation() async throws {
         // 1. Verify decoder distinguishes unresolved/placeholder titles from resolved titles & nested prompts
         let missingSummaryEntry: JSONValue = .object([
@@ -472,6 +544,7 @@ final class KmpEnginePortTests: XCTestCase {
             }
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
+
         let hydratedSummary = try XCTUnwrap(store.summaries.first(where: { $0.cascadeId == unhydratedId }))
         XCTAssertTrue(hydratedSummary.hasResolvedTitle)
         XCTAssertEqual(hydratedSummary.title, "Fix Slardar startup tracing")
@@ -526,6 +599,175 @@ final class KmpEnginePortTests: XCTestCase {
         let draftSummary = try XCTUnwrap(coldStore.summaries.first(where: { $0.cascadeId == draftId }))
         XCTAssertFalse(coldStore.isSummaryTitleLoading(draftSummary))
     }
+}
+
+private actor MultiHostKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "MultiHostKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=MultiHostKmpEngineDouble" }
+
+    private let mbpUuid = "uuid-mbp"
+    private let miniUuid = "uuid-macmini"
+    private let miniName = "huangjiafandemac-mini-local-swift-vapor"
+
+    var refreshedScopes: [AgentsHostFilterScope] = []
+    var switchedInstances: [String] = []
+
+    private var relayList: [RelayInstanceInfo] {
+        [
+            RelayInstanceInfo(uuid: mbpUuid, name: "MacBook Pro", status: .connected),
+            RelayInstanceInfo(uuid: miniUuid, name: miniName, status: .connected)
+        ]
+    }
+
+    private var cloudProject: ProjectWorkspace {
+        ProjectWorkspace(
+            id: "cloud:venciallee/PocketAntigravity",
+            name: "venciallee/PocketAntigravity",
+            pathDisplay: "Cloud · venciallee/PocketAntigravity",
+            workspaceUri: "cloud://venciallee/PocketAntigravity",
+            runtime: .cloud,
+            hostName: "Cloud",
+            cloudProjectId: "cloud-pocket-1"
+        )
+    }
+
+    func connectDirectLan(endpointURLString: String, csrfToken: String, certSHA256: String?, hostName: String, isRestoringSavedSession: Bool) async throws -> BackendHandshakeResult {
+        throw AntigravityRPCError.invalidEndpoint
+    }
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(
+            latencyMs: 20,
+            workspaces: [
+                WorkspaceInfo(
+                    workspaceUri: "file:///Users/mbp/ios-app",
+                    displayName: "ios-app",
+                    isCloud: false,
+                    originInstanceUuid: mbpUuid,
+                    originHostName: "MacBook Pro"
+                )
+            ],
+            summaries: [
+                CascadeSummary(
+                    cascadeId: "cas-mbp-1",
+                    title: "MBP Build",
+                    projectSlug: "ios-app",
+                    workspaceUri: "file:///Users/mbp/ios-app",
+                    status: .done,
+                    stepCount: 2,
+                    originInstanceUuid: mbpUuid,
+                    originHostName: "MacBook Pro"
+                )
+            ],
+            cloudProjects: [cloudProject],
+            resolvedHostname: "MacBook Pro",
+            resolvedInstanceUuid: mbpUuid,
+            availableRelayInstances: relayList,
+            isSelectedHostOnline: true
+        )
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        HostReachabilityProbeResult(latencyMs: 12, availableRelayInstances: relayList, isSelectedHostOnline: true)
+    }
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult {
+        refreshedScopes.append(hostScope)
+        switch hostScope {
+        case .localHost(let id, _) where id == miniUuid:
+            return KmpFederatedSyncResult(
+                workspaces: [
+                    WorkspaceInfo(
+                        workspaceUri: "file:///Users/mini/vapor-backend",
+                        displayName: "vapor-backend",
+                        isCloud: false,
+                        originInstanceUuid: miniUuid,
+                        originHostName: miniName
+                    ),
+                    WorkspaceInfo(
+                        workspaceUri: "file:///Users/mini/PocketAntigravity",
+                        displayName: "PocketAntigravity",
+                        isCloud: false,
+                        originInstanceUuid: miniUuid,
+                        originHostName: miniName
+                    )
+                ],
+                summaries: [
+                    CascadeSummary(
+                        cascadeId: "cas-mini-1",
+                        title: "Vapor Migration",
+                        projectSlug: "vapor-backend",
+                        workspaceUri: "file:///Users/mini/vapor-backend",
+                        status: .done,
+                        stepCount: 3,
+                        originInstanceUuid: miniUuid,
+                        originHostName: miniName
+                    )
+                ],
+                cloudProjects: [],
+                availableRelayInstances: relayList,
+                succeededInstanceUuids: [miniUuid],
+                cloudSucceeded: false,
+                latencyMs: 18
+            )
+        case .antigravityCloud:
+            return KmpFederatedSyncResult(
+                workspaces: [],
+                summaries: [],
+                cloudProjects: [cloudProject],
+                availableRelayInstances: relayList,
+                succeededInstanceUuids: [],
+                cloudSucceeded: true,
+                latencyMs: 15
+            )
+        default:
+            return KmpFederatedSyncResult(
+                workspaces: [
+                    WorkspaceInfo(
+                        workspaceUri: "file:///Users/mbp/ios-app",
+                        displayName: "ios-app",
+                        isCloud: false,
+                        originInstanceUuid: mbpUuid,
+                        originHostName: "MacBook Pro"
+                    )
+                ],
+                summaries: [],
+                cloudProjects: [cloudProject],
+                availableRelayInstances: relayList,
+                succeededInstanceUuids: [mbpUuid],
+                cloudSucceeded: true,
+                latencyMs: 15
+            )
+        }
+    }
+
+    func syncSteps(cascadeId: String, knownStepCount: Int, isCloud: Bool, instanceUuidOverride: String?) async throws -> [CascadeStep] { [] }
+    func startConversation(workspaceUri: String, initialPrompt: String, modelId: String, cloudProjectId: String?, isCloud: Bool, instanceUuidOverride: String?) async throws -> String { "cid-new" }
+    func sendMessage(cascadeId: String, message: String, workspaceUri: String, attachments: [ComposerAttachmentChip], modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode, agentPersona: String, isCloud: Bool, cloudProjectId: String?, permissionPreset: AgentPermissionPreset?, instanceUuidOverride: String?, isOptimisticDraft: Bool) async throws -> KmpSendMessageResult {
+        KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: true, queuedInOutbox: false)
+    }
+    func resolveWaitingInteraction(step: CascadeStep, decision: InteractionDecision, workspaceUri: String?, instanceUuidOverride: String?) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async { switchedInstances.append(instance.uuid) }
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { AsyncStream { $0.finish() } }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
 }
 
 private actor PreloadTestingKmpEngineDouble: AntigravityKmpEnginePort {

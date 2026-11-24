@@ -17,6 +17,7 @@ import dev.antigravity.shared.model.LiveProgressAgentSummary
 import dev.antigravity.shared.model.LiveProgressPhase
 import dev.antigravity.shared.model.LiveProgressSnapshot
 import dev.antigravity.shared.model.ProjectRuntimeTarget
+import dev.antigravity.shared.model.ProjectWorkspace
 import dev.antigravity.shared.model.RemoteConnectionChannel
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.model.ThinkingEffortLevel
@@ -35,6 +36,7 @@ import dev.antigravity.shared.protocol.FederatedWorkspaceSyncResult
 import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.HostReachabilityProbeResult
 import dev.antigravity.shared.protocol.RelayInstanceInfo
+import dev.antigravity.shared.protocol.RelayInstanceStatus
 import dev.antigravity.shared.protocol.TlsEngineConfig
 import dev.antigravity.shared.protocol.currentTimeMillis
 import kotlinx.coroutines.CancellationException
@@ -44,6 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -101,6 +104,8 @@ public class AntigravityCoreCoordinator(
 ) {
     private val _capabilityErrorBanner = MutableStateFlow<String?>(null)
     public val capabilityErrorBanner: StateFlow<String?> = _capabilityErrorBanner.asStateFlow()
+    private var hostSwitchJob: Job? = null
+    private var hostSwitchGeneration: Long = 0L
 
     private val preloadMutex = Mutex()
     private val preloadQueue = ArrayDeque<String>()
@@ -325,15 +330,28 @@ public class AntigravityCoreCoordinator(
     ): FederatedWorkspaceSyncResult {
         val client = connectionStore.activeClient()
             ?: throw AntigravityRpcError.HttpError(503, "No active backend connection")
-        val host = connectionStore.state.value.activeHost
+        val connState = connectionStore.state.value
+        val activeHost = connState.activeHost
             ?: throw AntigravityRpcError.HttpError(503, "No active paired host")
-        val effectiveScope = hostScope ?: connectionStore.state.value.selectedHostScope
+        val effectiveScope = hostScope ?: connState.selectedHostScope
+        val effectiveHost = when (effectiveScope) {
+            is AgentsHostFilterScope.LocalHost -> {
+                connState.knownHosts.firstOrNull {
+                    it.instanceId == effectiveScope.id || it.hostname == effectiveScope.name
+                } ?: activeHost.copy(
+                    instanceId = effectiveScope.id,
+                    hostname = effectiveScope.name.ifBlank { activeHost.hostname },
+                )
+            }
+            else -> activeHost
+        }
         val result = conversationSyncStore.refreshWorkspacesAndSummaries(
             client = client,
-            host = host,
+            host = effectiveHost,
             hostScope = effectiveScope,
             skipRelayListRefresh = skipRelayListRefresh,
         )
+        reconcileSelectedProjectForScope(effectiveScope)
         conversationSyncStore.resetSettledEmptyTitles()
         scheduleConversationPreload()
         if (!isVerificationMode && connectionStore.state.value.userDisplayName == null) {
@@ -794,10 +812,94 @@ public class AntigravityCoreCoordinator(
     @Throws(Throwable::class)
     public suspend fun switchToRelayInstance(instance: RelayInstanceInfo) {
         connectionStore.switchToRelayInstance(instance)
+        reconcileSelectedProjectForScope(
+            AgentsHostFilterScope.LocalHost(instance.uuid, instance.name),
+        )
+        val client = connectionStore.activeClient()
+        val host = connectionStore.state.value.activeHost
+        if (client != null && host != null && host.isOnline) {
+            conversationSyncStore.startSummarySubscriptionStream(client, host)
+        } else {
+            conversationSyncStore.stopSummarySubscriptionStream()
+        }
     }
 
-    public fun selectHostScope(scope: AgentsHostFilterScope) {
-        connectionStore.selectHostScope(scope)
+    public fun selectHostScope(targetScope: AgentsHostFilterScope) {
+        connectionStore.selectHostScope(targetScope)
+        reconcileSelectedProjectForScope(targetScope)
+        if (isVerificationMode) return
+
+        val connState = connectionStore.state.value
+        if (!connState.hasPairedBackend && !connState.isConnected) return
+
+        val generation = ++hostSwitchGeneration
+        hostSwitchJob?.cancel()
+        hostSwitchJob = scope.launch {
+            try {
+                val client = connectionStore.activeClient() ?: return@launch
+                if (targetScope is AgentsHostFilterScope.LocalHost &&
+                    connState.activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY
+                ) {
+                    val matchedRelay = connState.availableRelayInstances.firstOrNull {
+                        it.uuid == targetScope.id || it.name == targetScope.name
+                    }
+                    val matchedHost = connState.knownHosts.firstOrNull {
+                        it.instanceId == targetScope.id || it.hostname == targetScope.name
+                    }
+                    val targetInstance = matchedRelay ?: RelayInstanceInfo(
+                        uuid = matchedHost?.instanceId ?: targetScope.id,
+                        name = matchedHost?.hostname ?: targetScope.name,
+                        version = matchedHost?.version.orEmpty(),
+                        status = if (matchedHost?.isOnline == false) {
+                            RelayInstanceStatus.DISCONNECTED
+                        } else {
+                            RelayInstanceStatus.CONNECTED
+                        },
+                    )
+                    connectionStore.switchToRelayInstance(targetInstance)
+                    if (!isActive || hostSwitchGeneration != generation || !connectionStore.state.value.hasPairedBackend) {
+                        return@launch
+                    }
+                    val nextHost = connectionStore.state.value.activeHost
+                    if (nextHost != null && nextHost.isOnline) {
+                        conversationSyncStore.startSummarySubscriptionStream(client, nextHost)
+                    } else {
+                        conversationSyncStore.stopSummarySubscriptionStream()
+                    }
+                }
+                if (!isActive || hostSwitchGeneration != generation || !connectionStore.state.value.hasPairedBackend) {
+                    return@launch
+                }
+                refreshWorkspacesAndSummaries(
+                    hostScope = targetScope,
+                    skipRelayListRefresh = false,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort scoped refresh; offline hosts preserve their cached shards and status.
+            }
+        }
+    }
+
+    private fun reconcileSelectedProjectForScope(targetScope: AgentsHostFilterScope) {
+        val connState = connectionStore.state.value
+        val combined = (workspaceStore.state.value.projects + conversationSyncStore.state.value.projects)
+            .distinctBy { it.id }
+        val scopedNonEmpty = combined.filter { project ->
+            !project.isNoProject && conversationSyncStore.projectMatchesHostScope(
+                project = project,
+                hostScope = targetScope,
+                knownLocalHosts = connState.knownHosts,
+                activeHost = connState.activeHost,
+            )
+        }
+        val currentId = workspaceStore.state.value.selectedProjectId
+        if (scopedNonEmpty.any { it.id == currentId }) {
+            return
+        }
+        val preferred = scopedNonEmpty.firstOrNull()
+        workspaceStore.selectProject(preferred?.id.orEmpty())
     }
 
     public fun markAllConversationsRead() {
@@ -965,16 +1067,65 @@ public class AntigravityCoreCoordinator(
         )
     }
 
+    public fun projectMatchesHostScope(
+        project: ProjectWorkspace,
+        hostScope: AgentsHostFilterScope = connectionStore.state.value.selectedHostScope,
+    ): Boolean {
+        val connState = connectionStore.state.value
+        return conversationSyncStore.projectMatchesHostScope(
+            project = project,
+            hostScope = hostScope,
+            knownLocalHosts = connState.knownHosts,
+            activeHost = connState.activeHost,
+        )
+    }
+
+    public fun summaryMatchesHostScope(
+        summary: CascadeSummary,
+        hostScope: AgentsHostFilterScope = connectionStore.state.value.selectedHostScope,
+    ): Boolean {
+        val connState = connectionStore.state.value
+        return conversationSyncStore.summaryMatchesHostScope(
+            summary = summary,
+            hostScope = hostScope,
+            knownLocalHosts = connState.knownHosts,
+            activeHost = connState.activeHost,
+        )
+    }
+
+    public fun filteredProjects(
+        hostScope: AgentsHostFilterScope = connectionStore.state.value.selectedHostScope,
+        excludeNoProject: Boolean = true,
+    ): List<ProjectWorkspace> {
+        val connState = connectionStore.state.value
+        val combined = (workspaceStore.state.value.projects + conversationSyncStore.state.value.projects)
+            .distinctBy { it.id }
+        return combined.filter { project ->
+            if (excludeNoProject && project.isNoProject) return@filter false
+            conversationSyncStore.projectMatchesHostScope(
+                project = project,
+                hostScope = hostScope,
+                knownLocalHosts = connState.knownHosts,
+                activeHost = connState.activeHost,
+            )
+        }
+    }
+
     public fun filteredSummaries(
         quickFilter: AgentsQuickFilter = AgentsQuickFilter.ALL,
         searchQuery: String = "",
         includeArchived: Boolean = false,
-    ): List<CascadeSummary> = conversationSyncStore.filteredSummaries(
-        hostScope = connectionStore.state.value.selectedHostScope,
-        quickFilter = quickFilter,
-        searchQuery = searchQuery,
-        includeArchived = includeArchived,
-    )
+    ): List<CascadeSummary> {
+        val connState = connectionStore.state.value
+        return conversationSyncStore.filteredSummaries(
+            hostScope = connState.selectedHostScope,
+            quickFilter = quickFilter,
+            searchQuery = searchQuery,
+            includeArchived = includeArchived,
+            knownLocalHosts = connState.knownHosts,
+            activeHost = connState.activeHost,
+        )
+    }
 
     public fun parseMarkdown(markdown: String): List<MarkdownBlock> =
         chatStore.parseMarkdown(markdown)
@@ -999,6 +1150,10 @@ public class AntigravityCoreCoordinator(
 
     @Throws(Throwable::class)
     public suspend fun disconnectAndClearCredentials() {
+        hostSwitchGeneration += 1L
+        val activeHostSwitch = hostSwitchJob
+        hostSwitchJob = null
+        activeHostSwitch?.cancelAndJoin()
         stopConversationPreload()
         preloadMutex.withLock {
             preloadQueue.clear()
@@ -1011,6 +1166,9 @@ public class AntigravityCoreCoordinator(
 
     @Throws(Throwable::class)
     public suspend fun close() {
+        hostSwitchGeneration += 1L
+        hostSwitchJob?.cancel()
+        hostSwitchJob = null
         stopConversationPreload()
         conversationSyncStore.stopSummarySubscriptionStream()
         connectionStore.close()
@@ -1036,6 +1194,7 @@ public class AntigravityCoreCoordinator(
     ) {
         val host = connectionStore.state.value.activeHost ?: return
         conversationSyncStore.applyHandshake(host, handshake)
+        reconcileSelectedProjectForScope(connectionStore.state.value.selectedHostScope)
         conversationSyncStore.resetSettledEmptyTitles()
         val client = connectionStore.activeClient()
         if (client != null && handshake.isSelectedHostOnline) {
@@ -1054,6 +1213,7 @@ public class AntigravityCoreCoordinator(
                             hostScope = activeScope,
                             skipRelayListRefresh = true,
                         )
+                        reconcileSelectedProjectForScope(activeScope)
                         scheduleConversationPreload()
                     } catch (e: CancellationException) {
                         throw e

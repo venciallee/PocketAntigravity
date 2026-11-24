@@ -730,12 +730,7 @@ extension AntigravitySessionStore {
                     cloudProjects: effectiveCloudProjects
                 )
                 summaries = mergedList
-                if selectedProjectId.isEmpty || !projects.contains(where: { $0.id == selectedProjectId }) {
-                    let defaultProj = projects.first(where: { projectMatchesHostScope($0) && !$0.isNoProject })
-                        ?? projects.first(where: { !$0.isNoProject })
-                        ?? projects.first
-                    selectedProjectId = defaultProj?.id ?? ""
-                }
+                reconcileSelectedProjectForCurrentHostScope()
                 if shouldResyncActiveCascade && !activeCascadeId.isEmpty {
                     syncStepsForCascade(
                         activeCascadeId,

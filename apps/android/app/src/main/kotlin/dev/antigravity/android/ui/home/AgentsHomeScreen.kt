@@ -44,6 +44,7 @@ import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -91,12 +92,14 @@ import dev.antigravity.android.ui.chat.ComposerAttachmentsStrip
 import dev.antigravity.android.ui.chat.formatComposerModelPillName
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentsHostFilterScope
+import dev.antigravity.shared.model.AntigravityCloudDetector
 import dev.antigravity.shared.model.CascadeSummary
 import dev.antigravity.shared.model.ConversationSortField
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
 import dev.antigravity.shared.model.UserGreetingFormatter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -141,24 +144,60 @@ fun AgentsHomeScreen(
     }
     var selectedBranchLabel by rememberSaveable { mutableStateOf("Repo default") }
 
-    val allProjects = remember(workspaceState.projects, syncState.projects) {
-        (workspaceState.projects + syncState.projects).distinctBy { it.id }
+    val hostScope = connectionState.selectedHostScope
+    val pairedLocalHosts = remember(connectionState.knownHosts) {
+        connectionState.knownHosts
+            .filter { it.instanceId != "unpaired" && !it.hostname.equals("cloud", ignoreCase = true) }
+            .distinctBy { it.instanceId }
     }
-    val selectedProject = remember(allProjects, workspaceState.selectedProjectId) {
+
+    val allProjects = remember(
+        workspaceState.projects,
+        syncState.projects,
+        hostScope,
+        connectionState.knownHosts,
+        connectionState.activeHost,
+    ) {
+        (workspaceState.projects + syncState.projects)
+            .distinctBy { it.id }
+            .filter { project ->
+                !project.isNoProject && coordinator.projectMatchesHostScope(project, hostScope)
+            }
+    }
+    val selectedProject = remember(allProjects, workspaceState.selectedProjectId, hostScope) {
         allProjects.firstOrNull { it.id == workspaceState.selectedProjectId }
-            ?: allProjects.firstOrNull()
+            ?: when (hostScope) {
+                AgentsHostFilterScope.AntigravityCloud ->
+                    allProjects.firstOrNull { it.runtime == ProjectRuntimeTarget.CLOUD }
+                        ?: allProjects.firstOrNull()
+                else ->
+                    allProjects.firstOrNull { it.runtime != ProjectRuntimeTarget.CLOUD }
+                        ?: allProjects.firstOrNull()
+            }
     }
-    val selectedProjectName = selectedProject?.name ?: "ledger-svc"
+    val selectedProjectName = selectedProject?.name ?: when {
+        !coordinator.isVerificationMode && syncState.isRefreshing -> "Loading..."
+        !coordinator.isVerificationMode -> AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME
+        else -> "ledger-svc"
+    }
     var cloudModeEnabled by rememberSaveable {
-        mutableStateOf(selectedProject?.runtime == ProjectRuntimeTarget.CLOUD)
+        mutableStateOf(
+            selectedProject?.let { it.runtime == ProjectRuntimeTarget.CLOUD }
+                ?: (hostScope is AgentsHostFilterScope.AntigravityCloud),
+        )
     }
-    LaunchedEffect(selectedProject?.id, selectedProject?.runtime) {
-        selectedProject?.let { project ->
-            cloudModeEnabled = project.runtime == ProjectRuntimeTarget.CLOUD
+    LaunchedEffect(selectedProject?.id, selectedProject?.runtime, hostScope) {
+        val targetProject = selectedProject
+        if (targetProject != null) {
+            cloudModeEnabled = targetProject.runtime == ProjectRuntimeTarget.CLOUD
+            if (workspaceState.selectedProjectId != targetProject.id) {
+                coordinator.workspaceStore.selectProject(targetProject.id)
+            }
+        } else {
+            cloudModeEnabled = hostScope is AgentsHostFilterScope.AntigravityCloud
         }
     }
 
-    val hostScope = connectionState.selectedHostScope
     val hostDisplayName = remember(hostScope, connectionState.activeHost) {
         when (hostScope) {
             AgentsHostFilterScope.AntigravityCloud -> "Cloud"
@@ -171,14 +210,33 @@ fun AgentsHomeScreen(
         when {
             !connectionState.hasPairedBackend -> true
             hostScope is AgentsHostFilterScope.AntigravityCloud -> connectionState.isDeviceNetworkReachable
+            hostScope is AgentsHostFilterScope.LocalHost -> {
+                val matched = connectionState.knownHosts.firstOrNull {
+                    it.instanceId == hostScope.id || it.hostname == hostScope.name
+                }
+                matched?.isOnline ?: (connectionState.isConnected && (connectionState.activeHost?.isOnline != false))
+            }
             else -> connectionState.isConnected && (connectionState.activeHost?.isOnline != false)
         }
     }
 
-    val needsApprovalSummary = remember(syncState.summaries) {
-        syncState.summaries.firstOrNull {
+    val scopedSummaries = remember(
+        syncState.summaries,
+        hostScope,
+        connectionState.knownHosts,
+        connectionState.activeHost,
+    ) {
+        syncState.summaries.filter { coordinator.summaryMatchesHostScope(it, hostScope) }
+    }
+
+    val needsApprovalSummary = remember(scopedSummaries, coordinator.isVerificationMode) {
+        scopedSummaries.firstOrNull {
             !it.isArchived && (it.pendingInteractionTitle != null || it.status == CortexStepStatus.WAITING || it.status == CortexStepStatus.BLOCKED)
-        } ?: syncState.summaries.firstOrNull { it.cascadeId == "cas-rate-limiter" }
+        } ?: if (coordinator.isVerificationMode) {
+            scopedSummaries.firstOrNull { it.cascadeId == "cas-rate-limiter" }
+        } else {
+            null
+        }
     }
 
     val selectedModelName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
@@ -253,7 +311,7 @@ fun AgentsHomeScreen(
                 .navigationBarsPadding()
                 .imePadding(),
         ) {
-            // Top bar: Hamburger · Host Pill · Search
+            // Top bar: Hamburger · Bounded Centered Host Pill · Search
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -274,111 +332,130 @@ fun AgentsHomeScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
-
-                Box {
-                    Surface(
-                        onClick = { hostMenuExpanded = true },
-                        modifier = Modifier
-                            .defaultMinSize(minHeight = 40.dp)
-                            .testTag("host-switcher-pill"),
-                        shape = RoundedCornerShape(100.dp),
-                        color = colors.surfaceCard,
-                        border = BorderStroke(1.dp, colors.cardBorder),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box {
+                        Surface(
+                            onClick = { hostMenuExpanded = true },
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 40.dp)
+                                .testTag("host-switcher-pill"),
+                            shape = RoundedCornerShape(100.dp),
+                            color = colors.surfaceCard,
+                            border = BorderStroke(1.dp, colors.cardBorder),
                         ) {
-                            StatusDot(
-                                color = if (isHostOnline) colors.statusDone else colors.statusError,
-                                size = 8.dp,
-                                glow = false,
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                StatusDot(
+                                    color = if (isHostOnline) colors.statusDone else colors.statusError,
+                                    size = 8.dp,
+                                    glow = false,
+                                )
+                                Text(
+                                    text = hostDisplayName,
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    ),
+                                    color = colors.inkReading,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                if (showHostChevron) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                                        contentDescription = "Switch host",
+                                        tint = colors.inkSecondary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = hostMenuExpanded,
+                            onDismissRequest = { hostMenuExpanded = false },
+                            containerColor = colors.surfacePopover,
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("All Hosts", color = colors.inkReading) },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Hub, contentDescription = null, tint = colors.accentPeriwinkle)
+                                },
+                                trailingIcon = {
+                                    if (hostScope is AgentsHostFilterScope.AllHosts) {
+                                        Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.accentPeriwinkle)
+                                    }
+                                },
+                                onClick = {
+                                    hostMenuExpanded = false
+                                    coordinator.selectHostScope(AgentsHostFilterScope.AllHosts)
+                                },
+                                modifier = Modifier.testTag("host-option-all"),
                             )
-                            Text(
-                                text = hostDisplayName,
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Medium,
-                                ),
-                                color = colors.inkReading,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                            DropdownMenuItem(
+                                text = { Text("Antigravity Cloud", color = colors.inkReading) },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Cloud, contentDescription = null, tint = colors.accentPeriwinkle)
+                                },
+                                trailingIcon = {
+                                    if (hostScope is AgentsHostFilterScope.AntigravityCloud) {
+                                        Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.accentPeriwinkle)
+                                    }
+                                },
+                                onClick = {
+                                    hostMenuExpanded = false
+                                    coordinator.selectHostScope(AgentsHostFilterScope.AntigravityCloud)
+                                },
+                                modifier = Modifier.testTag("host-option-cloud"),
                             )
-                            if (showHostChevron) {
-                                Icon(
-                                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                                    contentDescription = "Switch host",
-                                    tint = colors.inkSecondary,
-                                    modifier = Modifier.size(18.dp),
+                            pairedLocalHosts.forEach { host ->
+                                val isSelectedHost = hostScope is AgentsHostFilterScope.LocalHost &&
+                                    (hostScope.id == host.instanceId || hostScope.name == host.hostname)
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(
+                                                host.hostname,
+                                                color = colors.inkReading,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = if (host.isOnline) "Online · ${host.version}" else "Offline · ${host.version}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (host.isOnline) colors.statusDone else colors.inkMuted,
+                                            )
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.Computer, contentDescription = null, tint = colors.inkSecondary)
+                                    },
+                                    trailingIcon = {
+                                        if (isSelectedHost) {
+                                            Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.accentPeriwinkle)
+                                        }
+                                    },
+                                    onClick = {
+                                        hostMenuExpanded = false
+                                        coordinator.selectHostScope(
+                                            AgentsHostFilterScope.LocalHost(host.instanceId, host.hostname),
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("host-option-${host.instanceId}"),
                                 )
                             }
                         }
                     }
-
-                    DropdownMenu(
-                        expanded = hostMenuExpanded,
-                        onDismissRequest = { hostMenuExpanded = false },
-                        containerColor = colors.surfacePopover,
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("All Hosts", color = colors.inkReading) },
-                            leadingIcon = {
-                                Icon(Icons.Rounded.Hub, contentDescription = null, tint = colors.accentPeriwinkle)
-                            },
-                            trailingIcon = {
-                                if (hostScope is AgentsHostFilterScope.AllHosts) {
-                                    Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.accentPeriwinkle)
-                                }
-                            },
-                            onClick = {
-                                hostMenuExpanded = false
-                                coordinator.connectionStore.selectHostScope(AgentsHostFilterScope.AllHosts)
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Antigravity Cloud", color = colors.inkReading) },
-                            leadingIcon = {
-                                Icon(Icons.Rounded.Cloud, contentDescription = null, tint = colors.accentPeriwinkle)
-                            },
-                            trailingIcon = {
-                                if (hostScope is AgentsHostFilterScope.AntigravityCloud) {
-                                    Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.accentPeriwinkle)
-                                }
-                            },
-                            onClick = {
-                                hostMenuExpanded = false
-                                coordinator.connectionStore.selectHostScope(AgentsHostFilterScope.AntigravityCloud)
-                            },
-                        )
-                        connectionState.knownHosts.forEach { host ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(host.hostname, color = colors.inkReading)
-                                        Text(
-                                            text = if (host.isOnline) "Online · ${host.version}" else "Offline · ${host.version}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = if (host.isOnline) colors.statusDone else colors.inkMuted,
-                                        )
-                                    }
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Rounded.Computer, contentDescription = null, tint = colors.inkSecondary)
-                                },
-                                onClick = {
-                                    hostMenuExpanded = false
-                                    coordinator.connectionStore.selectHostScope(
-                                        AgentsHostFilterScope.LocalHost(host.instanceId, host.hostname),
-                                    )
-                                },
-                            )
-                        }
-                    }
                 }
-
-                Spacer(modifier = Modifier.weight(1f))
 
                 if (showSearchAction) {
                     IconButton(
@@ -404,7 +481,7 @@ fun AgentsHomeScreen(
                     coordinator = coordinator,
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
-                    summaries = syncState.summaries,
+                    summaries = scopedSummaries,
                     onSelectConversation = { cascadeId ->
                         isSearchOpen = false
                         onOpenConversation(cascadeId)
@@ -524,105 +601,165 @@ fun AgentsHomeScreen(
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 11.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Box {
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { projectMenuExpanded = true }
-                                        .padding(vertical = 2.dp)
-                                        .testTag("home-project-picker"),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = if (cloudModeEnabled) Icons.Rounded.Cloud else Icons.Rounded.Folder,
-                                        contentDescription = null,
-                                        tint = colors.inkSecondary,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                    Text(
-                                        text = selectedProjectName,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                        color = colors.inkLabel,
-                                        maxLines = 1,
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Rounded.KeyboardArrowDown,
-                                        contentDescription = null,
-                                        tint = colors.inkSecondary,
-                                        modifier = Modifier.size(16.dp),
-                                    )
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                Box(modifier = Modifier.weight(1f, fill = false)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { projectMenuExpanded = true }
+                                            .padding(vertical = 2.dp)
+                                            .testTag("home-project-picker"),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = if (cloudModeEnabled) Icons.Rounded.Cloud else Icons.Rounded.Folder,
+                                            contentDescription = null,
+                                            tint = colors.inkSecondary,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Text(
+                                            text = selectedProjectName,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                            color = colors.inkLabel,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                                            contentDescription = null,
+                                            tint = colors.inkSecondary,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = projectMenuExpanded,
+                                        onDismissRequest = { projectMenuExpanded = false },
+                                        containerColor = colors.surfacePopover,
+                                    ) {
+                                        if (allProjects.isEmpty() && !coordinator.isVerificationMode) {
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = if (syncState.isRefreshing) {
+                                                            "Syncing repositories..."
+                                                        } else {
+                                                            "No repositories on $hostDisplayName"
+                                                        },
+                                                        color = colors.inkSecondary,
+                                                    )
+                                                },
+                                                enabled = false,
+                                                onClick = {},
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Sync Repositories", color = colors.inkReading) },
+                                                leadingIcon = {
+                                                    Icon(Icons.Rounded.Refresh, contentDescription = null, tint = colors.accentPeriwinkle)
+                                                },
+                                                onClick = {
+                                                    projectMenuExpanded = false
+                                                    scope.launch {
+                                                        try {
+                                                            coordinator.refreshWorkspacesAndSummaries(
+                                                                hostScope = hostScope,
+                                                                skipRelayListRefresh = false,
+                                                            )
+                                                        } catch (e: CancellationException) {
+                                                            throw e
+                                                        } catch (_: Throwable) {
+                                                            // Best-effort manual refresh; error state is tracked in syncStore.
+                                                        }
+                                                    }
+                                                },
+                                            )
+                                        } else {
+                                            allProjects.forEach { project ->
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            project.name,
+                                                            color = colors.inkReading,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
+                                                    },
+                                                    trailingIcon = {
+                                                        if (project.id == selectedProject?.id) {
+                                                            Icon(
+                                                                Icons.Rounded.Check,
+                                                                contentDescription = null,
+                                                                tint = colors.accentPeriwinkle,
+                                                            )
+                                                        }
+                                                    },
+                                                    onClick = {
+                                                        projectMenuExpanded = false
+                                                        coordinator.workspaceStore.selectProject(project.id)
+                                                        cloudModeEnabled = project.runtime == ProjectRuntimeTarget.CLOUD
+                                                    },
+                                                    modifier = Modifier.testTag("home-project-option-${project.id}"),
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
 
-                                DropdownMenu(
-                                    expanded = projectMenuExpanded,
-                                    onDismissRequest = { projectMenuExpanded = false },
-                                    containerColor = colors.surfacePopover,
-                                ) {
-                                    allProjects.forEach { project ->
-                                        DropdownMenuItem(
-                                            text = { Text(project.name, color = colors.inkReading) },
-                                            onClick = {
-                                                projectMenuExpanded = false
-                                                coordinator.workspaceStore.selectProject(project.id)
-                                                cloudModeEnabled = project.runtime == ProjectRuntimeTarget.CLOUD
-                                            },
-                                            modifier = Modifier.testTag("home-project-option-${project.id}"),
+                                Box {
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { branchMenuExpanded = true }
+                                            .padding(vertical = 2.dp)
+                                            .testTag("home-branch-picker"),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.AccountTree,
+                                            contentDescription = null,
+                                            tint = colors.inkSecondary,
+                                            modifier = Modifier.size(15.dp),
                                         )
+                                        Text(
+                                            text = selectedBranchLabel,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                            color = colors.inkLabel,
+                                            maxLines = 1,
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                                            contentDescription = null,
+                                            tint = colors.inkSecondary,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = branchMenuExpanded,
+                                        onDismissRequest = { branchMenuExpanded = false },
+                                        containerColor = colors.surfacePopover,
+                                    ) {
+                                        listOf("Repo default", "main", "New worktree").forEach { branch ->
+                                            DropdownMenuItem(
+                                                text = { Text(branch, color = colors.inkReading) },
+                                                onClick = {
+                                                    branchMenuExpanded = false
+                                                    selectedBranchLabel = branch
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }
-
-                            Box {
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { branchMenuExpanded = true }
-                                        .padding(vertical = 2.dp)
-                                        .testTag("home-branch-picker"),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.AccountTree,
-                                        contentDescription = null,
-                                        tint = colors.inkSecondary,
-                                        modifier = Modifier.size(15.dp),
-                                    )
-                                    Text(
-                                        text = selectedBranchLabel,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                        color = colors.inkLabel,
-                                        maxLines = 1,
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Rounded.KeyboardArrowDown,
-                                        contentDescription = null,
-                                        tint = colors.inkSecondary,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
-
-                                DropdownMenu(
-                                    expanded = branchMenuExpanded,
-                                    onDismissRequest = { branchMenuExpanded = false },
-                                    containerColor = colors.surfacePopover,
-                                ) {
-                                    listOf("Repo default", "main", "New worktree").forEach { branch ->
-                                        DropdownMenuItem(
-                                            text = { Text(branch, color = colors.inkReading) },
-                                            onClick = {
-                                                branchMenuExpanded = false
-                                                selectedBranchLabel = branch
-                                            },
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.weight(1f))
 
                             Icon(
                                 imageVector = if (cloudModeEnabled) Icons.Rounded.Cloud else Icons.Rounded.Computer,
@@ -1022,19 +1159,36 @@ fun AgentsSidebarDrawerContent(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val syncState by coordinator.syncState.collectAsStateWithLifecycle()
     val workspaceState by coordinator.workspaceStore.state.collectAsStateWithLifecycle()
     val displayOptions = workspaceState.displayOptions
+    val hostScope = connectionState.selectedHostScope
 
-    val allProjects = remember(workspaceState.projects, syncState.projects) {
-        (workspaceState.projects + syncState.projects).distinctBy { it.id }
+    val allProjects = remember(
+        workspaceState.projects,
+        syncState.projects,
+        hostScope,
+        connectionState.knownHosts,
+        connectionState.activeHost,
+    ) {
+        (workspaceState.projects + syncState.projects)
+            .distinctBy { it.id }
+            .filter { coordinator.projectMatchesHostScope(it, hostScope) }
     }
 
-    val visibleSummaries = remember(syncState.summaries, displayOptions) {
+    val visibleSummaries = remember(
+        syncState.summaries,
+        displayOptions,
+        hostScope,
+        connectionState.knownHosts,
+        connectionState.activeHost,
+    ) {
         val filtered = syncState.summaries
             .distinctBy { it.cascadeId }
             .filter { s ->
-                if (displayOptions.archivedOnly) s.isArchived else !s.isArchived
+                coordinator.summaryMatchesHostScope(s, hostScope) &&
+                    if (displayOptions.archivedOnly) s.isArchived else !s.isArchived
             }
         val comparator: Comparator<CascadeSummary> = when (displayOptions.sortBy) {
             ConversationSortField.LAST_UPDATED -> compareBy { it.updatedAtEpochMs }
@@ -1204,8 +1358,12 @@ fun AgentsSidebarDrawerContent(
                 val projIsCloud = project.runtime == ProjectRuntimeTarget.CLOUD
                 val projectItems = visibleSummaries.filter { s ->
                     if (s.cascadeId in consumedIds) return@filter false
+                    val sameHostForFallback = projIsCloud ||
+                        project.originInstanceUuid.isNullOrBlank() ||
+                        s.originInstanceUuid.isNullOrBlank() ||
+                        s.originInstanceUuid == project.originInstanceUuid
                     val matchesProject = s.projectSlug == project.id ||
-                        (s.projectSlug == project.name && s.isCloud == projIsCloud)
+                        (s.projectSlug == project.name && s.isCloud == projIsCloud && sameHostForFallback)
                     matchesProject && (!s.isPinned || s.cascadeId == activeHighlightCascadeId)
                 }
                 projectItems.forEach { consumedIds.add(it.cascadeId) }

@@ -1842,7 +1842,23 @@ public class AntigravityKmpRpcClient(
         val reachableInstances = relayInstances.filter { it.status.isReachable }
         val targets = when {
             !includeLocal -> emptyList()
-            targetInstanceUuid != null -> reachableInstances.filter { it.uuid == targetInstanceUuid }
+            targetInstanceUuid != null -> {
+                val matched = reachableInstances.filter { it.uuid == targetInstanceUuid }
+                if (matched.isNotEmpty()) {
+                    matched
+                } else if (relayInstances.isEmpty() && targetInstanceUuid.isNotBlank() && targetInstanceUuid != "unpaired") {
+                    listOf(
+                        RelayInstanceInfo(
+                            uuid = targetInstanceUuid,
+                            name = host.hostname.ifBlank { targetInstanceUuid },
+                            version = host.version,
+                            status = RelayInstanceStatus.CONNECTED,
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
+            }
             else -> reachableInstances
         }
 
