@@ -1,5 +1,8 @@
 package dev.antigravity.android.ui.chat
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,11 +25,13 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AlternateEmail
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.Button
@@ -44,12 +49,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -61,11 +68,13 @@ import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
 import dev.antigravity.android.ui.home.AgentsHomeScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.ContextCandidateCategory
+import kotlinx.coroutines.launch
 
 /**
  * UE08_ADD_CONTEXT (`and-add-context.png`): Anchored Material 3 Add Context menu above the `+` button
- * (`Files >`, `Folder >`, `Mentions >`, `Actions >`, `Drive [Set up]`), with interactive drill-down
- * into the multi-select file/folder/mention/skill picker when any category is tapped.
+ * (`Photos`, `Device Files`, `Files >`, `Folder >`, `Mentions >`, `Actions >`, `Drive [Set up]`),
+ * with permissionless Android Photo Picker (`PickMultipleVisualMedia`) and interactive drill-down
+ * into the multi-select file/folder/mention/skill picker.
  */
 @Composable
 fun AddContextSheetScreen(
@@ -75,12 +84,64 @@ fun AddContextSheetScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val workspaceState by coordinator.workspaceStore.state.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
     val hostName = connectionState.activeHost?.hostname?.takeIf { it.isNotBlank() } ?: "MacBook Pro"
 
     var drilldownCategory by remember { mutableStateOf<ContextCandidateCategory?>(null) }
     var searchQuery by remember { mutableStateOf("") }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 5),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            val existingLabels = coordinator.workspaceStore.state.value.attachedComposerChips
+                .mapTo(mutableSetOf()) { it.label }
+            for (uri in uris) {
+                val chip = runCatching {
+                    loadMediaAttachmentFromUri(
+                        context = context,
+                        uri = uri,
+                        existingLabels = existingLabels,
+                        preferImageKind = true,
+                    )
+                }.getOrNull()
+                if (chip != null) {
+                    existingLabels.add(chip.label)
+                    coordinator.workspaceStore.addComposerChip(chip)
+                }
+            }
+            onDismiss()
+        }
+    }
+
+    val deviceFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            val existingLabels = coordinator.workspaceStore.state.value.attachedComposerChips
+                .mapTo(mutableSetOf()) { it.label }
+            for (uri in uris) {
+                val chip = runCatching {
+                    loadMediaAttachmentFromUri(
+                        context = context,
+                        uri = uri,
+                        existingLabels = existingLabels,
+                        preferImageKind = false,
+                    )
+                }.getOrNull()
+                if (chip != null) {
+                    existingLabels.add(chip.label)
+                    coordinator.workspaceStore.addComposerChip(chip)
+                }
+            }
+            onDismiss()
+        }
+    }
 
     Box(
         modifier = modifier
@@ -133,6 +194,31 @@ fun AddContextSheetScreen(
                         color = colors.inkSecondary,
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
                     )
+
+                    if (!coordinator.isVerificationMode) {
+                        AddContextMenuRow(
+                            icon = Icons.Rounded.PhotoLibrary,
+                            label = "Photos",
+                            onClick = {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                )
+                            },
+                            modifier = Modifier.testTag("ctx-menu-photos"),
+                        )
+                        AddContextMenuRow(
+                            icon = Icons.Rounded.AttachFile,
+                            label = "Device Files",
+                            onClick = {
+                                deviceFilePickerLauncher.launch(arrayOf("image/*", "application/pdf", "*/*"))
+                            },
+                            modifier = Modifier.testTag("ctx-menu-device-file"),
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            color = colors.subtleDivider,
+                        )
+                    }
 
                     AddContextMenuRow(
                         icon = Icons.Rounded.Description,

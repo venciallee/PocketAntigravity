@@ -398,6 +398,17 @@ extension AntigravityRPCClient {
                     }
                 }
             }
+            if let mediaArr = uiObj["media"]?.arrayValue {
+                for (idx, mediaVal) in mediaArr.enumerated() {
+                    guard let mediaObj = mediaVal.objectValue else { continue }
+                    let label = nonEmptyString(mediaObj["description"]?.stringValue)
+                        ?? nonEmptyString(mediaObj["uri"]?.stringValue).map { ($0 as NSString).lastPathComponent }
+                        ?? ((mediaObj["mimeType"]?.stringValue ?? "").hasPrefix("image/") ? "image-\(idx + 1)" : "media-\(idx + 1)")
+                    if !label.isEmpty && !mentions.contains(label) {
+                        mentions.append(label)
+                    }
+                }
+            }
             if let userCfg = (uiObj["userConfig"] ?? uiObj["lastUserConfig"])?.objectValue,
                let plannerCfg = userCfg["plannerConfig"]?.objectValue {
                 if let convObj = plannerCfg["conversational"]?.objectValue {

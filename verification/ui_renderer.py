@@ -448,10 +448,7 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
                   <div style="display:flex; align-items:center; gap:10px;">
                     <button data-testid="composer-btn-add-context" style="width:34px; height:44px; display:inline-flex; align-items:center; justify-content:center; color:#F5F6F8; cursor:pointer;">{ICONS['plus']}</button>
                     <button data-testid="composer-pill-model" style="min-height:44px; display:inline-flex; align-items:center; gap:5px; text-align:left; cursor:pointer;">
-                      <div>
-                        <div style="font-size:13px; font-weight:500; color:#F5F6F8; line-height:16px;">Gemini 4 Neon</div>
-                        <div style="font-size:11px; color:#8E929B; line-height:14px;">Extra High</div>
-                      </div>
+                      <span style="font-size:13.5px; font-weight:500; color:#F5F6F8; white-space:nowrap;">Gemini 4 Neon</span>
                       <span style="color:#8E929B; display:flex;">{ICONS['chev_down']}</span>
                     </button>
                   </div>
@@ -1220,10 +1217,7 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
               <div style="display:flex; align-items:center; gap:9px;">
                 <button data-testid="composer-btn-add-context" style="width:34px; height:36px; color:#F5F6F8; display:flex; align-items:center; justify-content:center; cursor:pointer;">{ICONS['plus']}</button>
                 <button data-testid="composer-pill-model" style="min-height:36px; display:inline-flex; align-items:center; gap:5px; text-align:left; cursor:pointer;">
-                  <div>
-                    <div style="font-size:13px; font-weight:500; color:#F5F6F8; line-height:16px;">Gemini 4 Neon</div>
-                    <div style="font-size:11px; color:#8E929B; line-height:14px;">Extra High</div>
-                  </div>
+                  <span style="font-size:13.5px; font-weight:500; color:#F5F6F8; white-space:nowrap;">Gemini 4 Neon</span>
                   <span style="color:#8E929B; display:flex;">{ICONS['chev_down']}</span>
                 </button>
               </div>
