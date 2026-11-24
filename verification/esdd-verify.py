@@ -742,10 +742,12 @@ def run_interactive_e2e_suite(
         assert page.evaluate("document.body.dataset.sidebarOpened") == "true"
         page.click("[data-testid='banner-needs-approval']")
         assert page.evaluate("document.body.dataset.openedApprovalCascade") == "cas-rate-limiter"
+        assert page.evaluate("document.querySelector(\"[data-testid='composer-cloud-toggle']\").dataset.runtimeIcon") == "laptop"
         page.click("[data-testid='composer-cloud-toggle']")
         assert page.evaluate("document.body.dataset.cloudTarget") == "true"
+        assert page.evaluate("document.querySelector(\"[data-testid='composer-cloud-toggle']\").dataset.runtimeIcon") == "cloud"
         assert page.evaluate("window.__AGY_AX_REPORT.overflowPx") == 0
-        cases.append({"id": "TC-01", "screen": "UE01_AGENTS_HOME", "passed": True, "detail": "New Conversation Home sidebar trigger, host online pill, Needs approval banner & cloud toggle verified (0px overflow)"})
+        cases.append({"id": "TC-01", "screen": "UE01_AGENTS_HOME", "passed": True, "detail": "New Conversation Home sidebar trigger, host online pill, Needs approval banner & local-computer/cloud runtime toggle verified (0px overflow)"})
 
     # TC-02: UE02_DISPLAY_OPTIONS inspect Sort popover, toggle Auto Pin, Mark All as Read & Reset
     if should_run("TC-02"):

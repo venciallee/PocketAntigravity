@@ -910,6 +910,38 @@ final class AntigravityInteractiveUITests: XCTestCase {
         let sendButton = app.buttons["composer-btn-send"]
         XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
         XCTAssertFalse(sendButton.isEnabled, "Send button must stay disabled when draft text is empty")
+        let runtimeToggle = app.buttons["home-runtime-toggle"]
+        XCTAssertTrue(runtimeToggle.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            waitForRuntimeToggleState(runtimeToggle, label: "Cloud runtime selected", value: "cloud"),
+            "Initial cloud project must show cloud runtime state (got label=\(runtimeToggle.label), value=\(String(describing: runtimeToggle.value)))"
+        )
+
+        // Switching to local project `slardar_app_ai` must switch the right-hand cloud icon to the local computer icon
+        let projectSelector = app.descendants(matching: .any)["home-project-selector"].firstMatch
+        XCTAssertTrue(projectSelector.waitForExistence(timeout: 5))
+        projectSelector.tap()
+        let localProjectOption = app.buttons["slardar_app_ai"].firstMatch
+        XCTAssertTrue(localProjectOption.waitForExistence(timeout: 5), "Local project slardar_app_ai must appear in project selector menu")
+        localProjectOption.tap()
+
+        XCTAssertTrue(
+            waitForRuntimeToggleState(runtimeToggle, label: "Local runtime selected", value: "computer"),
+            "Selecting local project must switch runtime toggle to computer icon (got label=\(runtimeToggle.label), value=\(String(describing: runtimeToggle.value)))"
+        )
+
+        // Direct toggle switches between cloud and local computer states
+        runtimeToggle.tap()
+        XCTAssertTrue(
+            waitForRuntimeToggleState(runtimeToggle, label: "Cloud runtime selected", value: "cloud"),
+            "Tapping runtime toggle must switch to cloud state (got label=\(runtimeToggle.label), value=\(String(describing: runtimeToggle.value)))"
+        )
+
+        runtimeToggle.tap()
+        XCTAssertTrue(
+            waitForRuntimeToggleState(runtimeToggle, label: "Local runtime selected", value: "computer"),
+            "Tapping runtime toggle again must restore local computer state (got label=\(runtimeToggle.label), value=\(String(describing: runtimeToggle.value)))"
+        )
         attachScreenshot(named: "04a_Live_Composer_Idle_Claude_Style")
 
         // 3. Typing enables Send button and dispatches StartCascade + SendUserCascadeMessage
@@ -1209,6 +1241,22 @@ final class AntigravityInteractiveUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         return element.exists && isAppearanceOptionSelected(element)
+    }
+
+    private func waitForRuntimeToggleState(
+        _ element: XCUIElement,
+        label: String,
+        value: String,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.exists && element.label == label && (element.value as? String) == value {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return element.exists && element.label == label && (element.value as? String) == value
     }
 
     private func scrollUntilHittable(
