@@ -239,6 +239,7 @@ public enum class HostCapability(
             "SendUserCascadeMessage",
             "SetAutomationPaused",
             "StartCascade",
+            "StreamAgentStateUpdates",
             "StreamCascadeReactiveUpdates",
             "TriggerAutomationNow",
         )

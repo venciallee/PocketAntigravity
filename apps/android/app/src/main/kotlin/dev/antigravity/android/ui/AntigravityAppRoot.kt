@@ -274,6 +274,7 @@ fun AntigravityAppRoot(
     }
 
     fun navigateTo(destination: AppRoute, keepDrawerOpen: Boolean = false) {
+        dismissKeyboard()
         previousRoute = currentRoute
         activeChatOverlay = ChatOverlaySheet.NONE
         if (!keepDrawerOpen && (isDrawerOpen || drawerProgress.value > 0.001f)) {
@@ -293,14 +294,22 @@ fun AntigravityAppRoot(
     }
 
     fun openNewConversation(projectId: String = "") {
-        if (projectId.isNotBlank()) {
+        val matchedProject = if (projectId.isNotBlank()) {
             coordinator.workspaceStore.selectProject(projectId)
+            (workspaceState.projects + syncState.projects).firstOrNull {
+                it.id == projectId || it.name == projectId
+            }
+        } else {
+            null
         }
         if (coordinator.isVerificationMode) {
             navigateTo(AppRoute.NewConversationHome)
             return
         }
-        val draftId = coordinator.createLocalDraftConversation(projectSlug = projectId)
+        val draftId = coordinator.createLocalDraftConversation(
+            workspaceUri = matchedProject?.workspaceUri.orEmpty(),
+            projectSlug = matchedProject?.id ?: projectId,
+        )
         navigateTo(AppRoute.CascadeChat(draftId))
     }
 
@@ -602,13 +611,34 @@ fun AntigravityAppRoot(
                                 onOpenSidebar = { openDrawer() },
                                 onOpenDiffReview = { navigateTo(AppRoute.TurnDiffReview) },
                                 onOpenPlanReview = { navigateTo(AppRoute.PlanReview) },
-                                onOpenAddContext = { activeChatOverlay = ChatOverlaySheet.ADD_CONTEXT },
-                                onOpenModelAndMode = { activeChatOverlay = ChatOverlaySheet.MODEL_AND_MODE },
-                                onOpenPermissionsPreset = { activeChatOverlay = ChatOverlaySheet.PERMISSIONS_PRESET },
-                                onOpenOverview = { activeChatOverlay = ChatOverlaySheet.OVERVIEW },
-                                onOpenSideQuestion = { activeChatOverlay = ChatOverlaySheet.SIDE_QUESTION },
-                                onOpenSwarmBoard = { activeChatOverlay = ChatOverlaySheet.SWARM_BOARD },
-                                onOpenVoiceMode = { activeChatOverlay = ChatOverlaySheet.VOICE_MODE },
+                                onOpenAddContext = {
+                                    dismissKeyboard()
+                                    activeChatOverlay = ChatOverlaySheet.ADD_CONTEXT
+                                },
+                                onOpenModelAndMode = {
+                                    dismissKeyboard()
+                                    activeChatOverlay = ChatOverlaySheet.MODEL_AND_MODE
+                                },
+                                onOpenPermissionsPreset = {
+                                    dismissKeyboard()
+                                    activeChatOverlay = ChatOverlaySheet.PERMISSIONS_PRESET
+                                },
+                                onOpenOverview = {
+                                    dismissKeyboard()
+                                    activeChatOverlay = ChatOverlaySheet.OVERVIEW
+                                },
+                                onOpenSideQuestion = {
+                                    dismissKeyboard()
+                                    activeChatOverlay = ChatOverlaySheet.SIDE_QUESTION
+                                },
+                                onOpenSwarmBoard = {
+                                    dismissKeyboard()
+                                    activeChatOverlay = ChatOverlaySheet.SWARM_BOARD
+                                },
+                                onOpenVoiceMode = {
+                                    dismissKeyboard()
+                                    activeChatOverlay = ChatOverlaySheet.VOICE_MODE
+                                },
                                 onBiometricPrompt = onBiometricPrompt,
                                 onRetryLoadSteps = { stepSyncRetryNonce += 1 },
                             )

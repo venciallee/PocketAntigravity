@@ -1240,6 +1240,131 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertFalse(formatted.contains("[5,"))
         XCTAssertTrue(formatted.contains("not_found: trajectory not found"))
     }
+
+    func testCloudStreamAgentStateUpdatesLoadsActiveCloudTrajectoryWhenLegacyStepsReturns404() async throws {
+        let instanceUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+        let cloudCascadeId = "v1/default/jetski_remote_agents_3p_devbox/356aa3f9-503f-447a-8319-3e1baae4c634"
+        let counter = CompatRequestCounter()
+
+        let metaFrameJson = """
+        {"update":{"conversationId":"\(cloudCascadeId)","status":"CASCADE_RUN_STATUS_RUNNING"}}
+        """
+        let stepsFrameJson = """
+        {"update":{"conversationId":"\(cloudCascadeId)","status":"CASCADE_RUN_STATUS_RUNNING","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"items":[{"text":"聊天记录加载优化建议"}]}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_IN_PROGRESS","plannerResponse":{"response":"正在分析聊天记录加载路径..."}}]}}}}
+        """
+        let endFrame = ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream)
+        var connectStreamBytes = Data()
+        connectStreamBytes.append(ConnectEnvelope.encode(payload: Data(metaFrameJson.utf8)))
+        connectStreamBytes.append(ConnectEnvelope.encode(payload: Data(stepsFrameJson.utf8)))
+        connectStreamBytes.append(endFrame)
+        let boqChunk = "[\"\(connectStreamBytes.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            counter.record(path: path)
+            if path.hasSuffix("/ListInstances") {
+                let resp = HTTPURLResponse(
+                    url: req.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json+protobuf"]
+                )!
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.34.0\",true],1,[1740000000,0]]],5]"
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                let resp = HTTPURLResponse(
+                    url: req.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json+protobuf"]
+                )!
+                return (resp, Data(boqChunk.utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+                return (resp, Data("[5,\"not_found: trajectory not found (error ID: 356aa3f9503f447a83193e1baae4c634)\"]".utf8))
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: instanceUuid,
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let steps = try await client.fetchAllTrajectorySteps(
+            cascadeId: cloudCascadeId,
+            knownStepCount: 2,
+            isCloud: true
+        )
+        XCTAssertEqual(steps.count, 2)
+        XCTAssertEqual(steps[0].stepIndex, 0)
+        XCTAssertEqual(steps[0].userInput, "聊天记录加载优化建议")
+        XCTAssertEqual(steps[1].stepIndex, 1)
+        XCTAssertEqual(steps[1].plannerResponse?.response, "正在分析聊天记录加载路径...")
+        XCTAssertEqual(counter.count(forSuffix: "/StreamProxyCommand"), 1)
+        XCTAssertEqual(counter.count(forSuffix: "/ProxyCommand"), 0, "Cloud primary StreamAgentStateUpdates should succeed without calling doomed GetCascadeTrajectorySteps")
+    }
+
+    func testLocalTrajectoryFallsBackToStreamAgentStateUpdatesWhenLegacyStepsReturns404() async throws {
+        let localCid = "cas-local-sqlite-234"
+        let frame1Json = """
+        {"update":{"conversationId":"\(localCid)","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Inspect live turn"}}]}}}}
+        """
+        let frame2Json = """
+        {"update":{"conversationId":"\(localCid)","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Recovered via StreamAgentStateUpdates"}}]}}}}
+        """
+        var streamBytes = Data()
+        streamBytes.append(ConnectEnvelope.encode(payload: Data(frame1Json.utf8)))
+        streamBytes.append(ConnectEnvelope.encode(payload: Data(frame2Json.utf8)))
+        streamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            if path.hasSuffix("/StreamAgentStateUpdates") {
+                let resp = HTTPURLResponse(
+                    url: req.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/connect+json"]
+                )!
+                return (resp, streamBytes)
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{\"code\":\"not_found\",\"message\":\"trajectory not found\"}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "local-234-stream-fallback",
+            hostname: "Local Mac 2.34",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18801")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        let steps = try await client.fetchAllTrajectorySteps(
+            cascadeId: localCid,
+            knownStepCount: 2,
+            isCloud: false
+        )
+        XCTAssertEqual(steps.count, 2)
+        XCTAssertEqual(steps[0].stepIndex, 0)
+        XCTAssertEqual(steps[0].userInput, "Inspect live turn")
+        XCTAssertEqual(steps[1].stepIndex, 1)
+        XCTAssertEqual(steps[1].plannerResponse?.response, "Recovered via StreamAgentStateUpdates")
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers

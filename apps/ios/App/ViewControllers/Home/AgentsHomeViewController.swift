@@ -29,14 +29,14 @@ public struct AgentsHomeViewController: View {
     @State private var selectedProjectSlug: String = "ledger-svc"
     @State private var selectedBranchOption: String = "Repo default"
     @State private var isCloudTargetSelected: Bool = false
-    @State private var isShowingGlobalSearch: Bool = false
-    @State private var isShowingGoogleSignIn: Bool = false
-    @State private var standaloneSheet: StandaloneModal?
+    @State private var activeHomeSheet: HomeModalSheet?
 
-    private enum StandaloneModal: String, Identifiable {
+    private enum HomeModalSheet: String, Identifiable {
+        case globalSearch
         case displayOptions
         case newProject
         case contextMenu
+        case googleSignIn
 
         var id: String { rawValue }
     }
@@ -341,61 +341,63 @@ public struct AgentsHomeViewController: View {
             selectedProjectSlug = matched.id
             isCloudTargetSelected = (matched.runtime == .cloud)
         }
-        .sheet(isPresented: $isShowingGlobalSearch) {
-            GlobalConversationSearchSheet(
-                store: store,
-                onSelectConversation: { cid in
-                    isShowingGlobalSearch = false
-                    triggerOpenConversation(cid)
-                },
-                onSelectProject: { slug in
-                    isShowingGlobalSearch = false
-                    triggerOpenProjectDetail(slug)
-                },
-                onDismiss: {
-                    isShowingGlobalSearch = false
-                }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(item: $standaloneSheet) { modal in
+        .sheet(item: $activeHomeSheet) { modal in
             switch modal {
-            case .displayOptions:
-                DisplayOptionsSheetView(store: store, onDismiss: { standaloneSheet = nil })
-            case .newProject:
-                CreateProjectSheetView(store: store, onDismiss: { standaloneSheet = nil })
-            case .contextMenu:
-                ConversationContextPreviewMenu(store: store, onDismiss: { standaloneSheet = nil })
-            }
-        }
-        .sheet(isPresented: $isShowingGoogleSignIn) {
-            let targetURL = store.lastScannedRelayURL.isEmpty
-                ? store.activeHost.endpointURL.absoluteString
-                : store.lastScannedRelayURL
-            CloudRelaySignInSheet(
-                targetRelayURLString: targetURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : targetURL,
-                clearExistingSession: true,
-                onAuthenticated: { cookieHeader, finalURL, detectedAuthUser, detectedRelayApiKey in
-                    isShowingGoogleSignIn = false
-                    let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(
-                        scannedInput: targetURL,
-                        webViewFinalURL: finalURL
-                    )
-                    Task {
-                        _ = await store.connectCloudRelay(
-                            relayURLString: effectiveURL,
-                            sessionCookie: cookieHeader,
-                            authUser: detectedAuthUser,
-                            relayApiKey: detectedRelayApiKey,
-                            ignoreCachedRelayApiKey: true
-                        )
+            case .globalSearch:
+                GlobalConversationSearchSheet(
+                    store: store,
+                    onSelectConversation: { cid in
+                        activeHomeSheet = nil
+                        triggerOpenConversation(cid)
+                    },
+                    onSelectProject: { slug in
+                        activeHomeSheet = nil
+                        triggerOpenProjectDetail(slug)
+                    },
+                    onDismiss: {
+                        activeHomeSheet = nil
                     }
-                },
-                onDismiss: {
-                    isShowingGoogleSignIn = false
-                }
-            )
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+
+            case .displayOptions:
+                DisplayOptionsSheetView(store: store, onDismiss: { activeHomeSheet = nil })
+
+            case .newProject:
+                CreateProjectSheetView(store: store, onDismiss: { activeHomeSheet = nil })
+
+            case .contextMenu:
+                ConversationContextPreviewMenu(store: store, onDismiss: { activeHomeSheet = nil })
+
+            case .googleSignIn:
+                let targetURL = store.lastScannedRelayURL.isEmpty
+                    ? store.activeHost.endpointURL.absoluteString
+                    : store.lastScannedRelayURL
+                CloudRelaySignInSheet(
+                    targetRelayURLString: targetURL.isEmpty ? SAPISIDHashGenerator.defaultOrigin : targetURL,
+                    clearExistingSession: true,
+                    onAuthenticated: { cookieHeader, finalURL, detectedAuthUser, detectedRelayApiKey in
+                        activeHomeSheet = nil
+                        let effectiveURL = RemoteHostInstance.resolveEffectiveRelayTarget(
+                            scannedInput: targetURL,
+                            webViewFinalURL: finalURL
+                        )
+                        Task {
+                            _ = await store.connectCloudRelay(
+                                relayURLString: effectiveURL,
+                                sessionCookie: cookieHeader,
+                                authUser: detectedAuthUser,
+                                relayApiKey: detectedRelayApiKey,
+                                ignoreCachedRelayApiKey: true
+                            )
+                        }
+                    },
+                    onDismiss: {
+                        activeHomeSheet = nil
+                    }
+                )
+            }
         }
     }
 
@@ -426,7 +428,7 @@ public struct AgentsHomeViewController: View {
                 Spacer()
 
                 Button {
-                    isShowingGlobalSearch = true
+                    activeHomeSheet = .globalSearch
                 } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 18, weight: .regular))
@@ -614,7 +616,7 @@ public struct AgentsHomeViewController: View {
                         if let onOpenNewProject {
                             onOpenNewProject()
                         } else {
-                            standaloneSheet = .newProject
+                            activeHomeSheet = .newProject
                         }
                     } label: {
                         Label("New Project...", systemImage: "folder.badge.plus")
@@ -728,7 +730,7 @@ public struct AgentsHomeViewController: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button {
-                isShowingGoogleSignIn = true
+                activeHomeSheet = .googleSignIn
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "person.crop.circle.badge.checkmark")
@@ -1428,7 +1430,9 @@ public struct AgentsSidebarDrawerView: View {
                 .fill(AntigravityTheme.statusWaiting)
                 .frame(width: 8, height: 8)
         } else if row.status == .inProgress || row.status == .pending {
-            AntigravityRunningArcIndicatorView(isAnimated: !store.isVerificationMode || store.isLiveBackendConnected)
+            AntigravityRunningArcIndicatorView(
+                isAnimated: presentationProgress > 0.05 && (!store.isVerificationMode || store.isLiveBackendConnected)
+            )
                 .accessibilityIdentifier("loading-four-dots-\(row.id)")
         } else if row.isUnread {
             Circle()

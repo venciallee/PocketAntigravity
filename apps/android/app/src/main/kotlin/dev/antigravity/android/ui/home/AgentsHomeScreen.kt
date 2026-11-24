@@ -1002,9 +1002,11 @@ fun AgentsSidebarDrawerContent(
     }
 
     val visibleSummaries = remember(syncState.summaries, displayOptions) {
-        val filtered = syncState.summaries.filter { s ->
-            if (displayOptions.archivedOnly) s.isArchived else !s.isArchived
-        }
+        val filtered = syncState.summaries
+            .distinctBy { it.cascadeId }
+            .filter { s ->
+                if (displayOptions.archivedOnly) s.isArchived else !s.isArchived
+            }
         val comparator: Comparator<CascadeSummary> = when (displayOptions.sortBy) {
             ConversationSortField.LAST_UPDATED -> compareBy { it.updatedAtEpochMs }
             ConversationSortField.DATE_CREATED -> compareBy { it.updatedAtEpochMs }
