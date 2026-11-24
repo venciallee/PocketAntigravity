@@ -13,7 +13,8 @@ enum KmpModelConverters {
         let nsErr = error as NSError
         if let kotlinThrowable = nsErr.userInfo["KotlinException"] as? KotlinThrowable {
             let tag = KmpBridgeHelpers.shared.errorKindTag(throwable: kotlinThrowable)
-            let msg = kotlinThrowable.message ?? nsErr.localizedDescription
+            let detail = KmpBridgeHelpers.shared.errorDetailMessage(throwable: kotlinThrowable)
+            let msg = detail.isEmpty ? (kotlinThrowable.message ?? nsErr.localizedDescription) : detail
             if tag == "unauthorized" {
                 return AntigravityData.AntigravityRPCError.unauthorized(msg)
             }
@@ -22,7 +23,8 @@ enum KmpModelConverters {
             }
             if tag.hasPrefix("http:") {
                 let code = Int(tag.dropFirst("http:".count)) ?? 500
-                return AntigravityData.AntigravityRPCError.httpError(statusCode: code, body: msg)
+                let cleanBody = ProtocolCompatibilityEngine.stripRedundantHttpPrefix(from: msg, statusCode: code)
+                return AntigravityData.AntigravityRPCError.httpError(statusCode: code, body: cleanBody)
             }
             if tag == "decoding" {
                 return AntigravityData.AntigravityRPCError.decodingError(msg)

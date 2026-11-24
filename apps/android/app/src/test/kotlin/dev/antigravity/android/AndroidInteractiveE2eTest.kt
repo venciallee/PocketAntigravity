@@ -604,27 +604,35 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc25_liveHomeGreetingUsesRealUserNameAndNeverShowsMockAlex() {
+    fun atc25_cascadeChatRendersStepLoadErrorCardAndRetryButton() {
         val coordinator = AntigravityCoreCoordinator()
-        assertFalse(coordinator.isVerificationMode)
+        coordinator.chatStore.setActiveCascade("v1/sync-mobile-concept")
+        coordinator.chatStore.setStepLoadError("HTTP 404: not_found: trajectory not found")
+        var retryTapped = 0
 
         composeRule.setContent {
-            dev.antigravity.android.core.ui.theme.AntigravityTheme(darkTheme = true) {
-                dev.antigravity.android.ui.home.AgentsHomeScreen(
+            dev.antigravity.android.core.ui.theme.AntigravityTheme {
+                dev.antigravity.android.ui.chat.CascadeChatScreen(
                     coordinator = coordinator,
-                    onOpenSidebar = {},
-                    onOpenConversation = {},
+                    onBack = {},
+                    onOpenDiffReview = {},
+                    onOpenPlanReview = {},
+                    onOpenAddContext = {},
+                    onOpenModelAndMode = {},
+                    onOpenOverview = {},
+                    onOpenSideQuestion = {},
+                    onOpenSwarmBoard = {},
+                    onOpenVoiceMode = {},
+                    onBiometricPrompt = { _, onSuccess -> onSuccess() },
+                    onRetryLoadSteps = { retryTapped += 1 },
                 )
             }
         }
 
-        // Before GetUserStatus resolves, live Home shows clean nameless greeting (never "Alex")
-        composeRule.onNodeWithText("Welcome back.\nWhere should\nwe pick up?").assertIsDisplayed()
-        composeRule.onNodeWithText("Alex", substring = true).assertDoesNotExist()
-
-        // Once GetUserStatus populates the real user name, greeting updates dynamically
-        coordinator.connectionStore.setUserDisplayName("Vencial Lee", persist = false)
-        composeRule.onNodeWithText("Welcome back,\nVencial. Where\nshould we pick up?").assertIsDisplayed()
-        composeRule.onNodeWithText("Alex", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("chat-step-load-error-card").assertIsDisplayed()
+        composeRule.onNodeWithText("Could not load trajectory steps").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-chat-retry-steps").performClick()
+        assertEquals(1, retryTapped)
+        assertEquals(null, coordinator.chatState.value.stepLoadErrorText)
     }
 }
