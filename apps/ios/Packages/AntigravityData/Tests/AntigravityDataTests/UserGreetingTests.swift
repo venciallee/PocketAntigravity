@@ -110,7 +110,7 @@ final class UserGreetingTests: XCTestCase {
         XCTAssertEqual(restarted.homeHeroGreetingText, "Welcome back,\nVencial. Where\nshould we pick up?")
 
         // Disconnect clears cached name cleanly
-        await liveStore.disconnectAndClearCredentials()
+        await liveStore.disconnectBackendAndClearKeychain()
         XCTAssertNil(liveStore.userDisplayName)
         XCTAssertEqual(liveStore.homeHeroGreetingText, "Welcome back.\nWhere should\nwe pick up?")
 
