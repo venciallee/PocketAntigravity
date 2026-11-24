@@ -676,11 +676,14 @@ public struct AgentsHomeViewController: View {
                 isHomeComposer: true,
                 onSubmitDraft: { promptText in
                     let slug = resolvedSelectedProject?.id ?? "ledger-svc"
+                    let attachments = store.composerAttachments
                     let cleanTitle = String(promptText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(48))
+                    let fallbackTitle = attachments.first?.label ?? "New Conversation"
                     _ = store.createConversationInProject(
                         slug,
-                        title: cleanTitle.isEmpty ? "New Conversation" : cleanTitle,
-                        initialPrompt: promptText
+                        title: cleanTitle.isEmpty ? fallbackTitle : cleanTitle,
+                        initialPrompt: promptText,
+                        initialAttachments: attachments
                     )
                 }
             )

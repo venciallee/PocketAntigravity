@@ -3,7 +3,6 @@ package dev.antigravity.android.ui.chat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +21,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -36,7 +34,6 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DeviceHub
 import androidx.compose.material.icons.rounded.Dns
@@ -177,13 +174,7 @@ fun CascadeChatScreen(
     val totalDeletions = activeSummary?.totalDeletions ?: 14
 
     val displayItems = chatState.activeDisplayItems
-    val modelDisplayName = settingsState.selectedModel?.displayName
-        ?.replace(" (Thinking)", "")
-        ?: "Gemini 4 Neon"
-    val effortLabel = when (settingsState.selectedEffort.displayTitle) {
-        "Extra" -> "Extra High"
-        else -> settingsState.selectedEffort.displayTitle
-    }
+    val modelDisplayName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
     val permissionLabel = settingsState.activePermissionPreset.displayTitle
 
     Scaffold(
@@ -404,7 +395,6 @@ fun CascadeChatScreen(
                     chips = workspaceState.attachedComposerChips,
                     onRemoveChip = { coordinator.workspaceStore.removeComposerChip(it) },
                     modelLabel = modelDisplayName,
-                    effortLabel = effortLabel,
                     permissionLabel = permissionLabel,
                     onAddContext = onOpenAddContext,
                     onOpenModelAndMode = onOpenModelAndMode,
@@ -445,6 +435,7 @@ fun CascadeChatScreen(
                                             agentPersona = settingsState.selectedAgentPersona,
                                             isCloud = resolvedIsCloud,
                                             cloudProjectId = activeSummary?.cloudProjectId,
+                                            permissionPreset = settingsState.activePermissionPreset,
                                             instanceUuidOverride = activeSummary?.originInstanceUuid,
                                             isOptimisticDraft = isDraft,
                                         )
@@ -1615,7 +1606,6 @@ private fun ChatComposerCard(
     chips: List<ComposerAttachmentChip>,
     onRemoveChip: (String) -> Unit,
     modelLabel: String,
-    effortLabel: String,
     permissionLabel: String,
     onAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
@@ -1638,51 +1628,12 @@ private fun ChatComposerCard(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // Attached Context Chips Row (when user attaches files/mentions)
-            if (chips.isNotEmpty() && draftText.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    chips.forEach { chip ->
-                        val chipTag = if (chip.label.contains("ratelimit", ignoreCase = true)) {
-                            "composer-chip-ratelimit"
-                        } else {
-                            "composer-chip-${chip.id}"
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(100.dp),
-                            color = colors.surfaceElevated,
-                            border = BorderStroke(1.dp, colors.cardBorder),
-                            modifier = Modifier.testTag(chipTag),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Text(
-                                    text = chip.label,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.5.sp,
-                                    ),
-                                    color = colors.inkLabel,
-                                )
-                                Icon(
-                                    imageVector = Icons.Rounded.Close,
-                                    contentDescription = "Remove ${chip.label}",
-                                    tint = colors.inkMuted,
-                                    modifier = Modifier
-                                        .size(13.dp)
-                                        .clickable { onRemoveChip(chip.id) },
-                                )
-                            }
-                        }
-                    }
-                }
+            // Attached Image Thumbnails & Context Chips Row (shown whenever attachments are present)
+            if (chips.isNotEmpty()) {
+                ComposerAttachmentsStrip(
+                    chips = chips,
+                    onRemoveChip = onRemoveChip,
+                )
             }
 
             // Message Input Field
@@ -1714,7 +1665,7 @@ private fun ChatComposerCard(
                 )
             }
 
-            // Bottom Composer Toolbar: +, Gemini 4 Neon / Extra High ⌄, 🛡 Default ⌄, 🎤, →
+            // Single-line Bottom Composer Toolbar: +, Gemini 4 Neon ⌄, 🛡 Default ⌄, 🎤, →
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1734,33 +1685,26 @@ private fun ChatComposerCard(
                     )
                 }
 
-                // Two-line Model + Thinking Effort selector
+                // Single-line Model selector (`Gemini 4 Neon ⌄`); thinking effort shown inside sheet
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .clickable(onClick = onOpenModelAndMode)
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .padding(horizontal = 4.dp, vertical = 6.dp)
                         .testTag("composer-pill-model"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                        Text(
-                            text = modelLabel,
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                            ),
-                            color = colors.inkReading,
-                            maxLines = 1,
-                        )
-                        Text(
-                            text = effortLabel,
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                            color = colors.inkSecondary,
-                            maxLines = 1,
-                        )
-                    }
+                    Text(
+                        text = modelLabel,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        color = colors.inkReading,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,
                         contentDescription = "Select model",

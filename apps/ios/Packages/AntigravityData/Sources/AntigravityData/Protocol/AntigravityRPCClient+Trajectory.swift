@@ -1214,35 +1214,41 @@ extension AntigravityRPCClient {
         instanceUuidOverride: String? = nil
     ) async throws {
         var items: [JSONValue] = [.object(["text": .string(message)])]
+        var mediaItems: [JSONValue] = []
         for chip in attachments {
+            if let b64 = chip.inlineBase64Data, !b64.isEmpty {
+                let resolvedMime: String = {
+                    if let explicit = chip.mimeType, !explicit.isEmpty { return explicit }
+                    switch chip.kind {
+                    case .imageScreenshot: return "image/jpeg"
+                    case .pdfDocument: return "application/pdf"
+                    case .audioRecording: return "audio/m4a"
+                    case .videoClip: return "video/mp4"
+                    default: return "application/octet-stream"
+                    }
+                }()
+                var mediaObj: [String: JSONValue] = [
+                    "mimeType": .string(resolvedMime),
+                    "inlineData": .string(b64)
+                ]
+                if !chip.label.isEmpty {
+                    mediaObj["description"] = .string(chip.label)
+                }
+                mediaItems.append(.object(mediaObj))
+                continue
+            }
             switch chip.kind {
             case .imageScreenshot, .audioRecording, .videoClip, .pdfDocument, .archiveZip, .genericFile:
-                if let b64 = chip.inlineBase64Data, !b64.isEmpty {
-                    items.append(
-                        .object([
-                            "item": .object([
-                                "media": .object([
-                                    "uri": .string(chip.targetUri),
-                                    "label": .string(chip.label),
-                                    "mimeType": .string(chip.mimeType ?? "application/octet-stream"),
-                                    "inlineBase64Data": .string(b64),
-                                    "kind": .string(chip.kind.rawValue)
-                                ])
+                items.append(
+                    .object([
+                        "item": .object([
+                            "file": .object([
+                                "absoluteUri": .string(chip.targetUri),
+                                "label": .string(chip.label)
                             ])
                         ])
-                    )
-                } else {
-                    items.append(
-                        .object([
-                            "item": .object([
-                                "file": .object([
-                                    "absoluteUri": .string(chip.targetUri),
-                                    "label": .string(chip.label)
-                                ])
-                            ])
-                        ])
-                    )
-                }
+                    ])
+                )
             case .codeQuote:
                 items.append(
                     .object([
@@ -1347,21 +1353,26 @@ extension AntigravityRPCClient {
             "permissionPreset": .string(effectivePermission.rawValue)
         ]
 
+        var requestBody: [String: JSONValue] = [
+            "cascadeId": .string(cascadeId),
+            "items": .array(items),
+            "userResponse": .string(message),
+            "metadata": .object([
+                "ideName": .string("antigravity-ios"),
+                "ideVersion": .string(Self.clientAppVersion)
+            ]),
+            "cascadeConfig": .object([
+                "plannerConfig": .object(plannerConfig)
+            ]),
+            "modelConfig": .object(modelCfgObj)
+        ]
+        if !mediaItems.isEmpty {
+            requestBody["media"] = .array(mediaItems)
+        }
+
         _ = try await callUnaryJSON(
             method: "SendUserCascadeMessage",
-            body: [
-                "cascadeId": .string(cascadeId),
-                "items": .array(items),
-                "userResponse": .string(message),
-                "metadata": .object([
-                    "ideName": .string("antigravity-ios"),
-                    "ideVersion": .string(Self.clientAppVersion)
-                ]),
-                "cascadeConfig": .object([
-                    "plannerConfig": .object(plannerConfig)
-                ]),
-                "modelConfig": .object(modelCfgObj)
-            ],
+            body: requestBody,
             instanceUuidOverride: instanceUuidOverride,
             allowCrossHostFailover: isRemoteCloud,
             timeoutInterval: 300.0

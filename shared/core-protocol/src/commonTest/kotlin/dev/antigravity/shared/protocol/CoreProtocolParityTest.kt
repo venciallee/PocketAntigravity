@@ -258,4 +258,60 @@ class CoreProtocolParityTest {
         assertEquals("PLANNING", prefs.getString("mode"))
         assertTrue(StaticPowerStateProvider(isLowPowerModeEnabled = true).isLowPowerModeEnabled)
     }
+
+    @Test
+    fun testCloudRelaySanitizerPreservesTopLevelMediaAndStepDecoderReadsMedia() {
+        val host = dev.antigravity.shared.model.RemoteHostInstance(
+            instanceId = "relay-media-test",
+            hostname = "Antigravity Cloud",
+            channel = RemoteConnectionChannel.CLOUD_RELAY,
+            endpointUrl = "https://antigravity.google.com/r/relay-media-test",
+            isOnline = true,
+        )
+        val client = AntigravityKmpRpcClient(host = host, sessionCookie = "SAPISID=test")
+        val rawBody = kotlinx.serialization.json.buildJsonObject {
+            put("cascadeId", kotlinx.serialization.json.JsonPrimitive("cas-media"))
+            put("items", kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.buildJsonObject {
+                    put("text", kotlinx.serialization.json.JsonPrimitive("Check this screenshot"))
+                })
+            })
+            put("media", kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.buildJsonObject {
+                    put("mimeType", kotlinx.serialization.json.JsonPrimitive("image/jpeg"))
+                    put("inlineData", kotlinx.serialization.json.JsonPrimitive("iVBORw0KGgo="))
+                    put("description", kotlinx.serialization.json.JsonPrimitive("photo-1.jpg"))
+                    put("uri", kotlinx.serialization.json.JsonPrimitive("file:///private/var/mobile/photo-1.jpg"))
+                })
+            })
+        }
+        val sanitized = client.sanitizeCloudRelayPayload("SendUserCascadeMessage", rawBody)
+        val mediaArr = sanitized["media"] as? kotlinx.serialization.json.JsonArray
+        assertNotNull(mediaArr)
+        assertEquals(1, mediaArr.size)
+        val mediaObj = mediaArr[0] as kotlinx.serialization.json.JsonObject
+        assertEquals("image/jpeg", (mediaObj["mimeType"] as kotlinx.serialization.json.JsonPrimitive).content)
+        assertEquals("iVBORw0KGgo=", (mediaObj["inlineData"] as kotlinx.serialization.json.JsonPrimitive).content)
+        assertEquals("photo-1.jpg", (mediaObj["description"] as kotlinx.serialization.json.JsonPrimitive).content)
+        assertNull(mediaObj["uri"], "Device-local file:// URI must not leak to Cloud Relay media entry")
+
+        // Verify JSON step decoder extracts userInput.media labels into attachedMentions
+        val stepJson = kotlinx.serialization.json.buildJsonObject {
+            put("stepIndex", kotlinx.serialization.json.JsonPrimitive(0))
+            put("type", kotlinx.serialization.json.JsonPrimitive("CORTEX_STEP_TYPE_USER_INPUT"))
+            put("status", kotlinx.serialization.json.JsonPrimitive("CORTEX_STEP_STATUS_DONE"))
+            put("userInput", kotlinx.serialization.json.buildJsonObject {
+                put("userResponse", kotlinx.serialization.json.JsonPrimitive("Check this screenshot"))
+                put("media", kotlinx.serialization.json.buildJsonArray {
+                    add(kotlinx.serialization.json.buildJsonObject {
+                        put("mimeType", kotlinx.serialization.json.JsonPrimitive("image/jpeg"))
+                        put("description", kotlinx.serialization.json.JsonPrimitive("photo-1.jpg"))
+                    })
+                })
+            })
+        }
+        val decoded = JsonStepAndSummaryDecoder.decodeJsonStep(stepJson, "cas-media", 0)
+        assertNotNull(decoded)
+        assertTrue("photo-1.jpg" in decoded.attachedMentions)
+    }
 }

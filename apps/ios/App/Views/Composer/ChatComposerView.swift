@@ -1,20 +1,36 @@
 import SwiftUI
+import PhotosUI
 import UniformTypeIdentifiers
 import AntigravityData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Native Matte Obsidian Composer (`ChatComposerView`) pinned at the bottom of `UE01` (New Conversation Home)
 /// and `UE07_CHAT_AND_COMPOSER` (`docs/ue/ios/Main.png` & `docs/ue/ios/ios-chat.png`).
 /// Unified toolbar across Live and ESDD verification modes:
-/// - Clean multi-line `TextField` on top (contextual `/` slash popup, `@` mention popup, attached chips,
-///   workflow pill, and queued follow-ups appear only when active)
-/// - Single bottom toolbar: `+` (`AddContextSheetView`), two-line `[Gemini 4 Neon / Extra High ⌄]`
-///   (`ModelAndModeSheetView`), `[🛡 Default ⌄]` (`PermissionsSheetView`), `mic` dictation button,
-///   and adaptive primary action circle (`→` send / `■` stop / dimmed `→` when empty).
+/// - Clean multi-line `TextField` on top (contextual `/` slash popup, `@` mention popup, attached image
+///   thumbnails & file chips, workflow pill, and queued follow-ups appear only when active)
+/// - Single-line bottom toolbar: `+` (`AddContextSheetView` with Photos & Files), single-line `[Gemini 4 Neon ⌄]`
+///   (`ModelAndModeSheetView` displaying 4-level thinking effort when opened), `[🛡 Default ⌄]`
+///   (`PermissionsSheetView`), `mic` dictation button, and adaptive primary action circle (`→` / `■`).
 public struct ChatComposerView: View {
     private enum PrimaryActionMode: Equatable {
         case disabledSend
         case send
         case stop
+    }
+
+    private enum PendingDevicePicker: Equatable {
+        case photos
+        case files
+    }
+
+    private struct PreparedMediaPayload: Sendable {
+        let base64: String
+        let mimeType: String
+        let byteSize: Int
+        let fileExtension: String
     }
 
     @Bindable public var store: AntigravitySessionStore
@@ -28,7 +44,12 @@ public struct ChatComposerView: View {
     @State private var isShowingAddContextSheet: Bool = false
     @State private var isShowingModelAndModeSheet: Bool = false
     @State private var isShowingPermissionsSheet: Bool = false
+    @State private var isShowingPhotoPicker: Bool = false
     @State private var isShowingFileImporter: Bool = false
+    @State private var pendingDevicePicker: PendingDevicePicker? = nil
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var isImportingMedia: Bool = false
+    @State private var mediaErrorMessage: String? = nil
     @State private var voiceManager = VoiceInputManager()
 
     public init(
@@ -70,7 +91,7 @@ public struct ChatComposerView: View {
 
     private var canSendDraft: Bool {
         let hasText = !draftMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasAttachments = !attachedChipLabels.isEmpty
+        let hasAttachments = !attachedChipLabels.isEmpty || !store.composerAttachments.isEmpty
         let hasWorkflow = !(store.composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         return hasText || hasAttachments || hasWorkflow
     }
@@ -323,40 +344,25 @@ public struct ChatComposerView: View {
 
             // Composer Card
             VStack(alignment: .leading, spacing: 10) {
-                // Context Chips Strip (only rendered when attachments are present)
-                if !attachedChipLabels.isEmpty {
+                // Context & Image Preview Chips Strip (only rendered when attachments or media import active)
+                if !attachedChipLabels.isEmpty || isImportingMedia {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(attachedChipLabels, id: \.self) { label in
-                                Button {
-                                    attachedChipLabels.removeAll { $0 == label }
-                                    store.composerAttachments.removeAll { $0.label == label }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Text(label)
-                                            .font(.system(size: 13, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(AntigravityTheme.inkReading)
-                                        Image(systemName: "xmark")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(AntigravityTheme.inkSecondary)
-                                    }
-                                    .padding(.horizontal, 11)
-                                    .frame(height: 30)
-                                    .background(AntigravityTheme.surfaceElevated)
-                                    .overlay(
-                                        Capsule()
-                                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
-                                    )
-                                    .clipShape(Capsule())
-                                    .frame(minHeight: 36)
-                                    .contentShape(Rectangle())
+                                attachmentChipView(for: label)
+                            }
+                            if isImportingMedia {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                    Text("Adding photo…")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                        .foregroundStyle(AntigravityTheme.inkSecondary)
                                 }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier(
-                                    label.contains("ratelimit")
-                                        ? "composer-chip-ratelimit"
-                                        : "composer-chip-\(label)"
-                                )
+                                .padding(.horizontal, 11)
+                                .frame(height: 30)
+                                .background(AntigravityTheme.surfaceElevated)
+                                .clipShape(Capsule())
                             }
                         }
                     }
@@ -408,6 +414,13 @@ public struct ChatComposerView: View {
                         .padding(.horizontal, 4)
                 }
 
+                if let mediaErr = mediaErrorMessage {
+                    Text(mediaErr)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(AntigravityTheme.statusWaiting)
+                        .padding(.horizontal, 4)
+                }
+
                 // Multi-line Draft Input
                 TextField(
                     resolvedPlaceholder,
@@ -430,7 +443,7 @@ public struct ChatComposerView: View {
                 .padding(.top, 2)
                 .accessibilityIdentifier("composer-text-input")
 
-                // Unified Bottom Toolbar (`+`, `Gemini 4 Neon / Extra High ⌄`, `🛡 Default ⌄`, `mic`, `→`)
+                // Unified Single-Line Bottom Toolbar (`+`, `Gemini 4 Neon ⌄`, `🛡 Default ⌄`, `mic`, `→`)
                 unifiedComposerToolbar
             }
             .padding(.horizontal, 12)
@@ -447,6 +460,9 @@ public struct ChatComposerView: View {
             if !isHomeComposer && !store.composerDraftText.isEmpty {
                 draftMessageText = store.composerDraftText
             }
+            if !store.composerAttachments.isEmpty {
+                attachedChipLabels = store.composerAttachments.map(\.label)
+            }
         }
         .onChange(of: store.composerDraftText) { _, newValue in
             if !isHomeComposer && draftMessageText != newValue {
@@ -454,42 +470,41 @@ public struct ChatComposerView: View {
             }
         }
         .onChange(of: store.composerAttachments.count) { _, _ in
-            guard !isHomeComposer else { return }
             if !store.composerAttachments.isEmpty || !store.isVerificationMode {
                 attachedChipLabels = store.composerAttachments.map(\.label)
+            }
+        }
+        .onChange(of: selectedPhotoItems) { _, newItems in
+            guard !newItems.isEmpty else { return }
+            let picked = newItems
+            selectedPhotoItems = []
+            Task {
+                await importSelectedPhotoItems(picked)
             }
         }
         .onDisappear {
             voiceManager.stopRecording()
         }
+        .photosPicker(
+            isPresented: $isShowingPhotoPicker,
+            selection: $selectedPhotoItems,
+            maxSelectionCount: 5,
+            matching: .images
+        )
         .fileImporter(
             isPresented: $isShowingFileImporter,
             allowedContentTypes: [.item, .pdf, .image, .audio, .movie, .zip],
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
-                for url in urls {
-                    let name = url.lastPathComponent
-                    let ext = url.pathExtension.lowercased()
-                    let kind: ComposerAttachmentChip.Kind = {
-                        if ext == "pdf" { return .pdfDocument }
-                        if ext == "zip" { return .archiveZip }
-                        if ["png", "jpg", "jpeg", "webp", "heic"].contains(ext) { return .imageScreenshot }
-                        if ["m4a", "mp3", "wav"].contains(ext) { return .audioRecording }
-                        if ["mp4", "mov"].contains(ext) { return .videoClip }
-                        return .genericFile
-                    }()
-                    let chip = ComposerAttachmentChip(kind: kind, label: name, targetUri: url.absoluteString)
-                    if !store.composerAttachments.contains(where: { $0.targetUri == chip.targetUri }) {
-                        store.composerAttachments.append(chip)
-                    }
-                    if !attachedChipLabels.contains(name) {
-                        attachedChipLabels.append(name)
-                    }
+                Task {
+                    await importSelectedFileURLs(urls)
                 }
             }
         }
-        .sheet(isPresented: $isShowingAddContextSheet) {
+        .sheet(isPresented: $isShowingAddContextSheet, onDismiss: {
+            presentPendingDevicePickerIfNeeded()
+        }) {
             AddContextSheetView(
                 store: store,
                 startExpanded: true,
@@ -499,11 +514,13 @@ public struct ChatComposerView: View {
                         attachedChipLabels.append(item)
                     }
                 },
-                onPickDeviceFile: {
+                onPickPhotos: {
+                    pendingDevicePicker = .photos
                     isShowingAddContextSheet = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        isShowingFileImporter = true
-                    }
+                },
+                onPickDeviceFile: {
+                    pendingDevicePicker = .files
+                    isShowingAddContextSheet = false
                 },
                 onDismiss: {
                     isShowingAddContextSheet = false
@@ -537,12 +554,101 @@ public struct ChatComposerView: View {
         }
     }
 
-    // MARK: - Unified Toolbar (`Main.png` & `ios-chat.png`)
+    // MARK: - Attachment Chip / Image Thumbnail Preview
+
+    @ViewBuilder
+    private func attachmentChipView(for label: String) -> some View {
+        let chip = store.composerAttachments.first(where: { $0.label == label })
+        #if canImport(UIKit)
+        if let chip,
+           chip.kind == .imageScreenshot,
+           let b64 = chip.inlineBase64Data,
+           let data = Data(base64Encoded: b64),
+           let uiImage = UIImage(data: data) {
+            ZStack(alignment: .topTrailing) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 56, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                    )
+
+                Button {
+                    attachedChipLabels.removeAll { $0 == label }
+                    store.composerAttachments.removeAll { $0.label == label }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 20, height: 20)
+                        .background(Color.black.opacity(0.72), in: Circle())
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color.white.opacity(0.25), lineWidth: 0.75)
+                        )
+                }
+                .buttonStyle(.plain)
+                .offset(x: 4, y: -4)
+                .accessibilityLabel("Remove image \(label)")
+            }
+            .padding(.top, 4)
+            .padding(.trailing, 4)
+            .accessibilityIdentifier("composer-image-chip-\(label)")
+        } else {
+            textAttachmentChipButton(label: label, isMedia: chip?.inlineBase64Data != nil)
+        }
+        #else
+        textAttachmentChipButton(label: label, isMedia: chip?.inlineBase64Data != nil)
+        #endif
+    }
+
+    private func textAttachmentChipButton(label: String, isMedia: Bool) -> some View {
+        Button {
+            attachedChipLabels.removeAll { $0 == label }
+            store.composerAttachments.removeAll { $0.label == label }
+        } label: {
+            HStack(spacing: 6) {
+                if isMedia {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                }
+                Text(label)
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+                    .lineLimit(1)
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+            }
+            .padding(.horizontal, 11)
+            .frame(height: 30)
+            .background(AntigravityTheme.surfaceElevated)
+            .overlay(
+                Capsule()
+                    .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+            )
+            .clipShape(Capsule())
+            .frame(minHeight: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(
+            label.contains("ratelimit")
+                ? "composer-chip-ratelimit"
+                : "composer-chip-\(label)"
+        )
+    }
+
+    // MARK: - Unified Single-Line Toolbar (`Main.png` & `ios-chat.png`)
 
     private var unifiedComposerToolbar: some View {
         let modelPill = modelPillComponents
         return HStack(spacing: 5) {
-            // 1. `+` Add Context Button
+            // 1. `+` Add Context Button (Photos, Files, Workspace Mentions & Actions)
             Button {
                 isShowingAddContextSheet = true
             } label: {
@@ -556,25 +662,17 @@ public struct ChatComposerView: View {
             .accessibilityLabel("Add context")
             .accessibilityIdentifier("composer-btn-add-context")
 
-            // 2. Two-line `[Gemini 4 Neon / Extra High ⌄]` Model & Effort Picker
+            // 2. Single-line `[Gemini 4 Neon ⌄]` Model Picker (Thinking Effort shown inside sheet when opened)
             Button {
                 isShowingModelAndModeSheet = true
             } label: {
                 HStack(spacing: 4) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(modelPill.name)
-                            .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(AntigravityTheme.inkReading)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.88)
-                            .truncationMode(.tail)
-                        if let effort = modelPill.effort {
-                            Text(effort)
-                                .font(.system(size: 11.5, weight: .regular))
-                                .foregroundStyle(AntigravityTheme.inkSecondary)
-                                .lineLimit(1)
-                        }
-                    }
+                    Text(modelPill.name)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .truncationMode(.tail)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -655,6 +753,221 @@ public struct ChatComposerView: View {
         }
     }
 
+    // MARK: - Media Import Helpers (PhotosPicker & Files)
+
+    private func presentPendingDevicePickerIfNeeded() {
+        guard let next = pendingDevicePicker else { return }
+        pendingDevicePicker = nil
+        switch next {
+        case .photos:
+            isShowingPhotoPicker = true
+        case .files:
+            isShowingFileImporter = true
+        }
+    }
+
+    private func importSelectedPhotoItems(_ items: [PhotosPickerItem]) async {
+        isImportingMedia = true
+        mediaErrorMessage = nil
+        defer { isImportingMedia = false }
+
+        var failedCount = 0
+        for item in items {
+            let preferredMime = item.supportedContentTypes.first?.preferredMIMEType
+            guard let rawData = try? await item.loadTransferable(type: Data.self), !rawData.isEmpty else {
+                failedCount += 1
+                continue
+            }
+            let prepared = await Task.detached(priority: .userInitiated) {
+                Self.prepareImagePayload(from: rawData, preferredMimeType: preferredMime)
+            }.value
+            guard let prepared else {
+                failedCount += 1
+                continue
+            }
+            let label = uniqueAttachmentLabel(base: "photo", ext: prepared.fileExtension)
+            let chipId = UUID().uuidString
+            let chip = ComposerAttachmentChip(
+                id: chipId,
+                kind: .imageScreenshot,
+                label: label,
+                targetUri: "attachment://photo/\(chipId)/\(label)",
+                mimeType: prepared.mimeType,
+                byteSize: prepared.byteSize,
+                inlineBase64Data: prepared.base64
+            )
+            store.composerAttachments.append(chip)
+            if !attachedChipLabels.contains(label) {
+                attachedChipLabels.append(label)
+            }
+        }
+        if failedCount > 0 {
+            mediaErrorMessage = failedCount == 1
+                ? "Could not load 1 selected photo."
+                : "Could not load \(failedCount) selected photos."
+        }
+    }
+
+    private func importSelectedFileURLs(_ urls: [URL]) async {
+        isImportingMedia = true
+        mediaErrorMessage = nil
+        defer { isImportingMedia = false }
+
+        var failedCount = 0
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            let originalName = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
+            let kind: ComposerAttachmentChip.Kind = {
+                if ext == "pdf" { return .pdfDocument }
+                if ext == "zip" { return .archiveZip }
+                if ["png", "jpg", "jpeg", "webp", "heic", "heif", "gif"].contains(ext) { return .imageScreenshot }
+                if ["m4a", "mp3", "wav", "aac", "flac"].contains(ext) { return .audioRecording }
+                if ["mp4", "mov", "m4v"].contains(ext) { return .videoClip }
+                return .genericFile
+            }()
+            let inferredMime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+
+            let prepared: PreparedMediaPayload? = await Task.detached(priority: .userInitiated) {
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer {
+                    if accessed { url.stopAccessingSecurityScopedResource() }
+                }
+                guard let rawData = try? Data(contentsOf: url), !rawData.isEmpty else {
+                    return nil
+                }
+                if kind == .imageScreenshot {
+                    return Self.prepareImagePayload(from: rawData, preferredMimeType: inferredMime)
+                }
+                let maxFileBytes = 8 * 1024 * 1024
+                guard rawData.count <= maxFileBytes else { return nil }
+                return PreparedMediaPayload(
+                    base64: rawData.base64EncodedString(),
+                    mimeType: inferredMime,
+                    byteSize: rawData.count,
+                    fileExtension: ext.isEmpty ? "bin" : ext
+                )
+            }.value
+
+            guard let prepared else {
+                failedCount += 1
+                continue
+            }
+
+            let chipLabel: String = {
+                if kind == .imageScreenshot && (ext == "heic" || ext == "heif") {
+                    let stem = (originalName as NSString).deletingPathExtension
+                    return "\(stem).\(prepared.fileExtension)"
+                }
+                return originalName
+            }()
+            let uniqueLabel = attachedChipLabels.contains(chipLabel)
+                ? uniqueAttachmentLabel(base: (chipLabel as NSString).deletingPathExtension, ext: prepared.fileExtension)
+                : chipLabel
+            let chipId = UUID().uuidString
+            let chip = ComposerAttachmentChip(
+                id: chipId,
+                kind: kind,
+                label: uniqueLabel,
+                targetUri: "attachment://file/\(chipId)/\(uniqueLabel)",
+                mimeType: prepared.mimeType,
+                byteSize: prepared.byteSize,
+                inlineBase64Data: prepared.base64
+            )
+            store.composerAttachments.append(chip)
+            if !attachedChipLabels.contains(uniqueLabel) {
+                attachedChipLabels.append(uniqueLabel)
+            }
+        }
+        if failedCount > 0 {
+            mediaErrorMessage = "Some files could not be attached (exceeds 8 MB or unreadable)."
+        }
+    }
+
+    private func uniqueAttachmentLabel(base: String, ext: String) -> String {
+        let cleanBase = base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "photo" : base
+        let cleanExt = ext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "jpg" : ext
+        var counter = 1
+        while true {
+            let candidate = "\(cleanBase)-\(counter).\(cleanExt)"
+            if !attachedChipLabels.contains(candidate)
+                && !store.composerAttachments.contains(where: { $0.label == candidate }) {
+                return candidate
+            }
+            counter += 1
+        }
+    }
+
+    private nonisolated static func prepareImagePayload(
+        from rawData: Data,
+        preferredMimeType: String?
+    ) -> PreparedMediaPayload? {
+        #if canImport(UIKit)
+        guard let image = UIImage(data: rawData) else { return nil }
+        let maxDimension: CGFloat = 2048
+        let pixelWidth = image.size.width * image.scale
+        let pixelHeight = image.size.height * image.scale
+        let largest = max(pixelWidth, pixelHeight)
+
+        let lowerMime = (preferredMimeType ?? "").lowercased()
+        let isStandardWebImage = lowerMime == "image/png" || lowerMime == "image/jpeg" || lowerMime == "image/jpg"
+        let hasUpOrientation = image.imageOrientation == .up
+        if isStandardWebImage && hasUpOrientation && largest <= maxDimension && rawData.count <= 2 * 1024 * 1024 {
+            let normalizedMime = lowerMime == "image/png" ? "image/png" : "image/jpeg"
+            let ext = normalizedMime == "image/png" ? "png" : "jpg"
+            return PreparedMediaPayload(
+                base64: rawData.base64EncodedString(),
+                mimeType: normalizedMime,
+                byteSize: rawData.count,
+                fileExtension: ext
+            )
+        }
+
+        let targetScale: CGFloat = largest > maxDimension && largest > 0 ? (maxDimension / largest) : 1.0
+        let targetSize = CGSize(
+            width: max(1, (pixelWidth * targetScale).rounded()),
+            height: max(1, (pixelHeight * targetScale).rounded())
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+        let normalizedImage = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+
+        let qualities: [CGFloat] = [0.84, 0.72, 0.58]
+        var encoded: Data? = nil
+        for quality in qualities {
+            if let jpeg = normalizedImage.jpegData(compressionQuality: quality) {
+                encoded = jpeg
+                if jpeg.count <= 2_500_000 {
+                    break
+                }
+            }
+        }
+        guard let finalData = encoded ?? normalizedImage.pngData(), !finalData.isEmpty else {
+            return nil
+        }
+        let mime = encoded != nil ? "image/jpeg" : "image/png"
+        let ext = encoded != nil ? "jpg" : "png"
+        return PreparedMediaPayload(
+            base64: finalData.base64EncodedString(),
+            mimeType: mime,
+            byteSize: finalData.count,
+            fileExtension: ext
+        )
+        #else
+        let mime = preferredMimeType ?? "image/jpeg"
+        let ext = mime.contains("png") ? "png" : "jpg"
+        return PreparedMediaPayload(
+            base64: rawData.base64EncodedString(),
+            mimeType: mime,
+            byteSize: rawData.count,
+            fileExtension: ext
+        )
+        #endif
+    }
+
     // MARK: - Actions
 
     private func handlePrimaryAction() {
@@ -671,11 +984,16 @@ public struct ChatComposerView: View {
 
     private func submitMessage() {
         voiceManager.stopRecording()
+        mediaErrorMessage = nil
         let trimmed = draftMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasWorkflow = !(store.composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        guard !trimmed.isEmpty || !attachedChipLabels.isEmpty || hasWorkflow else { return }
-        let existingByLabel = Dictionary(uniqueKeysWithValues: store.composerAttachments.map { ($0.label, $0) })
-        store.composerAttachments = attachedChipLabels.map { label in
+        guard !trimmed.isEmpty || !attachedChipLabels.isEmpty || !store.composerAttachments.isEmpty || hasWorkflow else { return }
+
+        let existingByLabel = Dictionary(
+            store.composerAttachments.map { ($0.label, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let resolvedAttachments: [ComposerAttachmentChip] = attachedChipLabels.map { label in
             if let existing = existingByLabel[label] {
                 return existing
             }
@@ -697,6 +1015,7 @@ public struct ChatComposerView: View {
                 targetUri: targetUri
             )
         }
+        store.composerAttachments = resolvedAttachments
         if let onSubmitDraft {
             onSubmitDraft(trimmed)
         } else {

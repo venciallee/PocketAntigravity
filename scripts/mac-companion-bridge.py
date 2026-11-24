@@ -2594,6 +2594,32 @@ def create_bridge_server(
                     "items": clean_items,
                     "metadata": self._build_upstream_metadata(req_obj.get("metadata") or {}),
                 }
+                raw_media = req_obj.get("media")
+                if isinstance(raw_media, list) and raw_media:
+                    clean_media = []
+                    for entry in raw_media:
+                        if not isinstance(entry, dict):
+                            continue
+                        inline_data = entry.get("inlineData") or entry.get("inlineBase64Data")
+                        uri = entry.get("uri")
+                        if not inline_data and not uri:
+                            continue
+                        media_item = {
+                            "mimeType": entry.get("mimeType") or "image/jpeg",
+                        }
+                        if inline_data:
+                            media_item["inlineData"] = inline_data
+                        if entry.get("description"):
+                            media_item["description"] = entry["description"]
+                        if isinstance(uri, str) and uri.startswith(("http://", "https://")):
+                            media_item["uri"] = uri
+                        if entry.get("thumbnail"):
+                            media_item["thumbnail"] = entry["thumbnail"]
+                        if entry.get("durationSeconds") is not None:
+                            media_item["durationSeconds"] = entry["durationSeconds"]
+                        clean_media.append(media_item)
+                    if clean_media:
+                        sanitized["media"] = clean_media
                 cascade_cfg = json.loads(json.dumps(req_obj.get("cascadeConfig") or {}))
                 planner_cfg = cascade_cfg.get("plannerConfig")
                 if isinstance(planner_cfg, dict):

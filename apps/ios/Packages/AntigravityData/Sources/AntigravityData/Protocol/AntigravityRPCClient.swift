@@ -1196,6 +1196,38 @@ public actor AntigravityRPCClient {
                 "metadata": desktopMetadata
             ]
 
+            if let rawMedia = body["media"]?.arrayValue, !rawMedia.isEmpty {
+                var cleanMedia: [JSONValue] = []
+                for entry in rawMedia {
+                    guard let m = entry.objectValue else { continue }
+                    let inlineData = m["inlineData"]?.stringValue ?? m["inlineBase64Data"]?.stringValue
+                    let uri = m["uri"]?.stringValue
+                    if (inlineData ?? "").isEmpty && (uri ?? "").isEmpty { continue }
+                    var cleanEntry: [String: JSONValue] = [
+                        "mimeType": .string(m["mimeType"]?.stringValue ?? "image/jpeg")
+                    ]
+                    if let inlineData, !inlineData.isEmpty {
+                        cleanEntry["inlineData"] = .string(inlineData)
+                    }
+                    if let desc = m["description"]?.stringValue, !desc.isEmpty {
+                        cleanEntry["description"] = .string(desc)
+                    }
+                    if let uri, uri.hasPrefix("https://") || uri.hasPrefix("http://") {
+                        cleanEntry["uri"] = .string(uri)
+                    }
+                    if let thumb = m["thumbnail"]?.stringValue, !thumb.isEmpty {
+                        cleanEntry["thumbnail"] = .string(thumb)
+                    }
+                    if let duration = m["durationSeconds"] {
+                        cleanEntry["durationSeconds"] = duration
+                    }
+                    cleanMedia.append(.object(cleanEntry))
+                }
+                if !cleanMedia.isEmpty {
+                    clean["media"] = .array(cleanMedia)
+                }
+            }
+
             if var cascadeCfg = body["cascadeConfig"]?.objectValue,
                var plannerCfg = cascadeCfg["plannerConfig"]?.objectValue {
                 // Ensure conversational.plannerMode is ALWAYS valid upstream enum (`CONVERSATIONAL_PLANNER_MODE_DEFAULT`)

@@ -563,7 +563,48 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc24_cascadeChatRendersStepLoadErrorCardAndRetryButton() {
+    fun atc24_composerSingleLineModelPillAndImageAttachmentSend() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        // Add an inline image attachment directly to verify image chip renders even when draft text is empty
+        val samplePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGPs2/KfgYGBiYGBgYGBAQAaxQJFDxGZ5wAAAABJRU5ErkJggg=="
+        val photoChip = dev.antigravity.shared.model.ComposerAttachmentChip(
+            id = "photo-e2e-1",
+            kind = dev.antigravity.shared.model.ComposerAttachmentChip.Kind.IMAGE_SCREENSHOT,
+            label = "photo-1.png",
+            targetUri = "attachment://photo/photo-e2e-1/photo-1.png",
+            mimeType = "image/png",
+            inlinePayload = samplePngBase64,
+        )
+
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.AGENTS_HOME,
+            )
+        }
+
+        // Single-line model pill must show model name without stacked "Extra High" / "High" text in Home composer
+        composeRule.onNodeWithTag("btn-model-picker").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodes(androidx.compose.ui.test.hasText("Extra High")).fetchSemanticsNodes().size)
+
+        // Adding a photo renders the thumbnail chip on Home even with empty draft text, and enables image-only send
+        coordinator.workspaceStore.addComposerChip(photoChip)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("composer-image-chip-photo-e2e-1").assertIsDisplayed()
+
+        // Tap Send with empty text + image attachment -> navigates into chat & attaches photo-1.png
+        composeRule.onNodeWithTag("btn-home-send").performClick()
+        composeRule.waitForIdle()
+        assertTrue(
+            coordinator.chatState.value.steps.any { step ->
+                step.type == CortexStepType.USER_INPUT && "photo-1.png" in step.attachedMentions
+            },
+        )
+        assertTrue(coordinator.workspaceStore.state.value.attachedComposerChips.isEmpty())
+    }
+
+    @Test
+    fun atc25_cascadeChatRendersStepLoadErrorCardAndRetryButton() {
         val coordinator = AntigravityCoreCoordinator()
         coordinator.chatStore.setActiveCascade("v1/sync-mobile-concept")
         coordinator.chatStore.setStepLoadError("HTTP 404: not_found: trajectory not found")

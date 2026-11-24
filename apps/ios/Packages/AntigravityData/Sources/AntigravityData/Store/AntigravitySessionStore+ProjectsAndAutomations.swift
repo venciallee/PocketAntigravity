@@ -81,9 +81,16 @@ extension AntigravitySessionStore {
     public func createConversationInProject(
         _ projectSlug: String,
         title: String = "New Conversation",
-        initialPrompt: String? = nil
+        initialPrompt: String? = nil,
+        initialAttachments: [ComposerAttachmentChip] = []
     ) -> String {
         discardPendingDraftConversation()
+        let hasInitialPayload = (initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            || !initialAttachments.isEmpty
+        if !initialAttachments.isEmpty {
+            // Clear immediately so the newly opened chat composer does not display stale pre-send chips
+            composerAttachments.removeAll()
+        }
         let optimisticId = "cas-\(UUID().uuidString.prefix(8).lowercased())"
         let trimmedSlug = projectSlug.trimmingCharacters(in: .whitespacesAndNewlines)
         let project: ProjectWorkspace? = {
@@ -157,24 +164,33 @@ extension AntigravitySessionStore {
         }()
         let branch = isUnassigned ? "" : (project?.activeBranch ?? "main")
 
+        let initialPreviewText: String = {
+            if let p = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+                return p
+            }
+            if !initialAttachments.isEmpty {
+                return "Attached: \(initialAttachments.map(\.label).joined(separator: ", "))"
+            }
+            return "Ready for instructions..."
+        }()
         let newSummary = CascadeSummary(
             cascadeId: optimisticId,
             title: title,
             projectSlug: effectiveSlug,
             workspaceUri: workspaceUri,
             branchName: branch,
-            status: initialPrompt != nil ? .inProgress : .done,
-            stepCount: initialPrompt != nil ? 1 : 0,
+            status: hasInitialPayload ? .inProgress : .done,
+            stepCount: hasInitialPayload ? 1 : 0,
             currentStepIndex: 1,
             totalSteps: 1,
             updatedAt: Date(),
             relativeTimeLabel: "now",
-            statusSubtitle: initialPrompt != nil ? "Running · Step 1 of 1" : "Ready for instructions",
+            statusSubtitle: hasInitialPayload ? "Running · Step 1 of 1" : "Ready for instructions",
             isPinned: displayOptions.autoPinOnMessage,
             isArchived: false,
             isUnread: false,
             modelLabel: selectedModelConfig.displayName,
-            lastMessagePreview: initialPrompt ?? "Ready for instructions...",
+            lastMessagePreview: initialPreviewText,
             isCloud: isCloudProj,
             cloudProjectId: cloudProjId,
             originInstanceUuid: originUuid,
@@ -194,7 +210,7 @@ extension AntigravitySessionStore {
             summaries = nextSummaries
         }
         stepsByCascadeId[optimisticId] = []
-        if initialPrompt == nil || initialPrompt?.isEmpty == true {
+        if !hasInitialPayload {
             locallyCreatedEmptyCascadeIds.insert(optimisticId)
         }
         activeCascadeId = optimisticId
@@ -253,7 +269,7 @@ extension AntigravitySessionStore {
                 }
                 let wasEmptyNew = self.locallyCreatedEmptyCascadeIds.remove(optimisticId) != nil
                 let existingSteps = self.stepsByCascadeId.removeValue(forKey: optimisticId) ?? []
-                if wasEmptyNew && existingSteps.isEmpty && (initialPrompt == nil || initialPrompt?.isEmpty == true) {
+                if wasEmptyNew && existingSteps.isEmpty && !hasInitialPayload {
                     self.locallyCreatedEmptyCascadeIds.insert(realCascadeId)
                 }
                 self.stepsByCascadeId[realCascadeId] = existingSteps.map { step in
@@ -270,9 +286,10 @@ extension AntigravitySessionStore {
                         self.activeRoute = .cascadeChat(realCascadeId)
                     }
                 }
-                if let prompt = initialPrompt, !prompt.isEmpty {
+                if hasInitialPayload {
                     self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
-                    self.composerDraftText = prompt
+                    self.composerDraftText = initialPrompt ?? ""
+                    self.composerAttachments = initialAttachments
                     self.sendCurrentDraft()
                 } else {
                     self.syncStepsForCascade(realCascadeId, pollUntilIdle: false)
@@ -280,8 +297,9 @@ extension AntigravitySessionStore {
                 return
             }
 
-            if let prompt = initialPrompt, !prompt.isEmpty {
-                self?.composerDraftText = prompt
+            if hasInitialPayload {
+                self?.composerDraftText = initialPrompt ?? ""
+                self?.composerAttachments = initialAttachments
                 self?.sendCurrentDraft()
             }
         }
