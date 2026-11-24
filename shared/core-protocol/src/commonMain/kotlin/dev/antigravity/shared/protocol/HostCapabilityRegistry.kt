@@ -564,8 +564,45 @@ public object ProtocolCompatibilityEngine {
         return isMethodUnimplementedResponse(http.statusCode, http.body)
     }
 
+    /**
+     * Returns `true` when an HTTP/Connect error indicates a missing trajectory/conversation resource
+     * (e.g. HTTP 404 `[5,"not_found: trajectory not found (error ID: ...)"]`) from a live `language_server`,
+     * as opposed to an unimplemented RPC method or an offline host.
+     */
+    public fun isTrajectoryNotFoundResponse(statusCode: Int, body: String): Boolean {
+        val lower = body.lowercase()
+        if (lower.contains("trajectory not found") ||
+            lower.contains("cascade not found") ||
+            lower.contains("conversation not found") ||
+            lower.contains("unknown cascade")
+        ) {
+            return true
+        }
+        return statusCode == 404 &&
+            lower.contains("not_found") &&
+            !lower.contains("method not found") &&
+            !lower.contains("unimplemented") &&
+            !lower.contains("instance")
+    }
+
+    public fun isTrajectoryNotFoundError(error: Throwable): Boolean {
+        val http = error as? AntigravityRpcError.HttpError ?: return false
+        return isTrajectoryNotFoundResponse(http.statusCode, http.body)
+    }
+
+    private fun isResourceNotFoundResponse(statusCode: Int, body: String): Boolean {
+        if (isTrajectoryNotFoundResponse(statusCode, body)) return true
+        val lower = body.lowercase()
+        return lower.contains("project not found") ||
+            lower.contains("artifact not found") ||
+            lower.contains("step not found") ||
+            lower.contains("file not found")
+    }
+
     public fun isMethodUnimplementedResponse(statusCode: Int, body: String): Boolean {
-        if (statusCode == 404 || statusCode == 501) return true
+        if (statusCode == 501) return true
+        if (isResourceNotFoundResponse(statusCode, body)) return false
+        if (statusCode == 404) return true
         val lower = body.lowercase()
         return lower.contains("unimplemented") ||
             lower.contains("unknown method") ||
@@ -573,19 +610,109 @@ public object ProtocolCompatibilityEngine {
             lower.contains("not implemented")
     }
 
+    /**
+     * Strips Google Boq JSPB error envelopes (`[5,"not_found: ..."]`), Connect JSON error envelopes,
+     * and any redundant leading `HTTP <code>: ` prefixes into a clean single-line detail string.
+     */
+    public fun unwrapErrorDetail(raw: String, statusCode: Int? = null): String {
+        var cleaned = raw.trim()
+        if (cleaned.startsWith(")]}'")) {
+            cleaned = cleaned.drop(4).trim()
+        }
+        val redundantPrefix = if (statusCode != null) Regex("""^HTTP\s+$statusCode:\s*""", RegexOption.IGNORE_CASE) else null
+        if (redundantPrefix != null) {
+            while (redundantPrefix.containsMatchIn(cleaned)) {
+                cleaned = cleaned.replaceFirst(redundantPrefix, "").trim()
+            }
+        }
+        val parsed = runCatching { json.parseToJsonElement(cleaned) }.getOrNull()
+        when (parsed) {
+            is JsonArray -> {
+                val collected = mutableListOf<String>()
+                collectJsonArrayStrings(parsed, collected)
+                collected.firstOrNull { it.isNotBlank() }?.let { return it.trim() }
+            }
+            is JsonObject -> {
+                val code = (parsed["code"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                val msg = listOf("message", "error", "detail", "details")
+                    .firstNotNullOfOrNull { (parsed[it] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                if (msg != null) {
+                    return if (code.isNotEmpty() && !msg.startsWith(code, ignoreCase = true)) "$code: $msg" else msg
+                }
+            }
+            else -> Unit
+        }
+        return cleaned
+    }
+
+    /**
+     * Formats an RPC/transport failure cleanly for UI presentation (never doubling `HTTP 404: HTTP 404:`
+     * or leaking raw Boq JSON-array brackets like `[5,"not_found: ..."]`).
+     */
+    public fun formatUserFacingRpcError(error: Throwable): String {
+        val http = error as? AntigravityRpcError.HttpError
+        if (http != null) {
+            val detail = unwrapErrorDetail(http.body, statusCode = http.statusCode)
+            if (isTrajectoryNotFoundResponse(http.statusCode, http.body)) {
+                return if (detail.isNotEmpty()) {
+                    "Conversation history could not be found on this host ($detail). Try Retry or open it once on Antigravity Desktop."
+                } else {
+                    "Conversation history could not be found on this host. Try Retry or open it once on Antigravity Desktop."
+                }
+            }
+            return if (detail.isNotEmpty()) "HTTP ${http.statusCode}: $detail" else "HTTP ${http.statusCode}"
+        }
+        return error.message?.takeIf { it.isNotBlank() } ?: "Failed to load trajectory steps"
+    }
+
+    private fun collectJsonArrayStrings(arr: JsonArray, out: MutableList<String>, depth: Int = 0) {
+        if (depth > 4) return
+        for (el in arr) {
+            when (el) {
+                is JsonPrimitive -> {
+                    val str = el.takeIf { it.isString }?.contentOrNull?.trim()
+                    if (!str.isNullOrEmpty()) {
+                        out.add(str)
+                    }
+                }
+                is JsonArray -> collectJsonArrayStrings(el, out, depth + 1)
+                is JsonObject -> {
+                    for (key in listOf("message", "error", "detail", "details")) {
+                        val msg = (el[key] as? JsonPrimitive)?.contentOrNull?.trim()
+                        if (!msg.isNullOrEmpty()) out.add(msg)
+                    }
+                }
+            }
+        }
+    }
+
     private fun candidateErrorStrings(raw: String): List<String> {
         val candidates = mutableListOf<String>()
-        val obj = runCatching { json.parseToJsonElement(raw) as? JsonObject }.getOrNull()
-        if (obj != null) {
-            for (key in listOf("message", "error", "detail", "details")) {
-                val msg = (obj[key] as? JsonPrimitive)?.contentOrNull
-                if (!msg.isNullOrEmpty()) {
+        val trimmed = raw.trim().let { if (it.startsWith(")]}'")) it.drop(4).trim() else it }
+        val parsed = runCatching { json.parseToJsonElement(trimmed) }.getOrNull()
+        when (parsed) {
+            is JsonObject -> {
+                for (key in listOf("message", "error", "detail", "details")) {
+                    val msg = (parsed[key] as? JsonPrimitive)?.contentOrNull
+                    if (!msg.isNullOrEmpty()) {
+                        candidates.add(msg)
+                        if (msg.contains("\\\"")) {
+                            candidates.add(msg.replace("\\\"", "\""))
+                        }
+                    }
+                }
+            }
+            is JsonArray -> {
+                val arrStrings = mutableListOf<String>()
+                collectJsonArrayStrings(parsed, arrStrings)
+                for (msg in arrStrings) {
                     candidates.add(msg)
                     if (msg.contains("\\\"")) {
                         candidates.add(msg.replace("\\\"", "\""))
                     }
                 }
             }
+            else -> Unit
         }
         candidates.add(raw)
         if (raw.contains("\\\"")) {

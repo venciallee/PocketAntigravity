@@ -75,9 +75,12 @@ import dev.antigravity.android.ui.review.ImplementationPlanReviewScreen
 import dev.antigravity.android.ui.review.TurnDiffReviewScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.domain.EsddVerificationFixtures
+import dev.antigravity.shared.model.AntigravityCloudDetector
 import dev.antigravity.shared.model.AppAppearanceMode
 import dev.antigravity.shared.model.AppThemePreset
+import dev.antigravity.shared.model.CascadeSummary
 import dev.antigravity.shared.model.EsddVerifySceneCase
+import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.protocol.SapisidHashGenerator
 import kotlin.math.abs
@@ -175,6 +178,7 @@ fun AntigravityAppRoot(
     var dragDrawerProgress by remember(initialVerifyScene) { mutableStateOf<Float?>(null) }
     var showRemoteLinkDialog by remember { mutableStateOf(false) }
     var userExplicitlyOpenedPairing by remember { mutableStateOf(false) }
+    var stepSyncRetryNonce by remember { mutableStateOf(0) }
 
     fun dismissKeyboard() {
         keyboardController?.hide()
@@ -228,6 +232,21 @@ fun AntigravityAppRoot(
         }
     }
 
+    fun isCloudConversation(cascadeId: String, summary: CascadeSummary?): Boolean {
+        if (summary?.isCloud == true) return true
+        if (AntigravityCloudDetector.isCloudWorkspaceUri(summary?.workspaceUri.orEmpty(), cascadeId = cascadeId)) {
+            return true
+        }
+        val matchedProject = summary?.let { item ->
+            workspaceState.projects.firstOrNull { proj ->
+                (!item.cloudProjectId.isNullOrBlank() && (proj.cloudProjectId == item.cloudProjectId || proj.id == item.cloudProjectId)) ||
+                    (item.workspaceUri.isNotBlank() && proj.workspaceUri == item.workspaceUri) ||
+                    (item.projectSlug.isNotBlank() && proj.name.equals(item.projectSlug, ignoreCase = true))
+            }
+        }
+        return matchedProject?.runtime == ProjectRuntimeTarget.CLOUD
+    }
+
     val activeChatRouteId = (currentRoute as? AppRoute.CascadeChat)?.cascadeId
     val activeChatSummary = remember(activeChatRouteId, syncState.summaries) {
         if (activeChatRouteId.isNullOrBlank()) null
@@ -238,16 +257,18 @@ fun AntigravityAppRoot(
         activeChatSummary?.stepCount,
         activeChatSummary?.status,
         activeChatSummary?.updatedAtEpochMs,
+        stepSyncRetryNonce,
     ) {
         val cid = activeChatRouteId ?: return@LaunchedEffect
         if (coordinator.isVerificationMode || cid.startsWith("cascade-new-")) return@LaunchedEffect
-        val summary = activeChatSummary ?: return@LaunchedEffect
+        val summary = activeChatSummary
+        val resolvedIsCloud = isCloudConversation(cid, summary)
         runCatching {
             coordinator.syncSteps(
                 cascadeId = cid,
-                knownStepCount = summary.stepCount,
-                isCloud = summary.isCloud,
-                instanceUuidOverride = summary.originInstanceUuid,
+                knownStepCount = summary?.stepCount ?: 0,
+                isCloud = resolvedIsCloud,
+                instanceUuidOverride = summary?.originInstanceUuid,
             )
         }
     }
@@ -285,19 +306,6 @@ fun AntigravityAppRoot(
 
     fun openConversation(cascadeId: String) {
         coordinator.chatStore.setActiveCascade(cascadeId)
-        if (!coordinator.isVerificationMode && !cascadeId.startsWith("cascade-new-")) {
-            val summary = syncState.summaries.firstOrNull { it.cascadeId == cascadeId }
-            scope.launch {
-                runCatching {
-                    coordinator.syncSteps(
-                        cascadeId = cascadeId,
-                        knownStepCount = summary?.stepCount ?: 0,
-                        isCloud = summary?.isCloud == true,
-                        instanceUuidOverride = summary?.originInstanceUuid,
-                    )
-                }
-            }
-        }
         if (coordinator.isVerificationMode && cascadeId == "cas-audit-log-admin") {
             navigateTo(AppRoute.StructuredQuestion)
         } else {
@@ -602,6 +610,7 @@ fun AntigravityAppRoot(
                                 onOpenSwarmBoard = { activeChatOverlay = ChatOverlaySheet.SWARM_BOARD },
                                 onOpenVoiceMode = { activeChatOverlay = ChatOverlaySheet.VOICE_MODE },
                                 onBiometricPrompt = onBiometricPrompt,
+                                onRetryLoadSteps = { stepSyncRetryNonce += 1 },
                             )
 
                             when (activeChatOverlay) {

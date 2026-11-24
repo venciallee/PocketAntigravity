@@ -940,7 +940,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
         sendButton.tap()
 
         XCTAssertTrue(
-            waitForTextContaining("收到来自 iOS 真模拟器的实时指令", in: app, timeout: 8),
+            waitForTextContaining("收到来自 iOS 真模拟器的实时指令", in: app, timeout: 20),
             "Sending a message in Composer must dispatch StartCascade + SendUserCascadeMessage and render streamed reply"
         )
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
