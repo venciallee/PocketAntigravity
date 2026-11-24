@@ -1329,6 +1329,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
         streamBytes.append(ConnectEnvelope.encode(payload: Data(frame1Json.utf8)))
         streamBytes.append(ConnectEnvelope.encode(payload: Data(frame2Json.utf8)))
         streamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let streamPayload = streamBytes
 
         let session = makeMockSession { req in
             let path = req.url?.path ?? ""
@@ -1339,7 +1340,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
                     httpVersion: "HTTP/1.1",
                     headerFields: ["Content-Type": "application/connect+json"]
                 )!
-                return (resp, streamBytes)
+                return (resp, streamPayload)
             }
             let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
             return (resp, Data("{\"code\":\"not_found\",\"message\":\"trajectory not found\"}".utf8))
