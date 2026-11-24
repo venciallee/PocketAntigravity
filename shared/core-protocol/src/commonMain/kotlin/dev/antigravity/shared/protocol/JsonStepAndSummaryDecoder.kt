@@ -467,6 +467,13 @@ public object JsonStepAndSummaryDecoder {
                     }
                 }
             }
+            uiObj.arr("media")?.forEachIndexed { idx, mediaEl ->
+                val mediaObj = mediaEl as? JsonObject ?: return@forEachIndexed
+                val desc = nonEmpty(mediaObj.str("description"))
+                    ?: nonEmpty(mediaObj.str("uri"))?.substringAfterLast('/')
+                    ?: if (mediaObj.str("mimeType").orEmpty().startsWith("image/")) "image-${idx + 1}" else "media-${idx + 1}"
+                if (desc !in mentions) mentions.add(desc)
+            }
 
             val userCfg = uiObj.obj("userConfig") ?: uiObj.obj("lastUserConfig")
             userCfg?.obj("plannerConfig")?.let { plannerCfg ->

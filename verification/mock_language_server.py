@@ -1162,6 +1162,7 @@ class LiveMockServer:
                         "cascadeId": req.get("cascadeId", "cas-rate-limiter"),
                         "text": req.get("text", req.get("userResponse", "")),
                         "items": req.get("items", []),
+                        "media": req.get("media", []),
                         "contextChips": req.get("contextChips", []),
                         "mode": req.get("mode", "Planning"),
                         "model": req.get("model", "Gemini 4 Neon"),

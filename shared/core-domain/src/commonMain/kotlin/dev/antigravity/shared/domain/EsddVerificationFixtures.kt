@@ -1110,6 +1110,7 @@ public object EsddVerificationFixtures {
             EsddVerifySceneCase.SIDEBAR_DRAWER,
             -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+                coordinator.workspaceStore.clearComposerChips()
             }
             EsddVerifySceneCase.DISPLAY_OPTIONS -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
@@ -1136,16 +1137,18 @@ public object EsddVerificationFixtures {
             -> {
                 coordinator.workspaceStore.selectAutomation("auto-nightly-audit")
             }
-            EsddVerifySceneCase.CHAT_AND_COMPOSER,
-            EsddVerifySceneCase.PERMISSIONS_PRESET,
-            -> {
+            EsddVerifySceneCase.CHAT_AND_COMPOSER -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
             }
-            EsddVerifySceneCase.ADD_CONTEXT -> {
+            EsddVerifySceneCase.PERMISSIONS_PRESET,
+            EsddVerifySceneCase.ADD_CONTEXT,
+            -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+                coordinator.workspaceStore.clearComposerChips()
             }
             EsddVerifySceneCase.SLASH_MENU -> {
                 coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+                coordinator.workspaceStore.clearComposerChips()
                 coordinator.chatStore.setDraftInputText("/")
             }
             EsddVerifySceneCase.MODEL_AND_MODE -> {

@@ -490,6 +490,16 @@ public class WorkspaceAndAutomationStore(
         }
     }
 
+    public fun addComposerChip(chip: ComposerAttachmentChip) {
+        _state.update { prev ->
+            if (prev.attachedComposerChips.any { it.id == chip.id || (it.targetUri != null && it.targetUri == chip.targetUri && it.label == chip.label) }) {
+                prev
+            } else {
+                prev.copy(attachedComposerChips = prev.attachedComposerChips + chip)
+            }
+        }
+    }
+
     public fun removeComposerChip(chipId: String) {
         _state.update { prev ->
             prev.copy(

@@ -85,6 +85,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.ui.chat.ComposerAttachmentsStrip
+import dev.antigravity.android.ui.chat.formatComposerModelPillName
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentsHostFilterScope
 import dev.antigravity.shared.model.CascadeSummary
@@ -169,11 +171,7 @@ fun AgentsHomeScreen(
         } ?: syncState.summaries.firstOrNull { it.cascadeId == "cas-rate-limiter" }
     }
 
-    val selectedModelName = settingsState.selectedModel?.displayName ?: "Gemini 4 Neon"
-    val effortLabel = when (settingsState.selectedEffort.displayTitle) {
-        "Extra" -> "Extra High"
-        else -> settingsState.selectedEffort.displayTitle
-    }
+    val selectedModelName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
     val permissionLabel = when (settingsState.activePermissionPreset.displayTitle) {
         "Default" -> "Default"
         else -> settingsState.activePermissionPreset.displayTitle
@@ -181,24 +179,33 @@ fun AgentsHomeScreen(
 
     fun submitHomePrompt() {
         val text = draftText.trim()
-        if (text.isEmpty()) return
+        val attachments = workspaceState.attachedComposerChips
+        if (text.isEmpty() && attachments.isEmpty()) return
         if (coordinator.isVerificationMode) {
             coordinator.chatStore.setActiveCascade("cas-rate-limiter")
             scope.launch {
                 coordinator.sendMessage(
                     cascadeId = "cas-rate-limiter",
                     message = text,
+                    attachments = attachments,
+                    modelId = settingsState.selectedModelId,
+                    effort = settingsState.selectedEffort,
+                    mode = settingsState.selectedMode,
+                    agentPersona = settingsState.selectedAgentPersona,
+                    permissionPreset = settingsState.activePermissionPreset,
                     isOptimisticDraft = false,
                 )
             }
             draftText = ""
+            coordinator.workspaceStore.clearComposerChips()
             onOpenConversation("cas-rate-limiter")
             return
         }
+        val titleCandidate = text.take(48).ifBlank { attachments.firstOrNull()?.label ?: "New Conversation" }
         val draftId = coordinator.createLocalDraftConversation(
             workspaceUri = selectedProject?.workspaceUri.orEmpty(),
             projectSlug = selectedProject?.id.orEmpty(),
-            title = text.take(48),
+            title = titleCandidate,
         )
         scope.launch {
             runCatching {
@@ -206,11 +213,21 @@ fun AgentsHomeScreen(
                     cascadeId = draftId,
                     message = text,
                     workspaceUri = selectedProject?.workspaceUri.orEmpty(),
+                    attachments = attachments,
+                    modelId = settingsState.selectedModelId,
+                    effort = settingsState.selectedEffort,
+                    mode = settingsState.selectedMode,
+                    agentPersona = settingsState.selectedAgentPersona,
+                    isCloud = cloudModeEnabled || selectedProject?.runtime == ProjectRuntimeTarget.CLOUD,
+                    cloudProjectId = selectedProject?.cloudProjectId,
+                    permissionPreset = settingsState.activePermissionPreset,
+                    instanceUuidOverride = selectedProject?.originInstanceUuid,
                     isOptimisticDraft = true,
                 )
             }
         }
         draftText = ""
+        coordinator.workspaceStore.clearComposerChips()
         onOpenConversation(draftId)
     }
 
@@ -611,6 +628,13 @@ fun AgentsHomeScreen(
                                     .padding(horizontal = 14.dp, vertical = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
+                                if (workspaceState.attachedComposerChips.isNotEmpty()) {
+                                    ComposerAttachmentsStrip(
+                                        chips = workspaceState.attachedComposerChips,
+                                        onRemoveChip = { coordinator.workspaceStore.removeComposerChip(it) },
+                                    )
+                                }
+
                                 BasicTextField(
                                     value = draftText,
                                     onValueChange = { updated ->
@@ -663,33 +687,26 @@ fun AgentsHomeScreen(
                                         }
                                     }
 
-                                    // Model & effort two-line selector
+                                    // Single-line model selector (`Gemini 4 Neon ⌄`); thinking effort shown inside sheet
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(10.dp))
                                             .clickable(onClick = onOpenModelPicker)
-                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                            .padding(horizontal = 4.dp, vertical = 6.dp)
                                             .testTag("btn-model-picker"),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(3.dp),
                                     ) {
-                                        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                                            Text(
-                                                text = selectedModelName,
-                                                style = MaterialTheme.typography.labelMedium.copy(
-                                                    fontSize = 13.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                ),
-                                                color = colors.inkReading,
-                                                maxLines = 1,
-                                            )
-                                            Text(
-                                                text = effortLabel,
-                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                                color = colors.inkSecondary,
-                                                maxLines = 1,
-                                            )
-                                        }
+                                        Text(
+                                            text = selectedModelName,
+                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                fontSize = 13.5.sp,
+                                                fontWeight = FontWeight.Medium,
+                                            ),
+                                            color = colors.inkReading,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
                                         Icon(
                                             imageVector = Icons.Rounded.KeyboardArrowDown,
                                             contentDescription = "Select model",
@@ -747,7 +764,7 @@ fun AgentsHomeScreen(
                                         )
                                     }
 
-                                    val canSend = draftText.isNotBlank()
+                                    val canSend = draftText.isNotBlank() || workspaceState.attachedComposerChips.isNotEmpty()
                                     Surface(
                                         onClick = { submitHomePrompt() },
                                         modifier = Modifier
