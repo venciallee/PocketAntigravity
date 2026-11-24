@@ -390,6 +390,9 @@ public class CascadeChatDomainStore(
         if (trimmed.isEmpty() && attachments.isEmpty()) {
             return SendMessageOutcome(cascadeId, dispatchedLive = false, queuedInOutbox = false)
         }
+        val effectiveMessage = trimmed.ifEmpty {
+            "Inspect attached context: ${attachments.joinToString(", ") { it.label }}"
+        }
 
         var targetCascadeId = cascadeId.ifBlank { _state.value.activeCascadeId }
         val existingSteps = _state.value.stepsByCascadeId[targetCascadeId].orEmpty()
@@ -401,7 +404,7 @@ public class CascadeChatDomainStore(
             type = CortexStepType.USER_INPUT,
             status = CortexStepStatus.DONE,
             createdAtEpochMs = currentTimeMillis(),
-            userInput = trimmed,
+            userInput = effectiveMessage,
             attachedMentions = attachments.map { it.label },
             isQueuedInOutbox = !isOfflineVerification && (!isDeviceNetworkReachable || client == null),
             recordedExecutionMode = mode,
@@ -420,7 +423,7 @@ public class CascadeChatDomainStore(
             id = "outbox-${currentTimeMillis()}-${Random.nextInt(1000, 9999)}",
             cascadeId = targetCascadeId,
             kind = OutboxPayloadKind.USER_MESSAGE,
-            messageText = trimmed,
+            messageText = effectiveMessage,
             stepIndex = nextStepIndex,
         )
         projectionStorage.enqueueOutbox(outboxEntry)
@@ -448,7 +451,7 @@ public class CascadeChatDomainStore(
 
             client.sendUserCascadeMessage(
                 cascadeId = targetCascadeId,
-                message = trimmed,
+                message = effectiveMessage,
                 attachments = attachments,
                 modelId = modelId,
                 effort = effort,

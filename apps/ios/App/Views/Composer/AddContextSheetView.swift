@@ -53,6 +53,7 @@ public struct AddContextSheetView: View {
 
     @Bindable public var store: AntigravitySessionStore
     public var onAddLabels: (([String]) -> Void)?
+    public var onPickPhotos: (() -> Void)?
     public var onPickDeviceFile: (() -> Void)?
     public var onDismiss: (() -> Void)?
 
@@ -202,12 +203,14 @@ public struct AddContextSheetView: View {
         startExpanded: Bool = false,
         showHomeBackdrop: Bool = true,
         onAddLabels: (([String]) -> Void)? = nil,
+        onPickPhotos: (() -> Void)? = nil,
         onPickDeviceFile: (() -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.store = store
         self.showHomeBackdrop = showHomeBackdrop
         self.onAddLabels = onAddLabels
+        self.onPickPhotos = onPickPhotos
         self.onPickDeviceFile = onPickDeviceFile
         self.onDismiss = onDismiss
         self._isExpandedToPicker = State(initialValue: startExpanded)
@@ -272,6 +275,11 @@ public struct AddContextSheetView: View {
                         .padding(.top, 16)
                         .padding(.bottom, 8)
 
+                    if let onPickPhotos {
+                        popoverCategoryRow(icon: "photo.on.rectangle.angled", title: "Photos", trailingLabel: nil, testId: "ctx-menu-photos") {
+                            onPickPhotos()
+                        }
+                    }
                     popoverCategoryRow(icon: "paperclip", title: "Files", trailingLabel: nil, testId: "ctx-menu-files") {
                         activeCategoryFilter = .files
                         isExpandedToPicker = true
@@ -446,39 +454,78 @@ public struct AddContextSheetView: View {
                 // Grouped Sections ScrollView
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        if !store.isVerificationMode, let onPickDeviceFile {
-                            Button {
-                                onPickDeviceFile()
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "paperclip")
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                                        .frame(width: 22)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Attach File or Media")
-                                            .font(.system(size: 15, weight: .medium))
-                                            .foregroundStyle(AntigravityTheme.inkReading)
-                                        Text("PDF, image, archive, or document from device")
-                                            .font(.system(size: 12.5))
-                                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        if !store.isVerificationMode, (onPickPhotos != nil || onPickDeviceFile != nil) {
+                            HStack(spacing: 10) {
+                                if let onPickPhotos {
+                                    Button {
+                                        onPickPhotos()
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "photo.on.rectangle.angled")
+                                                .font(.system(size: 16, weight: .semibold))
+                                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                                .frame(width: 22)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Photos")
+                                                    .font(.system(size: 14.5, weight: .semibold))
+                                                    .foregroundStyle(AntigravityTheme.inkReading)
+                                                    .lineLimit(1)
+                                                Text("Photo Library")
+                                                    .font(.system(size: 12))
+                                                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                                                    .lineLimit(1)
+                                            }
+                                            Spacer(minLength: 0)
+                                        }
+                                        .padding(.horizontal, 13)
+                                        .frame(maxWidth: .infinity, minHeight: 54)
+                                        .background(AntigravityTheme.surfaceSheetGroup)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                     }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Choose images from Photos")
+                                    .accessibilityIdentifier("ctx-row-pick-photos")
                                 }
-                                .padding(.horizontal, 14)
-                                .frame(minHeight: 54)
-                                .background(AntigravityTheme.surfaceSheetGroup)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                                if let onPickDeviceFile {
+                                    Button {
+                                        onPickDeviceFile()
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "paperclip")
+                                                .font(.system(size: 15.5, weight: .semibold))
+                                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                                .frame(width: 22)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Files")
+                                                    .font(.system(size: 14.5, weight: .semibold))
+                                                    .foregroundStyle(AntigravityTheme.inkReading)
+                                                    .lineLimit(1)
+                                                Text("PDF, doc, media")
+                                                    .font(.system(size: 12))
+                                                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                                                    .lineLimit(1)
+                                            }
+                                            Spacer(minLength: 0)
+                                        }
+                                        .padding(.horizontal, 13)
+                                        .frame(maxWidth: .infinity, minHeight: 54)
+                                        .background(AntigravityTheme.surfaceSheetGroup)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Attach file or media from Files")
+                                    .accessibilityIdentifier("ctx-row-attach-device-file")
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("ctx-row-attach-device-file")
                         }
 
                         ForEach(["FILES & FOLDERS", "MENTIONS", "ACTIONS & SKILLS"], id: \.self) { sectionTitle in
