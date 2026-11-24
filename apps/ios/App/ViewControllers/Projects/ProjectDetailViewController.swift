@@ -25,6 +25,7 @@ public struct ProjectDetailViewController: View {
         let indicator: IndicatorKind
         let additions: Int?
         let deletions: Int?
+        var isTitleLoading: Bool = false
 
         enum IndicatorKind {
             case runningArc
@@ -297,12 +298,13 @@ public struct ProjectDetailViewController: View {
         }
         return ProjectConversationRowModel(
             id: s.cascadeId,
-            title: s.title,
+            title: store.displayTitle(for: s),
             subtitle: s.statusSubtitle.isEmpty ? s.status.displayBadgeText : s.statusSubtitle,
             timestamp: s.relativeTimeLabel,
             indicator: indicator,
             additions: s.totalAdditions > 0 ? s.totalAdditions : nil,
-            deletions: s.totalDeletions > 0 ? s.totalDeletions : nil
+            deletions: s.totalDeletions > 0 ? s.totalDeletions : nil,
+            isTitleLoading: store.isSummaryTitleLoading(s)
         )
     }
 
@@ -647,16 +649,29 @@ public struct ProjectDetailViewController: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("project-conv-list")
         } else {
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     Button {
                         triggerOpenConversation(row.id)
                     } label: {
                         HStack(alignment: .center, spacing: 11) {
-                            Text(row.title)
-                                .font(.system(size: 15.5, weight: .regular))
-                                .foregroundStyle(AntigravityTheme.textPrimary)
-                                .lineLimit(1)
+                            if row.isTitleLoading {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                        .tint(AntigravityTheme.textMuted)
+                                    Text("Loading...")
+                                        .font(.system(size: 14.5, weight: .regular))
+                                        .foregroundStyle(AntigravityTheme.textMuted)
+                                        .lineLimit(1)
+                                }
+                                .accessibilityIdentifier("project-conv-loading-\(row.id)")
+                            } else {
+                                Text(row.title)
+                                    .font(.system(size: 15.5, weight: .regular))
+                                    .foregroundStyle(AntigravityTheme.textPrimary)
+                                    .lineLimit(1)
+                            }
 
                             Spacer(minLength: 8)
 
@@ -667,6 +682,9 @@ public struct ProjectDetailViewController: View {
                         .frame(minHeight: 50)
                     }
                     .buttonStyle(AntigravityInteractiveRowButtonStyle())
+                    .onAppear {
+                        store.requestPreloadForVisibleConversation(row.id)
+                    }
                     .accessibilityIdentifier("project-conv-row-\(row.id)")
 
                     if index < rows.count - 1 {

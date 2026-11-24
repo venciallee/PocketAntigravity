@@ -3,7 +3,9 @@ package dev.antigravity.shared.domain
 import dev.antigravity.shared.model.AgentsHostFilterScope
 import dev.antigravity.shared.model.AgentsQuickFilter
 import dev.antigravity.shared.model.AntigravityCloudDetector
+import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.CascadeSummary
+import dev.antigravity.shared.model.CascadeSummaryTitleResolver
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
@@ -35,6 +37,9 @@ public data class ConversationSyncState(
     public val isStreamHealthy: Boolean = false,
     public val lastSyncedAtEpochMs: Long = 0L,
     public val errorText: String? = null,
+    public val hydratingCascadeIds: Set<String> = emptySet(),
+    public val settledEmptyTitleCascadeIds: Set<String> = emptySet(),
+    public val cachedStepCascadeIds: Set<String> = emptySet(),
 )
 
 /**
@@ -203,12 +208,21 @@ public class ConversationSyncStore(
     public fun applyStreamEvent(event: JsonStepAndSummaryDecoder.JetboxDecodedEvent) {
         _state.update { prev ->
             val byId = prev.summaries.associateBy { it.cascadeId }.toMutableMap()
+            val nextHydrating = prev.hydratingCascadeIds.toMutableSet()
+            val nextSettled = prev.settledEmptyTitleCascadeIds.toMutableSet()
             for (removedId in event.removedCascadeIds) {
                 byId.remove(removedId)
+                nextHydrating.remove(removedId)
+                nextSettled.remove(removedId)
             }
             for (incoming in event.summaries) {
                 val existing = byId[incoming.cascadeId]
-                byId[incoming.cascadeId] = mergeIncomingSummary(existing = existing, incoming = incoming)
+                val mergedItem = mergeIncomingSummary(existing = existing, incoming = incoming)
+                byId[incoming.cascadeId] = mergedItem
+                if (mergedItem.hasResolvedTitle) {
+                    nextHydrating.remove(incoming.cascadeId)
+                    nextSettled.remove(incoming.cascadeId)
+                }
             }
             val merged = byId.values.sortedWith(
                 compareByDescending<CascadeSummary> { it.updatedAtEpochMs }.thenBy { it.cascadeId }
@@ -217,6 +231,8 @@ public class ConversationSyncStore(
                 summaries = merged,
                 isStreamHealthy = true,
                 lastSyncedAtEpochMs = currentTimeMillis(),
+                hydratingCascadeIds = nextHydrating,
+                settledEmptyTitleCascadeIds = nextSettled,
             )
         }
     }
@@ -245,8 +261,12 @@ public class ConversationSyncStore(
                 isUnread = effectiveUnread,
             )
         }
+        val keepExistingTitle = existing.hasResolvedTitle && !incoming.hasResolvedTitle
+        val resolvedTitle = if (keepExistingTitle) existing.title else incoming.title
+        val resolvedHasTitle = existing.hasResolvedTitle || incoming.hasResolvedTitle
         return existing.copy(
-            title = if (incoming.title == "New Conversation" && existing.title != "New Conversation") existing.title else incoming.title,
+            title = resolvedTitle,
+            hasResolvedTitle = resolvedHasTitle,
             status = incoming.status,
             stepCount = mergedStepCount,
             currentStepIndex = incoming.currentStepIndex,
@@ -260,6 +280,131 @@ public class ConversationSyncStore(
             lastUserViewTimeEpochMs = latestViewed,
             pendingInteractionTitle = incoming.pendingInteractionTitle ?: existing.pendingInteractionTitle,
         )
+    }
+
+    public fun markHydrating(cascadeId: String) {
+        if (cascadeId.isEmpty()) return
+        _state.update { prev ->
+            if (cascadeId in prev.hydratingCascadeIds) prev
+            else prev.copy(hydratingCascadeIds = prev.hydratingCascadeIds + cascadeId)
+        }
+    }
+
+    public fun clearHydrating(cascadeId: String) {
+        if (cascadeId.isEmpty()) return
+        _state.update { prev ->
+            if (cascadeId !in prev.hydratingCascadeIds) prev
+            else prev.copy(hydratingCascadeIds = prev.hydratingCascadeIds - cascadeId)
+        }
+    }
+
+    public fun markSettledEmptyTitle(cascadeId: String) {
+        if (cascadeId.isEmpty()) return
+        _state.update { prev ->
+            prev.copy(
+                hydratingCascadeIds = prev.hydratingCascadeIds - cascadeId,
+                settledEmptyTitleCascadeIds = prev.settledEmptyTitleCascadeIds + cascadeId,
+            )
+        }
+    }
+
+    public fun resetSettledEmptyTitles() {
+        _state.update { prev ->
+            if (prev.settledEmptyTitleCascadeIds.isEmpty()) prev
+            else prev.copy(settledEmptyTitleCascadeIds = emptySet())
+        }
+    }
+
+    public fun markStepsCached(cascadeIds: Collection<String>) {
+        if (cascadeIds.isEmpty()) return
+        _state.update { prev ->
+            prev.copy(cachedStepCascadeIds = prev.cachedStepCascadeIds + cascadeIds)
+        }
+    }
+
+    /**
+     * Applies step-derived metadata (`title`, `hasResolvedTitle`, `stepCount`) for [cascadeId] and
+     * persists the updated host projection shard so future launches render the hydrated title instantly.
+     */
+    @Throws(Throwable::class)
+    public suspend fun applyHydratedStepsMetadata(
+        host: RemoteHostInstance?,
+        cascadeId: String,
+        steps: List<CascadeStep>,
+        persist: Boolean = true,
+    ): Boolean {
+        if (cascadeId.isEmpty()) return false
+        val derivedTitle = CascadeSummaryTitleResolver.deriveTitleFromSteps(steps)
+        var changed = false
+        var touchedSummary: CascadeSummary? = null
+
+        _state.update { prev ->
+            val idx = prev.summaries.indexOfFirst { it.cascadeId == cascadeId }
+            val nextHydrating = prev.hydratingCascadeIds - cascadeId
+            val nextCached = if (steps.isNotEmpty()) prev.cachedStepCascadeIds + cascadeId else prev.cachedStepCascadeIds
+            if (idx < 0) {
+                return@update prev.copy(
+                    hydratingCascadeIds = nextHydrating,
+                    cachedStepCascadeIds = nextCached,
+                )
+            }
+            val current = prev.summaries[idx]
+            val nextStepCount = maxOf(current.stepCount, steps.size)
+            val shouldUpdateTitle = current.needsTitleHydration && !derivedTitle.isNullOrBlank()
+            val updated = if (shouldUpdateTitle || nextStepCount != current.stepCount) {
+                changed = true
+                current.copy(
+                    title = if (shouldUpdateTitle) derivedTitle!! else current.title,
+                    hasResolvedTitle = if (shouldUpdateTitle) true else current.hasResolvedTitle,
+                    stepCount = nextStepCount,
+                    currentStepIndex = maxOf(1, nextStepCount),
+                    totalSteps = maxOf(current.totalSteps, nextStepCount),
+                    statusSubtitle = JsonStepAndSummaryDecoder.buildLiveStatusSubtitle(
+                        status = current.status,
+                        stepCount = nextStepCount,
+                        isUnread = current.isUnread,
+                    ),
+                )
+            } else {
+                current
+            }
+            touchedSummary = updated
+            val nextSummaries = if (changed) {
+                prev.summaries.toMutableList().apply { this[idx] = updated }
+            } else {
+                prev.summaries
+            }
+            val nextSettled = when {
+                updated.hasResolvedTitle -> prev.settledEmptyTitleCascadeIds - cascadeId
+                steps.isEmpty() && current.needsTitleHydration -> prev.settledEmptyTitleCascadeIds + cascadeId
+                else -> prev.settledEmptyTitleCascadeIds
+            }
+            prev.copy(
+                summaries = nextSummaries,
+                hydratingCascadeIds = nextHydrating,
+                settledEmptyTitleCascadeIds = nextSettled,
+                cachedStepCascadeIds = nextCached,
+            )
+        }
+
+        val summary = touchedSummary
+        if (persist && changed && host != null && summary != null) {
+            val hostKey = HostProjectionKey.compute(
+                isCloud = summary.isCloud,
+                instanceId = summary.originInstanceUuid,
+                hostname = summary.originHostName,
+                fallbackHostId = host.instanceId,
+                fallbackHostName = host.hostname,
+            )
+            val snapshot = _state.value
+            persistShards(
+                host = host,
+                summaries = snapshot.summaries,
+                projects = snapshot.projects,
+                refreshedHostKeys = setOf(hostKey),
+            )
+        }
+        return changed
     }
 
     public fun upsertSummary(summary: CascadeSummary) {
@@ -285,7 +430,12 @@ public class ConversationSyncStore(
 
     public fun removeSummary(cascadeId: String) {
         _state.update { prev ->
-            prev.copy(summaries = prev.summaries.filterNot { it.cascadeId == cascadeId })
+            prev.copy(
+                summaries = prev.summaries.filterNot { it.cascadeId == cascadeId },
+                hydratingCascadeIds = prev.hydratingCascadeIds - cascadeId,
+                settledEmptyTitleCascadeIds = prev.settledEmptyTitleCascadeIds - cascadeId,
+                cachedStepCascadeIds = prev.cachedStepCascadeIds - cascadeId,
+            )
         }
     }
 

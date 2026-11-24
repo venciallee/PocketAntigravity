@@ -314,4 +314,63 @@ class CoreProtocolParityTest {
         assertNotNull(decoded)
         assertTrue("photo-1.jpg" in decoded.attachedMentions)
     }
+
+    @Test
+    fun testSummaryDecoderTracksHasResolvedTitleAndExtractsNestedTitleCandidates() {
+        val unresolvedJson = kotlinx.serialization.json.buildJsonObject {
+            put("stepCount", kotlinx.serialization.json.JsonPrimitive(5))
+            put("status", kotlinx.serialization.json.JsonPrimitive("CASCADE_RUN_STATUS_IDLE"))
+        }
+        val unresolved = JsonStepAndSummaryDecoder.decodeTrajectorySummaryEntry(
+            cascadeId = "uuid-old-missing-summary",
+            value = unresolvedJson,
+        )
+        assertNotNull(unresolved)
+        assertFalse(unresolved.hasResolvedTitle)
+        assertTrue(unresolved.needsTitleHydration)
+
+        val placeholderJson = kotlinx.serialization.json.buildJsonObject {
+            put("summary", kotlinx.serialization.json.JsonPrimitive("New Conversation"))
+            put("stepCount", kotlinx.serialization.json.JsonPrimitive(3))
+        }
+        val placeholder = JsonStepAndSummaryDecoder.decodeTrajectorySummaryEntry(
+            cascadeId = "uuid-old-placeholder",
+            value = placeholderJson,
+        )
+        assertNotNull(placeholder)
+        assertFalse(placeholder.hasResolvedTitle)
+        assertTrue(placeholder.needsTitleHydration)
+
+        val nestedPromptJson = kotlinx.serialization.json.buildJsonObject {
+            put("stepCount", kotlinx.serialization.json.JsonPrimitive(4))
+            put("firstUserInputStep", kotlinx.serialization.json.buildJsonObject {
+                put("step", kotlinx.serialization.json.buildJsonObject {
+                    put("userInput", kotlinx.serialization.json.buildJsonObject {
+                        put("userResponse", kotlinx.serialization.json.JsonPrimitive("Fix cold start memory spike\nwith caching"))
+                    })
+                })
+            })
+        }
+        val nestedPrompt = JsonStepAndSummaryDecoder.decodeTrajectorySummaryEntry(
+            cascadeId = "uuid-nested-prompt",
+            value = nestedPromptJson,
+        )
+        assertNotNull(nestedPrompt)
+        assertTrue(nestedPrompt.hasResolvedTitle)
+        assertFalse(nestedPrompt.needsTitleHydration)
+        assertEquals("Fix cold start memory spike with caching", nestedPrompt.title)
+
+        val derivedFromSteps = dev.antigravity.shared.model.CascadeSummaryTitleResolver.deriveTitleFromSteps(
+            listOf(
+                CascadeStep(
+                    cascadeId = "uuid-old-missing-summary",
+                    stepIndex = 0,
+                    type = CortexStepType.USER_INPUT,
+                    status = CortexStepStatus.DONE,
+                    userInput = "Audit iOS sidebar preloading",
+                ),
+            ),
+        )
+        assertEquals("Audit iOS sidebar preloading", derivedFromSteps)
+    }
 }

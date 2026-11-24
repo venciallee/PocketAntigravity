@@ -51,6 +51,7 @@ public object AntigravitySharedFacade {
         powerStateProvider = powerStateProvider,
         preferencesStore = preferencesStore,
         projectionStorage = InMemoryProjectionStorage(),
+        autoPreloadConversations = false,
     )
 
     public fun createEsddVerificationCoordinator(): AntigravityCoreCoordinator =

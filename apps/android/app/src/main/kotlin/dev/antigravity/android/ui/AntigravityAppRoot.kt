@@ -189,6 +189,9 @@ fun AntigravityAppRoot(
         dismissKeyboard()
         isDrawerOpen = true
         dragDrawerProgress = null
+        if (!coordinator.isVerificationMode) {
+            coordinator.scheduleConversationPreload()
+        }
         scope.launch {
             if (immediate) {
                 drawerProgress.snapTo(1f)
@@ -198,6 +201,12 @@ fun AntigravityAppRoot(
                     animationSpec = spring(dampingRatio = 0.92f, stiffness = 420f),
                 )
             }
+        }
+    }
+
+    LaunchedEffect(isDrawerOpen) {
+        if (isDrawerOpen && !coordinator.isVerificationMode) {
+            coordinator.scheduleConversationPreload()
         }
     }
 

@@ -252,8 +252,13 @@ extension AntigravitySessionStore {
             summaries[sumIdx].lastMessagePreview = messageBody
             summaries[sumIdx].relativeTimeLabel = "now"
             summaries[sumIdx].updatedAt = Date()
-            if summaries[sumIdx].title == "New Conversation" {
-                summaries[sumIdx].title = String(messageBody.prefix(48))
+            if summaries[sumIdx].needsTitleHydration {
+                if let clean = CascadeSummaryTitleResolver.cleanSingleLine(messageBody) {
+                    summaries[sumIdx].title = CascadeSummaryTitleResolver.truncateTitle(clean, maxLength: 64)
+                    summaries[sumIdx].hasResolvedTitle = true
+                    hydratingCascadeIds.remove(activeCascadeId)
+                    settledEmptyTitleCascadeIds.remove(activeCascadeId)
+                }
             }
             if displayOptions.autoPinOnMessage {
                 summaries[sumIdx].isPinned = true

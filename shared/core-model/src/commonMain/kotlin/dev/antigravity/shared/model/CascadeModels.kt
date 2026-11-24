@@ -354,6 +354,67 @@ public sealed interface CascadeDisplayItem {
     }
 }
 
+/**
+ * Shared title placeholder detection and step-based title derivation so dormant/unhydrated server
+ * conversations show a truthful loading state instead of `"New Conversation"` until hydrated.
+ */
+public object CascadeSummaryTitleResolver {
+    public const val PLACEHOLDER_TITLE: String = "New Conversation"
+    public const val UNTITLED_FALLBACK: String = "Untitled conversation"
+
+    public fun isPlaceholderTitle(title: String?): Boolean {
+        val trimmed = title?.trim().orEmpty()
+        return trimmed.isEmpty() || trimmed.equals(PLACEHOLDER_TITLE, ignoreCase = true)
+    }
+
+    public fun cleanSingleLine(raw: String?): String? {
+        val collapsed = raw
+            ?.replace('\r', ' ')
+            ?.replace('\n', ' ')
+            ?.split(' ', '\t')
+            ?.filter { it.isNotEmpty() }
+            ?.joinToString(" ")
+            ?.trim()
+        return collapsed?.takeIf { it.isNotEmpty() }
+    }
+
+    public fun truncateTitle(text: String, maxLength: Int = 64): String {
+        val trimmed = text.trim()
+        if (trimmed.length <= maxLength) return trimmed
+        return trimmed.take((maxLength - 1).coerceAtLeast(1)).trimEnd() + "…"
+    }
+
+    /**
+     * Derives a concise, single-line human-readable conversation title from trajectory [steps]:
+     * 1. First non-empty `USER_INPUT` prompt,
+     * 2. First non-empty `TASK_BOUNDARY` task name,
+     * 3. First meaningful line of a `PLANNER_RESPONSE` / `NOTIFY_USER` reply.
+     */
+    public fun deriveTitleFromSteps(steps: List<CascadeStep>, maxLength: Int = 64): String? {
+        val firstPrompt = steps.firstOrNull { it.type == CortexStepType.USER_INPUT }
+            ?.userInput
+            ?.let(::cleanSingleLine)
+        if (!firstPrompt.isNullOrEmpty()) return truncateTitle(firstPrompt, maxLength)
+
+        val firstTaskName = steps.firstOrNull { it.type == CortexStepType.TASK_BOUNDARY }
+            ?.taskBoundary
+            ?.taskName
+            ?.let(::cleanSingleLine)
+        if (!firstTaskName.isNullOrEmpty()) return truncateTitle(firstTaskName, maxLength)
+
+        val firstReply = steps.firstOrNull {
+            it.type == CortexStepType.PLANNER_RESPONSE || it.type == CortexStepType.NOTIFY_USER
+        }?.plannerResponse?.response
+            ?.lineSequence()
+            ?.map { it.trim().trimStart('#', '*', '-', '>', ' ') }
+            ?.firstOrNull { it.isNotEmpty() }
+            ?.let(::cleanSingleLine)
+        if (!firstReply.isNullOrEmpty()) return truncateTitle(firstReply, maxLength)
+
+        return null
+    }
+}
+
 @Serializable
 public data class CascadeSummary(
     public val cascadeId: String,
@@ -381,8 +442,12 @@ public data class CascadeSummary(
     public val originInstanceUuid: String? = null,
     public val originHostName: String? = null,
     public val lastUserViewTimeEpochMs: Long? = null,
+    public val hasResolvedTitle: Boolean = !CascadeSummaryTitleResolver.isPlaceholderTitle(title),
 ) {
     public val id: String get() = cascadeId
+
+    public val needsTitleHydration: Boolean
+        get() = !hasResolvedTitle || CascadeSummaryTitleResolver.isPlaceholderTitle(title)
 }
 
 internal fun lastPathComponent(rawUri: String): String {

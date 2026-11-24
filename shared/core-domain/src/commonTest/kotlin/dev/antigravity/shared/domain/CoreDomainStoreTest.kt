@@ -514,4 +514,179 @@ class CoreDomainStoreTest {
             assertEquals(null, AntigravityCoreCoordinator(preferencesStore = prefs).connectionState.value.userDisplayName)
         }
     }
+
+    @Test
+    fun testConversationPreloadHydratesLoadingTitleCachesStepsAndPersistsProjectCollapse() = runTest {
+        withContext(Dispatchers.Default) {
+            val prefs = InMemoryPreferencesStore()
+            val storage = InMemoryProjectionStorage()
+            val rawUuid = "98765432-1111-4000-8000-123456789abc"
+            val unhydratedId = "aaaa1111-2222-4000-8000-000000000001"
+            val resolvedId = "bbbb1111-2222-4000-8000-000000000002"
+            val validKey = "AI" + "zaSyTESTPRELOAD00000000000000000000000"
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$rawUuid",["MacBook-Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = runCatching { request.body.toByteArray().decodeToString() }.getOrDefault("")
+                        val jsonPayload = when {
+                            bodyText.contains("GetWorkspaceInfos") ->
+                                """{"workspaces":[{"workspaceUri":"file:///Users/dev/slardar_app_ai","displayName":"slardar_app_ai"}]}"""
+                            bodyText.contains("GetAllCascadeTrajectories") ->
+                                """{
+                                    "trajectorySummaries": {
+                                        "$unhydratedId": {
+                                            "stepCount": 2,
+                                            "status": "CASCADE_RUN_STATUS_IDLE",
+                                            "lastModifiedTime": "2026-04-01T10:00:00Z",
+                                            "workspaces": [{"workspaceFolderAbsoluteUri": "file:///Users/dev/slardar_app_ai"}]
+                                        },
+                                        "$resolvedId": {
+                                            "summary": "Optimize startup trace",
+                                            "stepCount": 2,
+                                            "status": "CASCADE_RUN_STATUS_IDLE",
+                                            "lastModifiedTime": "2026-04-02T10:00:00Z",
+                                            "workspaces": [{"workspaceFolderAbsoluteUri": "file:///Users/dev/slardar_app_ai"}]
+                                        }
+                                    }
+                                }"""
+                            bodyText.contains("GetCascadeTrajectorySteps") ->
+                                """{
+                                    "steps": [
+                                        {
+                                            "stepIndex": 0,
+                                            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                                            "status": "CORTEX_STEP_STATUS_DONE",
+                                            "userInput": {"userResponse": "Investigate Slardar cold start regression"}
+                                        },
+                                        {
+                                            "stepIndex": 1,
+                                            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                                            "status": "CORTEX_STEP_STATUS_DONE",
+                                            "plannerResponse": {"response": "Cached steps ready for Frame 0."}
+                                        }
+                                    ]
+                                }"""
+                            else -> """{}"""
+                        }
+                        val b64 = ByteString.of(*jsonPayload.encodeToByteArray()).base64()
+                        respond(
+                            content = """["$b64",[["content-type","application/json"]]]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            // 1. Before hydration, an unhydrated server summary never displays "New Conversation":
+            //    unpaired falls back to "Untitled conversation", and while hydrating displays "Loading..."
+            val previewCoordinator = AntigravityCoreCoordinator(
+                preferencesStore = prefs,
+                projectionStorage = storage,
+                autoPreloadConversations = false,
+            )
+            val unhydratedSummary = CascadeSummary(
+                cascadeId = unhydratedId,
+                title = "New Conversation",
+                hasResolvedTitle = false,
+                projectSlug = "slardar_app_ai",
+                workspaceUri = "file:///Users/dev/slardar_app_ai",
+                status = CortexStepStatus.DONE,
+                stepCount = 2,
+            )
+            assertFalse(previewCoordinator.isSummaryTitleLoading(unhydratedSummary))
+            assertEquals("Untitled conversation", previewCoordinator.displayTitleForSummary(unhydratedSummary))
+            previewCoordinator.conversationSyncStore.markHydrating(unhydratedId)
+            assertTrue(previewCoordinator.isSummaryTitleLoading(unhydratedSummary))
+            assertEquals("Loading...", previewCoordinator.displayTitleForSummary(unhydratedSummary))
+
+            // Local user-created drafts must still display their draft title without loading spinner
+            val localDraftId = previewCoordinator.createLocalDraftConversation(
+                workspaceUri = "file:///Users/dev/slardar_app_ai",
+                projectSlug = "slardar_app_ai",
+                title = "New Conversation",
+            )
+            val localDraftSummary = previewCoordinator.syncState.value.summaries.first { it.cascadeId == localDraftId }
+            assertFalse(previewCoordinator.isSummaryTitleLoading(localDraftSummary))
+            assertEquals("New Conversation", previewCoordinator.displayTitleForSummary(localDraftSummary))
+
+            // 2. Live connection schedules background preloader -> hydrates title & caches steps to memory + disk
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = prefs,
+                projectionStorage = storage,
+                scope = this,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+
+            coordinator.connectCloudRelay(
+                relayUrlString = "https://antigravity.google.com/r/$rawUuid",
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                startSummaryStream = false,
+            )
+
+            var hydratedTitle: String? = null
+            for (i in 0 until 80) {
+                val summary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == unhydratedId }
+                val cachedSteps = coordinator.chatState.value.stepsByCascadeId[unhydratedId].orEmpty()
+                if (summary?.hasResolvedTitle == true && cachedSteps.size == 2) {
+                    hydratedTitle = summary.title
+                    break
+                }
+                delay(25L)
+            }
+            assertEquals("Investigate Slardar cold start regression", hydratedTitle)
+            assertEquals(2, storage.loadSteps(unhydratedId).size)
+            assertFalse(coordinator.isSummaryTitleLoading(coordinator.syncState.value.summaries.first { it.cascadeId == unhydratedId }))
+
+            // 3. Cold-start hydration warms persisted titles + steps immediately into memory for Frame 0 entry
+            val coldStarted = AntigravityCoreCoordinator(
+                preferencesStore = prefs,
+                projectionStorage = storage,
+                autoPreloadConversations = false,
+            )
+            coldStarted.hydrateOfflineCache()
+            val restoredSummary = coldStarted.syncState.value.summaries.firstOrNull { it.cascadeId == unhydratedId }
+            assertEquals("Investigate Slardar cold start regression", restoredSummary?.title)
+            assertTrue(restoredSummary?.hasResolvedTitle == true)
+            assertEquals(2, coldStarted.chatState.value.stepsByCascadeId[unhydratedId]?.size)
+
+            // 4. Collapsing a project persists across restarts via KeyValuePreferencesStore
+            assertFalse(coordinator.workspaceStore.isProjectCollapsed("slardar_app_ai"))
+            coordinator.workspaceStore.toggleProjectExpanded("slardar_app_ai")
+            assertTrue(coordinator.workspaceStore.isProjectCollapsed("slardar_app_ai"))
+
+            val restartedAfterCollapse = AntigravityCoreCoordinator(
+                preferencesStore = prefs,
+                projectionStorage = storage,
+                autoPreloadConversations = false,
+            )
+            assertTrue(restartedAfterCollapse.workspaceStore.isProjectCollapsed("slardar_app_ai"))
+
+            previewCoordinator.close()
+            coldStarted.close()
+            restartedAfterCollapse.close()
+        }
+    }
 }

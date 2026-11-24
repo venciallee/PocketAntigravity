@@ -308,6 +308,17 @@ public actor LocalProjectionStore {
         }
     }
 
+    public func loadProjectedStepsBatch(cascadeIds: [String]) -> [String: [CascadeStep]] {
+        var result: [String: [CascadeStep]] = [:]
+        for cid in cascadeIds where !cid.isEmpty {
+            let steps = loadProjectedSteps(cascadeId: cid)
+            if !steps.isEmpty {
+                result[cid] = steps
+            }
+        }
+        return result
+    }
+
     public func loadDisplayOptions() -> AgentDisplayOptions? {
         if let cachedDisplayOptions { return cachedDisplayOptions }
         let file = storageDirectory.appendingPathComponent("display_options.json")
