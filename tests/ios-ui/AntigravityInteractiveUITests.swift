@@ -910,6 +910,16 @@ final class AntigravityInteractiveUITests: XCTestCase {
         let sendButton = app.buttons["composer-btn-send"]
         XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
         XCTAssertFalse(sendButton.isEnabled, "Send button must stay disabled when draft text is empty")
+        let runtimeToggle = app.buttons["home-runtime-toggle"]
+        XCTAssertTrue(runtimeToggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(runtimeToggle.label, "Local runtime selected", "Local project must show local computer runtime state by default")
+        XCTAssertEqual(runtimeToggle.value as? String, "computer", "Local project runtime toggle must display computer icon state")
+        runtimeToggle.tap()
+        XCTAssertEqual(runtimeToggle.label, "Cloud runtime selected", "Tapping runtime toggle must switch to cloud runtime state")
+        XCTAssertEqual(runtimeToggle.value as? String, "cloud", "Cloud runtime toggle must display cloud icon state")
+        runtimeToggle.tap()
+        XCTAssertEqual(runtimeToggle.label, "Local runtime selected", "Tapping runtime toggle again must restore local computer runtime state")
+        XCTAssertEqual(runtimeToggle.value as? String, "computer", "Restored local runtime toggle must display computer icon state")
         attachScreenshot(named: "04a_Live_Composer_Idle_Claude_Style")
 
         // 3. Typing enables Send button and dispatches StartCascade + SendUserCascadeMessage

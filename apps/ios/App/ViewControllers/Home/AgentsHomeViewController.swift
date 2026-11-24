@@ -228,7 +228,10 @@ public struct AgentsHomeViewController: View {
     }
 
     private var resolvedSelectedProject: ProjectWorkspace? {
-        if let match = selectableProjects.first(where: { $0.id == selectedProjectSlug || $0.name == selectedProjectSlug }) {
+        if let match = selectableProjects.first(where: { $0.id == selectedProjectSlug }) {
+            return match
+        }
+        if let match = selectableProjects.first(where: { $0.name == selectedProjectSlug }) {
             return match
         }
         return selectableProjects.first(where: { $0.runtime != .cloud }) ?? selectableProjects.first
@@ -240,8 +243,15 @@ public struct AgentsHomeViewController: View {
 
     private func syncSelectedProjectWithLiveStore() {
         let nonEmpty = store.projects.filter { !$0.isNoProject }
-        guard !nonEmpty.isEmpty else { return }
-        if let current = nonEmpty.first(where: { $0.id == selectedProjectSlug || $0.name == selectedProjectSlug }) {
+        guard !nonEmpty.isEmpty else {
+            if let fallback = resolvedSelectedProject {
+                selectedProjectSlug = fallback.id
+                isCloudTargetSelected = (fallback.runtime == .cloud)
+            }
+            return
+        }
+        if let current = nonEmpty.first(where: { $0.id == selectedProjectSlug })
+            ?? nonEmpty.first(where: { $0.name == selectedProjectSlug }) {
             selectedProjectSlug = current.id
             isCloudTargetSelected = (current.runtime == .cloud)
             return
@@ -323,8 +333,13 @@ public struct AgentsHomeViewController: View {
         .onAppear {
             syncSelectedProjectWithLiveStore()
         }
-        .onChange(of: store.projects.map(\.id)) { _, _ in
+        .onChange(of: store.projects.map { "\($0.id):\($0.runtime.rawValue)" }) { _, _ in
             syncSelectedProjectWithLiveStore()
+        }
+        .onChange(of: store.selectedProjectId) { _, newProjectId in
+            guard let matched = selectableProjects.first(where: { $0.id == newProjectId }) else { return }
+            selectedProjectSlug = matched.id
+            isCloudTargetSelected = (matched.runtime == .cloud)
         }
         .sheet(isPresented: $isShowingGlobalSearch) {
             GlobalConversationSearchSheet(
@@ -587,7 +602,7 @@ public struct AgentsHomeViewController: View {
                             isCloudTargetSelected = (proj.runtime == .cloud)
                             store.selectedProjectId = proj.id
                         } label: {
-                            if proj.id == selectedProjectSlug || proj.name == resolvedSelectedProjectTitle {
+                            if proj.id == resolvedSelectedProject?.id {
                                 Label(proj.name, systemImage: "checkmark")
                             } else {
                                 Text(proj.name)
@@ -657,7 +672,7 @@ public struct AgentsHomeViewController: View {
                 Button {
                     isCloudTargetSelected.toggle()
                 } label: {
-                    Image(systemName: isCloudTargetSelected ? "cloud.fill" : "cloud")
+                    Image(systemName: isCloudTargetSelected ? "cloud.fill" : "laptopcomputer")
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(isCloudTargetSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.textSecondary)
                         .frame(width: 34, height: 34)
@@ -665,6 +680,7 @@ public struct AgentsHomeViewController: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(isCloudTargetSelected ? "Cloud runtime selected" : "Local runtime selected")
+                .accessibilityValue(isCloudTargetSelected ? "cloud" : "computer")
                 .accessibilityIdentifier("home-runtime-toggle")
             }
             .padding(.horizontal, 12)

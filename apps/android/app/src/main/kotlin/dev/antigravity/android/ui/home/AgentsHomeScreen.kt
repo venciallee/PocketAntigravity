@@ -58,6 +58,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -136,7 +137,6 @@ fun AgentsHomeScreen(
     var draftText by rememberSaveable(composerDraftOverride) {
         mutableStateOf(composerDraftOverride ?: "")
     }
-    var cloudModeEnabled by rememberSaveable { mutableStateOf(false) }
     var selectedBranchLabel by rememberSaveable { mutableStateOf("Repo default") }
 
     val allProjects = remember(workspaceState.projects, syncState.projects) {
@@ -147,6 +147,14 @@ fun AgentsHomeScreen(
             ?: allProjects.firstOrNull()
     }
     val selectedProjectName = selectedProject?.name ?: "ledger-svc"
+    var cloudModeEnabled by rememberSaveable {
+        mutableStateOf(selectedProject?.runtime == ProjectRuntimeTarget.CLOUD)
+    }
+    LaunchedEffect(selectedProject?.id, selectedProject?.runtime) {
+        selectedProject?.let { project ->
+            cloudModeEnabled = project.runtime == ProjectRuntimeTarget.CLOUD
+        }
+    }
 
     val hostScope = connectionState.selectedHostScope
     val hostDisplayName = remember(hostScope, connectionState.activeHost) {
@@ -218,7 +226,7 @@ fun AgentsHomeScreen(
                     effort = settingsState.selectedEffort,
                     mode = settingsState.selectedMode,
                     agentPersona = settingsState.selectedAgentPersona,
-                    isCloud = cloudModeEnabled || selectedProject?.runtime == ProjectRuntimeTarget.CLOUD,
+                    isCloud = cloudModeEnabled,
                     cloudProjectId = selectedProject?.cloudProjectId,
                     permissionPreset = settingsState.activePermissionPreset,
                     instanceUuidOverride = selectedProject?.originInstanceUuid,
@@ -518,7 +526,7 @@ fun AgentsHomeScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.Folder,
+                                        imageVector = if (cloudModeEnabled) Icons.Rounded.Cloud else Icons.Rounded.Folder,
                                         contentDescription = null,
                                         tint = colors.inkSecondary,
                                         modifier = Modifier.size(16.dp),
@@ -548,7 +556,9 @@ fun AgentsHomeScreen(
                                             onClick = {
                                                 projectMenuExpanded = false
                                                 coordinator.workspaceStore.selectProject(project.id)
+                                                cloudModeEnabled = project.runtime == ProjectRuntimeTarget.CLOUD
                                             },
+                                            modifier = Modifier.testTag("home-project-option-${project.id}"),
                                         )
                                     }
                                 }
@@ -604,8 +614,8 @@ fun AgentsHomeScreen(
                             Spacer(modifier = Modifier.weight(1f))
 
                             Icon(
-                                imageVector = Icons.Rounded.Cloud,
-                                contentDescription = "Toggle Cloud VM",
+                                imageVector = if (cloudModeEnabled) Icons.Rounded.Cloud else Icons.Rounded.Computer,
+                                contentDescription = if (cloudModeEnabled) "Cloud runtime selected" else "Local runtime selected",
                                 tint = if (cloudModeEnabled) colors.accentPeriwinkle else colors.inkSecondary,
                                 modifier = Modifier
                                     .size(20.dp)

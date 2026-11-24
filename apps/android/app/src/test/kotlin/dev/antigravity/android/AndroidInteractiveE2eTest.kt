@@ -602,4 +602,49 @@ class AndroidInteractiveE2eTest {
         )
         assertTrue(coordinator.workspaceStore.state.value.attachedComposerChips.isEmpty())
     }
+
+    @Test
+    fun atc25_homeRuntimeIconShowsComputerForLocalProjectAndCloudForCloudProject() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.AGENTS_HOME,
+            )
+        }
+
+        // Default local project (ledger-svc) displays local computer runtime icon semantics
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Local runtime selected")),
+        ).assertIsDisplayed()
+
+        // Selecting a cloud project switches the runtime icon to Cloud
+        composeRule.onNodeWithTag("home-project-picker").performClick()
+        composeRule.onNodeWithTag("home-project-option-web-console").performClick()
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Cloud runtime selected")),
+        ).assertIsDisplayed()
+
+        // Switching back to a local project restores the local computer runtime icon
+        composeRule.onNodeWithTag("home-project-picker").performClick()
+        composeRule.onNodeWithTag("home-project-option-ledger-svc").performClick()
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Local runtime selected")),
+        ).assertIsDisplayed()
+
+        // Tapping the runtime toggle directly switches between Cloud and Local computer
+        composeRule.onNodeWithTag("home-cloud-toggle").performClick()
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Cloud runtime selected")),
+        ).assertIsDisplayed()
+        composeRule.onNodeWithTag("home-cloud-toggle").performClick()
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Local runtime selected")),
+        ).assertIsDisplayed()
+    }
 }
