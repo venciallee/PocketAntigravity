@@ -149,7 +149,7 @@ extension AntigravitySessionStore {
                         }
                         break
                     } catch let AntigravityRPCError.httpError(_, body)
-                        where idx == 0 && body.lowercased().contains("unknown field \"backend\"") {
+                        where idx == 0 && ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body)?.lowercased() == "backend" {
                         continue
                     } catch {
                         break
@@ -1092,7 +1092,18 @@ extension AntigravitySessionStore {
                     break
                 }
                 let knownCount = summaryMeta?.stepCount ?? 0
-                let summaryIsCloud = summaryMeta?.isCloud ?? false
+                let summaryIsCloud: Bool = {
+                    if summaryMeta?.isCloud == true
+                        || AntigravityCloudDetector.isCloudWorkspaceURI("", cascadeId: cascadeId) {
+                        return true
+                    }
+                    if let slug = summaryMeta?.projectSlug,
+                       let matchedProject = self.projects.first(where: { $0.id == slug || $0.name == slug }),
+                       matchedProject.runtime == .cloud {
+                        return true
+                    }
+                    return false
+                }()
                 let originUuid = summaryMeta?.originInstanceUuid
                 let isEmptyNewSessionNow = self.locallyCreatedEmptyCascadeIds.contains(cascadeId)
                     && !(self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
@@ -1205,7 +1216,7 @@ extension AntigravitySessionStore {
                         if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
                             self.isLoadingSteps = false
                             if (self.stepsByCascadeId[cascadeId] ?? []).isEmpty && !isEmptyNewSessionNow {
-                                self.stepLoadErrorText = error.localizedDescription
+                                self.stepLoadErrorText = ProtocolCompatibilityEngine.formatUserFacingRpcError(error)
                             }
                         }
                     }

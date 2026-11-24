@@ -12,7 +12,9 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.headersOf
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -21,6 +23,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
+import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -480,5 +483,336 @@ class AdaptiveTrajectorySyncTest {
         assertEquals(150, client.learnedJsonStepCeiling())
         assertEquals(1, recorded.count { it.isJson })
         assertEquals(1, recorded.count { it.isProto })
+    }
+
+    private fun encodeJspbProxyResponse(jsonPayload: String): String {
+        val b64 = jsonPayload.encodeToByteArray().toByteString().base64()
+        return """["$b64",[["content-type","application/json"]]]"""
+    }
+
+    private fun decodeProxyCommandInner(bodyText: String): Triple<String, String, String> {
+        val arr = Json.parseToJsonElement(bodyText) as kotlinx.serialization.json.JsonArray
+        val targetUuid = (arr[0] as JsonPrimitive).content
+        val rpcPath = (arr[1] as JsonPrimitive).content
+        val b64Payload = (arr[2] as JsonPrimitive).content
+        val payloadText = CloudRelayJspbCodec.decodeBase64Flexible(b64Payload)?.decodeToString().orEmpty()
+        return Triple(targetUuid, rpcPath, payloadText)
+    }
+
+    @Test
+    fun testCloudRelayDormantHistoricalCloudTrajectoryWakesViaBareLoadTrajectoryAndSkipsExtraListInstances() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            val wokenIds = mutableSetOf<String>()
+            var listInstancesCalls = 0
+            val loadPayloads = mutableListOf<JsonObject>()
+            val json = Json { ignoreUnknownKeys = true }
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        listInstancesCalls += 1
+                        respond(
+                            content = """[[["$instanceUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val (_, rpcPath, payloadText) = decodeProxyCommandInner(bytes.decodeToString())
+                        val method = rpcPath.substringAfterLast('/')
+                        val reqObj = json.parseToJsonElement(payloadText) as JsonObject
+                        val cid = (reqObj["cascadeId"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                        when (method) {
+                            "LoadTrajectory" -> {
+                                loadPayloads.add(reqObj)
+                                when {
+                                    "backend" in reqObj -> respond(
+                                        content = """[3,"invalid_argument: unknown field \"backend\""]""",
+                                        status = HttpStatusCode.BadRequest,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                    "backendType" in reqObj -> respond(
+                                        content = """[3,"invalid_argument: unknown field \"backendType\""]""",
+                                        status = HttpStatusCode.BadRequest,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                    else -> {
+                                        wokenIds.add(cid)
+                                        respond(
+                                            content = encodeJspbProxyResponse("{}"),
+                                            status = HttpStatusCode.OK,
+                                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                        )
+                                    }
+                                }
+                            }
+                            "GetCascadeTrajectorySteps" -> {
+                                if (cid in wokenIds) {
+                                    respond(
+                                        content = encodeJspbProxyResponse(buildJsonStepsPayload(0 until 3)),
+                                        status = HttpStatusCode.OK,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                } else {
+                                    respond(
+                                        content = """[5,"not_found: trajectory not found (error ID: 721ffeb9b0bb4fb6b2a971dfa56087e2)"]""",
+                                        status = HttpStatusCode.NotFound,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                }
+                            }
+                            else -> respond(
+                                content = encodeJspbProxyResponse("{}"),
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val cloudRelayHost = RemoteHostInstance(
+                instanceId = instanceUuid,
+                hostname = "MacBook Pro",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                isOnline = true,
+            )
+            val client = AntigravityKmpRpcClient(
+                host = cloudRelayHost,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps1 = client.fetchAllTrajectorySteps(
+                cascadeId = "v1/sync-mobile-concept",
+                knownStepCount = 3,
+                isCloud = true,
+            )
+            assertEquals(3, steps1.size)
+            assertEquals(1, listInstancesCalls, "Trajectory-level 404 must not trigger extra ListInstances RTTs")
+            assertEquals(3, loadPayloads.size, "First dormant Cloud wake probes backend -> backendType -> bare {cascadeId}")
+            assertFalse("backend" in loadPayloads.last())
+            assertFalse("backendType" in loadPayloads.last())
+
+            // Second dormant Cloud chat reuses cached bare `{cascadeId}` variant on the very first LoadTrajectory call
+            loadPayloads.clear()
+            val steps2 = client.fetchAllTrajectorySteps(
+                cascadeId = "v1/sync-mobile-concept-2",
+                knownStepCount = 3,
+                isCloud = true,
+            )
+            assertEquals(3, steps2.size)
+            assertEquals(1, loadPayloads.size, "Subsequent dormant Cloud wakes must reuse learned bare {cascadeId} in 1 RTT")
+            assertEquals(1, listInstancesCalls)
+        }
+    }
+
+    @Test
+    fun testCloudRelayFallbackToGetCascadeTrajectoryWhenStepsReturns404() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            val json = Json { ignoreUnknownKeys = true }
+            var getTrajectoryCalls = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/ProxyCommand") -> {
+                        val (_, rpcPath, payloadText) = decodeProxyCommandInner(bytes.decodeToString())
+                        val method = rpcPath.substringAfterLast('/')
+                        val reqObj = runCatching { json.parseToJsonElement(payloadText) as? JsonObject }.getOrNull()
+                        when (method) {
+                            "GetCascadeTrajectorySteps" -> respond(
+                                content = """[5,"not_found: trajectory not found (error ID: abc123)"]""",
+                                status = HttpStatusCode.NotFound,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                            "LoadTrajectory" -> respond(
+                                content = encodeJspbProxyResponse("{}"),
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                            "GetCascadeTrajectory" -> {
+                                getTrajectoryCalls += 1
+                                if (reqObj != null && "backend" in reqObj) {
+                                    respond(
+                                        content = """[3,"invalid_argument: unknown field \"backend\""]""",
+                                        status = HttpStatusCode.BadRequest,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                } else {
+                                    val wrapped = """{"trajectory":${buildJsonStepsPayload(0 until 2)}}"""
+                                    respond(
+                                        content = encodeJspbProxyResponse(wrapped),
+                                        status = HttpStatusCode.OK,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                }
+                            }
+                            else -> respond("", HttpStatusCode.NotFound)
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(
+                cascadeId = "v1/fallback-traj",
+                knownStepCount = 2,
+                isCloud = true,
+            )
+            assertEquals(2, steps.size)
+            assertTrue(getTrajectoryCalls >= 2, "Should self-heal unknown backend and recover via GetCascadeTrajectory")
+        }
+    }
+
+    @Test
+    fun testLocalDormantTrajectoryWakesOnBinaryProtobuf404NotFound() = runTest {
+        val recorded = mutableListOf<RecordedRequest>()
+        var woken = false
+        val protoPayload = buildBinaryPlannerSteps(count = 4)
+
+        val engine = MockEngine { request ->
+            val ct = request.body.contentType?.toString()
+                ?: request.headers[HttpHeaders.ContentType].orEmpty()
+            val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            recorded.add(RecordedRequest(request.url.encodedPath, ct, bytes))
+
+            when {
+                request.url.encodedPath.endsWith("/LoadTrajectory") -> {
+                    woken = true
+                    respond(
+                        content = "{}",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+                request.url.encodedPath.endsWith("/GetCascadeTrajectorySteps") && ct.contains("application/proto") -> {
+                    if (woken) {
+                        respond(
+                            content = protoPayload,
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/proto"),
+                        )
+                    } else {
+                        respond(
+                            content = """{"code":"not_found","message":"trajectory not found"}""",
+                            status = HttpStatusCode.NotFound,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    }
+                }
+                else -> respond("""{"steps":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+            }
+        }
+
+        val client = AntigravityKmpRpcClient(
+            host = testHost("mac-dormant-local"),
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(engine),
+        )
+
+        val steps = client.fetchAllTrajectorySteps(cascadeId = "cas-dormant-local", knownStepCount = 4)
+        assertEquals(4, steps.size)
+        assertEquals(2, recorded.count { it.isProto }, "Should retry Binary Protobuf directly after waking")
+        assertEquals(1, recorded.count { it.path.endsWith("/LoadTrajectory") })
+        assertEquals(0, recorded.count { it.path.endsWith("/GetCascadeTrajectorySteps") && it.isJson })
+    }
+
+    @Test
+    fun testCloudJetboxSummariesPreserveCloudFlagForUuidSessionsAndFilterLocalFileUris() {
+        val event = buildJsonObject {
+            put(
+                "updates",
+                buildJsonObject {
+                    put(
+                        "9f2b14a1-4c22-4a91-9e12-1234567890ab",
+                        buildJsonObject {
+                            put("summary", "Sync Antigravity Mobile Concept")
+                            put("status", "CASCADE_RUN_STATUS_IDLE")
+                            put("stepCount", 42)
+                        },
+                    )
+                    put(
+                        "local-echoed-chat",
+                        buildJsonObject {
+                            put("summary", "Local workspace chat")
+                            put("status", "CASCADE_RUN_STATUS_IDLE")
+                            put("stepCount", 5)
+                            put(
+                                "workspaces",
+                                buildJsonArray {
+                                    add(buildJsonObject { put("workspaceFolderAbsoluteUri", "file:///Users/dev/local-repo") })
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        }
+
+        val decoded = JsonStepAndSummaryDecoder.decodeJetboxSummariesEvent(
+            obj = event,
+            nowEpochMs = 1_750_000_000_000L,
+            forceCloud = true,
+            originInstanceUuid = "inst-1",
+            originHostName = "Antigravity",
+        )
+        assertEquals(1, decoded.summaries.size)
+        val cloudItem = decoded.summaries.first()
+        assertEquals("9f2b14a1-4c22-4a91-9e12-1234567890ab", cloudItem.cascadeId)
+        assertTrue(cloudItem.isCloud)
+        assertEquals("Antigravity", cloudItem.originHostName)
+    }
+
+    @Test
+    fun testProtocolCompatibilityEngineBoqParsingTrajectory404AndUserFacingError() {
+        val boqUnknownBackend = """[3,"invalid_argument: unknown field \"backend\""]"""
+        assertEquals("backend", ProtocolCompatibilityEngine.extractUnknownProtoFieldName(boqUnknownBackend))
+
+        val boqNotFound = """[5,"not_found: trajectory not found (error ID: 721ffeb9b0bb4fb6b2a971dfa56087e2)"]"""
+        assertTrue(ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(404, boqNotFound))
+        assertFalse(
+            ProtocolCompatibilityEngine.isMethodUnimplementedResponse(404, boqNotFound),
+            "Trajectory-level 404 must never be classified as method-unimplemented",
+        )
+        assertTrue(
+            ProtocolCompatibilityEngine.isMethodUnimplementedResponse(
+                404,
+                """{"code":"unimplemented","message":"unknown method SendSideQuestion"}""",
+            )
+        )
+
+        val formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(
+            AntigravityRpcError.HttpError(404, boqNotFound)
+        )
+        assertFalse(formatted.contains("HTTP 404: HTTP 404:"), "Must never double HTTP status prefix")
+        assertFalse(formatted.contains("[5,"), "Must unwrap Boq JSPB array envelope")
+        assertTrue(formatted.contains("not_found: trajectory not found"))
     }
 }

@@ -321,7 +321,7 @@ public object JsonStepAndSummaryDecoder {
             explicitSubtitle = explicitSubtitle,
         )
 
-        return CascadeSummary(
+        val decoded = CascadeSummary(
             cascadeId = cascadeId,
             title = title,
             projectSlug = slug.ifEmpty { AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME },
@@ -346,6 +346,20 @@ public object JsonStepAndSummaryDecoder {
             originHostName = if (isCloud) "Antigravity" else originHostName,
             lastUserViewTimeEpochMs = lastViewedEpochMs,
         )
+        if (!forceCloud) return decoded
+        // Ignore echoed local `file://` workspaces from servers that do not filter by `backend`,
+        // while keeping Cloud `No Project` / UUID sessions (`workspaceUri.isEmpty()`) and forcing `isCloud = true`.
+        if (decoded.workspaceUri.isNotEmpty() &&
+            !AntigravityCloudDetector.isPlaygroundScratchUri(decoded.workspaceUri) &&
+            !decoded.isCloud &&
+            decoded.cloudProjectId.isNullOrEmpty()
+        ) {
+            return null
+        }
+        return decoded.copy(
+            isCloud = true,
+            originHostName = "Antigravity",
+        )
     }
 
     public fun decodeJetboxSummariesEvent(
@@ -362,6 +376,13 @@ public object JsonStepAndSummaryDecoder {
         val updatesMap = obj.obj("updates") ?: obj.obj("trajectorySummaries")
         if (updatesMap != null) {
             for ((cid, entry) in updatesMap) {
+                val entryObj = entry as? JsonObject
+                if (entryObj != null &&
+                    entryObj.bool("killed") == true &&
+                    (entryObj.str("status") ?: "").contains("UNSPECIFIED")
+                ) {
+                    continue
+                }
                 decodeTrajectorySummaryEntry(
                     cascadeId = cid,
                     value = entry,
@@ -373,8 +394,8 @@ public object JsonStepAndSummaryDecoder {
             }
         }
 
-        // Format 2: Companion / mock `{"summaries": [...]}`
-        obj.arr("summaries")?.forEach { item ->
+        // Format 2: Companion / mock `{"summaries": [...]}` or `{"trajectories": [...]}`
+        (obj.arr("summaries") ?: obj.arr("trajectories"))?.forEach { item ->
             val itemObj = item as? JsonObject ?: return@forEach
             val cid = itemObj.str("cascadeId") ?: return@forEach
             decodeTrajectorySummaryEntry(
@@ -402,7 +423,7 @@ public object JsonStepAndSummaryDecoder {
             }
         }
 
-        obj.arr("removedCascadeIds")?.forEach { el ->
+        (obj.arr("removedCascadeIds") ?: obj.arr("deletes"))?.forEach { el ->
             (el as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { removedIds.add(it) }
         }
         return JetboxDecodedEvent(summaries = summaries, removedCascadeIds = removedIds)
