@@ -185,13 +185,15 @@ public struct AntigravityRootContainerView: View {
     @Bindable public var store: AntigravitySessionStore
     @Binding public var activeVerifyCase: ESDDVerifySceneCase?
 
+    @Environment(\.layoutDirection) private var layoutDirection
     @State private var selectedTab: ShellTab
     @State private var activeModalSheet: ModalSheetDestination?
     @State private var navigationPath: [ShellPushDestination] = []
     @State private var settingsScannerTriggered: Bool = false
     @State private var drawerMounted: Bool = false
-    @State private var visualDrawerProgress: CGFloat = 0.0
+    @State private var visualDrawerProgress: CGFloat = 1.0
     @State private var isDraggingDrawer: Bool = false
+    @State private var shellWidth: CGFloat = 393.0
     #if canImport(UIKit)
     @State private var popGestureHandler = InteractivePopGestureHandler()
     @State private var sidebarGestureHandler = SidebarDrawerGestureHandler()
@@ -276,8 +278,16 @@ public struct AntigravityRootContainerView: View {
         }
     }
 
+    private var drawerWidth: CGFloat {
+        min(334.0, max(shellWidth, 320.0) * 0.83)
+    }
+
     @ViewBuilder
     private var pairedShellView: some View {
+        let clampedProgress = min(max(visualDrawerProgress, 0.0), 1.0)
+        let slideOriginX: CGFloat = (layoutDirection == .rightToLeft ? drawerWidth : -drawerWidth)
+        let dragOffsetX: CGFloat = slideOriginX * (1.0 - clampedProgress)
+
         ZStack(alignment: .leading) {
             NavigationStack(path: $navigationPath) {
                 withInteractivePopGesture(
@@ -296,10 +306,20 @@ public struct AntigravityRootContainerView: View {
 
             // Slide-over Left Sidebar Drawer (`UE01B`)
             if drawerMounted {
-                AgentsSidebarDrawerView(
+                Color.black.opacity(0.62)
+                    .ignoresSafeArea()
+                    .opacity(clampedProgress)
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(clampedProgress > 0.01)
+                    .onTapGesture {
+                        closeSidebarDrawer()
+                    }
+                    .accessibilityIdentifier("sidebar-drawer-scrim")
+                    .transition(.opacity)
+                    .zIndex(49)
+
+                AgentsSidebarDrawerPanelView(
                     store: store,
-                    showWelcomeBackdrop: false,
-                    presentationProgress: visualDrawerProgress,
                     onClose: {
                         closeSidebarDrawer()
                     },
@@ -341,7 +361,22 @@ public struct AntigravityRootContainerView: View {
                         openOrCreateConversation(convId, defaultProjectSlug: store.selectedProjectId)
                     }
                 )
+                .frame(width: drawerWidth)
+                .frame(maxHeight: .infinity)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+                .offset(x: dragOffsetX)
+                .allowsHitTesting(clampedProgress > 0.01)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("sidebar-drawer-panel")
+                .transition(.offset(x: slideOriginX))
                 .zIndex(50)
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { newWidth in
+            if newWidth > 0, abs(shellWidth - newWidth) > 0.5 {
+                shellWidth = newWidth
             }
         }
         .background {
@@ -350,7 +385,7 @@ public struct AntigravityRootContainerView: View {
                 handler: sidebarGestureHandler,
                 isDrawerOpen: store.isSidebarPresented,
                 canOpenBySwipe: canOpenSidebarBySwipe,
-                currentProgress: { visualDrawerProgress },
+                currentProgress: { drawerMounted ? visualDrawerProgress : 0.0 },
                 onDragBegan: { startProgress in
                     handleSidebarDragBegan(startProgress)
                 },
@@ -408,8 +443,8 @@ public struct AntigravityRootContainerView: View {
             withTransaction(transaction) {
                 syncNavigationPath(from: store.activeRoute)
                 if store.isSidebarPresented {
-                    drawerMounted = true
                     visualDrawerProgress = 1.0
+                    drawerMounted = true
                 }
             }
         }
@@ -524,52 +559,66 @@ public struct AntigravityRootContainerView: View {
 
     private func openSidebarDrawer() {
         dismissKeyboard()
-        if store.isSidebarPresented {
-            animateDrawerOpen(fromCurrentProgress: true)
-        } else {
+        if !store.isSidebarPresented {
             store.isSidebarPresented = true
         }
+        animateDrawerOpen(fromCurrentProgress: drawerMounted)
     }
 
     private func closeSidebarDrawer() {
         dismissKeyboard()
         if store.isSidebarPresented {
             store.isSidebarPresented = false
-        } else if drawerMounted {
-            animateDrawerClosed()
         }
+        animateDrawerClosed()
     }
 
     private func animateDrawerOpen(fromCurrentProgress: Bool) {
         if !drawerMounted {
-            visualDrawerProgress = 0.0
-            drawerMounted = true
-            Task { @MainActor in
-                guard store.isSidebarPresented && !isDraggingDrawer else { return }
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.92)) {
+            if visualDrawerProgress < 0.999 {
+                var resetTransaction = Transaction()
+                resetTransaction.disablesAnimations = true
+                withTransaction(resetTransaction) {
                     visualDrawerProgress = 1.0
                 }
             }
+            withAnimation(.spring(duration: 0.34, bounce: 0.0)) {
+                drawerMounted = true
+            }
         } else if fromCurrentProgress || visualDrawerProgress < 0.999 {
-            withAnimation(.spring(response: 0.26, dampingFraction: 0.92)) {
+            withAnimation(.spring(duration: 0.30, bounce: 0.0)) {
                 visualDrawerProgress = 1.0
             }
         }
     }
 
     private func animateDrawerClosed() {
-        if visualDrawerProgress <= 0.001 {
-            visualDrawerProgress = 0.0
-            if !store.isSidebarPresented && !isDraggingDrawer {
+        guard drawerMounted else { return }
+        if visualDrawerProgress >= 0.999 {
+            withAnimation(.spring(duration: 0.28, bounce: 0.0)) {
                 drawerMounted = false
             }
             return
         }
-        withAnimation(.snappy(duration: 0.22)) {
+        if visualDrawerProgress <= 0.001 {
+            var unmountTransaction = Transaction()
+            unmountTransaction.disablesAnimations = true
+            withTransaction(unmountTransaction) {
+                drawerMounted = false
+                visualDrawerProgress = 1.0
+            }
+            return
+        }
+        withAnimation(.spring(duration: 0.24, bounce: 0.0)) {
             visualDrawerProgress = 0.0
         } completion: {
             if !store.isSidebarPresented && !isDraggingDrawer && visualDrawerProgress <= 0.001 {
-                drawerMounted = false
+                var unmountTransaction = Transaction()
+                unmountTransaction.disablesAnimations = true
+                withTransaction(unmountTransaction) {
+                    drawerMounted = false
+                    visualDrawerProgress = 1.0
+                }
             }
         }
     }
@@ -578,8 +627,12 @@ public struct AntigravityRootContainerView: View {
         dismissKeyboard()
         isDraggingDrawer = true
         if !drawerMounted {
-            visualDrawerProgress = startProgress
-            drawerMounted = true
+            var mountTransaction = Transaction()
+            mountTransaction.disablesAnimations = true
+            withTransaction(mountTransaction) {
+                visualDrawerProgress = startProgress
+                drawerMounted = true
+            }
         }
     }
 

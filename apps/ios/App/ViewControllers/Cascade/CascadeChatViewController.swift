@@ -636,6 +636,7 @@ public struct CascadeChatViewController: View {
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
 
             Spacer(minLength: 4)
@@ -662,6 +663,7 @@ public struct CascadeChatViewController: View {
                     .frame(minHeight: AntigravityTheme.minTouchTargetPt)
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
                 .accessibilityIdentifier("chat-diff-pill")
             }
 

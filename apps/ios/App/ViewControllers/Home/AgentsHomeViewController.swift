@@ -199,13 +199,20 @@ public struct AgentsHomeViewController: View {
             return store.summaries.first(where: { $0.cascadeId == "cas-rate-limiter" })
                 ?? store.summaries.first(where: { $0.status == .waiting })
         }
-        return store.summaries.first(where: { $0.status == .waiting && !$0.isArchived })
+        return store.summaries.first(where: {
+            $0.status == .waiting && !$0.isArchived && store.summaryMatchesHostScope($0)
+        })
     }
 
     private var selectableProjects: [ProjectWorkspace] {
-        let nonEmpty = store.projects.filter { !$0.isNoProject }
-        if !nonEmpty.isEmpty { return nonEmpty }
-        return [
+        let scoped = store.projects.filter { proj in
+            !proj.isNoProject && store.projectMatchesHostScope(proj)
+        }
+        if usesLiveStoreData {
+            return scoped
+        }
+        if !scoped.isEmpty { return scoped }
+        let fallbackFixtures = [
             ProjectWorkspace(
                 id: "ledger-svc",
                 name: "ledger-svc",
@@ -225,6 +232,8 @@ public struct AgentsHomeViewController: View {
                 activeBranch: "main"
             )
         ]
+        let scopedFallback = fallbackFixtures.filter { store.projectMatchesHostScope($0) }
+        return scopedFallback.isEmpty ? fallbackFixtures : scopedFallback
     }
 
     private var resolvedSelectedProject: ProjectWorkspace? {
@@ -234,34 +243,53 @@ public struct AgentsHomeViewController: View {
         if let match = selectableProjects.first(where: { $0.name == selectedProjectSlug }) {
             return match
         }
+        if selectedHost == .antigravityCloud {
+            return selectableProjects.first(where: { $0.runtime == .cloud }) ?? selectableProjects.first
+        }
         return selectableProjects.first(where: { $0.runtime != .cloud }) ?? selectableProjects.first
     }
 
     private var resolvedSelectedProjectTitle: String {
-        resolvedSelectedProject?.name ?? "ledger-svc"
+        if let project = resolvedSelectedProject {
+            return project.name
+        }
+        if usesLiveStoreData {
+            if store.isSwitchingHost || store.isRefreshingSelectedHost {
+                return "Loading..."
+            }
+            return AntigravityCloudDetector.noProjectDisplayName
+        }
+        return "ledger-svc"
     }
 
     private func syncSelectedProjectWithLiveStore() {
-        let nonEmpty = store.projects.filter { !$0.isNoProject }
-        guard !nonEmpty.isEmpty else {
-            if let fallback = resolvedSelectedProject {
-                selectedProjectSlug = fallback.id
-                isCloudTargetSelected = (fallback.runtime == .cloud)
-            }
+        let scoped = selectableProjects
+        guard !scoped.isEmpty else {
+            selectedProjectSlug = ""
+            isCloudTargetSelected = (selectedHost == .antigravityCloud)
             return
         }
-        if let current = nonEmpty.first(where: { $0.id == selectedProjectSlug })
-            ?? nonEmpty.first(where: { $0.name == selectedProjectSlug }) {
+        if let current = scoped.first(where: { $0.id == selectedProjectSlug })
+            ?? scoped.first(where: { $0.name == selectedProjectSlug }) {
             selectedProjectSlug = current.id
             isCloudTargetSelected = (current.runtime == .cloud)
             return
         }
-        let preferred = nonEmpty.first(where: { $0.id == store.selectedProjectId })
-            ?? nonEmpty.first(where: { $0.runtime != .cloud })
-            ?? nonEmpty.first
+        let preferred: ProjectWorkspace? = {
+            if let storeMatch = scoped.first(where: { $0.id == store.selectedProjectId }) {
+                return storeMatch
+            }
+            if selectedHost == .antigravityCloud {
+                return scoped.first(where: { $0.runtime == .cloud }) ?? scoped.first
+            }
+            return scoped.first(where: { $0.runtime != .cloud }) ?? scoped.first
+        }()
         if let preferred {
             selectedProjectSlug = preferred.id
             isCloudTargetSelected = (preferred.runtime == .cloud)
+            if store.selectedProjectId != preferred.id {
+                store.selectedProjectId = preferred.id
+            }
         }
     }
 
@@ -279,6 +307,8 @@ public struct AgentsHomeViewController: View {
                     Text("Connecting to \(selectedHostDisplayName)...")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -287,6 +317,7 @@ public struct AgentsHomeViewController: View {
                     Capsule()
                         .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
+                .padding(.horizontal, 16)
                 .padding(.top, 10)
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("agents-loading-conversations")
@@ -333,13 +364,22 @@ public struct AgentsHomeViewController: View {
         .onAppear {
             syncSelectedProjectWithLiveStore()
         }
-        .onChange(of: store.projects.map { "\($0.id):\($0.runtime.rawValue)" }) { _, _ in
+        .onChange(of: store.selectedHostScope) { _, _ in
+            syncSelectedProjectWithLiveStore()
+        }
+        .onChange(of: store.activeHost.instanceId) { _, _ in
+            syncSelectedProjectWithLiveStore()
+        }
+        .onChange(of: store.projects.map { "\($0.id):\($0.runtime.rawValue):\($0.originInstanceUuid ?? ""):\($0.hostName)" }) { _, _ in
             syncSelectedProjectWithLiveStore()
         }
         .onChange(of: store.selectedProjectId) { _, newProjectId in
-            guard let matched = selectableProjects.first(where: { $0.id == newProjectId }) else { return }
-            selectedProjectSlug = matched.id
-            isCloudTargetSelected = (matched.runtime == .cloud)
+            if let matched = selectableProjects.first(where: { $0.id == newProjectId }) {
+                selectedProjectSlug = matched.id
+                isCloudTargetSelected = (matched.runtime == .cloud)
+            } else {
+                syncSelectedProjectWithLiveStore()
+            }
         }
         .sheet(isPresented: $isShowingGlobalSearch) {
             GlobalConversationSearchSheet(
@@ -402,44 +442,29 @@ public struct AgentsHomeViewController: View {
     // MARK: - Top Bar (Sidebar Trigger + Centered Host Pill + Search Trigger)
 
     private var topNavigationBar: some View {
-        ZStack {
-            HStack {
-                Button {
-                    if let onOpenSidebar {
-                        onOpenSidebar()
-                    } else {
-                        withAnimation(.snappy(duration: 0.24)) {
-                            store.isSidebarPresented = true
-                        }
+        HStack(spacing: 8) {
+            Button {
+                if let onOpenSidebar {
+                    onOpenSidebar()
+                } else {
+                    withAnimation(.spring(duration: 0.34, bounce: 0.0)) {
+                        store.isSidebarPresented = true
                     }
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 19, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.textPrimary)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .leading)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open sidebar")
-                .accessibilityIdentifier("btn-sidebar")
-
-                Spacer()
-
-                Button {
-                    isShowingGlobalSearch = true
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.textPrimary)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Search conversations")
-                .accessibilityIdentifier("btn-global-search")
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 19, weight: .regular))
+                    .foregroundStyle(AntigravityTheme.textPrimary)
+                    .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .leading)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .layoutPriority(1)
+            .accessibilityLabel("Open sidebar")
+            .accessibilityIdentifier("btn-sidebar")
 
-            // Centered Host Switcher Capsule
+            // Centered Host Switcher Capsule (strictly bounded between sidebar & search buttons)
             Menu {
                 Section {
                     if store.hasPairedBackend {
@@ -521,18 +546,23 @@ public struct AgentsHomeViewController: View {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(AntigravityTheme.accentPeriwinkle)
+                            .fixedSize()
                     } else {
                         Circle()
                             .fill(hostSwitcherDotColor)
                             .frame(width: 8, height: 8)
+                            .fixedSize()
                     }
                     Text(hostSwitcherLabelText)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(-1)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textSecondary)
+                        .fixedSize()
                 }
                 .padding(.horizontal, 14)
                 .frame(height: 38)
@@ -544,6 +574,22 @@ public struct AgentsHomeViewController: View {
                 .frame(minHeight: AntigravityTheme.minTouchTargetPt)
             }
             .accessibilityIdentifier("host-switcher-pill")
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .center)
+
+            Button {
+                isShowingGlobalSearch = true
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(AntigravityTheme.textPrimary)
+                    .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .layoutPriority(1)
+            .accessibilityLabel("Search conversations")
+            .accessibilityIdentifier("btn-global-search")
         }
     }
 
@@ -594,18 +640,37 @@ public struct AgentsHomeViewController: View {
 
     private var homeComposerContainer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 Menu {
-                    ForEach(selectableProjects) { proj in
+                    if selectableProjects.isEmpty && usesLiveStoreData {
+                        Button {} label: {
+                            Text(
+                                (store.isSwitchingHost || store.isRefreshingSelectedHost)
+                                    ? "Syncing repositories..."
+                                    : "No repositories on \(selectedHostDisplayName)"
+                            )
+                        }
+                        .disabled(true)
+
                         Button {
-                            selectedProjectSlug = proj.id
-                            isCloudTargetSelected = (proj.runtime == .cloud)
-                            store.selectedProjectId = proj.id
+                            Task {
+                                _ = await store.refreshConversationsForHostScope(selectedHost, forceFullSync: true)
+                            }
                         } label: {
-                            if proj.id == resolvedSelectedProject?.id {
-                                Label(proj.name, systemImage: "checkmark")
-                            } else {
-                                Text(proj.name)
+                            Label("Sync Repositories", systemImage: "arrow.clockwise")
+                        }
+                    } else {
+                        ForEach(selectableProjects) { proj in
+                            Button {
+                                selectedProjectSlug = proj.id
+                                isCloudTargetSelected = (proj.runtime == .cloud)
+                                store.selectedProjectId = proj.id
+                            } label: {
+                                if proj.id == resolvedSelectedProject?.id {
+                                    Label(proj.name, systemImage: "checkmark")
+                                } else {
+                                    Text(proj.name)
+                                }
                             }
                         }
                     }
@@ -624,13 +689,17 @@ public struct AgentsHomeViewController: View {
                         Image(systemName: isCloudTargetSelected ? "cloud" : "folder")
                             .font(.system(size: 13.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textSecondary)
+                            .fixedSize()
                         Text(resolvedSelectedProjectTitle)
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textBody)
                             .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(-1)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.textSecondary)
+                            .fixedSize()
                     }
                     .frame(minHeight: 34)
                     .contentShape(Rectangle())
@@ -665,6 +734,8 @@ public struct AgentsHomeViewController: View {
                     .frame(minHeight: 34)
                     .contentShape(Rectangle())
                 }
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
                 .accessibilityIdentifier("home-branch-selector")
 
                 Spacer(minLength: 4)
@@ -679,6 +750,8 @@ public struct AgentsHomeViewController: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
+                .layoutPriority(1)
                 .accessibilityLabel(isCloudTargetSelected ? "Cloud runtime selected" : "Local runtime selected")
                 .accessibilityValue(isCloudTargetSelected ? "cloud" : "computer")
                 .accessibilityIdentifier("home-runtime-toggle")
@@ -691,7 +764,8 @@ public struct AgentsHomeViewController: View {
                 placeholderOverride: "Ask anything, @ to mention, / for actions",
                 isHomeComposer: true,
                 onSubmitDraft: { promptText in
-                    let slug = resolvedSelectedProject?.id ?? "ledger-svc"
+                    let slug = resolvedSelectedProject?.id
+                        ?? (usesLiveStoreData ? AntigravityCloudDetector.noProjectDisplayName : "ledger-svc")
                     let attachments = store.composerAttachments
                     let cleanTitle = String(promptText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(48))
                     let fallbackTitle = attachments.first?.label ?? "New Conversation"
@@ -790,9 +864,6 @@ public struct AgentsSidebarDrawerView: View {
     public var onOpenConversation: ((String) -> Void)?
     public var onOpenContextMenuPreview: ((String) -> Void)?
 
-    @State private var isSearchExpanded: Bool = false
-    @State private var searchQuery: String = ""
-
     public init(
         store: AntigravitySessionStore,
         showWelcomeBackdrop: Bool = false,
@@ -811,6 +882,114 @@ public struct AgentsSidebarDrawerView: View {
         self.store = store
         self.showWelcomeBackdrop = showWelcomeBackdrop
         self.presentationProgress = presentationProgress
+        self.onClose = onClose
+        self.onNewConversation = onNewConversation
+        self.onOpenAutomations = onOpenAutomations
+        self.onOpenCustomizations = onOpenCustomizations
+        self.onOpenSettings = onOpenSettings
+        self.onOpenDisplayOptions = onOpenDisplayOptions
+        self.onOpenNewProject = onOpenNewProject
+        self.onOpenProjectDetail = onOpenProjectDetail
+        self.onOpenConversation = onOpenConversation
+        self.onOpenContextMenuPreview = onOpenContextMenuPreview
+    }
+
+    public var body: some View {
+        let clampedProgress = min(max(presentationProgress, 0.0), 1.0)
+
+        GeometryReader { geo in
+            let drawerWidth = min(334, geo.size.width * 0.83)
+            let hiddenOffsetX: CGFloat = (layoutDirection == .rightToLeft ? drawerWidth : -drawerWidth) * (1.0 - clampedProgress)
+
+            ZStack(alignment: .leading) {
+                // Dimmed scrim & subtle right-edge peek of Home (`ios-drawer.png`)
+                ZStack(alignment: .trailing) {
+                    Color.black.opacity(showWelcomeBackdrop ? 0.94 : 0.62)
+                        .ignoresSafeArea()
+                    if showWelcomeBackdrop {
+                        Text("Wel")
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundStyle(AntigravityTheme.textPrimary.opacity(0.42))
+                            .padding(.trailing, 4)
+                            .offset(y: -48)
+                    }
+                }
+                .opacity(clampedProgress)
+                .contentShape(Rectangle())
+                .allowsHitTesting(clampedProgress > 0.01)
+                .onTapGesture {
+                    dismissDrawer()
+                }
+                .accessibilityIdentifier("sidebar-drawer-scrim")
+
+                // Left Sidebar Drawer Panel (`#101012`)
+                AgentsSidebarDrawerPanelView(
+                    store: store,
+                    onClose: onClose,
+                    onNewConversation: onNewConversation,
+                    onOpenAutomations: onOpenAutomations,
+                    onOpenCustomizations: onOpenCustomizations,
+                    onOpenSettings: onOpenSettings,
+                    onOpenDisplayOptions: onOpenDisplayOptions,
+                    onOpenNewProject: onOpenNewProject,
+                    onOpenProjectDetail: onOpenProjectDetail,
+                    onOpenConversation: onOpenConversation,
+                    onOpenContextMenuPreview: onOpenContextMenuPreview
+                )
+                .frame(width: drawerWidth)
+                .frame(maxHeight: .infinity)
+                .offset(x: hiddenOffsetX)
+                .allowsHitTesting(clampedProgress > 0.01)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("sidebar-drawer-panel")
+            }
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+
+    private func dismissDrawer() {
+        if let onClose {
+            onClose()
+        } else {
+            withAnimation(.spring(duration: 0.28, bounce: 0.0)) {
+                store.isSidebarPresented = false
+            }
+        }
+    }
+}
+
+/// Isolated left sidebar panel content without `presentationProgress` dependencies so GPU slide-in,
+/// slide-out, and 1:1 interactive swipe transforms never trigger list body re-evaluations.
+public struct AgentsSidebarDrawerPanelView: View {
+    @Bindable public var store: AntigravitySessionStore
+    public var onClose: (() -> Void)?
+    public var onNewConversation: (() -> Void)?
+    public var onOpenAutomations: (() -> Void)?
+    public var onOpenCustomizations: (() -> Void)?
+    public var onOpenSettings: (() -> Void)?
+    public var onOpenDisplayOptions: (() -> Void)?
+    public var onOpenNewProject: (() -> Void)?
+    public var onOpenProjectDetail: ((String) -> Void)?
+    public var onOpenConversation: ((String) -> Void)?
+    public var onOpenContextMenuPreview: ((String) -> Void)?
+
+    @State private var isSearchExpanded: Bool = false
+    @State private var searchQuery: String = ""
+
+    public init(
+        store: AntigravitySessionStore,
+        onClose: (() -> Void)? = nil,
+        onNewConversation: (() -> Void)? = nil,
+        onOpenAutomations: (() -> Void)? = nil,
+        onOpenCustomizations: (() -> Void)? = nil,
+        onOpenSettings: (() -> Void)? = nil,
+        onOpenDisplayOptions: (() -> Void)? = nil,
+        onOpenNewProject: (() -> Void)? = nil,
+        onOpenProjectDetail: ((String) -> Void)? = nil,
+        onOpenConversation: ((String) -> Void)? = nil,
+        onOpenContextMenuPreview: ((String) -> Void)? = nil
+    ) {
+        self.store = store
         self.onClose = onClose
         self.onNewConversation = onNewConversation
         self.onOpenAutomations = onOpenAutomations
@@ -861,7 +1040,7 @@ public struct AgentsSidebarDrawerView: View {
             ].filter(matchesSearch)
         }
         return store.summaries
-            .filter { $0.isPinned && !$0.isArchived }
+            .filter { $0.isPinned && !$0.isArchived && store.summaryMatchesHostScope($0) }
             .map(rowModel(from:))
             .filter(matchesSearch)
     }
@@ -942,6 +1121,7 @@ public struct AgentsSidebarDrawerView: View {
 
         // Live mode: group real summaries by project honoring host scope and displayOptions
         let visibleSummaries = store.summaries.filter { summary in
+            guard store.summaryMatchesHostScope(summary) else { return false }
             if store.displayOptions.archivedOnly {
                 guard summary.isArchived else { return false }
             } else {
@@ -955,7 +1135,7 @@ public struct AgentsSidebarDrawerView: View {
 
         var groups: [DrawerProjectGroup] = []
         var consumedIds: Set<String> = []
-        for proj in store.projects {
+        for proj in store.projects where store.projectMatchesHostScope(proj) {
             let projIsCloud = (proj.runtime == .cloud)
             let matching = visibleSummaries.filter { summary in
                 guard !consumedIds.contains(summary.cascadeId) else { return false }
@@ -1020,323 +1200,287 @@ public struct AgentsSidebarDrawerView: View {
     }
 
     public var body: some View {
-        let clampedProgress = min(max(presentationProgress, 0.0), 1.0)
-
-        GeometryReader { geo in
-            let drawerWidth = min(334, geo.size.width * 0.83)
-            let hiddenOffsetX: CGFloat = (layoutDirection == .rightToLeft ? drawerWidth : -drawerWidth) * (1.0 - clampedProgress)
-
-            ZStack(alignment: .leading) {
-                // Dimmed scrim & subtle right-edge peek of Home (`ios-drawer.png`)
-                ZStack(alignment: .trailing) {
-                    Color.black.opacity(showWelcomeBackdrop ? 0.94 : 0.62)
-                        .ignoresSafeArea()
-                    if showWelcomeBackdrop {
-                        Text("Wel")
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundStyle(AntigravityTheme.textPrimary.opacity(0.42))
-                            .padding(.trailing, 4)
-                            .offset(y: -48)
-                    }
-                }
-                .opacity(clampedProgress)
-                .contentShape(Rectangle())
-                .allowsHitTesting(clampedProgress > 0.01)
-                .onTapGesture {
+        VStack(alignment: .leading, spacing: 0) {
+            // Drawer Top Bar
+            HStack {
+                Button {
                     dismissDrawer()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 19, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
-                .accessibilityIdentifier("sidebar-drawer-scrim")
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close sidebar")
+                .accessibilityIdentifier("btn-close-sidebar")
 
-                // Left Sidebar Drawer Panel (`#101012`)
-                VStack(alignment: .leading, spacing: 0) {
-                    // Drawer Top Bar
-                    HStack {
+                Spacer()
+
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        isSearchExpanded.toggle()
+                        if !isSearchExpanded { searchQuery = "" }
+                    }
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Search sidebar")
+                .accessibilityIdentifier("btn-drawer-search")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
+            if isSearchExpanded {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 14))
+                        .foregroundStyle(AntigravityTheme.textMuted)
+                    TextField("Search conversations", text: $searchQuery)
+                        .font(.system(size: 15))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                        .accessibilityIdentifier("drawer-search-input")
+                    if !searchQuery.isEmpty {
                         Button {
-                            dismissDrawer()
+                            searchQuery = ""
                         } label: {
-                            Image(systemName: "sidebar.left")
-                                .font(.system(size: 19, weight: .regular))
-                                .foregroundStyle(AntigravityTheme.textPrimary)
-                                .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .leading)
-                                .contentShape(Rectangle())
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(AntigravityTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Close sidebar")
-                        .accessibilityIdentifier("btn-close-sidebar")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(AntigravityTheme.surfaceElevated)
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+            }
+
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    // `+ New Conversation` Button
+                    Button {
+                        if let onNewConversation {
+                            onNewConversation()
+                        } else {
+                            store.isSidebarPresented = false
+                            store.selectedTab = .agents
+                            store.activeRoute = .tabRoot
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .medium))
+                            Text("New Conversation")
+                                .font(.system(size: 16, weight: .medium))
+                            Spacer()
+                        }
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                        .padding(.horizontal, 14)
+                        .frame(maxWidth: .infinity, minHeight: 46)
+                        .background(
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .fill(AntigravityTheme.surfaceElevated)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
+                    .padding(.bottom, 6)
+                    .accessibilityIdentifier("btn-new-conversation")
+
+                    // Primary Navigation Rows (`Automations`, `Customizations`)
+                    drawerPrimaryNavRow(
+                        icon: "clock",
+                        title: "Automations",
+                        testId: "drawer-nav-automations"
+                    ) {
+                        if let onOpenAutomations {
+                            onOpenAutomations()
+                        } else {
+                            store.isSidebarPresented = false
+                            store.selectedTab = .automations
+                            store.activeRoute = .tabRoot
+                        }
+                    }
+
+                    drawerPrimaryNavRow(
+                        icon: "briefcase",
+                        title: "Customizations",
+                        testId: "drawer-nav-customizations"
+                    ) {
+                        if let onOpenCustomizations {
+                            onOpenCustomizations()
+                        } else {
+                            store.isSidebarPresented = false
+                            store.activeRoute = .rulesAndSkills
+                        }
+                    }
+
+                    // Pinned Section
+                    if !pinnedConversations.isEmpty {
+                        Text("Pinned")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 16)
+                            .padding(.bottom, 4)
+
+                        ForEach(pinnedConversations) { row in
+                            drawerConversationItem(row, indented: false)
+                        }
+                    }
+
+                    // Projects Section Header + Filter / New Project Actions
+                    HStack(spacing: 8) {
+                        Text("Projects")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
 
                         Spacer()
 
                         Button {
-                            withAnimation(.snappy(duration: 0.2)) {
-                                isSearchExpanded.toggle()
-                                if !isSearchExpanded { searchQuery = "" }
+                            if let onOpenDisplayOptions {
+                                onOpenDisplayOptions()
+                            } else {
+                                store.presentedSheet = .displayOptions
                             }
                         } label: {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 18, weight: .regular))
-                                .foregroundStyle(AntigravityTheme.textPrimary)
-                                .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
+                            Image(systemName: "line.3.horizontal.decrease")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(AntigravityTheme.textSecondary)
+                                .frame(width: 34, height: 34)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Search sidebar")
-                        .accessibilityIdentifier("btn-drawer-search")
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                        .accessibilityLabel("Display options")
+                        .accessibilityIdentifier("btn-display-options")
 
-                    if isSearchExpanded {
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 14))
-                                .foregroundStyle(AntigravityTheme.textMuted)
-                            TextField("Search conversations", text: $searchQuery)
-                                .font(.system(size: 15))
-                                .foregroundStyle(AntigravityTheme.textPrimary)
-                                .accessibilityIdentifier("drawer-search-input")
-                            if !searchQuery.isEmpty {
-                                Button {
-                                    searchQuery = ""
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundStyle(AntigravityTheme.textSecondary)
-                                }
-                                .buttonStyle(.plain)
+                        Button {
+                            if let onOpenNewProject {
+                                onOpenNewProject()
+                            } else {
+                                store.presentedSheet = .createProject
                             }
+                        } label: {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.system(size: 14.5, weight: .medium))
+                                .foregroundStyle(AntigravityTheme.textSecondary)
+                                .frame(width: 34, height: 34)
+                                .contentShape(Rectangle())
                         }
-                        .padding(.horizontal, 12)
-                        .frame(height: 38)
-                        .background(
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(AntigravityTheme.surfaceElevated)
-                        )
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 10)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("New project")
+                        .accessibilityIdentifier("btn-new-project")
                     }
+                    .padding(.leading, 18)
+                    .padding(.trailing, 10)
+                    .padding(.top, 14)
 
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            // `+ New Conversation` Button
-                            Button {
-                                if let onNewConversation {
-                                    onNewConversation()
-                                } else {
-                                    store.isSidebarPresented = false
-                                    store.selectedTab = .agents
-                                    store.activeRoute = .tabRoot
-                                }
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "plus")
-                                        .font(.system(size: 16, weight: .medium))
-                                    Text("New Conversation")
-                                        .font(.system(size: 16, weight: .medium))
-                                    Spacer()
-                                }
-                                .foregroundStyle(AntigravityTheme.textPrimary)
-                                .padding(.horizontal, 14)
-                                .frame(maxWidth: .infinity, minHeight: 46)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                        .fill(AntigravityTheme.surfaceElevated)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 12)
-                            .padding(.top, 6)
-                            .padding(.bottom, 6)
-                            .accessibilityIdentifier("btn-new-conversation")
-
-                            // Primary Navigation Rows (`Automations`, `Customizations`)
-                            drawerPrimaryNavRow(
-                                icon: "clock",
-                                title: "Automations",
-                                testId: "drawer-nav-automations"
-                            ) {
-                                if let onOpenAutomations {
-                                    onOpenAutomations()
-                                } else {
-                                    store.isSidebarPresented = false
-                                    store.selectedTab = .automations
-                                    store.activeRoute = .tabRoot
-                                }
-                            }
-
-                            drawerPrimaryNavRow(
-                                icon: "briefcase",
-                                title: "Customizations",
-                                testId: "drawer-nav-customizations"
-                            ) {
-                                if let onOpenCustomizations {
-                                    onOpenCustomizations()
-                                } else {
-                                    store.isSidebarPresented = false
-                                    store.activeRoute = .rulesAndSkills
-                                }
-                            }
-
-                            // Pinned Section
-                            if !pinnedConversations.isEmpty {
-                                Text("Pinned")
-                                    .font(.system(size: 13, weight: .regular))
-                                    .foregroundStyle(AntigravityTheme.textSecondary)
-                                    .padding(.horizontal, 18)
-                                    .padding(.top, 16)
-                                    .padding(.bottom, 4)
-
-                                ForEach(pinnedConversations) { row in
-                                    drawerConversationItem(row, indented: false)
-                                }
-                            }
-
-                            // Projects Section Header + Filter / New Project Actions
+                    // Project Groups & Conversations
+                    ForEach(projectGroups) { group in
+                        VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 8) {
-                                Text("Projects")
-                                    .font(.system(size: 13, weight: .regular))
-                                    .foregroundStyle(AntigravityTheme.textSecondary)
-
-                                Spacer()
-
                                 Button {
-                                    if let onOpenDisplayOptions {
-                                        onOpenDisplayOptions()
+                                    if let onOpenProjectDetail {
+                                        onOpenProjectDetail(group.id)
                                     } else {
-                                        store.presentedSheet = .displayOptions
+                                        store.isSidebarPresented = false
+                                        store.selectProject(group.id)
                                     }
                                 } label: {
-                                    Image(systemName: "line.3.horizontal.decrease")
-                                        .font(.system(size: 14, weight: .medium))
+                                    HStack(spacing: 9) {
+                                        Image(systemName: group.isCloud ? "cloud" : "folder")
+                                            .font(.system(size: 14, weight: .regular))
+                                            .foregroundStyle(AntigravityTheme.textSecondary)
+                                            .frame(width: 20)
+                                        Text(group.displayName)
+                                            .font(.system(size: 15.5, weight: .regular))
+                                            .foregroundStyle(AntigravityTheme.textSecondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                    }
+                                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("project-header-\(group.id)")
+
+                                Button {
+                                    if let onOpenConversation {
+                                        onOpenConversation("new-\(group.id)")
+                                    } else {
+                                        store.isSidebarPresented = false
+                                        _ = store.createConversationInProject(group.id)
+                                    }
+                                } label: {
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 15, weight: .regular))
                                         .foregroundStyle(AntigravityTheme.textSecondary)
-                                        .frame(width: 34, height: 34)
+                                        .frame(width: 36, height: 36)
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("Display options")
-                                .accessibilityIdentifier("btn-display-options")
-
-                                Button {
-                                    if let onOpenNewProject {
-                                        onOpenNewProject()
-                                    } else {
-                                        store.presentedSheet = .createProject
-                                    }
-                                } label: {
-                                    Image(systemName: "folder.badge.plus")
-                                        .font(.system(size: 14.5, weight: .medium))
-                                        .foregroundStyle(AntigravityTheme.textSecondary)
-                                        .frame(width: 34, height: 34)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("New project")
-                                .accessibilityIdentifier("btn-new-project")
+                                .accessibilityIdentifier("btn-add-conv-\(group.id)")
                             }
                             .padding(.leading, 18)
                             .padding(.trailing, 10)
-                            .padding(.top, 14)
+                            .padding(.top, 4)
 
-                            // Project Groups & Conversations
-                            ForEach(projectGroups) { group in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 8) {
-                                        Button {
-                                            if let onOpenProjectDetail {
-                                                onOpenProjectDetail(group.id)
-                                            } else {
-                                                store.isSidebarPresented = false
-                                                store.selectProject(group.id)
-                                            }
-                                        } label: {
-                                            HStack(spacing: 9) {
-                                                Image(systemName: group.isCloud ? "cloud" : "folder")
-                                                    .font(.system(size: 14, weight: .regular))
-                                                    .foregroundStyle(AntigravityTheme.textSecondary)
-                                                    .frame(width: 20)
-                                                Text(group.displayName)
-                                                    .font(.system(size: 15.5, weight: .regular))
-                                                    .foregroundStyle(AntigravityTheme.textSecondary)
-                                                    .lineLimit(1)
-                                            }
-                                            .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                                            .contentShape(Rectangle())
-                                        }
-                                        .buttonStyle(.plain)
-                                        .accessibilityIdentifier("project-header-\(group.id)")
-
-                                        Button {
-                                            if let onOpenConversation {
-                                                onOpenConversation("new-\(group.id)")
-                                            } else {
-                                                store.isSidebarPresented = false
-                                                _ = store.createConversationInProject(group.id)
-                                            }
-                                        } label: {
-                                            Image(systemName: "plus")
-                                                .font(.system(size: 15, weight: .regular))
-                                                .foregroundStyle(AntigravityTheme.textSecondary)
-                                                .frame(width: 36, height: 36)
-                                                .contentShape(Rectangle())
-                                        }
-                                        .buttonStyle(.plain)
-                                        .accessibilityIdentifier("btn-add-conv-\(group.id)")
-                                    }
-                                    .padding(.leading, 18)
-                                    .padding(.trailing, 10)
-                                    .padding(.top, 4)
-
-                                    ForEach(group.conversations) { row in
-                                        drawerConversationItem(row, indented: true)
-                                    }
-                                }
+                            ForEach(group.conversations) { row in
+                                drawerConversationItem(row, indented: true)
                             }
                         }
-                        .padding(.bottom, 16)
                     }
-
-                    // Bottom Pinned Settings Footer (`ios-drawer.png`)
-                    Divider()
-                        .overlay(AntigravityTheme.subtleDivider)
-
-                    Button {
-                        if let onOpenSettings {
-                            onOpenSettings()
-                        } else {
-                            store.isSidebarPresented = false
-                            store.activeRoute = .pairingSettings
-                        }
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "sun.max")
-                                .font(.system(size: 17, weight: .regular))
-                                .foregroundStyle(AntigravityTheme.textSecondary)
-                            Text("Settings")
-                                .font(.system(size: 16, weight: .regular))
-                                .foregroundStyle(AntigravityTheme.textPrimary)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 18)
-                        .frame(maxWidth: .infinity, minHeight: 54)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("drawer-nav-settings")
                 }
-                .frame(width: drawerWidth)
-                .frame(maxHeight: .infinity)
-                .background(AntigravityTheme.surfaceSheet.ignoresSafeArea())
-                .overlay(alignment: .trailing) {
-                    Rectangle()
-                        .fill(AntigravityTheme.cardBorder)
-                        .frame(width: 1)
-                        .ignoresSafeArea()
-                }
-                .offset(x: hiddenOffsetX)
-                .allowsHitTesting(clampedProgress > 0.01)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("sidebar-drawer-panel")
+                .padding(.bottom, 16)
             }
+
+            // Bottom Pinned Settings Footer (`ios-drawer.png`)
+            Divider()
+                .overlay(AntigravityTheme.subtleDivider)
+
+            Button {
+                if let onOpenSettings {
+                    onOpenSettings()
+                } else {
+                    store.isSidebarPresented = false
+                    store.activeRoute = .pairingSettings
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "sun.max")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textSecondary)
+                    Text("Settings")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                    Spacer()
+                }
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity, minHeight: 54)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("drawer-nav-settings")
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .background(AntigravityTheme.surfaceSheet.ignoresSafeArea())
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(AntigravityTheme.cardBorder)
+                .frame(width: 1)
+                .ignoresSafeArea()
+        }
     }
 
     private func drawerPrimaryNavRow(
@@ -1445,7 +1589,7 @@ public struct AgentsSidebarDrawerView: View {
         if let onClose {
             onClose()
         } else {
-            withAnimation(.snappy(duration: 0.22)) {
+            withAnimation(.spring(duration: 0.28, bounce: 0.0)) {
                 store.isSidebarPresented = false
             }
         }
@@ -1464,7 +1608,8 @@ private struct GlobalConversationSearchSheet: View {
 
     private var matchingConversations: [CascadeSummary] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let base = store.summaries.filter { !$0.isArchived }
+        let isLive = !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected
+        let base = store.summaries.filter { !$0.isArchived && (!isLive || store.summaryMatchesHostScope($0)) }
         guard !q.isEmpty else { return Array(base.prefix(8)) }
         return base.filter {
             $0.title.lowercased().contains(q)

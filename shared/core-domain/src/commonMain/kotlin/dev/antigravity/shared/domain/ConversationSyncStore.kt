@@ -379,21 +379,106 @@ public class ConversationSyncStore(
         }
     }
 
+    public fun summaryMatchesHostScope(
+        summary: CascadeSummary,
+        hostScope: AgentsHostFilterScope,
+        knownLocalHosts: List<RemoteHostInstance> = emptyList(),
+        activeHost: RemoteHostInstance? = null,
+    ): Boolean = when (hostScope) {
+        AgentsHostFilterScope.AllHosts -> true
+        AgentsHostFilterScope.AntigravityCloud -> summary.isCloud
+        is AgentsHostFilterScope.LocalHost -> {
+            if (summary.isCloud) {
+                false
+            } else {
+                val distinctLocalHosts = knownLocalHosts
+                    .filter { it.instanceId != "unpaired" && !it.hostname.equals("cloud", ignoreCase = true) }
+                    .distinctBy { it.instanceId }
+                val originId = summary.originInstanceUuid?.takeIf { it.isNotBlank() }
+                val originHost = summary.originHostName?.takeIf { it.isNotBlank() }
+                if (distinctLocalHosts.size <= 1) {
+                    if (originId != null) {
+                        originId == hostScope.id || originId == activeHost?.instanceId || originHost == hostScope.name
+                    } else {
+                        true
+                    }
+                } else {
+                    when {
+                        originId != null -> originId == hostScope.id || (originHost != null && originHost == hostScope.name)
+                        originHost != null -> originHost == hostScope.name
+                        else -> activeHost?.instanceId == hostScope.id || activeHost?.hostname == hostScope.name
+                    }
+                }
+            }
+        }
+    }
+
+    public fun projectMatchesHostScope(
+        project: ProjectWorkspace,
+        hostScope: AgentsHostFilterScope,
+        knownLocalHosts: List<RemoteHostInstance> = emptyList(),
+        activeHost: RemoteHostInstance? = null,
+    ): Boolean = when (hostScope) {
+        AgentsHostFilterScope.AllHosts -> true
+        AgentsHostFilterScope.AntigravityCloud -> project.runtime == ProjectRuntimeTarget.CLOUD
+        is AgentsHostFilterScope.LocalHost -> {
+            if (project.runtime == ProjectRuntimeTarget.CLOUD) {
+                false
+            } else {
+                val distinctLocalHosts = knownLocalHosts
+                    .filter { it.instanceId != "unpaired" && !it.hostname.equals("cloud", ignoreCase = true) }
+                    .distinctBy { it.instanceId }
+                val originId = project.originInstanceUuid?.takeIf { it.isNotBlank() }
+                val hostLabel = project.hostName.trim()
+                if (distinctLocalHosts.size <= 1) {
+                    if (originId != null) {
+                        originId == hostScope.id || originId == activeHost?.instanceId || hostLabel == hostScope.name
+                    } else {
+                        true
+                    }
+                } else {
+                    when {
+                        originId != null -> originId == hostScope.id || (hostLabel.isNotEmpty() && hostLabel == hostScope.name)
+                        hostLabel.isNotEmpty() -> hostLabel == hostScope.name
+                        else -> activeHost?.instanceId == hostScope.id || activeHost?.hostname == hostScope.name
+                    }
+                }
+            }
+        }
+    }
+
+    public fun filteredProjects(
+        hostScope: AgentsHostFilterScope = AgentsHostFilterScope.AllHosts,
+        knownLocalHosts: List<RemoteHostInstance> = emptyList(),
+        activeHost: RemoteHostInstance? = null,
+        excludeNoProject: Boolean = true,
+    ): List<ProjectWorkspace> = _state.value.projects.filter { project ->
+        if (excludeNoProject && project.isNoProject) return@filter false
+        projectMatchesHostScope(
+            project = project,
+            hostScope = hostScope,
+            knownLocalHosts = knownLocalHosts,
+            activeHost = activeHost,
+        )
+    }
+
     public fun filteredSummaries(
         hostScope: AgentsHostFilterScope = AgentsHostFilterScope.AllHosts,
         quickFilter: AgentsQuickFilter = AgentsQuickFilter.ALL,
         searchQuery: String = "",
         includeArchived: Boolean = false,
+        knownLocalHosts: List<RemoteHostInstance> = emptyList(),
+        activeHost: RemoteHostInstance? = null,
     ): List<CascadeSummary> {
         val q = searchQuery.trim().lowercase()
         return _state.value.summaries.filter { s ->
             if (!includeArchived && s.isArchived) return@filter false
-            val matchesScope = when (hostScope) {
-                AgentsHostFilterScope.AllHosts -> true
-                AgentsHostFilterScope.AntigravityCloud -> s.isCloud
-                is AgentsHostFilterScope.LocalHost -> !s.isCloud &&
-                    (s.originInstanceUuid == hostScope.id || s.originHostName == hostScope.name)
-            }
+            val matchesScope = summaryMatchesHostScope(
+                summary = s,
+                hostScope = hostScope,
+                knownLocalHosts = knownLocalHosts,
+                activeHost = activeHost,
+            )
             if (!matchesScope) return@filter false
             val matchesFilter = when (quickFilter) {
                 AgentsQuickFilter.ALL -> true
@@ -446,9 +531,20 @@ public class ConversationSyncStore(
             .distinctBy { it.cascadeId }
             .sortedWith(compareByDescending<CascadeSummary> { it.updatedAtEpochMs }.thenBy { it.cascadeId })
 
-        val incomingWsUris = incomingWorkspaces.map { it.workspaceUri }.toSet()
+        fun workspaceCompositeKey(ws: WorkspaceInfo): String {
+            val hostKey = HostProjectionKey.compute(
+                isCloud = ws.isCloud,
+                instanceId = ws.originInstanceUuid,
+                hostname = ws.originHostName,
+                fallbackHostId = host.instanceId,
+                fallbackHostName = host.hostname,
+            )
+            return "$hostKey|${ws.workspaceUri.lowercase()}"
+        }
+
+        val incomingWsKeys = incomingWorkspaces.map(::workspaceCompositeKey).toSet()
         val preservedWorkspaces = prev.workspaces.filter { ws ->
-            if (ws.workspaceUri in incomingWsUris) return@filter false
+            if (workspaceCompositeKey(ws) in incomingWsKeys) return@filter false
             val key = HostProjectionKey.compute(
                 isCloud = ws.isCloud,
                 instanceId = ws.originInstanceUuid,
@@ -457,26 +553,62 @@ public class ConversationSyncStore(
                 fallbackHostName = host.hostname,
             )
             key !in refreshedHostKeys
+        }.toMutableList()
+
+        // Preserve unrefreshed local hosts' 0-conversation projects even when prev.workspaces wasn't populated (e.g., cache hydration)
+        val keptWsKeySet = (incomingWorkspaces + preservedWorkspaces).map(::workspaceCompositeKey).toMutableSet()
+        for (existingProj in prev.projects) {
+            if (existingProj.runtime == ProjectRuntimeTarget.CLOUD || existingProj.isNoProject || existingProj.workspaceUri.isBlank()) {
+                continue
+            }
+            val projHostKey = HostProjectionKey.compute(
+                isCloud = false,
+                instanceId = existingProj.originInstanceUuid,
+                hostname = existingProj.hostName,
+                fallbackHostId = host.instanceId,
+                fallbackHostName = host.hostname,
+            )
+            if (projHostKey in refreshedHostKeys) continue
+            val candidate = WorkspaceInfo(
+                workspaceUri = existingProj.workspaceUri,
+                displayName = existingProj.name,
+                activeBranch = existingProj.activeBranch,
+                worktrees = existingProj.worktrees,
+                isCloud = false,
+                originInstanceUuid = existingProj.originInstanceUuid,
+                originHostName = existingProj.hostName,
+            )
+            val ck = workspaceCompositeKey(candidate)
+            if (keptWsKeySet.add(ck)) {
+                preservedWorkspaces.add(candidate)
+            }
         }
-        val mergedWorkspaces = (incomingWorkspaces + preservedWorkspaces).distinctBy { it.workspaceUri }
-        val mergedProjects = reconcileProjects(
+
+        val mergedWorkspaces = (incomingWorkspaces + preservedWorkspaces).distinctBy(::workspaceCompositeKey)
+        val effectiveCloudProjects = if ("cloud" in refreshedHostKeys || incomingCloudProjects.isNotEmpty()) {
+            incomingCloudProjects
+        } else {
+            prev.projects.filter { it.runtime == ProjectRuntimeTarget.CLOUD && !it.isNoProject }
+        }
+        val (mergedProjects, normalizedSummaries) = reconcileProjects(
             workspaces = mergedWorkspaces,
             summaries = mergedSummaries,
-            cloudProjects = incomingCloudProjects,
+            cloudProjects = effectiveCloudProjects,
             defaultHostName = host.hostname,
+            defaultInstanceUuid = host.instanceId,
         )
 
         _state.update {
             it.copy(
                 workspaces = mergedWorkspaces,
                 projects = mergedProjects,
-                summaries = mergedSummaries,
+                summaries = normalizedSummaries,
                 lastSyncedAtEpochMs = currentTimeMillis(),
             )
         }
 
         // Persist ONLY refreshed host shards so offline host shards on disk stay intact
-        persistShards(host, mergedSummaries, mergedProjects, refreshedHostKeys)
+        persistShards(host, normalizedSummaries, mergedProjects, refreshedHostKeys)
     }
 
     private suspend fun persistShards(
@@ -546,41 +678,117 @@ public class ConversationSyncStore(
         summaries: List<CascadeSummary>,
         cloudProjects: List<ProjectWorkspace>,
         defaultHostName: String,
-    ): List<ProjectWorkspace> {
+        defaultInstanceUuid: String? = null,
+    ): Pair<List<ProjectWorkspace>, List<CascadeSummary>> {
         val byId = linkedMapOf<String, ProjectWorkspace>()
-        for (cp in cloudProjects) byId[cp.id] = cp
+        val keyToProjectId = mutableMapOf<String, String>()
+
+        fun allocateProjectId(
+            baseName: String,
+            isCloud: Boolean,
+            originUuid: String?,
+            originHostName: String?,
+        ): String {
+            if (!byId.containsKey(baseName)) return baseName
+            if (isCloud) {
+                val cloudId = "cloud:$baseName"
+                if (!byId.containsKey(cloudId)) return cloudId
+            }
+            val hostKey = originUuid?.takeIf { it.isNotBlank() }
+                ?: originHostName?.takeIf { it.isNotBlank() }
+                ?: defaultInstanceUuid?.takeIf { it.isNotBlank() }
+                ?: defaultHostName
+            return if (isCloud) "cloud:$baseName" else "host:$hostKey:$baseName"
+        }
+
+        fun dedupeKey(
+            name: String,
+            isCloud: Boolean,
+            originUuid: String?,
+            originHostName: String?,
+            workspaceUri: String,
+        ): String {
+            val scopeKey = if (isCloud) {
+                "cloud"
+            } else {
+                originUuid?.takeIf { it.isNotBlank() }
+                    ?: originHostName?.takeIf { it.isNotBlank() }
+                    ?: defaultHostName
+            }
+            val normalizedUri = workspaceUri.trim().lowercase()
+            return if (normalizedUri.isNotEmpty()) "$scopeKey|uri|$normalizedUri" else "$scopeKey|name|${name.lowercase()}"
+        }
+
+        for (cp in cloudProjects) {
+            val key = dedupeKey(cp.name, true, cp.originInstanceUuid, "Cloud", cp.workspaceUri)
+            if (!keyToProjectId.containsKey(key)) {
+                val id = if (cp.id.isNotBlank() && !byId.containsKey(cp.id)) cp.id else allocateProjectId(cp.name, true, cp.originInstanceUuid, "Cloud")
+                byId[id] = cp.copy(id = id, runtime = ProjectRuntimeTarget.CLOUD, hostName = "Cloud")
+                keyToProjectId[key] = id
+            }
+        }
+
         for (ws in workspaces) {
-            val id = ws.displayName.ifBlank { ws.workspaceUri }
+            val baseName = ws.displayName.ifBlank { ws.workspaceUri }
+            if (AntigravityCloudDetector.isNoProjectSlug(baseName)) continue
+            val isCloud = ws.isCloud || AntigravityCloudDetector.isCloudWorkspaceUri(ws.workspaceUri)
+            val resolvedHost = if (isCloud) "Cloud" else (ws.originHostName?.takeIf { it.isNotBlank() } ?: defaultHostName)
+            val resolvedUuid = ws.originInstanceUuid?.takeIf { it.isNotBlank() } ?: if (isCloud) null else defaultInstanceUuid
+            val key = dedupeKey(baseName, isCloud, resolvedUuid, resolvedHost, ws.workspaceUri)
+            if (keyToProjectId.containsKey(key)) continue
+            val id = allocateProjectId(baseName, isCloud, resolvedUuid, resolvedHost)
             if (!byId.containsKey(id)) {
                 byId[id] = ProjectWorkspace(
                     id = id,
-                    name = ws.displayName,
+                    name = baseName,
                     pathDisplay = ws.workspaceUri.removePrefix("file://"),
                     workspaceUri = ws.workspaceUri,
-                    runtime = if (ws.isCloud) ProjectRuntimeTarget.CLOUD else ProjectRuntimeTarget.MAC_BOOK_PRO,
-                    hostName = ws.originHostName ?: defaultHostName,
+                    runtime = if (isCloud) ProjectRuntimeTarget.CLOUD else ProjectRuntimeTarget.MAC_BOOK_PRO,
+                    hostName = resolvedHost,
                     activeBranch = ws.activeBranch,
                     worktrees = ws.worktrees,
-                    originInstanceUuid = ws.originInstanceUuid,
+                    originInstanceUuid = resolvedUuid,
                 )
             }
+            keyToProjectId[key] = id
         }
-        for (s in summaries) {
-            val slug = s.projectSlug.ifBlank { AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME }
-            if (!byId.containsKey(slug)) {
-                byId[slug] = ProjectWorkspace(
-                    id = slug,
-                    name = slug,
-                    pathDisplay = s.workspaceUri.removePrefix("file://").ifBlank { slug },
-                    workspaceUri = s.workspaceUri,
-                    runtime = if (s.isCloud) ProjectRuntimeTarget.CLOUD else ProjectRuntimeTarget.MAC_BOOK_PRO,
-                    hostName = s.originHostName ?: defaultHostName,
-                    activeBranch = s.branchName,
-                    cloudProjectId = s.cloudProjectId,
-                    originInstanceUuid = s.originInstanceUuid,
-                )
+
+        val normalizedSummaries = summaries.map { s ->
+            val rawSlug = s.projectSlug.ifBlank { AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME }
+            val baseName = AntigravityCloudDetector.stripProjectScopePrefix(rawSlug).ifBlank {
+                AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME
             }
+            val resolvedHost = if (s.isCloud) "Cloud" else (s.originHostName?.takeIf { it.isNotBlank() } ?: defaultHostName)
+            val resolvedUuid = s.originInstanceUuid?.takeIf { it.isNotBlank() } ?: if (s.isCloud) null else defaultInstanceUuid
+            val key = dedupeKey(baseName, s.isCloud, resolvedUuid, resolvedHost, s.workspaceUri)
+
+            val matchedProjectId = keyToProjectId[key]
+                ?: byId.values.firstOrNull { existing ->
+                    existing.name.equals(baseName, ignoreCase = true) &&
+                        (existing.runtime == ProjectRuntimeTarget.CLOUD) == s.isCloud &&
+                        (s.isCloud || existing.originInstanceUuid == resolvedUuid || existing.hostName == resolvedHost)
+                }?.id
+                ?: run {
+                    val id = allocateProjectId(baseName, s.isCloud, resolvedUuid, resolvedHost)
+                    if (!byId.containsKey(id)) {
+                        byId[id] = ProjectWorkspace(
+                            id = id,
+                            name = baseName,
+                            pathDisplay = s.workspaceUri.removePrefix("file://").ifBlank { baseName },
+                            workspaceUri = s.workspaceUri,
+                            runtime = if (s.isCloud) ProjectRuntimeTarget.CLOUD else ProjectRuntimeTarget.MAC_BOOK_PRO,
+                            hostName = resolvedHost,
+                            activeBranch = s.branchName,
+                            cloudProjectId = s.cloudProjectId,
+                            originInstanceUuid = resolvedUuid,
+                        )
+                    }
+                    keyToProjectId[key] = id
+                    id
+                }
+
+            if (s.projectSlug == matchedProjectId) s else s.copy(projectSlug = matchedProjectId)
         }
-        return byId.values.toList()
+        return byId.values.toList() to normalizedSummaries
     }
 }

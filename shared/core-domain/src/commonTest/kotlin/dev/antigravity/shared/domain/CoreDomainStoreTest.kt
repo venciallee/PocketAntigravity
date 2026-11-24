@@ -514,4 +514,190 @@ class CoreDomainStoreTest {
             assertEquals(null, AntigravityCoreCoordinator(preferencesStore = prefs).connectionState.value.userDisplayName)
         }
     }
+
+    @Test
+    fun testMultiHostDeviceSwitchUpdatesScopedProjectsAndPreservesCloudRepos() = runTest {
+        withContext(Dispatchers.Default) {
+            val mbpUuid = "11111111-1111-4111-8111-111111111111-v2"
+            val macMiniUuid = "22222222-2222-4222-8222-222222222222-v2"
+            val macMiniName = "huangjiafandemac-mini-local-swift-vapor"
+            val validKey = "AI" + "zaSyMULTIHOSTTEST00000000000000000000"
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$mbpUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]],["$macMiniUuid",["$macMiniName","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = runCatching { request.body.toByteArray().decodeToString() }.getOrDefault("")
+                        val targetsMini = bodyText.contains(macMiniUuid)
+                        val jsonPayload = when {
+                            bodyText.contains("ListProjects") ->
+                                """{"projectIds":["cloud-pocket-1"]}"""
+                            bodyText.contains("ReadProject") ->
+                                """{"project":{"id":"cloud-pocket-1","name":"venciallee/PocketAntigravity"}}"""
+                            bodyText.contains("GetWorkspaceInfos") && targetsMini ->
+                                """{"workspaces":[{"workspaceUri":"file:///Users/mini/vapor-backend","displayName":"vapor-backend"},{"workspaceUri":"file:///Users/mini/PocketAntigravity","displayName":"PocketAntigravity"}]}"""
+                            bodyText.contains("GetWorkspaceInfos") ->
+                                """{"workspaces":[{"workspaceUri":"file:///Users/mbp/ios-app","displayName":"ios-app"},{"workspaceUri":"file:///Users/mbp/PocketAntigravity","displayName":"PocketAntigravity"}]}"""
+                            bodyText.contains("GetAllCascadeTrajectories") && targetsMini ->
+                                """{"trajectorySummaries":{"cas-mini-1":{"summary":"Mini Vapor Migration","stepCount":3,"status":"CORTEX_STEP_STATUS_DONE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/mini/PocketAntigravity"}]}}}"""
+                            bodyText.contains("GetAllCascadeTrajectories") ->
+                                """{"trajectorySummaries":{"cas-mbp-1":{"summary":"MBP iOS Build","stepCount":4,"status":"CORTEX_STEP_STATUS_DONE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/mbp/PocketAntigravity"}]}}}"""
+                            else -> """{"projects":[]}"""
+                        }
+                        val b64 = ByteString.of(*jsonPayload.encodeToByteArray()).base64()
+                        respond(
+                            content = """["$b64",[["content-type","application/json"]]]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                scope = this,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+
+            coordinator.connectCloudRelay(
+                relayUrlString = "https://antigravity.google.com/r/$mbpUuid",
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                startSummaryStream = false,
+            )
+
+            // Initial handshake targets MacBook Pro (and federates both reachable Macs + Cloud)
+            val mbpScope = AgentsHostFilterScope.LocalHost(mbpUuid, "MacBook Pro")
+            val miniScope = AgentsHostFilterScope.LocalHost(macMiniUuid, macMiniName)
+            val cloudScope = AgentsHostFilterScope.AntigravityCloud
+
+            // Switch to Mac mini -> scoped refresh must fetch vapor-backend & Mac mini PocketAntigravity and reconcile selectedProjectId
+            coordinator.selectHostScope(miniScope)
+            var miniProjects: List<ProjectWorkspace> = emptyList()
+            for (i in 0 until 60) {
+                miniProjects = coordinator.filteredProjects(hostScope = miniScope)
+                if (miniProjects.any { it.name == "vapor-backend" } &&
+                    coordinator.workspaceStore.state.value.selectedProjectId.let { selId ->
+                        miniProjects.any { it.id == selId }
+                    }
+                ) {
+                    break
+                }
+                delay(25L)
+            }
+            assertEquals(setOf("vapor-backend", "PocketAntigravity"), miniProjects.map { it.name }.toSet())
+            assertFalse(miniProjects.any { it.name == "ios-app" }, "MacBook Pro repo must not leak into Mac mini scope")
+            assertFalse(miniProjects.any { it.runtime == ProjectRuntimeTarget.CLOUD }, "Cloud repo must not leak into Mac mini scope")
+            val selectedMiniId = coordinator.workspaceStore.state.value.selectedProjectId
+            assertTrue(miniProjects.any { it.id == selectedMiniId }, "Selected project must belong to Mac mini after device switch")
+
+            // Mac mini's PocketAntigravity summary must point to Mac mini's reconciled project ID
+            val miniSummary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == "cas-mini-1" }
+            val miniPocketProj = miniProjects.first { it.name == "PocketAntigravity" }
+            assertEquals(miniPocketProj.id, miniSummary?.projectSlug)
+
+            // 0-conversation Cloud project must survive local-host-only refresh
+            val cloudProjects = coordinator.filteredProjects(hostScope = cloudScope)
+            assertTrue(
+                cloudProjects.any { it.name == "venciallee/PocketAntigravity" },
+                "0-conversation Cloud project must remain available after local host refresh",
+            )
+
+            // Switch back to MacBook Pro -> scoped projects must isolate to MacBook Pro repos only
+            coordinator.selectHostScope(mbpScope)
+            var mbpProjects: List<ProjectWorkspace> = emptyList()
+            for (i in 0 until 60) {
+                mbpProjects = coordinator.filteredProjects(hostScope = mbpScope)
+                if (mbpProjects.any { it.name == "ios-app" } &&
+                    coordinator.workspaceStore.state.value.selectedProjectId.let { selId ->
+                        mbpProjects.any { it.id == selId }
+                    }
+                ) {
+                    break
+                }
+                delay(25L)
+            }
+            assertEquals(setOf("ios-app", "PocketAntigravity"), mbpProjects.map { it.name }.toSet())
+            assertFalse(mbpProjects.any { it.name == "vapor-backend" }, "Mac mini repo must not leak into MacBook Pro scope")
+        }
+    }
+
+    @Test
+    fun testProjectMatchesHostScopeIsolatesMacBookProHostFromSecondMac() = runTest {
+        val syncStore = ConversationSyncStore(scope = this)
+        val mbpHost = RemoteHostInstance(
+            instanceId = "uuid-mbp",
+            hostname = "MacBook Pro",
+            channel = RemoteConnectionChannel.CLOUD_RELAY,
+            endpointUrl = "https://antigravity.google.com/r/uuid-mbp",
+            isOnline = true,
+        )
+        val miniHost = RemoteHostInstance(
+            instanceId = "uuid-mini",
+            hostname = "huangjiafandemac-mini-local-swift-vapor",
+            channel = RemoteConnectionChannel.CLOUD_RELAY,
+            endpointUrl = "https://antigravity.google.com/r/uuid-mini",
+            isOnline = true,
+        )
+        val knownHosts = listOf(mbpHost, miniHost)
+
+        // Legacy/untagged project with hostName == "MacBook Pro" and null originInstanceUuid
+        val legacyMbpProject = ProjectWorkspace(
+            id = "legacy-mbp-repo",
+            name = "legacy-mbp-repo",
+            pathDisplay = "~/legacy-mbp-repo",
+            workspaceUri = "file:///Users/dev/legacy-mbp-repo",
+            runtime = ProjectRuntimeTarget.MAC_BOOK_PRO,
+            hostName = "MacBook Pro",
+            originInstanceUuid = null,
+        )
+        val miniProject = ProjectWorkspace(
+            id = "vapor-svc",
+            name = "vapor-svc",
+            pathDisplay = "~/vapor-svc",
+            workspaceUri = "file:///Users/mini/vapor-svc",
+            runtime = ProjectRuntimeTarget.MAC_BOOK_PRO,
+            hostName = miniHost.hostname,
+            originInstanceUuid = miniHost.instanceId,
+        )
+        val cloudProject = ProjectWorkspace(
+            id = "cloud:venciallee/PocketAntigravity",
+            name = "venciallee/PocketAntigravity",
+            pathDisplay = "Cloud · venciallee/PocketAntigravity",
+            workspaceUri = "cloud://venciallee/PocketAntigravity",
+            runtime = ProjectRuntimeTarget.CLOUD,
+            hostName = "Cloud",
+        )
+
+        val mbpScope = AgentsHostFilterScope.LocalHost(mbpHost.instanceId, mbpHost.hostname)
+        val miniScope = AgentsHostFilterScope.LocalHost(miniHost.instanceId, miniHost.hostname)
+
+        assertTrue(syncStore.projectMatchesHostScope(legacyMbpProject, mbpScope, knownHosts, activeHost = miniHost))
+        assertFalse(
+            syncStore.projectMatchesHostScope(legacyMbpProject, miniScope, knownHosts, activeHost = miniHost),
+            "Project with hostName='MacBook Pro' must never leak into Mac mini scope when multiple local hosts exist",
+        )
+        assertTrue(syncStore.projectMatchesHostScope(miniProject, miniScope, knownHosts, activeHost = miniHost))
+        assertFalse(syncStore.projectMatchesHostScope(cloudProject, miniScope, knownHosts, activeHost = miniHost))
+        assertTrue(syncStore.projectMatchesHostScope(cloudProject, AgentsHostFilterScope.AntigravityCloud, knownHosts, activeHost = miniHost))
+    }
 }

@@ -161,10 +161,36 @@ extension AntigravitySessionStore {
                 }
                 return false
             }
-            if !proj.hostName.isEmpty && proj.hostName != "MacBook Pro" {
+            if !proj.hostName.isEmpty {
                 return proj.hostName == name
             }
             return activeHost.instanceId == id || activeHost.hostname == name
+        }
+    }
+
+    /// Ensures `selectedProjectId` and `selectedWorkspaceUri` point to a repository belonging to
+    /// `selectedHostScope` so switching devices immediately updates the composer's selected repository.
+    public func reconcileSelectedProjectForCurrentHostScope() {
+        let scopedNonEmpty = projects.filter { projectMatchesHostScope($0) && !$0.isNoProject }
+        if let current = scopedNonEmpty.first(where: { $0.id == selectedProjectId }) {
+            if selectedWorkspaceUri != current.workspaceUri {
+                selectedWorkspaceUri = current.workspaceUri
+            }
+            return
+        }
+        if let preferred = scopedNonEmpty.first {
+            selectedProjectId = preferred.id
+            selectedWorkspaceUri = preferred.workspaceUri
+            return
+        }
+        if let fallbackScoped = projects.first(where: { projectMatchesHostScope($0) }) {
+            selectedProjectId = fallbackScoped.id
+            selectedWorkspaceUri = fallbackScoped.workspaceUri
+            return
+        }
+        if hasPairedBackend || isLiveBackendConnected {
+            selectedProjectId = ""
+            selectedWorkspaceUri = ""
         }
     }
 
@@ -565,6 +591,63 @@ extension AntigravitySessionStore {
             let result: ScopedWorkspaceSyncResult
             if let override = hostRefreshExecutorOverrideForTesting {
                 result = try await override(scope)
+            } else if let kmpEngine {
+                let kmpSync = try await kmpEngine.refreshWorkspacesAndSummaries(
+                    hostScope: scope,
+                    skipRelayListRefresh: false
+                )
+                let succeededUuids = Set(kmpSync.succeededInstanceUuids)
+                var refreshedNames = Set(
+                    kmpSync.availableRelayInstances
+                        .filter { succeededUuids.contains($0.uuid) }
+                        .map(\.name)
+                )
+                if case .localHost(let targetId, let targetName) = scope,
+                   succeededUuids.contains(targetId) {
+                    refreshedNames.insert(targetName)
+                }
+                let targetReachable: Bool = {
+                    switch scope {
+                    case .localHost:
+                        return !succeededUuids.isEmpty
+                    case .antigravityCloud:
+                        return kmpSync.cloudSucceeded || !kmpSync.cloudProjects.isEmpty
+                    case .allHosts:
+                        return (activeHost.channel != .cloudRelay)
+                            || !succeededUuids.isEmpty
+                            || kmpSync.cloudSucceeded
+                    }
+                }()
+                let normalizedWorkspaces: [WorkspaceInfo] = kmpSync.workspaces.map { ws in
+                    guard !ws.isCloud else { return ws }
+                    if ws.originInstanceUuid?.isEmpty == false { return ws }
+                    if case .localHost(let targetId, let targetName) = scope {
+                        return WorkspaceInfo(
+                            workspaceUri: ws.workspaceUri,
+                            displayName: ws.displayName,
+                            activeBranch: ws.activeBranch,
+                            worktrees: ws.worktrees,
+                            activeCascadeCount: ws.activeCascadeCount,
+                            indexedFiles: ws.indexedFiles,
+                            isCloud: false,
+                            originInstanceUuid: targetId,
+                            originHostName: (ws.originHostName?.isEmpty == false) ? ws.originHostName : targetName
+                        )
+                    }
+                    return ws
+                }
+                result = ScopedWorkspaceSyncResult(
+                    workspaces: normalizedWorkspaces,
+                    summaries: kmpSync.summaries,
+                    cloudProjects: kmpSync.cloudProjects,
+                    cloudWarmingUp: kmpSync.cloudWarmingUp,
+                    relayInstances: kmpSync.availableRelayInstances,
+                    refreshedLocalHostUuids: succeededUuids,
+                    refreshedLocalHostNames: refreshedNames,
+                    refreshedCloud: kmpSync.cloudSucceeded,
+                    targetReachable: targetReachable,
+                    latencyMs: kmpSync.latencyMs
+                )
             } else {
                 guard let client = rpcClient else { return false }
                 let isRelay = (activeHost.channel == .cloudRelay)
@@ -805,21 +888,22 @@ extension AntigravitySessionStore {
         let effectiveCloudProjects: [ProjectWorkspace] = result.refreshedCloud
             ? result.cloudProjects
             : projects.filter { $0.runtime == .cloud && $0.cloudProjectId != nil }
+        let reconcileDefaultHostName: String = {
+            if case .localHost(_, let targetName) = scope, !targetName.isEmpty {
+                return targetName
+            }
+            return activeHost.hostname
+        }()
         projects = Self.reconcileLiveProjects(
             workspaces: workspaces,
             summaries: &mergedList,
             existingProjects: projects,
-            hostName: activeHost.hostname,
+            hostName: reconcileDefaultHostName,
             cloudProjects: effectiveCloudProjects
         )
         summaries = mergedList
 
-        if selectedProjectId.isEmpty || !projects.contains(where: { $0.id == selectedProjectId }) {
-            let defaultProj = projects.first(where: { projectMatchesHostScope($0) && !$0.isNoProject })
-                ?? projects.first(where: { !$0.isNoProject })
-                ?? projects.first
-            selectedProjectId = defaultProj?.id ?? ""
-        }
+        reconcileSelectedProjectForCurrentHostScope()
 
         let activeHostResponded = replacedLocalUuids.contains(activeHost.instanceId)
             || replacedLocalHostNames.contains(activeHost.hostname)
@@ -870,8 +954,11 @@ extension AntigravitySessionStore {
                let matched = hosts.first(where: { $0.instanceId == id || $0.hostname == name }) {
                 activeHost = matched
             }
+            reconcileSelectedProjectForCurrentHostScope()
             return
         }
+
+        reconcileSelectedProjectForCurrentHostScope()
 
         switch scope {
         case .localHost(let id, let name):
@@ -907,7 +994,7 @@ extension AntigravitySessionStore {
                     latencyMs: lastPingLatencyMs ?? activeHost.latencyMs
                 )
             }()
-            if rpcClient != nil || hostRefreshExecutorOverrideForTesting != nil {
+            if rpcClient != nil || kmpEngine != nil || hostRefreshExecutorOverrideForTesting != nil {
                 _ = ensureInFlightHostRefreshTask(
                     .localHost(id: targetHost.instanceId, name: targetHost.hostname),
                     forceFullSync: true
@@ -919,7 +1006,7 @@ extension AntigravitySessionStore {
             }
 
         case .antigravityCloud, .allHosts:
-            if rpcClient != nil || hostRefreshExecutorOverrideForTesting != nil {
+            if rpcClient != nil || kmpEngine != nil || hostRefreshExecutorOverrideForTesting != nil {
                 _ = ensureInFlightHostRefreshTask(scope, forceFullSync: true)
             }
             hostSwitchTask?.cancel()
@@ -965,6 +1052,7 @@ extension AntigravitySessionStore {
         } else {
             hosts.insert(host, at: 0)
         }
+        reconcileSelectedProjectForCurrentHostScope()
 
         isSwitchingHost = true
         consecutiveSyncFailures = 0
@@ -993,7 +1081,9 @@ extension AntigravitySessionStore {
                         )
                     await engine.switchToRelayInstance(targetInst)
                 }
-                if let cached = await loadSavedSessionCookie() {
+                if let savedCreds = await secretStore.loadCredentials(),
+                   let cookie = savedCreds.sessionCookie,
+                   !cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(host.endpointURL.absoluteString)
                     let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
                     let relayURL = URL(string: "\(originPrefix)/r/\(host.instanceId)") ?? host.endpointURL
@@ -1002,9 +1092,10 @@ extension AntigravitySessionStore {
                             endpointURLString: relayURL.absoluteString,
                             channel: .cloudRelay,
                             hostname: host.hostname,
-                            sessionCookie: cached.cookie,
-                            authUser: cached.authUser ?? activeAuthUser,
-                            resolvedInstanceUuid: host.instanceId
+                            sessionCookie: cookie,
+                            authUser: savedCreds.authUser ?? activeAuthUser,
+                            resolvedInstanceUuid: host.instanceId,
+                            relayApiKey: savedCreds.relayApiKey
                         )
                     )
                 }
@@ -1017,7 +1108,9 @@ extension AntigravitySessionStore {
                 guard self.hostSwitchGeneration == generation else { return false }
 
                 if activeHost.instanceId != host.instanceId,
-                   let cached = await loadSavedSessionCookie() {
+                   let savedCreds = await secretStore.loadCredentials(),
+                   let cookie = savedCreds.sessionCookie,
+                   !cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(activeHost.endpointURL.absoluteString)
                     let originPrefix = parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin
                     let relayURL = URL(string: "\(originPrefix)/r/\(activeHost.instanceId)") ?? activeHost.endpointURL
@@ -1026,9 +1119,10 @@ extension AntigravitySessionStore {
                             endpointURLString: relayURL.absoluteString,
                             channel: .cloudRelay,
                             hostname: activeHost.hostname,
-                            sessionCookie: cached.cookie,
-                            authUser: cached.authUser ?? activeAuthUser,
-                            resolvedInstanceUuid: activeHost.instanceId
+                            sessionCookie: cookie,
+                            authUser: savedCreds.authUser ?? activeAuthUser,
+                            resolvedInstanceUuid: activeHost.instanceId,
+                            relayApiKey: savedCreds.relayApiKey
                         )
                     )
                 }

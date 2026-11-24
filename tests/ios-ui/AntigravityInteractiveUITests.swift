@@ -564,11 +564,11 @@ private final class EmbeddedDesktopMockServer: @unchecked Sendable {
 @MainActor
 final class AntigravityInteractiveUITests: XCTestCase {
 
-    private func launchLiveApp(serverPort: UInt16) -> XCUIApplication {
+    private func launchLiveApp(serverPort: UInt16, hostName: String = "MacBook-Pro-Live") -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["ANTIGRAVITY_BACKEND_URL"] = "http://127.0.0.1:\(serverPort)"
         app.launchEnvironment["ANTIGRAVITY_CSRF_TOKEN"] = "uitest-csrf-token"
-        app.launchEnvironment["ANTIGRAVITY_HOST_NAME"] = "MacBook-Pro-Live"
+        app.launchEnvironment["ANTIGRAVITY_HOST_NAME"] = hostName
         app.launchEnvironment["NO_PROXY"] = "127.0.0.1,localhost,::1"
         app.launchEnvironment["no_proxy"] = "127.0.0.1,localhost,::1"
         app.launch()
@@ -718,16 +718,54 @@ final class AntigravityInteractiveUITests: XCTestCase {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
-        let app = launchLiveApp(serverPort: server.port)
+        let app = launchLiveApp(
+            serverPort: server.port,
+            hostName: "huangjiafandemac-mini-local-swift-vapor"
+        )
 
         let sidebarButton = app.buttons["btn-sidebar"]
         XCTAssertTrue(sidebarButton.waitForExistence(timeout: 10))
+        let hostPill = app.buttons["host-switcher-pill"]
+        XCTAssertTrue(hostPill.waitForExistence(timeout: 6))
+        let searchButton = app.buttons["btn-global-search"]
+        XCTAssertTrue(searchButton.waitForExistence(timeout: 6))
         let heroGreeting = app.descendants(matching: .any)["home-hero-greeting"].firstMatch
         XCTAssertTrue(heroGreeting.waitForExistence(timeout: 6))
 
+        // Verify a very long device hostname truncates inside the pill and never overlaps the top-left/top-right buttons
+        XCTAssertTrue(sidebarButton.isHittable, "Left sidebar button must stay unhindered and tappable with a long host name")
+        XCTAssertTrue(searchButton.isHittable, "Right global search button must stay unhindered and tappable with a long host name")
+        XCTAssertLessThanOrEqual(
+            sidebarButton.frame.maxX,
+            hostPill.frame.minX + 1.0,
+            "Host pill (\(hostPill.frame)) must not overlap left sidebar button (\(sidebarButton.frame))"
+        )
+        XCTAssertLessThanOrEqual(
+            hostPill.frame.maxX,
+            searchButton.frame.minX + 1.0,
+            "Host pill (\(hostPill.frame)) must not overlap right search button (\(searchButton.frame))"
+        )
+
+        // Tap top-left sidebar trigger -> must animate open Sidebar Drawer; tap scrim -> must close cleanly
+        let drawerPanel = app.descendants(matching: .any)["sidebar-drawer-panel"].firstMatch
+        sidebarButton.tap()
+        XCTAssertTrue(
+            drawerPanel.waitForExistence(timeout: 5),
+            "Tapping btn-sidebar must open the Sidebar Drawer"
+        )
+        let scrim = app.descendants(matching: .any)["sidebar-drawer-scrim"].firstMatch
+        if scrim.waitForExistence(timeout: 2) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        } else {
+            performSwipeCloseDrawer(in: app)
+        }
+        XCTAssertTrue(
+            waitForNonExistence(drawerPanel, timeout: 5),
+            "Tapping scrim must dismiss the Sidebar Drawer cleanly back to Home"
+        )
+
         // 0. Swipe left-to-right from the left edge on Home -> must slide open Sidebar Drawer; swipe right-to-left -> must close it
         performEdgeSwipeBack(in: app)
-        let drawerPanel = app.descendants(matching: .any)["sidebar-drawer-panel"].firstMatch
         XCTAssertTrue(
             drawerPanel.waitForExistence(timeout: 5),
             "Swiping left-to-right from the left edge on Home must slide open the Sidebar Drawer"
