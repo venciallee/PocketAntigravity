@@ -88,6 +88,7 @@ import dev.antigravity.android.core.ui.components.statusColorFor
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
+import dev.antigravity.shared.model.AntigravityCloudDetector
 import dev.antigravity.shared.model.CascadeDisplayItem
 import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.ComposerAttachmentChip
@@ -96,6 +97,7 @@ import dev.antigravity.shared.model.CortexStepType
 import dev.antigravity.shared.model.DynamicWorkflowPayload
 import dev.antigravity.shared.model.InteractionDecision
 import dev.antigravity.shared.model.McpToolCallPayload
+import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.SlashCommandItem
 import dev.antigravity.shared.model.SubagentPayload
 import dev.antigravity.shared.model.SwarmBoardPayload
@@ -130,6 +132,7 @@ fun CascadeChatScreen(
     onOpenSwarmBoard: () -> Unit,
     onOpenVoiceMode: () -> Unit,
     onBiometricPrompt: (title: String, onSuccess: () -> Unit) -> Unit,
+    onRetryLoadSteps: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
@@ -143,6 +146,22 @@ fun CascadeChatScreen(
     val activeCascadeId = chatState.activeCascadeId.ifBlank { "cas-rate-limiter" }
     val activeSummary = syncState.summaries.firstOrNull { it.cascadeId == activeCascadeId }
         ?: syncState.summaries.firstOrNull()
+    val resolvedIsCloud = remember(activeCascadeId, activeSummary, workspaceState.projects) {
+        if (activeSummary?.isCloud == true) {
+            true
+        } else if (AntigravityCloudDetector.isCloudWorkspaceUri(activeSummary?.workspaceUri.orEmpty(), cascadeId = activeCascadeId)) {
+            true
+        } else {
+            val matchedProject = activeSummary?.let { item ->
+                workspaceState.projects.firstOrNull { proj ->
+                    (!item.cloudProjectId.isNullOrBlank() && (proj.cloudProjectId == item.cloudProjectId || proj.id == item.cloudProjectId)) ||
+                        (item.workspaceUri.isNotBlank() && proj.workspaceUri == item.workspaceUri) ||
+                        (item.projectSlug.isNotBlank() && proj.name.equals(item.projectSlug, ignoreCase = true))
+                }
+            }
+            matchedProject?.runtime == ProjectRuntimeTarget.CLOUD
+        }
+    }
 
     val rawTitle = activeSummary?.title ?: "Add rate limiter"
     val headerTitle = if (rawTitle == "Add rate limiter to /transfers") "Add rate limiter" else rawTitle
@@ -324,6 +343,51 @@ fun CascadeChatScreen(
                     }
                 }
 
+                if (displayItems.isNotEmpty() && !chatState.stepLoadErrorText.isNullOrBlank()) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 4.dp)
+                            .testTag("chat-step-load-error-banner"),
+                        shape = RoundedCornerShape(12.dp),
+                        color = colors.surfaceCard,
+                        border = BorderStroke(1.dp, colors.statusError.copy(alpha = 0.35f)),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(colors.statusError),
+                            )
+                            Text(
+                                text = chatState.stepLoadErrorText.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.statusError,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = { coordinator.chatStore.clearStepLoadError() },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    text = "Dismiss",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.accentPeriwinkle,
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Docked Material 3 Chat Composer (`and-chat.png`)
                 ChatComposerCard(
                     draftText = chatState.draftInputText,
@@ -369,7 +433,7 @@ fun CascadeChatScreen(
                                             effort = settingsState.selectedEffort,
                                             mode = settingsState.selectedMode,
                                             agentPersona = settingsState.selectedAgentPersona,
-                                            isCloud = activeSummary?.isCloud == true,
+                                            isCloud = resolvedIsCloud,
                                             cloudProjectId = activeSummary?.cloudProjectId,
                                             permissionPreset = settingsState.activePermissionPreset,
                                             instanceUuidOverride = activeSummary?.originInstanceUuid,
@@ -417,6 +481,65 @@ fun CascadeChatScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.inkSecondary,
                         )
+                    }
+                }
+            }
+        } else if (displayItems.isEmpty() && !chatState.stepLoadErrorText.isNullOrBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(20.dp)
+                    .testTag("chat-step-load-error-card"),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                AntigravitySurfaceCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    contentPadding = PaddingValues(18.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(colors.statusError),
+                            )
+                            Text(
+                                text = "Could not load trajectory steps",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = colors.inkReading,
+                            )
+                        }
+                        Text(
+                            text = chatState.stepLoadErrorText.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkSecondary,
+                        )
+                        FilledTonalButton(
+                            onClick = {
+                                coordinator.chatStore.clearStepLoadError()
+                                onRetryLoadSteps()
+                            },
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
+                                contentColor = colors.accentPeriwinkle,
+                            ),
+                            modifier = Modifier.testTag("btn-chat-retry-steps"),
+                        ) {
+                            Text(
+                                text = "Retry",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                            )
+                        }
                     }
                 }
             }

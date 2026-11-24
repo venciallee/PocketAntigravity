@@ -1885,7 +1885,8 @@ extension AntigravityRPCClient {
                         method: "GetAllCascadeTrajectories",
                         body: payload,
                         instanceUuidOverride: instanceUuidOverride,
-                        timeoutInterval: timeoutInterval ?? 4.0
+                        timeoutInterval: timeoutInterval ?? 4.0,
+                        allowStripUnknownFields: false
                     )
                 }
                 let decoded = Self.decodeJetboxSummariesEvent(
@@ -1906,8 +1907,9 @@ extension AntigravityRPCClient {
                     return copy
                 }
                 return decoded
-            } catch let AntigravityRPCError.httpError(_, body) {
-                if idx == 0 && body.lowercased().contains("unknown field \"backend\"") {
+            } catch let AntigravityRPCError.httpError(statusCode, body) {
+                let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body)
+                if idx == 0 && (unknownField?.lowercased() == "backend" || statusCode == 400) {
                     continue
                 }
                 return []
@@ -2001,7 +2003,8 @@ extension AntigravityRPCClient {
             if !primary.isEmpty || !cloud {
                 return primary
             }
-        } catch let AntigravityRPCError.httpError(_, body) where cloud && body.lowercased().contains("unknown field \"backend\"") {
+        } catch let AntigravityRPCError.httpError(_, body)
+            where cloud && ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body)?.lowercased() == "backend" {
             if let fallback = try? await readJetboxSnapshotOnce(
                 requestPayload: ["backendType": .string("BACKEND_TYPE_REMOTE_AICODE")],
                 cloud: true,

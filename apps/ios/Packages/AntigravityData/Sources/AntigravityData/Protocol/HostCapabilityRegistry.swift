@@ -526,8 +526,48 @@ public enum ProtocolCompatibilityEngine: Sendable {
         return isMethodUnimplementedResponse(statusCode: code, body: body)
     }
 
+    /// Returns `true` when an HTTP/Connect error indicates a missing trajectory/conversation resource
+    /// (e.g. HTTP 404 `[5,"not_found: trajectory not found (error ID: ...)"]`) from a live `language_server`,
+    /// as opposed to an unimplemented RPC method or an offline host.
+    public static func isTrajectoryNotFoundResponse(statusCode: Int, body: String) -> Bool {
+        let lower = body.lowercased()
+        if lower.contains("trajectory not found")
+            || lower.contains("cascade not found")
+            || lower.contains("conversation not found")
+            || lower.contains("unknown cascade") {
+            return true
+        }
+        return statusCode == 404
+            && lower.contains("not_found")
+            && !lower.contains("method not found")
+            && !lower.contains("unimplemented")
+            && !lower.contains("instance")
+    }
+
+    public static func isTrajectoryNotFoundError(_ error: Error) -> Bool {
+        guard case let AntigravityRPCError.httpError(code, body) = error else { return false }
+        return isTrajectoryNotFoundResponse(statusCode: code, body: body)
+    }
+
+    private static func isResourceNotFoundResponse(statusCode: Int, body: String) -> Bool {
+        if isTrajectoryNotFoundResponse(statusCode: statusCode, body: body) {
+            return true
+        }
+        let lower = body.lowercased()
+        return lower.contains("project not found")
+            || lower.contains("artifact not found")
+            || lower.contains("step not found")
+            || lower.contains("file not found")
+    }
+
     public static func isMethodUnimplementedResponse(statusCode: Int, body: String) -> Bool {
-        if statusCode == 404 || statusCode == 501 {
+        if statusCode == 501 {
+            return true
+        }
+        if isResourceNotFoundResponse(statusCode: statusCode, body: body) {
+            return false
+        }
+        if statusCode == 404 {
             return true
         }
         let lower = body.lowercased()
@@ -537,20 +577,129 @@ public enum ProtocolCompatibilityEngine: Sendable {
             || lower.contains("not implemented")
     }
 
-    /// Unwraps JSON error payloads (`{"message": "..."}` / `{"error": "..."}`) and normalizes
+    /// Strips any redundant leading `HTTP <code>: ` prefix (e.g. from KMP/SKIE error bridging).
+    public static func stripRedundantHttpPrefix(from raw: String, statusCode: Int) -> String {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "HTTP \(statusCode):"
+        while cleaned.lowercased().hasPrefix(prefix.lowercased()) {
+            cleaned = String(cleaned.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return cleaned
+    }
+
+    /// Strips Google Boq JSPB error envelopes (`[5,"not_found: ..."]`), Connect JSON error envelopes,
+    /// and any redundant leading `HTTP <code>: ` prefixes into a clean single-line detail string.
+    public static func unwrapErrorDetail(from raw: String, statusCode: Int? = nil) -> String {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix(")]}'") {
+            cleaned = String(cleaned.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let statusCode {
+            cleaned = stripRedundantHttpPrefix(from: cleaned, statusCode: statusCode)
+        }
+        if let data = cleaned.data(using: .utf8),
+           let parsed = try? JSONDecoder().decode(JSONValue.self, from: data) {
+            switch parsed {
+            case .array(let arr):
+                var collected: [String] = []
+                collectJsonArrayStrings(arr, into: &collected)
+                if let first = collected.first(where: { !$0.isEmpty }) {
+                    return first
+                }
+            case .object(let obj):
+                let code = obj["code"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                for key in ["message", "error", "detail", "details"] {
+                    if let msg = obj[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !msg.isEmpty {
+                        if !code.isEmpty && !msg.lowercased().hasPrefix(code.lowercased()) {
+                            return "\(code): \(msg)"
+                        }
+                        return msg
+                    }
+                }
+            default:
+                break
+            }
+        }
+        return cleaned
+    }
+
+    /// Formats an RPC/transport failure cleanly for UI presentation (never doubling `HTTP 404: HTTP 404:`
+    /// or leaking raw Boq JSON-array brackets like `[5,"not_found: ..."]`).
+    public static func formatUserFacingRpcError(_ error: Error) -> String {
+        if case let AntigravityRPCError.httpError(code, body) = error {
+            let detail = unwrapErrorDetail(from: body, statusCode: code)
+            if isTrajectoryNotFoundResponse(statusCode: code, body: body) {
+                if !detail.isEmpty {
+                    return "Conversation history could not be found on this host (\(detail)). Try Retry or open it once on Antigravity Desktop."
+                }
+                return "Conversation history could not be found on this host. Try Retry or open it once on Antigravity Desktop."
+            }
+            return detail.isEmpty ? "HTTP \(code)" : "HTTP \(code): \(detail)"
+        }
+        return error.localizedDescription
+    }
+
+    private static func collectJsonArrayStrings(
+        _ values: [JSONValue],
+        into out: inout [String],
+        depth: Int = 0
+    ) {
+        guard depth <= 4 else { return }
+        for val in values {
+            switch val {
+            case .string(let s):
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    out.append(trimmed)
+                }
+            case .array(let nested):
+                collectJsonArrayStrings(nested, into: &out, depth: depth + 1)
+            case .object(let obj):
+                for key in ["message", "error", "detail", "details"] {
+                    if let msg = obj[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !msg.isEmpty {
+                        out.append(msg)
+                    }
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    /// Unwraps JSON object/array error payloads (`{"message": "..."}` / `[3,"invalid_argument: ..."]`) and normalizes
     /// JSON-escaped quotes (`\"`) so protojson field/enum error extractors work on both raw HTTP
-    /// Connect-RPC bodies and already-unwrapped error strings.
+    /// Connect-RPC bodies and Cloud Relay Boq responses.
     private static func candidateErrorStrings(from raw: String) -> [String] {
         var candidates: [String] = []
-        if let data = raw.data(using: .utf8),
-           let obj = try? JSONDecoder().decode([String: JSONValue].self, from: data) {
-            for key in ["message", "error", "detail", "details"] {
-                if let msg = obj[key]?.stringValue, !msg.isEmpty {
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix(")]}'") {
+            trimmed = String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let data = trimmed.data(using: .utf8),
+           let parsed = try? JSONDecoder().decode(JSONValue.self, from: data) {
+            switch parsed {
+            case .object(let obj):
+                for key in ["message", "error", "detail", "details"] {
+                    if let msg = obj[key]?.stringValue, !msg.isEmpty {
+                        candidates.append(msg)
+                        if msg.contains("\\\"") {
+                            candidates.append(msg.replacingOccurrences(of: "\\\"", with: "\""))
+                        }
+                    }
+                }
+            case .array(let arr):
+                var arrStrings: [String] = []
+                collectJsonArrayStrings(arr, into: &arrStrings)
+                for msg in arrStrings {
                     candidates.append(msg)
                     if msg.contains("\\\"") {
                         candidates.append(msg.replacingOccurrences(of: "\\\"", with: "\""))
                     }
                 }
+            default:
+                break
             }
         }
         candidates.append(raw)
