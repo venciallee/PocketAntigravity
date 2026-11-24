@@ -268,7 +268,30 @@ public final class AntigravitySessionStore {
     public var availableRelayInstances: [RelayInstanceInfo] = []
     public var isRefreshingRelayHosts: Bool = false
     public var activeAuthUser: String = "0"
+    public var userDisplayName: String? = nil
     public var lastScannedRelayURL: String = ""
+
+    /// Resolved greeting display name: uses the deterministic `"Alex"` fixture ONLY in offline
+    /// ESDD verification mode; live mode uses the real user's name from `GetUserStatus` (or `nil`
+    /// for a clean nameless greeting).
+    public var homeGreetingDisplayName: String? {
+        if isVerificationMode && !hasPairedBackend && !isLiveBackendConnected {
+            return UserGreetingFormatter.formatGreetingName(userDisplayName) ?? "Alex"
+        }
+        return UserGreetingFormatter.formatGreetingName(userDisplayName)
+    }
+
+    public var homeHeroGreetingText: String {
+        UserGreetingFormatter.homeHeroGreeting(displayName: homeGreetingDisplayName)
+    }
+
+    public var homeAddContextBackdropGreetingText: String {
+        UserGreetingFormatter.addContextBackdropGreeting(displayName: homeGreetingDisplayName)
+    }
+
+    public var homeCompactBackdropGreetingText: String {
+        UserGreetingFormatter.compactBackdropGreeting(displayName: homeGreetingDisplayName)
+    }
     public var isLoadingSteps: Bool = false
     public var stepLoadErrorText: String? = nil
     public var cloudAgentWarmingUp: Bool = false
@@ -404,6 +427,7 @@ public final class AntigravitySessionStore {
     // MARK: - Dependencies
     internal static let selectedHostScopeDefaultsKey = "antigravity.ios.selectedHostScope.v1"
     internal static let pairedHostLaunchHintDefaultsKey = "antigravity.ios.pairedHostLaunchHint.v1"
+    internal static let userDisplayNameDefaultsKey = "antigravity.userDisplayName.v1"
     internal let projectionStore: LocalProjectionStore
     internal let secretStore: any SecretStore
     internal let networkMonitor: any NetworkReachabilityMonitoring
@@ -756,6 +780,10 @@ public final class AntigravitySessionStore {
         if let rawAppearance = store.preferencesStore.string(forKey: Self.appearanceModeDefaultsKey),
            let savedAppearance = AppAppearanceMode(rawValue: rawAppearance) {
             store.appearancePreferences.appearanceMode = savedAppearance
+        }
+        if let rawUserName = store.preferencesStore.string(forKey: Self.userDisplayNameDefaultsKey),
+           let savedUserName = UserGreetingFormatter.formatGreetingName(rawUserName) {
+            store.userDisplayName = savedUserName
         }
         return store
     }

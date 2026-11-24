@@ -7,7 +7,7 @@ import UIKit
 /// State `UE01_AGENTS_HOME`: Minimalist New Conversation Home (`docs/ue/ios/Main.png`).
 /// - Top bar: Left sidebar trigger (`btn-sidebar`), centered Host Switcher capsule (`host-switcher-pill`),
 ///   right Global Search trigger (`btn-global-search`).
-/// - Center: Hero greeting (`Welcome back, Alex. Where should we pick up?`).
+/// - Center: Dynamic hero greeting (`Welcome back, <name>. Where should we pick up?`, or nameless fallback).
 /// - Bottom: Compact amber `Needs approval` banner (when an agent awaits approval) + docked outer
 ///   project/branch/runtime selector wrapping `ChatComposerView`.
 public struct AgentsHomeViewController: View {
@@ -304,7 +304,7 @@ public struct AgentsHomeViewController: View {
             Spacer(minLength: 24)
 
             // Centered Hero Greeting (`Main.png`)
-            Text("Welcome back,\nAlex. Where\nshould we pick up?")
+            Text(store.homeHeroGreetingText)
                 .font(.system(size: 30, weight: .bold))
                 .tracking(-0.5)
                 .lineSpacing(3)

@@ -375,6 +375,15 @@ class LiveMockServer:
                                     }
                                 }
                             }
+                        elif inner_method == "GetUserStatus":
+                            payload_obj = {
+                                "serverInfo": {"version": "v2.33.0"},
+                                "userStatus": {
+                                    "name": "Vencial Lee",
+                                    "email": "venciallee@gmail.com",
+                                    "userTier": {"id": "g1-ultra-tier", "name": "Google AI Ultra"},
+                                },
+                            }
                         elif inner_method == "StartCascade":
                             # Enforce strict protojson (reject companion-only unknown fields)
                             if "modelId" in inner_req or "initialUserInput" in inner_req:
@@ -754,6 +763,21 @@ class LiveMockServer:
                         outer_state.interactions.append(ack)
                     outer_state.record(method, req)
                     self._send_json(200, ack)
+                    return
+
+                if method == "GetUserStatus":
+                    outer_state.record(method, req)
+                    self._send_json(
+                        200,
+                        {
+                            "serverInfo": {"version": "v2.33.0"},
+                            "userStatus": {
+                                "name": "Vencial Lee",
+                                "email": "venciallee@gmail.com",
+                                "userTier": {"id": "g1-ultra-tier", "name": "Google AI Ultra"},
+                            },
+                        },
+                    )
                     return
 
                 if method == "GetCascadeModelConfigs":

@@ -14,6 +14,7 @@ import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.model.RequestedInteraction
 import dev.antigravity.shared.model.RunCommandInteractionSpec
 import dev.antigravity.shared.model.RunCommandPayload
+import dev.antigravity.shared.platform.InMemoryPreferencesStore
 import dev.antigravity.shared.platform.NetworkReachabilityStatus
 import dev.antigravity.shared.protocol.AntigravityKmpRpcClient
 import dev.antigravity.shared.protocol.AntigravityRpcError
@@ -425,6 +426,92 @@ class CoreDomainStoreTest {
                 delay(50L)
             }
             assertTrue(hydrated, "Background hydration must populate summaries when initial handshake returned empty")
+        }
+    }
+
+    @Test
+    fun testLiveUserDisplayNameHydratesFromGetUserStatusAndPersistsAcrossRestart() = runTest {
+        withContext(Dispatchers.Default) {
+            val rawUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+            val validKey = "AI" + "zaSyUSERPROFILE0000000000000000000000"
+            val prefs = InMemoryPreferencesStore()
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$rawUuid",["Venciallee","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = runCatching { request.body.toByteArray().decodeToString() }.getOrDefault("")
+                        val jsonPayload = when {
+                            bodyText.contains("GetUserStatus") ->
+                                """{"userStatus":{"name":"Vencial Lee","email":"venciallee@gmail.com","userTier":{"name":"Google AI Ultra"}}}"""
+                            bodyText.contains("GetWorkspaceInfos") ->
+                                """{"workspaces":[{"workspaceUri":"file:///Users/vencial/dsh-superagent","displayName":"dsh-superagent"}]}"""
+                            bodyText.contains("GetAllCascadeTrajectories") ->
+                                """{"trajectorySummaries":{}}"""
+                            else -> """{"projects":[]}"""
+                        }
+                        val b64 = ByteString.of(*jsonPayload.encodeToByteArray()).base64()
+                        respond(
+                            content = """["$b64",[["content-type","application/json"]]]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = prefs,
+                scope = this,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+
+            // Fresh live coordinator starts with null userDisplayName (never mock "Alex")
+            assertEquals(null, coordinator.connectionState.value.userDisplayName)
+
+            coordinator.connectCloudRelay(
+                relayUrlString = "https://antigravity.google.com/r/$rawUuid",
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                startSummaryStream = false,
+            )
+
+            // Wait for background GetUserStatus hydration launched in onHandshakeSucceeded
+            var resolved: String? = null
+            for (i in 0 until 60) {
+                resolved = coordinator.connectionState.value.userDisplayName
+                if (resolved != null) break
+                delay(25L)
+            }
+            assertEquals("Vencial", resolved)
+
+            // Cold-starting a fresh coordinator with the same preferencesStore hydrates cached name immediately
+            val restarted = AntigravityCoreCoordinator(preferencesStore = prefs)
+            assertEquals("Vencial", restarted.connectionState.value.userDisplayName)
+
+            // Disconnect clears both live state and persisted userDisplayName
+            coordinator.disconnectAndClearCredentials()
+            assertEquals(null, coordinator.connectionState.value.userDisplayName)
+            assertEquals(null, AntigravityCoreCoordinator(preferencesStore = prefs).connectionState.value.userDisplayName)
         }
     }
 }

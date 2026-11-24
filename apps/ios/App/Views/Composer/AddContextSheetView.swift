@@ -248,7 +248,7 @@ public struct AddContextSheetView: View {
                 if showHomeBackdrop {
                     VStack {
                         Spacer()
-                        Text("Welcome back, Alex.\nWhere should we pick\nup?")
+                        Text(store.homeAddContextBackdropGreetingText)
                             .font(.system(size: 30, weight: .bold))
                             .multilineTextAlignment(.center)
                             .foregroundStyle(AntigravityTheme.textPrimary.opacity(0.32))

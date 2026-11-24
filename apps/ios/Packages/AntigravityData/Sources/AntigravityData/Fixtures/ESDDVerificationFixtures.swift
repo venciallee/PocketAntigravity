@@ -983,6 +983,7 @@ extension AntigravitySessionStore {
         )
         store.isVerificationMode = true
         store.isInitialSessionCheckComplete = true
+        store.userDisplayName = "Alex"
         store.appearancePreferences.appearanceMode = .dark
         store.usageQuota = ModelUsageQuota(
             geminiWeeklyRemaining: 0.48,

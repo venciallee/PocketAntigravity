@@ -1231,7 +1231,9 @@ extension AntigravitySessionStore {
             selectedWorkspaceUri = ""
             activeCascadeId = ""
             activeRoute = .tabRoot
+            userDisplayName = nil
         }
+        preferencesStore.set(nil, forKey: Self.userDisplayNameDefaultsKey)
         _ = await projectionStore.drainOutbox()
         await projectionStore.clearCachedProjections()
         await secretStore.clearCredentials()
@@ -1301,6 +1303,11 @@ extension AntigravitySessionStore {
             forceFullSync: true,
             includeAutomations: selectedTab == .automations
         )
+        if userDisplayName == nil {
+            Task { [weak self] in
+                await self?.refreshUserProfile()
+            }
+        }
         startSummarySubscriptionStream()
 
         if case .cascadeChat(let cid) = activeRoute, !cid.isEmpty {
@@ -2302,6 +2309,7 @@ extension AntigravitySessionStore {
                 )
             }
             if hostOnline {
+                await self?.refreshUserProfile()
                 await self?.refreshModelCatalog()
                 await self?.refreshAutomations()
                 await self?.replayPendingOutbox()
@@ -2314,6 +2322,25 @@ extension AntigravitySessionStore {
                 activeCascadeId,
                 pollUntilIdle: activeRoute == .cascadeChat(activeCascadeId)
             )
+        }
+    }
+
+    /// Queries the connected host via `GetUserStatus` (KMP-first when attached, falling back to
+    /// `AntigravityRPCClient`) and caches the real signed-in user's greeting name for instant cold starts.
+    public func refreshUserProfile() async {
+        guard !isVerificationMode || hasPairedBackend || isLiveBackendConnected else { return }
+        var resolvedName: String? = nil
+        if let engine = kmpEngine {
+            resolvedName = await engine.fetchUserDisplayName()
+        }
+        if resolvedName == nil, let client = rpcClient {
+            resolvedName = await client.fetchUserProfile()?.displayName
+        }
+        if let clean = UserGreetingFormatter.formatGreetingName(resolvedName) {
+            userDisplayName = clean
+            if !isVerificationMode {
+                preferencesStore.set(clean, forKey: Self.userDisplayNameDefaultsKey)
+            }
         }
     }
 }

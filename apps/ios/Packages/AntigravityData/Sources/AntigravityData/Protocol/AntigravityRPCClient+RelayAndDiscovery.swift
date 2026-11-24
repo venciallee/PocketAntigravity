@@ -421,6 +421,95 @@ extension AntigravityRPCClient {
         }
     }
 
+    /// Parses signed-in user identity (display name, email, plan tier) from an upstream `GetUserStatus` JSON payload.
+    public static func parseUserProfileResponse(_ obj: [String: JSONValue]) -> LiveUserProfile? {
+        let statusObj = obj["userStatus"]?.objectValue ?? obj["user_status"]?.objectValue
+        var containers: [[String: JSONValue]] = []
+        if let statusObj {
+            containers.append(statusObj)
+            if let u = statusObj["user"]?.objectValue { containers.append(u) }
+            if let p = statusObj["profile"]?.objectValue { containers.append(p) }
+            if let a = statusObj["account"]?.objectValue { containers.append(a) }
+        }
+        if let u = obj["user"]?.objectValue { containers.append(u) }
+        if let p = obj["profile"]?.objectValue { containers.append(p) }
+        if let a = obj["account"]?.objectValue { containers.append(a) }
+        containers.append(obj)
+
+        let givenNameKeys = ["givenName", "given_name", "firstName", "first_name"]
+        let fullNameKeys = [
+            "name",
+            "displayName",
+            "display_name",
+            "fullName",
+            "full_name",
+            "userName",
+            "user_name",
+            "accountName",
+            "account_name"
+        ]
+        let emailKeys = ["email", "userEmail", "user_email", "accountEmail", "account_email"]
+
+        func firstString(_ keys: [String]) -> String? {
+            for container in containers {
+                for key in keys {
+                    if let raw = container[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !raw.isEmpty {
+                        return raw
+                    }
+                }
+            }
+            return nil
+        }
+
+        let rawName = firstString(givenNameKeys) ?? firstString(fullNameKeys)
+        let rawEmail = firstString(emailKeys)
+        let tierObj = statusObj?["userTier"]?.objectValue
+            ?? statusObj?["user_tier"]?.objectValue
+            ?? obj["userTier"]?.objectValue
+        let planInfoObj = statusObj?["planStatus"]?.objectValue?["planInfo"]?.objectValue
+            ?? statusObj?["plan_status"]?.objectValue?["plan_info"]?.objectValue
+            ?? obj["planStatus"]?.objectValue?["planInfo"]?.objectValue
+        let planDisplayName = Self.nonEmptyString(tierObj?["name"]?.stringValue)
+            ?? Self.nonEmptyString(planInfoObj?["planName"]?.stringValue)
+            ?? Self.nonEmptyString(planInfoObj?["plan_name"]?.stringValue)
+
+        let displayName = UserGreetingFormatter.formatGreetingName(rawName, fallbackEmail: rawEmail)
+        if displayName == nil && rawEmail == nil && planDisplayName == nil {
+            return nil
+        }
+        return LiveUserProfile(
+            displayName: displayName,
+            email: rawEmail,
+            planDisplayName: planDisplayName
+        )
+    }
+
+    /// Queries upstream `GetUserStatus` (over Direct LAN or Cloud Relay `ProxyCommand`) for the
+    /// real signed-in user's profile without blocking or failing the connection handshake.
+    public func fetchUserProfile(
+        instanceUuidOverride: String? = nil,
+        timeoutInterval: TimeInterval = 5.0
+    ) async -> LiveUserProfile? {
+        let metaReq: [String: JSONValue] = [
+            "metadata": .object([
+                "ideName": .string("antigravity"),
+                "extensionName": .string("antigravity"),
+                "locale": .string("en")
+            ])
+        ]
+        guard let resp = try? await callUnaryJSON(
+            method: "GetUserStatus",
+            body: metaReq,
+            instanceUuidOverride: instanceUuidOverride,
+            timeoutInterval: timeoutInterval,
+            respectNegativeCache: false
+        ) else {
+            return nil
+        }
+        return Self.parseUserProfileResponse(resp)
+    }
+
     // MARK: - Handshake & Login Verification
 
     /// Verifies authentication (`SAPISIDHASH` + `ApiService/ListInstances` + `ProxyCommand`, or `x-codeium-csrf-token`)

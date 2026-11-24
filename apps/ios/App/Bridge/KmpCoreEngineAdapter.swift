@@ -285,6 +285,14 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
         try? await coordinator.disconnectAndClearCredentials()
     }
 
+    public func fetchUserDisplayName() async -> String? {
+        do {
+            return try await coordinator.refreshUserProfile()
+        } catch {
+            return nil
+        }
+    }
+
     public var lastHandshakeDiagnostic: String {
         coordinator.lastHandshakeDiagnostic()
     }
@@ -307,5 +315,6 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
     public func onBackground() {}
     public func onForeground() async {}
     public func disconnectAndClearCredentials() async {}
+    public func fetchUserDisplayName() async -> String? { nil }
     #endif
 }

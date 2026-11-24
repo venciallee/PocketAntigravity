@@ -153,4 +153,35 @@ class CoreModelParityTest {
         )
         assertEquals(AppAppearanceMode.SYSTEM, legacyDecoded.appearanceMode)
     }
+
+    @Test
+    fun testUserGreetingFormatterNormalizationAndFallbacks() {
+        // Full names collapse to given name; single-word / CJK / short initials stay clean
+        assertEquals("Vencial", UserGreetingFormatter.formatGreetingName("Vencial Lee"))
+        assertEquals("Venciallee", UserGreetingFormatter.formatGreetingName("Venciallee"))
+        assertEquals("李明", UserGreetingFormatter.formatGreetingName("李明"))
+        assertEquals("J. Smith", UserGreetingFormatter.formatGreetingName("J. Smith"))
+
+        // Email fallback extracts readable handle and rejects numeric-only addresses
+        assertEquals("Venciallee", UserGreetingFormatter.formatGreetingName(null, fallbackEmail = "venciallee@gmail.com"))
+        assertEquals("Alex", UserGreetingFormatter.formatGreetingName("", fallbackEmail = "alex.chen+work@company.com"))
+        assertEquals(null, UserGreetingFormatter.formatGreetingName(null, fallbackEmail = "12345678@qq.com"))
+
+        // Rejects placeholders and raw UUIDs
+        assertEquals(null, UserGreetingFormatter.formatGreetingName("unknown"))
+        assertEquals(null, UserGreetingFormatter.formatGreetingName("Anonymous"))
+        assertEquals(null, UserGreetingFormatter.formatGreetingName("0f5819ac-9308-40d8-a308-98b55122c533"))
+
+        // Greeting copy renders real name when available, and clean nameless fallback otherwise
+        assertEquals(
+            "Welcome back,\nVencial. Where\nshould we pick up?",
+            UserGreetingFormatter.homeHeroGreeting("Vencial Lee"),
+        )
+        assertEquals(
+            "Welcome back.\nWhere should\nwe pick up?",
+            UserGreetingFormatter.homeHeroGreeting(null),
+        )
+        assertEquals("Welcome back, Vencial.", UserGreetingFormatter.compactBackdropGreeting("Vencial Lee"))
+        assertEquals("Welcome back.", UserGreetingFormatter.compactBackdropGreeting(null))
+    }
 }

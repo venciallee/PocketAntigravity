@@ -95,6 +95,7 @@ import dev.antigravity.shared.model.ConversationSortField
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
+import dev.antigravity.shared.model.UserGreetingFormatter
 import kotlinx.coroutines.launch
 
 /**
@@ -420,8 +421,16 @@ fun AgentsHomeScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     if (showGreeting) {
+                        val greetingDisplayName = if (coordinator.isVerificationMode) {
+                            connectionState.userDisplayName ?: "Alex"
+                        } else {
+                            connectionState.userDisplayName
+                        }
+                        val heroGreetingText = remember(greetingDisplayName) {
+                            UserGreetingFormatter.homeHeroGreeting(greetingDisplayName)
+                        }
                         Text(
-                            text = "Welcome back,\nAlex. Where\nshould we pick up?",
+                            text = heroGreetingText,
                             style = MaterialTheme.typography.headlineMedium.copy(
                                 fontSize = 30.sp,
                                 lineHeight = 38.sp,
