@@ -643,7 +643,7 @@ class CoreDomainStoreTest {
 
     @Test
     fun testProjectMatchesHostScopeIsolatesMacBookProHostFromSecondMac() = runTest {
-        val syncStore = ConversationSyncStore(scope = this)
+        val syncStore = ConversationSyncStore(scope = this, projectionStorage = InMemoryProjectionStorage())
         val mbpHost = RemoteHostInstance(
             instanceId = "uuid-mbp",
             hostname = "MacBook Pro",

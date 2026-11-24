@@ -1,7 +1,9 @@
 package dev.antigravity.android
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -167,7 +169,9 @@ class AndroidSidebarDrawerGestureTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
 
-        composeRule.onNodeWithTag("sidebar-scrim").performClick()
+        composeRule.onNodeWithTag("sidebar-scrim").performTouchInput {
+            click(Offset(width * 0.92f, height * 0.5f))
+        }
         composeRule.waitForIdle()
         assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
     }
@@ -291,7 +295,9 @@ class AndroidSidebarDrawerGestureTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("project-header-vapor-backend").assertIsDisplayed()
         assertEquals(0, composeRule.onAllNodesWithTag("project-header-mbp-ios-app").fetchSemanticsNodes().size)
-        composeRule.onNodeWithTag("sidebar-scrim").performClick()
+        composeRule.onNodeWithTag("sidebar-scrim").performTouchInput {
+            click(Offset(width * 0.92f, height * 0.5f))
+        }
         composeRule.waitForIdle()
 
         // Switch to Antigravity Cloud -> repo picker updates to venciallee/PocketAntigravity
