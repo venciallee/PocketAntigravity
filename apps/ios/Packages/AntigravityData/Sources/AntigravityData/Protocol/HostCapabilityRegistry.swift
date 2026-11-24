@@ -221,6 +221,7 @@ public enum HostCapability: String, Codable, Sendable, CaseIterable, Hashable {
         "SendUserCascadeMessage",
         "SetAutomationPaused",
         "StartCascade",
+        "StreamAgentStateUpdates",
         "StreamCascadeReactiveUpdates",
         "TriggerAutomationNow"
     ]

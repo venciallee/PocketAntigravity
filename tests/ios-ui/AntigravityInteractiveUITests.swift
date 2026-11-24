@@ -958,7 +958,16 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["composer-btn-attach-file"].firstMatch.exists, "Legacy Attach pill must not appear above input")
 
         // 2. Verify unified UE v2.1 composer controls: `+`, Model+Effort, `🛡 Default`, `mic`, `→`
-        XCTAssertTrue(app.descendants(matching: .any)["composer-btn-add-context"].firstMatch.waitForExistence(timeout: 5))
+        let addContextButton = app.descendants(matching: .any)["composer-btn-add-context"].firstMatch
+        XCTAssertTrue(addContextButton.waitForExistence(timeout: 5))
+        // Tap `+` to verify AddContextSheetView presents & dismisses cleanly without freezing iOS presentation host
+        addContextButton.tap()
+        let closeAddContextButton = app.buttons["btn-close-add-context"].firstMatch
+        XCTAssertTrue(
+            closeAddContextButton.waitForExistence(timeout: 5),
+            "Tapping composer '+' button must present AddContextSheetView responsively without freezing"
+        )
+        closeAddContextButton.tap()
         XCTAssertTrue(app.buttons["composer-pill-model"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["composer-pill-permissions"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["composer-btn-mic"].waitForExistence(timeout: 5))

@@ -2568,6 +2568,34 @@ public class AntigravityKmpRpcClient(
         val wakeKey = "${targetUuid ?: "direct"}|$cascadeId"
         var lastError: Throwable? = null
 
+        // Path 0 (Antigravity 2.x Cloud Primary): Remote Cloud (`v1/...`) conversations live on
+        // Google's remote backend rather than local `.pb` files, so `GetCascadeTrajectorySteps` /
+        // `LoadTrajectory` / `GetCascadeTrajectory` often return `not_found: trajectory not found`
+        // even for actively running Cloud chats. `StreamAgentStateUpdates` is the authoritative
+        // Antigravity 2.x streaming RPC that delivers live & historical Cloud trajectories.
+        if (isRemoteCloud) {
+            try {
+                val streamedSteps = fetchStepsViaAgentStateStream(
+                    cascadeId = cascadeId,
+                    isRemoteCloud = true,
+                    targetUuid = targetUuid,
+                    timeoutMs = 5_000L,
+                )
+                if (!streamedSteps.isNullOrEmpty()) {
+                    stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                    return streamedSteps
+                }
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (!ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                    lastError = e
+                }
+            }
+        }
+
         // Path 1 (Local PC Default): Binary Protobuf (`application/proto`) first.
         // Saves ~65% mobile bandwidth, avoids server-side JSON truncation dynamically,
         // wakes dormant disk sessions on empty OR 404 `not_found`, and repairs unknown wire types via JSON.
@@ -2639,15 +2667,170 @@ public class AntigravityKmpRpcClient(
         }
 
         // Path 2: Adaptive JSON (`GetCascadeTrajectorySteps` + `LoadTrajectory` + `GetCascadeTrajectory`)
-        // for Cloud (`v1/...`) or fallback, with zero hardcoded step thresholds and per-host runtime ceiling learning.
-        return fetchStepsViaAdaptiveJson(
-            cascadeId = cascadeId,
-            knownStepCount = knownStepCount,
-            isRemoteCloud = isRemoteCloud,
-            targetUuid = targetUuid,
-            wakeKey = wakeKey,
-            initialError = lastError,
+        // for Cloud fallback or local sessions, with zero hardcoded step thresholds and per-host runtime ceiling learning.
+        var adaptiveError: Throwable? = null
+        val adaptiveSteps = try {
+            fetchStepsViaAdaptiveJson(
+                cascadeId = cascadeId,
+                knownStepCount = knownStepCount,
+                isRemoteCloud = isRemoteCloud,
+                targetUuid = targetUuid,
+                wakeKey = wakeKey,
+                initialError = lastError,
+            )
+        } catch (e: AntigravityRpcError.Unauthorized) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            adaptiveError = e
+            emptyList()
+        }
+
+        if (adaptiveSteps.isNotEmpty()) {
+            return adaptiveSteps
+        }
+
+        // Path 3 (Local Antigravity 2.x Fallback): If local checkpoint RPCs failed (`not_found`)
+        // or returned empty on a session that may have live un-checkpointed turns or SQLite-backed
+        // state, fall back to `StreamAgentStateUpdates` before surfacing an error.
+        if (!isRemoteCloud && (adaptiveError != null || knownStepCount > 0)) {
+            try {
+                val streamedSteps = fetchStepsViaAgentStateStream(
+                    cascadeId = cascadeId,
+                    isRemoteCloud = false,
+                    targetUuid = targetUuid,
+                    timeoutMs = 3_500L,
+                )
+                if (!streamedSteps.isNullOrEmpty()) {
+                    stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                    return streamedSteps
+                }
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Preserve original adaptiveError below.
+            }
+        }
+
+        adaptiveError?.let { throw it }
+        return adaptiveSteps
+    }
+
+    /**
+     * Reads the initial trajectory snapshot from Antigravity 2.x's authoritative
+     * `StreamAgentStateUpdates` server-streaming Connect-RPC (`mainTrajectoryUpdate.stepsUpdate`),
+     * merging sparse `indices` + `steps` up to `totalLength` and immediately closing the stream.
+     * Returns `null` when this host does not implement `StreamAgentStateUpdates` (negative-cached).
+     */
+    private suspend fun fetchStepsViaAgentStateStream(
+        cascadeId: String,
+        isRemoteCloud: Boolean,
+        targetUuid: String?,
+        timeoutMs: Long = 5_000L,
+    ): List<CascadeStep>? {
+        val profile = stateMutex.withLock {
+            getOrCreateProfileLocked(hostCapabilityKey(targetUuid))
+        }
+        if (profile.isMethodKnownUnsupported("StreamAgentStateUpdates")) {
+            return null
+        }
+
+        val strippedFields = profile.strippedFieldsByMethod["StreamAgentStateUpdates"].orEmpty()
+        val payloadVariants = mutableListOf<JsonObject>()
+        // Canonical Antigravity 2.x request (`conversationId` + `subscriberId`)
+        payloadVariants.add(
+            buildJsonObject {
+                put("conversationId", cascadeId)
+                put("subscriberId", "pocket-${randomUuidV4()}")
+            }
         )
+        if (isRemoteCloud && "backend" !in strippedFields) {
+            payloadVariants.add(
+                buildJsonObject {
+                    put("conversationId", cascadeId)
+                    put("subscriberId", "pocket-${randomUuidV4()}")
+                    put("backend", "BACKEND_TYPE_REMOTE_AICODE")
+                }
+            )
+        }
+
+        var lastError: Throwable? = null
+        for (variant in payloadVariants) {
+            val stepsByIndex = linkedMapOf<Int, CascadeStep>()
+            var reportedTotalLength: Int? = null
+            var sawMainTrajectory = false
+            try {
+                withSafeTimeoutOrNull(timeoutMs) {
+                    subscribeEnvelopeStream(
+                        method = "StreamAgentStateUpdates",
+                        body = variant,
+                        instanceUuidOverride = targetUuid,
+                        allowCrossHostFailover = isRemoteCloud,
+                    ).collect { frameObj ->
+                        val decoded = JsonStepAndSummaryDecoder.decodeAgentStateStepsUpdate(
+                            obj = frameObj,
+                            cascadeId = cascadeId,
+                        )
+                        if (decoded.hasMainTrajectoryUpdate) {
+                            sawMainTrajectory = true
+                        }
+                        if (decoded.totalLength != null) {
+                            reportedTotalLength = decoded.totalLength
+                        }
+                        for (step in decoded.steps) {
+                            stepsByIndex[step.stepIndex] = step
+                        }
+                        val totalLen = reportedTotalLength
+                        if (totalLen != null && totalLen >= 0) {
+                            stepsByIndex.keys.removeAll { it >= totalLen }
+                        }
+                        if (stepsByIndex.isNotEmpty() && (totalLen == null || stepsByIndex.size >= totalLen)) {
+                            throw SnapshotCompleteSignal()
+                        }
+                        if (sawMainTrajectory && totalLen == 0) {
+                            throw SnapshotCompleteSignal()
+                        }
+                    }
+                }
+                if (stepsByIndex.isNotEmpty() || (sawMainTrajectory && reportedTotalLength == 0)) {
+                    mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
+                    return stepsByIndex.values.sortedBy { it.stepIndex }
+                }
+            } catch (_: SnapshotCompleteSignal) {
+                mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
+                return stepsByIndex.values.sortedBy { it.stepIndex }
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                    mutateCapabilityProfile(targetUuid) { it.recordMethodUnsupported("StreamAgentStateUpdates") }
+                    return null
+                }
+                if (e is AntigravityRpcError.HttpError) {
+                    ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body)?.let { unknownField ->
+                        mutateCapabilityProfile(targetUuid) {
+                            it.recordStrippedField(unknownField, forMethod = "StreamAgentStateUpdates")
+                        }
+                    }
+                }
+                lastError = e
+                val shouldTryNext = e is AntigravityRpcError.HttpError && (
+                    e.statusCode == 400 ||
+                        ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body) != null ||
+                        ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(e.statusCode, e.body)
+                    )
+                if (!shouldTryNext) {
+                    break
+                }
+            }
+        }
+        lastError?.let { throw it }
+        return emptyList()
     }
 
     private suspend fun fetchStepsViaAdaptiveJson(
@@ -4441,6 +4624,29 @@ public class AntigravityKmpRpcClient(
         instanceUuidOverride = instanceUuidOverride,
     )
 
+    private fun extractConnectEndStreamError(frameBytes: ByteArray): AntigravityRpcError? {
+        if (frameBytes.isEmpty()) return null
+        val obj = runCatching { json.parseToJsonElement(frameBytes.decodeToString()) as? JsonObject }.getOrNull()
+            ?: return null
+        val errObj = obj["error"] as? JsonObject
+        val rawCode = ((errObj?.get("code") ?: obj["code"]) as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        val rawMessage = ((errObj?.get("message") ?: obj["message"]) as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        if (rawCode.isEmpty() && rawMessage.isEmpty()) return null
+        val combined = listOf(rawCode, rawMessage).filter { it.isNotEmpty() }.joinToString(": ")
+        val lowerCode = rawCode.lowercase()
+        return when {
+            lowerCode == "unauthenticated" || lowerCode == "permission_denied" ->
+                AntigravityRpcError.Unauthorized(combined)
+            lowerCode == "unimplemented" ||
+                ProtocolCompatibilityEngine.isMethodUnimplementedResponse(400, combined) ->
+                AntigravityRpcError.HttpError(501, combined)
+            lowerCode == "not_found" ->
+                AntigravityRpcError.HttpError(404, combined)
+            else ->
+                AntigravityRpcError.HttpError(400, combined)
+        }
+    }
+
     public fun subscribeEnvelopeStream(
         method: String,
         body: JsonObject = JsonObject(emptyMap()),
@@ -4452,20 +4658,19 @@ public class AntigravityKmpRpcClient(
             val isCloudStream = allowCrossHostFailover ||
                 (body["backend"] as? JsonPrimitive)?.contentOrNull == "BACKEND_TYPE_REMOTE_AICODE" ||
                 (body["backendType"] as? JsonPrimitive)?.contentOrNull == "BACKEND_TYPE_REMOTE_AICODE"
+            if (instanceUuidOverride == null && currentResolvedInstanceUuid() == null) {
+                resolveCloudRelayInstance(
+                    preferredIdentifier = null,
+                    allowCrossHostFallback = isCloudStream,
+                )
+            }
             val targetUuid = selectReachableRelayUuid(instanceUuidOverride, allowCrossHostFailover = isCloudStream)
                 ?.takeIf { it.isNotEmpty() }
                 ?: throw AntigravityRpcError.HttpError(503, "Selected Antigravity Desktop host is offline")
-            val url = "$relayOrigin${SapisidHashGenerator.API_SERVICE_PREFIX}/StreamProxyCommand?\$unique=$method"
-            val apiKey = ensureRelayWebApiKey()
+            val uniqueTag = "$method-${randomUuidV4().take(8)}"
+            val url = "$relayOrigin${SapisidHashGenerator.API_SERVICE_PREFIX}/StreamProxyCommand?\$unique=$uniqueTag"
+            var activeApiKey = ensureRelayWebApiKey()
             val activeAuth = currentAuthUser()
-            val headers = SapisidHashGenerator.buildApiServiceHeaders(
-                cookieHeader = sessionCookie.orEmpty(),
-                origin = relayOrigin,
-                authUser = activeAuth,
-                apiKey = apiKey,
-                isStreaming = true,
-                timestampSeconds = currentTimeMillis() / 1000L,
-            )
             val reqBytes = CloudRelayJspbCodec.encodeProxyCommandRequest(
                 targetInstanceUuid = targetUuid,
                 rpcPath = "$SERVICE_PREFIX/$method",
@@ -4473,65 +4678,209 @@ public class AntigravityKmpRpcClient(
                 contentType = "application/connect+json",
                 isStreaming = true,
             )
-            streamingHttpClient.preparePost(url) {
-                for ((k, v) in headers) {
-                    if (!k.equals("Content-Type", ignoreCase = true)) header(k, v)
-                }
-                setBody(ByteArrayContent(reqBytes, ContentType.parse("application/json+protobuf")))
-            }.execute { response ->
-                val code = response.status.value
-                if (code == 401 || code == 403) {
-                    val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
-                    throw AntigravityRpcError.Unauthorized(
-                        buildUnauthorizedDiagnostic(
-                            operation = "StreamProxyCommand/$method",
-                            statusCode = code,
-                            responseHeaders = response.flattenHeaders(),
-                            rawBytes = errBytes,
-                            apiKey = apiKey,
-                            authUser = activeAuth,
-                        )
-                    )
-                }
-                if (code !in 200..299) throw AntigravityRpcError.HttpError(code, "StreamProxyCommand HTTP $code")
-                val respHeaders = response.flattenHeaders()
-                val headerBase64 = respHeaders.any { (k, v) ->
-                    (k.equals("x-goog-safety-encoding", ignoreCase = true) ||
-                        k.equals("content-transfer-encoding", ignoreCase = true)) &&
-                        v.contains("base64", ignoreCase = true)
-                }
-                val jspbParser = CloudRelayJspbStreamParser()
-                val connectParser = ConnectStreamParser()
-                val b64Decoder = StreamingBase64Decoder()
-                val channelReader = response.bodyAsChannel()
-                val buf = ByteArray(4096)
 
-                var done = false
-                while (!done) {
-                    val read = channelReader.readAvailable(buf, 0, buf.size)
-                    if (read < 0) break
-                    if (read == 0) continue
-                    val rawSlice = buf.copyOf(read)
-                    val feedSlice = if (headerBase64) b64Decoder.feed(rawSlice) else rawSlice
-                    val innerChunks = jspbParser.feed(feedSlice)
-                    for (chunk in innerChunks) {
-                        val frames = connectParser.feed(chunk)
-                        for (frame in frames) {
-                            if (frame.isEndStream) {
-                                done = true
-                                break
+            suspend fun executeCloudStreamOnce(apiKey: String?, allowKeyRefreshRetry: Boolean): Boolean {
+                val headers = SapisidHashGenerator.buildApiServiceHeaders(
+                    cookieHeader = sessionCookie.orEmpty(),
+                    origin = relayOrigin,
+                    authUser = activeAuth,
+                    apiKey = apiKey,
+                    isStreaming = true,
+                    timestampSeconds = currentTimeMillis() / 1000L,
+                )
+                var retryWithRefreshedKey = false
+                streamingHttpClient.preparePost(url) {
+                    for ((k, v) in headers) {
+                        if (!k.equals("Content-Type", ignoreCase = true)) header(k, v)
+                    }
+                    setBody(ByteArrayContent(reqBytes, ContentType.parse("application/json+protobuf")))
+                }.execute { response ->
+                    val code = response.status.value
+                    val respHeaders = response.flattenHeaders()
+                    if (allowKeyRefreshRetry && (code == 400 || code == 403)) {
+                        val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
+                        val errText = unwrapErrorBodyText(errBytes, respHeaders)
+                        if (SapisidHashGenerator.isInvalidApiKeyError(code, errText)) {
+                            val refreshedKey = ensureRelayWebApiKey(forceRefresh = true)
+                            if (!refreshedKey.isNullOrEmpty() && refreshedKey != apiKey) {
+                                activeApiKey = refreshedKey
+                                retryWithRefreshedKey = true
+                                return@execute
                             }
-                            val frameBytes = if (frame.isCompressed) {
-                                CloudRelayJspbCodec.decompressPayloadIfNeeded(frame.payload)
-                            } else {
-                                frame.payload
-                            }
-                            val obj = runCatching { json.parseToJsonElement(frameBytes.decodeToString()) as? JsonObject }.getOrNull()
-                            if (obj != null) emit(obj)
                         }
-                        if (done) break
+                        if (code == 403) {
+                            throw AntigravityRpcError.Unauthorized(
+                                buildUnauthorizedDiagnostic(
+                                    operation = "StreamProxyCommand/$method",
+                                    statusCode = code,
+                                    responseHeaders = respHeaders,
+                                    rawBytes = errBytes,
+                                    apiKey = apiKey,
+                                    authUser = activeAuth,
+                                )
+                            )
+                        }
+                        throw AntigravityRpcError.HttpError(
+                            code,
+                            errText.ifBlank { "StreamProxyCommand HTTP $code" },
+                        )
+                    }
+                    if (code == 401 || code == 403) {
+                        val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
+                        throw AntigravityRpcError.Unauthorized(
+                            buildUnauthorizedDiagnostic(
+                                operation = "StreamProxyCommand/$method",
+                                statusCode = code,
+                                responseHeaders = respHeaders,
+                                rawBytes = errBytes,
+                                apiKey = apiKey,
+                                authUser = activeAuth,
+                            )
+                        )
+                    }
+                    if (code !in 200..299) {
+                        val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
+                        val errText = unwrapErrorBodyText(errBytes, respHeaders)
+                        throw AntigravityRpcError.HttpError(
+                            code,
+                            errText.ifBlank { "StreamProxyCommand HTTP $code" },
+                        )
+                    }
+                    val headerBase64 = respHeaders.any { (k, v) ->
+                        (k.equals("x-goog-safety-encoding", ignoreCase = true) ||
+                            k.equals("content-transfer-encoding", ignoreCase = true)) &&
+                            v.contains("base64", ignoreCase = true)
+                    }
+                    val jspbParser = CloudRelayJspbStreamParser()
+                    val connectParser = ConnectStreamParser()
+                    val b64Decoder = StreamingBase64Decoder()
+                    // 0 = auto-detect outer base64 vs raw UTF-8 JSPB, 1 = raw, 2 = base64
+                    var outerMode = if (headerBase64) 2 else 0
+                    val sniffBuffer = ArrayList<Byte>(4)
+                    var yieldedAny = false
+                    var done = false
+
+                    suspend fun processDecodedBytes(decodedSlice: ByteArray) {
+                        if (decodedSlice.isEmpty() || done) return
+                        val innerChunks = jspbParser.feed(decodedSlice)
+                        for (rawChunk in innerChunks) {
+                            val chunkData = CloudRelayJspbCodec.decompressPayloadIfNeeded(rawChunk)
+                            if (!connectParser.hasBufferedBytes &&
+                                chunkData.isNotEmpty() &&
+                                (chunkData[0].toInt() and 0xFF) == '{'.code
+                            ) {
+                                val directObj = runCatching {
+                                    json.parseToJsonElement(chunkData.decodeToString()) as? JsonObject
+                                }.getOrNull()
+                                if (directObj != null) {
+                                    yieldedAny = true
+                                    emit(directObj)
+                                    continue
+                                }
+                            }
+                            val frames = connectParser.feed(chunkData)
+                            for (frame in frames) {
+                                val frameBytes = if (frame.isCompressed) {
+                                    CloudRelayJspbCodec.decompressPayloadIfNeeded(frame.payload)
+                                } else {
+                                    frame.payload
+                                }
+                                if (frame.isEndStream) {
+                                    extractConnectEndStreamError(frameBytes)?.let { throw it }
+                                    done = true
+                                    break
+                                }
+                                val obj = runCatching {
+                                    json.parseToJsonElement(frameBytes.decodeToString()) as? JsonObject
+                                }.getOrNull()
+                                if (obj != null) {
+                                    yieldedAny = true
+                                    emit(obj)
+                                }
+                            }
+                            if (done) break
+                        }
+                    }
+
+                    val channelReader = response.bodyAsChannel()
+                    val buf = ByteArray(4096)
+                    while (!done) {
+                        val read = channelReader.readAvailable(buf, 0, buf.size)
+                        if (read < 0) break
+                        if (read == 0) continue
+                        when (outerMode) {
+                            1 -> processDecodedBytes(buf.copyOf(read))
+                            2 -> processDecodedBytes(b64Decoder.feed(buf.copyOf(read)))
+                            else -> {
+                                var idx = 0
+                                while (idx < read && outerMode == 0 && !done) {
+                                    val b = buf[idx]
+                                    val c = b.toInt() and 0xFF
+                                    if (sniffBuffer.isEmpty() &&
+                                        (c == ' '.code || c == '\t'.code || c == '\r'.code || c == '\n'.code)
+                                    ) {
+                                        idx += 1
+                                        continue
+                                    }
+                                    if (sniffBuffer.isEmpty() &&
+                                        (c == '['.code || c == '{'.code || c == ')'.code || c == '('.code || c in '0'.code..'9'.code)
+                                    ) {
+                                        outerMode = 1
+                                        processDecodedBytes(buf.copyOfRange(idx, read))
+                                        idx = read
+                                        break
+                                    }
+                                    sniffBuffer.add(b)
+                                    idx += 1
+                                    if (sniffBuffer.size == 4) {
+                                        val candidateStr = sniffBuffer.toByteArray().decodeToString()
+                                        val decodedPrefix = CloudRelayJspbCodec.decodeBase64Flexible(candidateStr)
+                                        val firstDecoded = decodedPrefix?.firstOrNull()?.toInt()?.and(0xFF)
+                                        if (decodedPrefix != null &&
+                                            (firstDecoded == ')'.code || firstDecoded == '['.code ||
+                                                firstDecoded == '{'.code || firstDecoded == ' '.code ||
+                                                firstDecoded == '\n'.code)
+                                        ) {
+                                            outerMode = 2
+                                            processDecodedBytes(decodedPrefix)
+                                            if (idx < read && !done) {
+                                                processDecodedBytes(b64Decoder.feed(buf.copyOfRange(idx, read)))
+                                            }
+                                        } else {
+                                            outerMode = 1
+                                            processDecodedBytes(sniffBuffer.toByteArray())
+                                            if (idx < read && !done) {
+                                                processDecodedBytes(buf.copyOfRange(idx, read))
+                                            }
+                                        }
+                                        sniffBuffer.clear()
+                                        idx = read
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (!done) {
+                        if (outerMode == 2) {
+                            processDecodedBytes(b64Decoder.flush())
+                        } else if (sniffBuffer.isNotEmpty()) {
+                            processDecodedBytes(sniffBuffer.toByteArray())
+                            sniffBuffer.clear()
+                        }
+                    }
+
+                    if (!yieldedAny && !done) {
+                        jspbParser.lastErrorTrailer?.let { boqErr ->
+                            throw AntigravityRpcError.HttpError(502, boqErr)
+                        }
                     }
                 }
+                return retryWithRefreshedKey
+            }
+
+            if (executeCloudStreamOnce(activeApiKey, allowKeyRefreshRetry = true)) {
+                executeCloudStreamOnce(activeApiKey, allowKeyRefreshRetry = false)
             }
         } else {
             val url = "$endpointBaseUrl$SERVICE_PREFIX/$method"
@@ -4543,7 +4892,10 @@ public class AntigravityKmpRpcClient(
             }.execute { response ->
                 val code = response.status.value
                 if (code == 401 || code == 403) throw AntigravityRpcError.Unauthorized("HTTP $code [Stream/$method]")
-                if (code !in 200..299) throw AntigravityRpcError.HttpError(code, "Stream HTTP $code")
+                if (code !in 200..299) {
+                    val errText = runCatching { response.bodyAsBytes().decodeToString() }.getOrDefault("")
+                    throw AntigravityRpcError.HttpError(code, errText.ifBlank { "Stream HTTP $code" })
+                }
                 val connectParser = ConnectStreamParser()
                 val channelReader = response.bodyAsChannel()
                 val buf = ByteArray(4096)
@@ -4555,16 +4907,19 @@ public class AntigravityKmpRpcClient(
                     if (read == 0) continue
                     val frames = connectParser.feed(buf.copyOf(read))
                     for (frame in frames) {
-                        if (frame.isEndStream) {
-                            done = true
-                            break
-                        }
                         val frameBytes = if (frame.isCompressed) {
                             CloudRelayJspbCodec.decompressPayloadIfNeeded(frame.payload)
                         } else {
                             frame.payload
                         }
-                        val obj = runCatching { json.parseToJsonElement(frameBytes.decodeToString()) as? JsonObject }.getOrNull()
+                        if (frame.isEndStream) {
+                            extractConnectEndStreamError(frameBytes)?.let { throw it }
+                            done = true
+                            break
+                        }
+                        val obj = runCatching {
+                            json.parseToJsonElement(frameBytes.decodeToString()) as? JsonObject
+                        }.getOrNull()
                         if (obj != null) emit(obj)
                     }
                 }

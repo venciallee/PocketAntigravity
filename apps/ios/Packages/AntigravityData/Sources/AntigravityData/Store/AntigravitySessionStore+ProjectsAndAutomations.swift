@@ -198,7 +198,7 @@ extension AntigravitySessionStore {
             hasResolvedTitle: true
         )
         summaries.insert(newSummary, at: 0)
-        if hasPairedBackend || isLiveBackendConnected {
+        if (hasPairedBackend || isLiveBackendConnected) && project == nil {
             let existingCloudProjects = projects.filter { $0.runtime == .cloud && $0.cloudProjectId != nil }
             var nextSummaries = summaries
             projects = Self.reconcileLiveProjects(
@@ -292,7 +292,7 @@ extension AntigravitySessionStore {
                     self.composerDraftText = initialPrompt ?? ""
                     self.composerAttachments = initialAttachments
                     self.sendCurrentDraft()
-                } else {
+                } else if !self.locallyCreatedEmptyCascadeIds.contains(realCascadeId) {
                     self.syncStepsForCascade(realCascadeId, pollUntilIdle: false)
                 }
                 return

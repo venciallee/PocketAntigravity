@@ -192,6 +192,7 @@ public struct AntigravityRootContainerView: View {
     @State private var drawerMounted: Bool = false
     @State private var visualDrawerProgress: CGFloat = 0.0
     @State private var isDraggingDrawer: Bool = false
+    @State private var drawerAnimationGeneration: Int = 0
     #if canImport(UIKit)
     @State private var popGestureHandler = InteractivePopGestureHandler()
     @State private var sidebarGestureHandler = SidebarDrawerGestureHandler()
@@ -425,6 +426,71 @@ public struct AntigravityRootContainerView: View {
         .onChange(of: navigationPath) { _, newPath in
             syncActiveRoute(from: newPath)
         }
+        .background {
+            Color.clear
+                .frame(width: 0, height: 0)
+                .sheet(item: $store.presentedSheet) { modal in
+                    switch modal {
+                    case .conversationOverview:
+                        ConversationOverviewSheetView(store: store)
+                    case .sideQuestion:
+                        SideQuestionSheetView(store: store)
+                    case .swarmBoard(let stepIndex):
+                        SwarmBoardSheetView(store: store, stepIndex: stepIndex)
+                    case .voiceMode:
+                        VoiceModeSheetView(store: store)
+                    case .richArtifactViewer(let artifactPath):
+                        RichArtifactViewerSheet(store: store, artifactPath: artifactPath)
+                    case .customizationsSettings:
+                        CustomizationsSettingsView(store: store)
+                    case .automationEdit(let automationId):
+                        AutomationEditSheetView(
+                            store: store,
+                            automationId: automationId,
+                            onDismiss: { store.presentedSheet = nil }
+                        )
+                    case .permissionsPreset:
+                        PermissionsSheetView(
+                            store: store,
+                            onDismiss: { store.presentedSheet = nil }
+                        )
+                    case .slashMenu:
+                        SlashCommandMenuOverlayView(
+                            store: store,
+                            showHomeBackdrop: false,
+                            onDismiss: { store.presentedSheet = nil }
+                        )
+                    case .modelAndMode, .modelConfigPicker:
+                        ModelAndModeSheetView(
+                            store: store,
+                            isPresentedAsNativeSheet: true,
+                            onDismiss: { store.presentedSheet = nil }
+                        )
+                    case .addContext, .fileMentionPicker:
+                        AddContextSheetView(
+                            store: store,
+                            startExpanded: true,
+                            showHomeBackdrop: false,
+                            isPresentedAsNativeSheet: true,
+                            onDismiss: { store.presentedSheet = nil }
+                        )
+                        .presentationDetents([.fraction(0.86), .large])
+                        .presentationDragIndicator(.visible)
+                        .presentationCornerRadius(28)
+                        .presentationBackground(AntigravityTheme.surfaceSheet)
+                    case .displayOptions:
+                        DisplayOptionsSheetView(store: store, onDismiss: { store.presentedSheet = nil })
+                    case .createProject:
+                        CreateProjectSheetView(store: store, onDismiss: { store.presentedSheet = nil })
+                    case .contextMenuPreview:
+                        ConversationContextPreviewMenu(store: store, onDismiss: { store.presentedSheet = nil })
+                    case .permissionGate(let stepIndex):
+                        InteractionGateSheetController(store: store, mode: .permissionGate, stepIndex: stepIndex)
+                    case .askQuestion, .newCascadeSheet:
+                        StructuredQuestionCardView(store: store)
+                    }
+                }
+        }
         .sheet(item: $activeModalSheet) { sheet in
             switch sheet {
             case .displayOptions:
@@ -442,62 +508,6 @@ public struct AntigravityRootContainerView: View {
                     store: store,
                     onDismiss: { activeModalSheet = nil }
                 )
-            }
-        }
-        .sheet(item: $store.presentedSheet) { modal in
-            switch modal {
-            case .conversationOverview:
-                ConversationOverviewSheetView(store: store)
-            case .sideQuestion:
-                SideQuestionSheetView(store: store)
-            case .swarmBoard(let stepIndex):
-                SwarmBoardSheetView(store: store, stepIndex: stepIndex)
-            case .voiceMode:
-                VoiceModeSheetView(store: store)
-            case .richArtifactViewer(let artifactPath):
-                RichArtifactViewerSheet(store: store, artifactPath: artifactPath)
-            case .customizationsSettings:
-                CustomizationsSettingsView(store: store)
-            case .automationEdit(let automationId):
-                AutomationEditSheetView(
-                    store: store,
-                    automationId: automationId,
-                    onDismiss: { store.presentedSheet = nil }
-                )
-            case .permissionsPreset:
-                PermissionsSheetView(
-                    store: store,
-                    onDismiss: { store.presentedSheet = nil }
-                )
-            case .slashMenu:
-                SlashCommandMenuOverlayView(
-                    store: store,
-                    showHomeBackdrop: false,
-                    onDismiss: { store.presentedSheet = nil }
-                )
-            case .modelAndMode, .modelConfigPicker:
-                ModelAndModeSheetView(
-                    store: store,
-                    isPresentedAsNativeSheet: true,
-                    onDismiss: { store.presentedSheet = nil }
-                )
-            case .addContext, .fileMentionPicker:
-                AddContextSheetView(
-                    store: store,
-                    startExpanded: true,
-                    showHomeBackdrop: false,
-                    onDismiss: { store.presentedSheet = nil }
-                )
-            case .displayOptions:
-                DisplayOptionsSheetView(store: store, onDismiss: { store.presentedSheet = nil })
-            case .createProject:
-                CreateProjectSheetView(store: store, onDismiss: { store.presentedSheet = nil })
-            case .contextMenuPreview:
-                ConversationContextPreviewMenu(store: store, onDismiss: { store.presentedSheet = nil })
-            case .permissionGate(let stepIndex):
-                InteractionGateSheetController(store: store, mode: .permissionGate, stepIndex: stepIndex)
-            case .askQuestion, .newCascadeSheet:
-                StructuredQuestionCardView(store: store)
             }
         }
     }
@@ -541,11 +551,13 @@ public struct AntigravityRootContainerView: View {
     }
 
     private func animateDrawerOpen(fromCurrentProgress: Bool) {
+        drawerAnimationGeneration &+= 1
+        let gen = drawerAnimationGeneration
         if !drawerMounted {
             visualDrawerProgress = 0.0
             drawerMounted = true
             Task { @MainActor in
-                guard store.isSidebarPresented && !isDraggingDrawer else { return }
+                guard drawerAnimationGeneration == gen, store.isSidebarPresented && !isDraggingDrawer else { return }
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.92)) {
                     visualDrawerProgress = 1.0
                 }
@@ -558,6 +570,8 @@ public struct AntigravityRootContainerView: View {
     }
 
     private func animateDrawerClosed() {
+        drawerAnimationGeneration &+= 1
+        let gen = drawerAnimationGeneration
         if visualDrawerProgress <= 0.001 {
             visualDrawerProgress = 0.0
             if !store.isSidebarPresented && !isDraggingDrawer {
@@ -568,14 +582,23 @@ public struct AntigravityRootContainerView: View {
         withAnimation(.snappy(duration: 0.22)) {
             visualDrawerProgress = 0.0
         } completion: {
-            if !store.isSidebarPresented && !isDraggingDrawer && visualDrawerProgress <= 0.001 {
+            if drawerAnimationGeneration == gen && !store.isSidebarPresented && !isDraggingDrawer && visualDrawerProgress <= 0.001 {
                 drawerMounted = false
             }
+        }
+        // Guaranteed fallback unmount if simultaneous NavigationStack / store mutations
+        // interrupt the SwiftUI animation completion callback on iOS 18+.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(280))
+            guard drawerAnimationGeneration == gen, !store.isSidebarPresented, !isDraggingDrawer else { return }
+            visualDrawerProgress = 0.0
+            drawerMounted = false
         }
     }
 
     private func handleSidebarDragBegan(_ startProgress: CGFloat) {
         dismissKeyboard()
+        drawerAnimationGeneration &+= 1
         isDraggingDrawer = true
         if !drawerMounted {
             visualDrawerProgress = startProgress
@@ -1189,8 +1212,14 @@ private final class InteractivePopGestureAnchorViewController: UIViewController 
         configureNavigationController()
     }
 
+    private weak var lastAttachedNavController: UINavigationController?
+
     func configureNavigationController() {
         guard let navController = resolveNavigationController() else { return }
+        if lastAttachedNavController === navController && navController.interactivePopGestureRecognizer?.delegate === handler {
+            return
+        }
+        lastAttachedNavController = navController
         handler.attach(to: navController)
     }
 
@@ -1586,6 +1615,9 @@ private final class SidebarDrawerGestureAnchorViewController: UIViewController {
 
     func configureContainerView() {
         guard let containerView = resolveContainerView() else { return }
+        if lastAttachedView === containerView && handler.attachedView === containerView {
+            return
+        }
         lastAttachedView = containerView
         handler.attach(to: containerView)
     }

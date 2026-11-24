@@ -26,6 +26,14 @@ public struct ChatComposerView: View {
         case files
     }
 
+    private enum ComposerModalSheet: String, Identifiable {
+        case addContext
+        case modelAndMode
+        case permissions
+
+        var id: String { rawValue }
+    }
+
     private struct PreparedMediaPayload: Sendable {
         let base64: String
         let mimeType: String
@@ -41,12 +49,11 @@ public struct ChatComposerView: View {
 
     @State private var attachedChipLabels: [String]
     @State private var draftMessageText: String
-    @State private var isShowingAddContextSheet: Bool = false
-    @State private var isShowingModelAndModeSheet: Bool = false
-    @State private var isShowingPermissionsSheet: Bool = false
+    @State private var activeModalSheet: ComposerModalSheet? = nil
     @State private var isShowingPhotoPicker: Bool = false
     @State private var isShowingFileImporter: Bool = false
     @State private var pendingDevicePicker: PendingDevicePicker? = nil
+    @State private var pendingDevicePickerTask: Task<Void, Never>? = nil
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isImportingMedia: Bool = false
     @State private var mediaErrorMessage: String? = nil
@@ -484,74 +491,104 @@ public struct ChatComposerView: View {
         }
         .onDisappear {
             voiceManager.stopRecording()
+            pendingDevicePickerTask?.cancel()
+            pendingDevicePickerTask = nil
         }
-        .photosPicker(
-            isPresented: $isShowingPhotoPicker,
-            selection: $selectedPhotoItems,
-            maxSelectionCount: 5,
-            matching: .images
-        )
-        .fileImporter(
-            isPresented: $isShowingFileImporter,
-            allowedContentTypes: [.item, .pdf, .image, .audio, .movie, .zip],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result {
-                Task {
-                    await importSelectedFileURLs(urls)
+        .background {
+            // Isolate PhotosPicker and FileImporter on separate sibling presentation anchors so
+            // iOS 18+ SwiftUI never stacks multiple modal presentation hosts on the same view.
+            Color.clear
+                .frame(width: 0, height: 0)
+                .photosPicker(
+                    isPresented: $isShowingPhotoPicker,
+                    selection: $selectedPhotoItems,
+                    maxSelectionCount: 5,
+                    matching: .images
+                )
+            Color.clear
+                .frame(width: 0, height: 0)
+                .fileImporter(
+                    isPresented: $isShowingFileImporter,
+                    allowedContentTypes: [.item, .pdf, .image, .audio, .movie, .zip],
+                    allowsMultipleSelection: true
+                ) { result in
+                    if case .success(let urls) = result {
+                        Task {
+                            await importSelectedFileURLs(urls)
+                        }
+                    }
                 }
+        }
+        .sheet(item: $activeModalSheet, onDismiss: {
+            presentPendingDevicePickerIfNeeded()
+        }) { sheet in
+            switch sheet {
+            case .addContext:
+                AddContextSheetView(
+                    store: store,
+                    startExpanded: true,
+                    showHomeBackdrop: false,
+                    isPresentedAsNativeSheet: true,
+                    onAddLabels: { added in
+                        for item in added where !attachedChipLabels.contains(item) {
+                            attachedChipLabels.append(item)
+                        }
+                    },
+                    onPickPhotos: {
+                        pendingDevicePicker = .photos
+                        activeModalSheet = nil
+                    },
+                    onPickDeviceFile: {
+                        pendingDevicePicker = .files
+                        activeModalSheet = nil
+                    },
+                    onDismiss: {
+                        activeModalSheet = nil
+                    }
+                )
+                .presentationDetents([.fraction(0.86), .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+                .presentationBackground(AntigravityTheme.surfaceSheet)
+
+            case .modelAndMode:
+                ModelAndModeSheetView(
+                    store: store,
+                    isPresentedAsNativeSheet: true,
+                    onDismiss: {
+                        activeModalSheet = nil
+                    }
+                )
+                .presentationDetents([.fraction(0.82), .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+                .presentationBackground(ModelAndModeSheetView.sheetSurfaceColor)
+
+            case .permissions:
+                PermissionsSheetView(
+                    store: store,
+                    onDismiss: {
+                        activeModalSheet = nil
+                    }
+                )
+                .presentationDetents([.height(store.isActiveSessionCloud ? 356 : 428), .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+                .presentationBackground(PermissionsSheetView.sheetSurfaceColor)
             }
         }
-        .sheet(isPresented: $isShowingAddContextSheet, onDismiss: {
-            presentPendingDevicePickerIfNeeded()
-        }) {
-            AddContextSheetView(
-                store: store,
-                startExpanded: true,
-                showHomeBackdrop: false,
-                onAddLabels: { added in
-                    for item in added where !attachedChipLabels.contains(item) {
-                        attachedChipLabels.append(item)
-                    }
-                },
-                onPickPhotos: {
-                    pendingDevicePicker = .photos
-                    isShowingAddContextSheet = false
-                },
-                onPickDeviceFile: {
-                    pendingDevicePicker = .files
-                    isShowingAddContextSheet = false
-                },
-                onDismiss: {
-                    isShowingAddContextSheet = false
-                }
-            )
-        }
-        .sheet(isPresented: $isShowingModelAndModeSheet) {
-            ModelAndModeSheetView(
-                store: store,
-                isPresentedAsNativeSheet: true,
-                onDismiss: {
-                    isShowingModelAndModeSheet = false
-                }
-            )
-            .presentationDetents([.fraction(0.82), .large])
-            .presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
-            .presentationBackground(ModelAndModeSheetView.sheetSurfaceColor)
-        }
-        .sheet(isPresented: $isShowingPermissionsSheet) {
-            PermissionsSheetView(
-                store: store,
-                onDismiss: {
-                    isShowingPermissionsSheet = false
-                }
-            )
-            .presentationDetents([.height(store.isActiveSessionCloud ? 356 : 428), .large])
-            .presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
-            .presentationBackground(PermissionsSheetView.sheetSurfaceColor)
-        }
+    }
+
+    private func openComposerSheet(_ sheet: ComposerModalSheet) {
+        dismissComposerKeyboard()
+        activeModalSheet = sheet
+    }
+
+    private func dismissComposerKeyboard() {
+        isInputFocused = false
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
     }
 
     // MARK: - Attachment Chip / Image Thumbnail Preview
@@ -650,7 +687,7 @@ public struct ChatComposerView: View {
         return HStack(spacing: 5) {
             // 1. `+` Add Context Button (Photos, Files, Workspace Mentions & Actions)
             Button {
-                isShowingAddContextSheet = true
+                openComposerSheet(.addContext)
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 18, weight: .regular))
@@ -664,7 +701,7 @@ public struct ChatComposerView: View {
 
             // 2. Single-line `[Gemini 4 Neon ⌄]` Model Picker (Thinking Effort shown inside sheet when opened)
             Button {
-                isShowingModelAndModeSheet = true
+                openComposerSheet(.modelAndMode)
             } label: {
                 HStack(spacing: 4) {
                     Text(modelPill.name)
@@ -692,7 +729,7 @@ public struct ChatComposerView: View {
 
             // 3. Permission Preset Pill (`🛡 Default ⌄`)
             Button {
-                isShowingPermissionsSheet = true
+                openComposerSheet(.permissions)
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "shield")
@@ -758,11 +795,17 @@ public struct ChatComposerView: View {
     private func presentPendingDevicePickerIfNeeded() {
         guard let next = pendingDevicePicker else { return }
         pendingDevicePicker = nil
-        switch next {
-        case .photos:
-            isShowingPhotoPicker = true
-        case .files:
-            isShowingFileImporter = true
+        pendingDevicePickerTask?.cancel()
+        pendingDevicePickerTask = Task { @MainActor in
+            // Allow UIKit sheet dismissal transition to finish cleanly before presenting system pickers.
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled, activeModalSheet == nil else { return }
+            switch next {
+            case .photos:
+                isShowingPhotoPicker = true
+            case .files:
+                isShowingFileImporter = true
+            }
         }
     }
 
