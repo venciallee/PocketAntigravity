@@ -682,7 +682,126 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc27_plusButtonsOpenContextAndCreateProjectDraftCleanly() {
+    fun atc27_sidebarProjectCollapseToggleHidesAndRestoresConversationsWhileHeaderStillOpensProjectDetail() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.SIDEBAR_DRAWER,
+            )
+        }
+
+        // Initially expanded: project conversations are visible
+        composeRule.onNodeWithTag("project-header-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-toggle-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
+
+        // Tap collapse toggle -> conversations under ledger-svc collapse and count badge renders
+        composeRule.onNodeWithTag("project-toggle-ledger-svc").performClick()
+        assertTrue(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        assertEquals(0, composeRule.onAllNodesWithTag("conversation-row-cas-rate-limiter").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("project-collapsed-count-ledger-svc", useUnmergedTree = true).assertIsDisplayed()
+
+        // Tap collapse toggle again -> conversations expand back into view
+        composeRule.onNodeWithTag("project-toggle-ledger-svc").performClick()
+        assertFalse(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
+
+        // Tapping project header still navigates cleanly to Project Detail (UE04)
+        composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
+        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
+    }
+
+    @Test
+    fun atc28_unhydratedLiveConversationShowsLoadingInsteadOfNewConversationAndUpdatesWhenHydrated() {
+        val unhydratedId = "8b52c910-1111-4000-8000-000000000099"
+        val coordinator = AntigravityCoreCoordinator(autoPreloadConversations = false)
+        coordinator.workspaceStore.seedFixture(
+            projects = listOf(
+                dev.antigravity.shared.model.ProjectWorkspace(
+                    id = "slardar_app_ai",
+                    name = "slardar_app_ai",
+                    pathDisplay = "~/code/slardar_app_ai",
+                    workspaceUri = "file:///Users/dev/code/slardar_app_ai",
+                    runtime = dev.antigravity.shared.model.ProjectRuntimeTarget.MAC_BOOK_PRO,
+                    hostName = "MacBook Pro",
+                ),
+            ),
+            automations = emptyList(),
+            availableRepos = emptyList(),
+            contextCandidates = emptyList(),
+        )
+        coordinator.conversationSyncStore.applyStreamEvent(
+            dev.antigravity.shared.protocol.JsonStepAndSummaryDecoder.JetboxDecodedEvent(
+                summaries = listOf(
+                    dev.antigravity.shared.model.CascadeSummary(
+                        cascadeId = unhydratedId,
+                        title = "New Conversation",
+                        hasResolvedTitle = false,
+                        projectSlug = "slardar_app_ai",
+                        workspaceUri = "file:///Users/dev/code/slardar_app_ai",
+                        status = CortexStepStatus.DONE,
+                        stepCount = 4,
+                        relativeTimeLabel = "1w",
+                    ),
+                ),
+            ),
+        )
+        coordinator.conversationSyncStore.markHydrating(unhydratedId)
+
+        // Disable auto-advance while indeterminate CircularProgressIndicator is visible
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            dev.antigravity.android.core.ui.theme.AntigravityTheme {
+                dev.antigravity.android.ui.home.AgentsSidebarDrawerContent(
+                    coordinator = coordinator,
+                    onNewConversation = {},
+                    onOpenAutomations = {},
+                    onOpenCustomizations = {},
+                    onOpenDisplayOptions = {},
+                    onOpenNewProject = {},
+                    onOpenProjectDetail = {},
+                    onOpenConversation = {},
+                    onLongPressConversation = {},
+                    onOpenSettings = {},
+                    activeHighlightCascadeId = "",
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeByFrame()
+
+        // Unhydrated row renders Loading... indicator instead of placeholder "New Conversation"
+        composeRule.onNodeWithTag("conversation-loading-$unhydratedId", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Loading...", useUnmergedTree = true).assertIsDisplayed()
+
+        // Once hydrated metadata arrives, the real derived title immediately replaces Loading...
+        kotlinx.coroutines.runBlocking {
+            coordinator.conversationSyncStore.applyHydratedStepsMetadata(
+                host = null,
+                cascadeId = unhydratedId,
+                steps = listOf(
+                    CascadeStep(
+                        cascadeId = unhydratedId,
+                        stepIndex = 0,
+                        type = CortexStepType.USER_INPUT,
+                        status = CortexStepStatus.DONE,
+                        userInput = "Fix Slardar startup cold cache",
+                    ),
+                ),
+                persist = false,
+            )
+        }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithTag("conversation-loading-$unhydratedId", useUnmergedTree = true).fetchSemanticsNodes().size,
+        )
+        composeRule.onNodeWithText("Fix Slardar startup cold cache").assertIsDisplayed()
+    }
+
+    @Test
+    fun atc29_plusButtonsOpenContextAndCreateProjectDraftCleanly() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(

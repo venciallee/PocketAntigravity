@@ -321,6 +321,33 @@ extension AntigravitySessionStore {
             if activeCascadeId.isEmpty {
                 activeCascadeId = hydratedSummaries.first?.cascadeId ?? ""
             }
+
+            // Warm persisted trajectory steps for recent & unhydrated conversations so entering cached
+            // conversations displays immediately on Frame 0 without flashing a loading card.
+            var idsToWarm: [String] = []
+            var seenWarm = Set<String>()
+            for s in hydratedSummaries where s.needsTitleHydration {
+                if seenWarm.insert(s.cascadeId).inserted {
+                    idsToWarm.append(s.cascadeId)
+                }
+                if idsToWarm.count >= 24 { break }
+            }
+            for s in hydratedSummaries where !s.isArchived {
+                if seenWarm.insert(s.cascadeId).inserted {
+                    idsToWarm.append(s.cascadeId)
+                }
+                if idsToWarm.count >= 24 { break }
+            }
+            if !idsToWarm.isEmpty {
+                let warmedBatch = await projectionStore.loadProjectedStepsBatch(cascadeIds: idsToWarm)
+                for (cid, cachedSteps) in warmedBatch where !cachedSteps.isEmpty {
+                    if (stepsByCascadeId[cid] ?? []).isEmpty {
+                        stepsByCascadeId[cid] = cachedSteps
+                        harvestEmbedResources(from: cachedSteps)
+                    }
+                    applyHydratedMetadataIfNeeded(cascadeId: cid, steps: cachedSteps, persist: false)
+                }
+            }
         }
 
         let cachedAutomations = (await projectionStore.loadAutomations()).filter {
@@ -1164,6 +1191,12 @@ extension AntigravitySessionStore {
         hostSwitchTask?.cancel()
         hostSwitchTask = nil
         cancelAllSummaryStreams()
+        cancelConversationPreload()
+        preloadPersistDebounceTask?.cancel()
+        preloadPersistDebounceTask = nil
+        pendingPersistHostKeys.removeAll()
+        settledEmptyTitleCascadeIds.removeAll()
+        preloadAttemptedAtByCascadeId.removeAll()
         summaryPollingTask?.cancel()
         summaryPollingTask = nil
         stepPollingTask?.cancel()
@@ -1256,6 +1289,7 @@ extension AntigravitySessionStore {
         inFlightHostRefreshTasks.removeAll()
         refreshingHostScopeKeys.removeAll()
         cancelAllSummaryStreams()
+        cancelConversationPreload()
         summaryPollingTask?.cancel()
         summaryPollingTask = nil
         stepPollingTask?.cancel()
@@ -1624,10 +1658,13 @@ extension AntigravitySessionStore {
 
         if wasOffline && !isNetworkingSuspended {
             lastStreamReopenAttemptAt = .distantPast
+            settledEmptyTitleCascadeIds.removeAll()
+            preloadAttemptedAtByCascadeId.removeAll()
             ensureSummaryEnvelopeStreamRunning()
             if case .cascadeChat(let cid) = activeRoute, !cid.isEmpty, stepPollingTask == nil {
                 syncStepsForCascade(cid, pollUntilIdle: true)
             }
+            scheduleConversationPreload()
             Task { [weak self] in
                 await self?.replayPendingOutbox()
             }
@@ -2205,7 +2242,36 @@ extension AntigravitySessionStore {
             }
         }
 
+        let existingBeforeConnectById = Dictionary(
+            existingSummariesBeforeConnect.map { ($0.cascadeId, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let incomingSummaryIds = Set(handshake.summaries.map(\.cascadeId))
+        let mergedIncomingSummaries: [CascadeSummary] = handshake.summaries.map { remote in
+            var copy = remote
+            if let existing = existingBeforeConnectById[remote.cascadeId] {
+                if existing.hasResolvedTitle && !copy.hasResolvedTitle {
+                    copy.title = existing.title
+                    copy.hasResolvedTitle = true
+                }
+                if existing.isCloud && !copy.isCloud {
+                    copy.isCloud = true
+                    copy.originHostName = "Antigravity"
+                }
+                copy.isPinned = existing.isPinned || remote.isPinned
+                copy.isArchived = existing.isArchived || remote.isArchived
+                copy.stepCount = max(existing.stepCount, remote.stepCount)
+                copy.currentStepIndex = max(1, copy.stepCount)
+                copy.totalSteps = max(existing.totalSteps, copy.stepCount)
+                copy.cloudProjectId = remote.cloudProjectId ?? existing.cloudProjectId
+                copy.lastUserViewTime = [existing.lastUserViewTime, remote.lastUserViewTime].compactMap { $0 }.max()
+                if copy.originInstanceUuid == nil {
+                    copy.originInstanceUuid = existing.originInstanceUuid
+                    copy.originHostName = copy.originHostName ?? existing.originHostName
+                }
+            }
+            return copy
+        }
         let preservedOfflineSummaries = existingSummariesBeforeConnect.filter { existing in
             guard !incomingSummaryIds.contains(existing.cascadeId) else { return false }
             let key = Self.projectionHostKey(
@@ -2241,7 +2307,7 @@ extension AntigravitySessionStore {
         let mergedWorkspaces = handshake.workspaces + preservedOfflineWorkspaces
         workspaces = mergedWorkspaces
 
-        var sortedSummaries = (handshake.summaries + preservedOfflineSummaries).sorted { lhs, rhs in
+        var sortedSummaries = (mergedIncomingSummaries + preservedOfflineSummaries).sorted { lhs, rhs in
             if lhs.updatedAt != rhs.updatedAt {
                 return lhs.updatedAt > rhs.updatedAt
             }
@@ -2282,6 +2348,8 @@ extension AntigravitySessionStore {
                 stepsByCascadeId.removeValue(forKey: fixtureId)
             }
         }
+        settledEmptyTitleCascadeIds.removeAll()
+        preloadAttemptedAtByCascadeId.removeAll()
         syncedConfigCascadeIds.removeAll()
         activeTurnDiffs = []
         pendingDraftConversation = nil
@@ -2322,6 +2390,9 @@ extension AntigravitySessionStore {
                 activeCascadeId,
                 pollUntilIdle: activeRoute == .cascadeChat(activeCascadeId)
             )
+        }
+        if hostOnline {
+            scheduleConversationPreload()
         }
     }
 

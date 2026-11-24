@@ -6,6 +6,7 @@ import dev.antigravity.shared.model.BrowserUploadInteractionSpec
 import dev.antigravity.shared.model.CascadeExecutionMode
 import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.CascadeSummary
+import dev.antigravity.shared.model.CascadeSummaryTitleResolver
 import dev.antigravity.shared.model.CodeActionPayload
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.CortexStepType
@@ -123,20 +124,36 @@ public object JsonStepAndSummaryDecoder {
         val annotations = obj.obj("annotations") ?: obj.obj("conversationAnnotations")
         val trajMeta = obj.obj("trajectoryMetadata")
 
+        val nestedUserTitle = extractSummaryStepUserPrompt(obj.obj("firstUserInputStep"))
+            ?: extractSummaryStepUserPrompt(obj.obj("latestUserInputStep"))
+        val nestedTaskName = obj.obj("latestTaskBoundaryStep")
+            ?.obj("step")
+            ?.obj("taskBoundary")
+            ?.str("taskName")
+
         val resolvedTitle = listOf(
             annotations?.str("title"),
             annotations?.str("customTitle"),
             annotations?.str("name"),
+            annotations?.str("summary"),
             obj.str("summary"),
             obj.str("title"),
             obj.str("displayName"),
             obj.str("name"),
+            obj.str("conversationTitle"),
+            obj.str("sessionTitle"),
             trajMeta?.str("title"),
             trajMeta?.str("summary"),
             trajMeta?.str("name"),
             obj.str("firstUserInput"),
             obj.str("query"),
-        ).firstNotNullOfOrNull { it?.trim()?.takeIf { s -> s.isNotEmpty() } }
+            obj.str("prompt"),
+            nestedUserTitle,
+            nestedTaskName,
+        ).firstNotNullOfOrNull { candidate ->
+            CascadeSummaryTitleResolver.cleanSingleLine(candidate)
+                ?.takeIf { !CascadeSummaryTitleResolver.isPlaceholderTitle(it) }
+        }
 
         val stepCount = obj.int("stepCount") ?: obj.int("stepTotal") ?: 0
         val cloudProjectId = listOf(
@@ -176,7 +193,9 @@ public object JsonStepAndSummaryDecoder {
         if (resolvedTitle == null && stepCount == 0 && !explicitCloudBool && !forceCloud && !isActiveRun) {
             return null
         }
-        val title = resolvedTitle ?: "New Conversation"
+        val hasResolvedTitle = resolvedTitle != null
+        val title = resolvedTitle?.let { CascadeSummaryTitleResolver.truncateTitle(it, maxLength = 96) }
+            ?: CascadeSummaryTitleResolver.PLACEHOLDER_TITLE
         val lowerTitle = title.lowercase()
         if (lowerTitle.contains("ios connect-rpc handshake") ||
             lowerTitle.contains("reply in one short sentence confirming ios connect-rpc handshake")
@@ -345,6 +364,7 @@ public object JsonStepAndSummaryDecoder {
             originInstanceUuid = originInstanceUuid,
             originHostName = if (isCloud) "Antigravity" else originHostName,
             lastUserViewTimeEpochMs = lastViewedEpochMs,
+            hasResolvedTitle = hasResolvedTitle,
         )
         if (!forceCloud) return decoded
         // Ignore echoed local `file://` workspaces from servers that do not filter by `backend`,
@@ -360,6 +380,21 @@ public object JsonStepAndSummaryDecoder {
             isCloud = true,
             originHostName = "Antigravity",
         )
+    }
+
+    private fun extractSummaryStepUserPrompt(wrapper: JsonObject?): String? {
+        if (wrapper == null) return null
+        val stepObj = wrapper.obj("step") ?: wrapper
+        val userInput = stepObj.obj("userInput") ?: return null
+        val direct = userInput.str("userResponse")
+            ?: userInput.str("query")
+            ?: userInput.str("text")
+        if (!direct.isNullOrBlank()) return direct
+        val items = userInput.arr("items") ?: return null
+        return items.firstNotNullOfOrNull { el ->
+            val itemObj = el as? JsonObject ?: return@firstNotNullOfOrNull null
+            itemObj.str("text")?.takeIf { it.isNotBlank() }
+        }
     }
 
     public fun decodeJetboxSummariesEvent(

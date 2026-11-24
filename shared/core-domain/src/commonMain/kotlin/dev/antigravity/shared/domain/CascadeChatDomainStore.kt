@@ -306,6 +306,72 @@ public class CascadeChatDomainStore(
         return cached
     }
 
+    /**
+     * Warms persisted trajectory steps from disk into memory for [cascadeIds] so entering cached
+     * conversations renders immediately on Frame 0 without flashing a loading card.
+     */
+    @Throws(Throwable::class)
+    public suspend fun warmCachedSteps(cascadeIds: List<String>): Map<String, List<CascadeStep>> {
+        if (cascadeIds.isEmpty()) return emptyMap()
+        val loaded = linkedMapOf<String, List<CascadeStep>>()
+        for (cid in cascadeIds) {
+            if (cid.isEmpty()) continue
+            val existing = _state.value.stepsByCascadeId[cid].orEmpty()
+            if (existing.isNotEmpty()) {
+                loaded[cid] = existing
+                continue
+            }
+            val diskSteps = projectionStorage.loadSteps(cid)
+            if (diskSteps.isNotEmpty()) {
+                putSteps(cid, diskSteps)
+                loaded[cid] = diskSteps
+            }
+        }
+        return loaded
+    }
+
+    /**
+     * Preloads and caches trajectory steps for [cascadeId] in the background WITHOUT mutating
+     * `activeCascadeId`, `isLoadingSteps`, or `stepLoadErrorText`.
+     *
+     * Checks in-memory and disk caches first; skips network RPCs when cached steps already satisfy
+     * [knownStepCount] and [requireRemoteRefresh] is `false`.
+     */
+    @Throws(Throwable::class)
+    public suspend fun preloadSteps(
+        client: AntigravityKmpRpcClient,
+        cascadeId: String,
+        knownStepCount: Int = 0,
+        isCloud: Boolean = false,
+        instanceUuidOverride: String? = null,
+        requireRemoteRefresh: Boolean = false,
+    ): List<CascadeStep> {
+        if (cascadeId.isEmpty()) return emptyList()
+        val inMemory = _state.value.stepsByCascadeId[cascadeId].orEmpty()
+        if (inMemory.isNotEmpty() && !requireRemoteRefresh && (knownStepCount <= 0 || inMemory.size >= knownStepCount)) {
+            return inMemory
+        }
+        val diskSteps = if (inMemory.isEmpty()) projectionStorage.loadSteps(cascadeId) else emptyList()
+        if (diskSteps.isNotEmpty()) {
+            putSteps(cascadeId, diskSteps)
+            if (!requireRemoteRefresh && (knownStepCount <= 0 || diskSteps.size >= knownStepCount)) {
+                return diskSteps
+            }
+        }
+        val remoteSteps = client.fetchAllTrajectorySteps(
+            cascadeId = cascadeId,
+            knownStepCount = knownStepCount,
+            isCloud = isCloud,
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        if (remoteSteps.isNotEmpty()) {
+            putSteps(cascadeId, remoteSteps)
+            projectionStorage.saveSteps(cascadeId, remoteSteps)
+            return remoteSteps
+        }
+        return inMemory.ifEmpty { diskSteps }
+    }
+
     public fun clearStepLoadError() {
         _state.update { it.copy(stepLoadErrorText = null) }
     }

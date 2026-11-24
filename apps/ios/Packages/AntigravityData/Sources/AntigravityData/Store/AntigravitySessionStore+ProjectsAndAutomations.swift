@@ -194,7 +194,8 @@ extension AntigravitySessionStore {
             isCloud: isCloudProj,
             cloudProjectId: cloudProjId,
             originInstanceUuid: originUuid,
-            originHostName: resolvedOriginHostName
+            originHostName: resolvedOriginHostName,
+            hasResolvedTitle: true
         )
         summaries.insert(newSummary, at: 0)
         if (hasPairedBackend || isLiveBackendConnected) && project == nil {
@@ -613,8 +614,12 @@ extension AntigravitySessionStore {
                 if let existing = existingById[remote.cascadeId] {
                     let hasNewActivity = remote.stepCount > existing.stepCount
                         || remote.updatedAt.timeIntervalSince(existing.updatedAt) > 0.5
-                    if existing.title != "New Conversation" && copy.title == "New Conversation" {
+                    if existing.hasResolvedTitle && !copy.hasResolvedTitle {
                         copy.title = existing.title
+                        copy.hasResolvedTitle = true
+                    } else if copy.hasResolvedTitle {
+                        hydratingCascadeIds.remove(remote.cascadeId)
+                        settledEmptyTitleCascadeIds.remove(remote.cascadeId)
                     }
                     if existing.isCloud && !copy.isCloud {
                         copy.isCloud = true
@@ -790,6 +795,9 @@ extension AntigravitySessionStore {
             if !refreshedHostKeys.isEmpty {
                 await persistHostProjections(refreshedHostKeys: refreshedHostKeys)
             }
+            settledEmptyTitleCascadeIds.removeAll()
+            preloadAttemptedAtByCascadeId.removeAll()
+            scheduleConversationPreload()
         } catch {
             guard self.hostSwitchGeneration == generation else { return }
             if Self.isBackendOfflineError(error) {

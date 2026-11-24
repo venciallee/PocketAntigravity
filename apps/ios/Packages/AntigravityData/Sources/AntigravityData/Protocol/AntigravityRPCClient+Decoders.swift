@@ -882,23 +882,33 @@ extension AntigravityRPCClient {
         let annotations = obj["annotations"]?.objectValue ?? obj["conversationAnnotations"]?.objectValue
         let trajMeta = obj["trajectoryMetadata"]?.objectValue
 
+        let nestedUserTitle = Self.extractSummaryStepUserPrompt(obj["firstUserInputStep"]?.objectValue)
+            ?? Self.extractSummaryStepUserPrompt(obj["latestUserInputStep"]?.objectValue)
+        let nestedTaskName = obj["latestTaskBoundaryStep"]?.objectValue?["step"]?.objectValue?["taskBoundary"]?.objectValue?["taskName"]?.stringValue
+
         let candidateTitles: [String?] = [
             annotations?["title"]?.stringValue,
             annotations?["customTitle"]?.stringValue,
             annotations?["name"]?.stringValue,
+            annotations?["summary"]?.stringValue,
             obj["summary"]?.stringValue,
             obj["title"]?.stringValue,
             obj["displayName"]?.stringValue,
             obj["name"]?.stringValue,
+            obj["conversationTitle"]?.stringValue,
+            obj["sessionTitle"]?.stringValue,
             trajMeta?["title"]?.stringValue,
             trajMeta?["summary"]?.stringValue,
             trajMeta?["name"]?.stringValue,
             obj["firstUserInput"]?.stringValue,
-            obj["query"]?.stringValue
+            obj["query"]?.stringValue,
+            obj["prompt"]?.stringValue,
+            nestedUserTitle,
+            nestedTaskName
         ]
         let resolvedTitle = candidateTitles
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty })
+            .compactMap { CascadeSummaryTitleResolver.cleanSingleLine($0) }
+            .first(where: { !CascadeSummaryTitleResolver.isPlaceholderTitle($0) })
 
         let stepCount = obj["stepCount"]?.intValue
             ?? Int(obj["stepCount"]?.stringValue ?? "")
@@ -942,7 +952,9 @@ extension AntigravityRPCClient {
         if resolvedTitle == nil && stepCount == 0 && !explicitCloudBool && !forceCloud && !isActiveRun {
             return nil
         }
-        let title = resolvedTitle ?? "New Conversation"
+        let hasResolvedTitle = (resolvedTitle != nil)
+        let title = resolvedTitle.map { CascadeSummaryTitleResolver.truncateTitle($0, maxLength: 96) }
+            ?? CascadeSummaryTitleResolver.placeholderTitle
         let lowerTitle = title.lowercased()
         if lowerTitle.contains("ios connect-rpc handshake")
             || lowerTitle.contains("reply in one short sentence confirming ios connect-rpc handshake") {
@@ -1141,8 +1153,29 @@ extension AntigravityRPCClient {
             isCloud: isCloud,
             cloudProjectId: cloudProjectId,
             originHostName: isCloud ? "Antigravity" : nil,
-            lastUserViewTime: lastViewedDate
+            lastUserViewTime: lastViewedDate,
+            hasResolvedTitle: hasResolvedTitle
         )
+    }
+
+    private static func extractSummaryStepUserPrompt(_ wrapper: [String: JSONValue]?) -> String? {
+        guard let wrapper else { return nil }
+        let stepObj = wrapper["step"]?.objectValue ?? wrapper
+        guard let userInput = stepObj["userInput"]?.objectValue else { return nil }
+        let direct = userInput["userResponse"]?.stringValue
+            ?? userInput["query"]?.stringValue
+            ?? userInput["text"]?.stringValue
+        if let direct, !direct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return direct
+        }
+        guard let items = userInput["items"]?.arrayValue else { return nil }
+        for item in items {
+            if let text = item.objectValue?["text"]?.stringValue,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return text
+            }
+        }
+        return nil
     }
 
     internal static func selectPrimaryWorkspaceObject(

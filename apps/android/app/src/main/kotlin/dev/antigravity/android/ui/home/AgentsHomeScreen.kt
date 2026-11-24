@@ -49,6 +49,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.WorkOutline
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -400,6 +401,7 @@ fun AgentsHomeScreen(
 
             if (isSearchOpen) {
                 GlobalSearchSection(
+                    coordinator = coordinator,
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
                     summaries = syncState.summaries,
@@ -484,7 +486,7 @@ fun AgentsHomeScreen(
                                         append(" · ")
                                     }
                                     withStyle(SpanStyle(color = colors.inkReading)) {
-                                        append(needsApprovalSummary.title)
+                                        append(coordinator.displayTitleForSummary(needsApprovalSummary))
                                     }
                                 },
                                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
@@ -813,6 +815,7 @@ fun AgentsHomeScreen(
 
 @Composable
 private fun GlobalSearchSection(
+    coordinator: AntigravityCoreCoordinator,
     query: String,
     onQueryChange: (String) -> Unit,
     summaries: List<CascadeSummary>,
@@ -824,7 +827,7 @@ private fun GlobalSearchSection(
         val q = query.trim().lowercase()
         summaries.filter { !it.isArchived }.filter { s ->
             q.isEmpty() ||
-                s.title.lowercase().contains(q) ||
+                coordinator.displayTitleForSummary(s).lowercase().contains(q) ||
                 s.projectSlug.lowercase().contains(q) ||
                 s.statusSubtitle.lowercase().contains(q)
         }
@@ -872,6 +875,13 @@ private fun GlobalSearchSection(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             items(filtered, key = { it.cascadeId }) { item ->
+                val isTitleLoading = coordinator.isSummaryTitleLoading(item)
+                val displayTitle = coordinator.displayTitleForSummary(item)
+                LaunchedEffect(item.cascadeId, item.hasResolvedTitle) {
+                    if (!coordinator.isVerificationMode) {
+                        coordinator.prioritizeConversationPreload(item.cascadeId)
+                    }
+                }
                 Surface(
                     onClick = { onSelectConversation(item.cascadeId) },
                     modifier = Modifier.fillMaxWidth(),
@@ -884,7 +894,26 @@ private fun GlobalSearchSection(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(item.title, color = colors.inkReading, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (isTitleLoading) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    CircularProgressIndicator(
+                                        strokeWidth = 1.8.dp,
+                                        color = colors.inkMuted,
+                                        modifier = Modifier.size(13.dp),
+                                    )
+                                    Text(
+                                        text = "Loading...",
+                                        color = colors.inkMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            } else {
+                                Text(displayTitle, color = colors.inkReading, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                             Text(
                                 "${item.projectSlug} · ${item.statusSubtitle}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -1111,6 +1140,13 @@ fun AgentsSidebarDrawerContent(
                         summary = summary,
                         isSelected = false,
                         indented = false,
+                        isTitleLoading = coordinator.isSummaryTitleLoading(summary),
+                        displayTitle = coordinator.displayTitleForSummary(summary),
+                        onVisible = {
+                            if (!coordinator.isVerificationMode) {
+                                coordinator.prioritizeConversationPreload(summary.cascadeId)
+                            }
+                        },
                         onClick = { onOpenConversation(summary.cascadeId) },
                         onLongClick = { onLongPressConversation(summary.cascadeId) },
                     )
@@ -1184,6 +1220,7 @@ fun AgentsSidebarDrawerContent(
             }
 
             dedupedGroups.forEach { (project, projectItems) ->
+                val isCollapsed = project.id in workspaceState.collapsedProjectIds
                 item(key = "project-header-${project.id}") {
                     Row(
                         modifier = Modifier
@@ -1192,7 +1229,7 @@ fun AgentsSidebarDrawerContent(
                             .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
                             .testTag("project-header-${project.id}"),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Icon(
                             imageVector = if (project.runtime == ProjectRuntimeTarget.CLOUD) Icons.Rounded.Cloud else Icons.Rounded.Folder,
@@ -1215,6 +1252,43 @@ fun AgentsSidebarDrawerContent(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
+                        if (isCollapsed && projectItems.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(100.dp),
+                                color = colors.surfaceActiveTab,
+                                modifier = Modifier.testTag("project-collapsed-count-${project.id}"),
+                            ) {
+                                Text(
+                                    text = "${projectItems.size}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    ),
+                                    color = colors.inkMuted,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                        if (projectItems.isNotEmpty()) {
+                            IconButton(
+                                onClick = {
+                                    coordinator.workspaceStore.toggleProjectExpanded(
+                                        projectId = project.id,
+                                        persist = !coordinator.isVerificationMode,
+                                    )
+                                },
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .testTag("project-toggle-${project.id}"),
+                            ) {
+                                Icon(
+                                    imageVector = if (isCollapsed) Icons.Rounded.ChevronRight else Icons.Rounded.KeyboardArrowDown,
+                                    contentDescription = if (isCollapsed) "Expand ${project.name}" else "Collapse ${project.name}",
+                                    tint = colors.inkMuted,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
                         IconButton(
                             onClick = { onNewConversation(project.id) },
                             modifier = Modifier
@@ -1231,14 +1305,23 @@ fun AgentsSidebarDrawerContent(
                     }
                 }
 
-                items(projectItems, key = { "proj-${project.id}-${it.cascadeId}" }) { summary ->
-                    DrawerConversationRow(
-                        summary = summary,
-                        isSelected = summary.cascadeId == activeHighlightCascadeId,
-                        indented = true,
-                        onClick = { onOpenConversation(summary.cascadeId) },
-                        onLongClick = { onLongPressConversation(summary.cascadeId) },
-                    )
+                if (!isCollapsed) {
+                    items(projectItems, key = { "proj-${project.id}-${it.cascadeId}" }) { summary ->
+                        DrawerConversationRow(
+                            summary = summary,
+                            isSelected = summary.cascadeId == activeHighlightCascadeId,
+                            indented = true,
+                            isTitleLoading = coordinator.isSummaryTitleLoading(summary),
+                            displayTitle = coordinator.displayTitleForSummary(summary),
+                            onVisible = {
+                                if (!coordinator.isVerificationMode) {
+                                    coordinator.prioritizeConversationPreload(summary.cascadeId)
+                                }
+                            },
+                            onClick = { onOpenConversation(summary.cascadeId) },
+                            onLongClick = { onLongPressConversation(summary.cascadeId) },
+                        )
+                    }
                 }
             }
         }
@@ -1298,10 +1381,16 @@ private fun DrawerConversationRow(
     summary: CascadeSummary,
     isSelected: Boolean,
     indented: Boolean,
+    isTitleLoading: Boolean = false,
+    displayTitle: String = summary.title,
+    onVisible: () -> Unit = {},
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
     val colors = MaterialTheme.antigravityColors
+    LaunchedEffect(summary.cascadeId, summary.hasResolvedTitle) {
+        onVisible()
+    }
     val containerModifier = if (isSelected) {
         Modifier
             .fillMaxWidth()
@@ -1328,17 +1417,43 @@ private fun DrawerConversationRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(
-            text = summary.title,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 15.sp,
-                fontWeight = if (isSelected || summary.isUnread) FontWeight.Medium else FontWeight.Normal,
-            ),
-            color = colors.inkReading,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        if (isTitleLoading) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("conversation-loading-${summary.cascadeId}"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    strokeWidth = 1.8.dp,
+                    color = colors.inkMuted,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    text = "Loading...",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.Normal,
+                    ),
+                    color = colors.inkMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        } else {
+            Text(
+                text = displayTitle,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 15.sp,
+                    fontWeight = if (isSelected || summary.isUnread) FontWeight.Medium else FontWeight.Normal,
+                ),
+                color = colors.inkReading,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
 
         DrawerConversationTrailingIndicator(summary = summary)
     }

@@ -53,6 +53,7 @@ import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -163,7 +164,8 @@ fun CascadeChatScreen(
         }
     }
 
-    val rawTitle = activeSummary?.title ?: "Add rate limiter"
+    val isHeaderTitleLoading = activeSummary != null && coordinator.isSummaryTitleLoading(activeSummary)
+    val rawTitle = activeSummary?.let { coordinator.displayTitleForSummary(it) } ?: "Add rate limiter"
     val headerTitle = if (rawTitle == "Add rate limiter to /transfers") "Add rate limiter" else rawTitle
     val rawHostLabel = activeSummary?.originHostName
         ?: connectionState.activeHost?.hostname
@@ -211,16 +213,40 @@ fun CascadeChatScreen(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
-                    Text(
-                        text = headerTitle,
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontSize = 18.5.sp,
-                            fontWeight = FontWeight.Normal,
-                        ),
-                        color = colors.inkReading,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (isHeaderTitleLoading) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.testTag("chat-header-loading"),
+                        ) {
+                            CircularProgressIndicator(
+                                strokeWidth = 1.8.dp,
+                                color = colors.inkSecondary,
+                                modifier = Modifier.size(13.dp),
+                            )
+                            Text(
+                                text = "Loading...",
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontSize = 17.5.sp,
+                                    fontWeight = FontWeight.Normal,
+                                ),
+                                color = colors.inkSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = headerTitle,
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontSize = 18.5.sp,
+                                fontWeight = FontWeight.Normal,
+                            ),
+                            color = colors.inkReading,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
                         text = headerSubtitle,
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),

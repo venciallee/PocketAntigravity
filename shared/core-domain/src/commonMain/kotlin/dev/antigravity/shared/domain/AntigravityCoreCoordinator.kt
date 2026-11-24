@@ -4,9 +4,11 @@ import dev.antigravity.shared.markdown.MarkdownBlock
 import dev.antigravity.shared.model.AgentPermissionPreset
 import dev.antigravity.shared.model.AgentsHostFilterScope
 import dev.antigravity.shared.model.AgentsQuickFilter
+import dev.antigravity.shared.model.AntigravityCloudDetector
 import dev.antigravity.shared.model.CascadeExecutionMode
 import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.CascadeSummary
+import dev.antigravity.shared.model.CascadeSummaryTitleResolver
 import dev.antigravity.shared.model.CascadeUserInteractionPayload
 import dev.antigravity.shared.model.ComposerAttachmentChip
 import dev.antigravity.shared.model.CortexStepStatus
@@ -14,6 +16,7 @@ import dev.antigravity.shared.model.InteractionDecision
 import dev.antigravity.shared.model.LiveProgressAgentSummary
 import dev.antigravity.shared.model.LiveProgressPhase
 import dev.antigravity.shared.model.LiveProgressSnapshot
+import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.RemoteConnectionChannel
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.model.ThinkingEffortLevel
@@ -33,16 +36,22 @@ import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.HostReachabilityProbeResult
 import dev.antigravity.shared.protocol.RelayInstanceInfo
 import dev.antigravity.shared.protocol.TlsEngineConfig
+import dev.antigravity.shared.protocol.currentTimeMillis
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.Throws
 
 /**
@@ -61,7 +70,7 @@ import kotlin.Throws
 public class AntigravityCoreCoordinator(
     secretStore: SecretStore = InMemorySecretStore(),
     networkMonitor: NetworkReachabilityMonitoring = NoopNetworkReachabilityMonitor(),
-    powerStateProvider: PowerStateProviding = StaticPowerStateProvider(),
+    private val powerStateProvider: PowerStateProviding = StaticPowerStateProvider(),
     preferencesStore: KeyValuePreferencesStore = InMemoryPreferencesStore(),
     projectionStorage: ProjectionStoragePort = InMemoryProjectionStorage(),
     private val scope: CoroutineScope = CoroutineScope(
@@ -69,6 +78,7 @@ public class AntigravityCoreCoordinator(
             // Prevent uncaught background coroutine exceptions from aborting Kotlin/Native via propagateExceptionFinalResort.
         }
     ),
+    private val autoPreloadConversations: Boolean = true,
     clientFactory: (
         host: RemoteHostInstance,
         csrfToken: String?,
@@ -92,6 +102,11 @@ public class AntigravityCoreCoordinator(
     private val _capabilityErrorBanner = MutableStateFlow<String?>(null)
     public val capabilityErrorBanner: StateFlow<String?> = _capabilityErrorBanner.asStateFlow()
 
+    private val preloadMutex = Mutex()
+    private val preloadQueue = ArrayDeque<String>()
+    private val preloadAttemptedAtMs = mutableMapOf<String, Long>()
+    private var preloadWorkerJob: Job? = null
+
     public val connectionStore: ConnectionDomainStore = ConnectionDomainStore(
         secretStore = secretStore,
         networkMonitor = networkMonitor,
@@ -112,6 +127,7 @@ public class AntigravityCoreCoordinator(
     )
 
     public val workspaceStore: WorkspaceAndAutomationStore = WorkspaceAndAutomationStore(
+        preferencesStore = preferencesStore,
         onCapabilityError = ::reportCapabilityError,
     )
 
@@ -157,6 +173,34 @@ public class AntigravityCoreCoordinator(
     @Throws(Throwable::class)
     public suspend fun hydrateOfflineCache() {
         conversationSyncStore.hydrateFromCache()
+        val summaries = conversationSyncStore.state.value.summaries
+        if (summaries.isEmpty()) return
+        val idsToWarm = buildList {
+            for (s in summaries) {
+                if (s.needsTitleHydration && s.cascadeId !in this) add(s.cascadeId)
+                if (size >= 24) break
+            }
+            for (s in summaries) {
+                if (!s.isArchived && s.cascadeId !in this) add(s.cascadeId)
+                if (size >= 24) break
+            }
+        }
+        val warmed = chatStore.warmCachedSteps(idsToWarm)
+        if (warmed.isNotEmpty()) {
+            conversationSyncStore.markStepsCached(warmed.keys)
+            val host = connectionStore.state.value.activeHost
+            for ((cid, steps) in warmed) {
+                val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cid }
+                if (summary != null && summary.needsTitleHydration) {
+                    conversationSyncStore.applyHydratedStepsMetadata(
+                        host = host,
+                        cascadeId = cid,
+                        steps = steps,
+                        persist = host != null,
+                    )
+                }
+            }
+        }
     }
 
     @Throws(Throwable::class)
@@ -263,6 +307,7 @@ public class AntigravityCoreCoordinator(
                 originInstanceUuid = activeHost?.instanceId,
                 originHostName = activeHost?.hostname,
                 updatedAtEpochMs = dev.antigravity.shared.protocol.currentTimeMillis(),
+                hasResolvedTitle = true,
             ),
         )
         chatStore.setActiveCascade(draftId)
@@ -289,6 +334,8 @@ public class AntigravityCoreCoordinator(
             hostScope = effectiveScope,
             skipRelayListRefresh = skipRelayListRefresh,
         )
+        conversationSyncStore.resetSettledEmptyTitles()
+        scheduleConversationPreload()
         if (!isVerificationMode && connectionStore.state.value.userDisplayName == null) {
             scope.launch {
                 try {
@@ -311,15 +358,330 @@ public class AntigravityCoreCoordinator(
         instanceUuidOverride: String? = null,
     ): List<CascadeStep> {
         val client = connectionStore.activeClient()
-            ?: return chatStore.loadCachedSteps(cascadeId)
+        if (client == null) {
+            val cached = chatStore.loadCachedSteps(cascadeId)
+            if (cached.isNotEmpty()) {
+                conversationSyncStore.applyHydratedStepsMetadata(
+                    host = connectionStore.state.value.activeHost,
+                    cascadeId = cascadeId,
+                    steps = cached,
+                    persist = false,
+                )
+            }
+            return cached
+        }
         chatStore.setActiveCascade(cascadeId)
-        return chatStore.syncSteps(
+        val steps = chatStore.syncSteps(
             client = client,
             cascadeId = cascadeId,
             knownStepCount = knownStepCount,
             isCloud = isCloud,
             instanceUuidOverride = instanceUuidOverride,
         )
+        conversationSyncStore.applyHydratedStepsMetadata(
+            host = connectionStore.state.value.activeHost,
+            cascadeId = cascadeId,
+            steps = steps,
+            persist = true,
+        )
+        return steps
+    }
+
+    /**
+     * Background-safe step preloader exported to both Android and iOS (SKIE).
+     * Never mutates `activeCascadeId`, `isLoadingSteps`, or `stepLoadErrorText`.
+     */
+    @Throws(Throwable::class)
+    public suspend fun preloadSteps(
+        cascadeId: String,
+        knownStepCount: Int = 0,
+        isCloud: Boolean = false,
+        instanceUuidOverride: String? = null,
+        requireRemoteRefresh: Boolean = false,
+    ): List<CascadeStep> {
+        val client = connectionStore.activeClient()
+            ?: return chatStore.loadCachedSteps(cascadeId)
+        val steps = chatStore.preloadSteps(
+            client = client,
+            cascadeId = cascadeId,
+            knownStepCount = knownStepCount,
+            isCloud = isCloud,
+            instanceUuidOverride = instanceUuidOverride,
+            requireRemoteRefresh = requireRemoteRefresh,
+        )
+        conversationSyncStore.applyHydratedStepsMetadata(
+            host = connectionStore.state.value.activeHost,
+            cascadeId = cascadeId,
+            steps = steps,
+            persist = autoPreloadConversations,
+        )
+        return steps
+    }
+
+    /**
+     * Returns `true` when [summary] represents a server conversation whose title has not finished
+     * hydrating yet (and should render a loading indicator instead of `"New Conversation"`).
+     */
+    public fun isSummaryTitleLoading(summary: CascadeSummary): Boolean {
+        val conn = connectionStore.state.value
+        if (isVerificationMode && !conn.hasPairedBackend && !conn.isConnected) {
+            return false
+        }
+        if (summary.cascadeId.startsWith("cascade-new-")) {
+            return false
+        }
+        if (!summary.needsTitleHydration) return false
+        val sync = conversationSyncStore.state.value
+        if (summary.cascadeId in sync.hydratingCascadeIds) return true
+        if (summary.cascadeId in sync.settledEmptyTitleCascadeIds) return false
+        if (!conn.isDeviceNetworkReachable) return false
+        if (!conn.isConnected && conn.isConnecting) return true
+        return isSummaryHostReachable(summary, conn) && (conn.isConnected || conn.hasPairedBackend)
+    }
+
+    /**
+     * Returns the user-facing display title for [summary], replacing placeholder `"New Conversation"`
+     * on unloaded server conversations with `"Loading..."` or `"Untitled conversation"`.
+     */
+    public fun displayTitleForSummary(summary: CascadeSummary): String {
+        if (summary.cascadeId.startsWith("cascade-new-")) {
+            return summary.title.ifBlank { CascadeSummaryTitleResolver.PLACEHOLDER_TITLE }
+        }
+        if (summary.needsTitleHydration) {
+            return if (isSummaryTitleLoading(summary)) {
+                "Loading..."
+            } else {
+                CascadeSummaryTitleResolver.UNTITLED_FALLBACK
+            }
+        }
+        return summary.title
+    }
+
+    /**
+     * Enqueues a visible conversation at the front of the background preload queue so scrolling
+     * through long project lists hydrates titles and caches steps immediately.
+     */
+    public fun prioritizeConversationPreload(cascadeId: String) {
+        if (!autoPreloadConversations || isVerificationMode || cascadeId.isBlank()) return
+        if (cascadeId.startsWith("cascade-new-")) return
+        val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId } ?: return
+        val hasCachedSteps = !chatStore.state.value.stepsByCascadeId[cascadeId].isNullOrEmpty()
+        if (!summary.needsTitleHydration && hasCachedSteps) return
+        scheduleConversationPreload(priorityCascadeIds = listOf(cascadeId))
+    }
+
+    /**
+     * Schedules bounded-concurrency background preloading of unhydrated conversation titles and
+     * top recent conversations' steps so both sidebar titles and conversation entry load fast.
+     */
+    public fun scheduleConversationPreload(priorityCascadeIds: List<String> = emptyList()) {
+        if (!autoPreloadConversations || isVerificationMode) return
+        val conn = connectionStore.state.value
+        if (!conn.isConnected || conn.isNetworkingSuspended || !conn.isDeviceNetworkReachable) return
+
+        val collapsedIds = workspaceStore.state.value.collapsedProjectIds
+        val sync = conversationSyncStore.state.value
+        val existingStepsById = chatStore.state.value.stepsByCascadeId
+        val candidates = buildList {
+            val seen = mutableSetOf<String>()
+            fun addIfEligible(id: String) {
+                if (id.isNotBlank() && !id.startsWith("cascade-new-") && seen.add(id)) {
+                    add(id)
+                }
+            }
+            for (cid in priorityCascadeIds) addIfEligible(cid)
+            // 1. Prioritize all non-archived unresolved-title conversations in expanded projects first
+            val unresolvedExpanded = sync.summaries.filter { s ->
+                !s.isArchived && s.needsTitleHydration &&
+                    s.cascadeId !in sync.settledEmptyTitleCascadeIds &&
+                    s.projectSlug !in collapsedIds &&
+                    isSummaryHostReachable(s, conn)
+            }
+            for (s in unresolvedExpanded.take(MAX_BACKGROUND_HYDRATE_COUNT)) {
+                addIfEligible(s.cascadeId)
+            }
+            // 2. Also hydrate unresolved-title conversations in collapsed projects so expanding is instant
+            val unresolvedCollapsed = sync.summaries.filter { s ->
+                !s.isArchived && s.needsTitleHydration &&
+                    s.cascadeId !in sync.settledEmptyTitleCascadeIds &&
+                    s.projectSlug in collapsedIds &&
+                    isSummaryHostReachable(s, conn)
+            }
+            for (s in unresolvedCollapsed.take(MAX_BACKGROUND_HYDRATE_COUNT)) {
+                addIfEligible(s.cascadeId)
+            }
+            // 3. Preload steps for top recent conversations across expanded projects so entry is instant
+            val recentToWarm = sync.summaries.filter { s ->
+                !s.isArchived &&
+                    s.projectSlug !in collapsedIds &&
+                    existingStepsById[s.cascadeId].isNullOrEmpty() &&
+                    isSummaryHostReachable(s, conn)
+            }
+            for (s in recentToWarm.take(MAX_RECENT_STEP_PRELOAD_COUNT)) {
+                addIfEligible(s.cascadeId)
+            }
+        }
+        if (candidates.isEmpty()) return
+
+        scope.launch {
+            try {
+                preloadMutex.withLock {
+                    // Re-insert explicit priorities at the front of the queue
+                    for (cid in priorityCascadeIds.asReversed()) {
+                        if (cid in candidates) {
+                            preloadQueue.remove(cid)
+                            preloadQueue.addFirst(cid)
+                        }
+                    }
+                    for (cid in candidates) {
+                        if (cid !in preloadQueue) {
+                            preloadQueue.addLast(cid)
+                        }
+                    }
+                    if (preloadWorkerJob?.isActive == true) return@withLock
+                    preloadWorkerJob = scope.launch {
+                        try {
+                            runPreloadWorkers()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Throwable) {
+                            // Never allow background preloader failures to crash the app.
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort scheduling
+            }
+        }
+    }
+
+    private fun stopConversationPreload() {
+        preloadWorkerJob?.cancel()
+        preloadWorkerJob = null
+    }
+
+    private suspend fun runPreloadWorkers() {
+        val conn = connectionStore.state.value
+        val maxConcurrency = if (powerStateProvider.isLowPowerModeEnabled || conn.isNetworkExpensiveOrConstrained) 1 else 2
+        coroutineScope {
+            repeat(maxConcurrency) {
+                launch {
+                    while (isActive) {
+                        val nextId = preloadMutex.withLock {
+                            if (preloadQueue.isEmpty()) null else preloadQueue.removeFirst()
+                        } ?: break
+                        val liveConn = connectionStore.state.value
+                        if (!liveConn.isConnected || liveConn.isNetworkingSuspended || !liveConn.isDeviceNetworkReachable) {
+                            break
+                        }
+                        preloadSingleConversation(nextId)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun preloadSingleConversation(cascadeId: String) {
+        val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId } ?: return
+        val conn = connectionStore.state.value
+        if (!isSummaryHostReachable(summary, conn)) return
+        val nowMs = currentTimeMillis()
+        val recentlyAttempted = preloadMutex.withLock {
+            val prev = preloadAttemptedAtMs[cascadeId]
+            if (prev != null && (nowMs - prev) < PRELOAD_RETRY_COOLDOWN_MS) {
+                true
+            } else {
+                preloadAttemptedAtMs[cascadeId] = nowMs
+                false
+            }
+        }
+        if (recentlyAttempted) return
+
+        val client = connectionStore.activeClient() ?: return
+        val isCloud = isSummaryCloud(summary)
+        val shouldMarkHydrating = summary.needsTitleHydration
+        if (shouldMarkHydrating) {
+            conversationSyncStore.markHydrating(cascadeId)
+        }
+        try {
+            var steps = chatStore.preloadSteps(
+                client = client,
+                cascadeId = cascadeId,
+                knownStepCount = summary.stepCount,
+                isCloud = isCloud,
+                instanceUuidOverride = summary.originInstanceUuid,
+                requireRemoteRefresh = false,
+            )
+            if (steps.isNotEmpty() && shouldMarkHydrating &&
+                CascadeSummaryTitleResolver.deriveTitleFromSteps(steps) == null
+            ) {
+                steps = chatStore.preloadSteps(
+                    client = client,
+                    cascadeId = cascadeId,
+                    knownStepCount = summary.stepCount,
+                    isCloud = isCloud,
+                    instanceUuidOverride = summary.originInstanceUuid,
+                    requireRemoteRefresh = true,
+                )
+            }
+            if (steps.isNotEmpty()) {
+                conversationSyncStore.applyHydratedStepsMetadata(
+                    host = conn.activeHost,
+                    cascadeId = cascadeId,
+                    steps = steps,
+                    persist = true,
+                )
+            } else if (shouldMarkHydrating) {
+                conversationSyncStore.markSettledEmptyTitle(cascadeId)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // Settle cleanly so the row does not spin indefinitely; refresh/reconnect or tapping retries.
+            if (shouldMarkHydrating) {
+                conversationSyncStore.markSettledEmptyTitle(cascadeId)
+            }
+        } finally {
+            if (shouldMarkHydrating) {
+                conversationSyncStore.clearHydrating(cascadeId)
+            }
+        }
+    }
+
+    private fun isSummaryCloud(summary: CascadeSummary): Boolean {
+        if (summary.isCloud) return true
+        if (AntigravityCloudDetector.isCloudWorkspaceUri(summary.workspaceUri, cascadeId = summary.cascadeId)) return true
+        val proj = (workspaceStore.state.value.projects + conversationSyncStore.state.value.projects).firstOrNull {
+            (!summary.cloudProjectId.isNullOrBlank() && (it.cloudProjectId == summary.cloudProjectId || it.id == summary.cloudProjectId)) ||
+                (summary.workspaceUri.isNotBlank() && it.workspaceUri == summary.workspaceUri) ||
+                it.id == summary.projectSlug ||
+                it.name.equals(summary.projectSlug, ignoreCase = true)
+        }
+        return proj?.runtime == ProjectRuntimeTarget.CLOUD
+    }
+
+    private fun isSummaryHostReachable(summary: CascadeSummary, conn: ConnectionState): Boolean {
+        if (!conn.isDeviceNetworkReachable) return false
+        if (summary.isCloud) {
+            return if (conn.activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY && conn.availableRelayInstances.isNotEmpty()) {
+                conn.availableRelayInstances.any { it.status.isReachable } || conn.isConnected
+            } else {
+                conn.isConnected || conn.isConnecting
+            }
+        }
+        val originUuid = summary.originInstanceUuid?.trim().orEmpty()
+        if (originUuid.isNotEmpty() && conn.availableRelayInstances.isNotEmpty()) {
+            val matched = conn.availableRelayInstances.firstOrNull { it.uuid == originUuid }
+            if (matched != null) return matched.status.isReachable
+        }
+        val originHost = summary.originHostName?.trim().orEmpty()
+        if (originHost.isNotEmpty() && conn.availableRelayInstances.isNotEmpty()) {
+            val matched = conn.availableRelayInstances.firstOrNull { it.name == originHost }
+            if (matched != null) return matched.status.isReachable
+        }
+        return conn.isConnected || conn.isConnecting
     }
 
     @Throws(Throwable::class)
@@ -618,6 +980,7 @@ public class AntigravityCoreCoordinator(
         chatStore.parseMarkdown(markdown)
 
     public fun onBackground() {
+        stopConversationPreload()
         conversationSyncStore.stopSummarySubscriptionStream()
         connectionStore.onBackground()
     }
@@ -630,11 +993,17 @@ public class AntigravityCoreCoordinator(
         if (client != null && host != null && connectionStore.state.value.isConnected) {
             conversationSyncStore.startSummarySubscriptionStream(client, host)
             replayPendingOutbox()
+            scheduleConversationPreload()
         }
     }
 
     @Throws(Throwable::class)
     public suspend fun disconnectAndClearCredentials() {
+        stopConversationPreload()
+        preloadMutex.withLock {
+            preloadQueue.clear()
+            preloadAttemptedAtMs.clear()
+        }
         conversationSyncStore.clear()
         chatStore.clear()
         connectionStore.disconnectAndClearCredentials()
@@ -642,6 +1011,7 @@ public class AntigravityCoreCoordinator(
 
     @Throws(Throwable::class)
     public suspend fun close() {
+        stopConversationPreload()
         conversationSyncStore.stopSummarySubscriptionStream()
         connectionStore.close()
         scope.cancel()
@@ -666,6 +1036,7 @@ public class AntigravityCoreCoordinator(
     ) {
         val host = connectionStore.state.value.activeHost ?: return
         conversationSyncStore.applyHandshake(host, handshake)
+        conversationSyncStore.resetSettledEmptyTitles()
         val client = connectionStore.activeClient()
         if (client != null && handshake.isSelectedHostOnline) {
             if (startSummaryStream) {
@@ -683,12 +1054,15 @@ public class AntigravityCoreCoordinator(
                             hostScope = activeScope,
                             skipRelayListRefresh = true,
                         )
+                        scheduleConversationPreload()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Throwable) {
                         // Best-effort deferred hydration after fast handshake; UI stays connected and pull-to-refresh can retry.
                     }
                 }
+            } else {
+                scheduleConversationPreload()
             }
             scope.launch {
                 try {
@@ -725,6 +1099,10 @@ public class AntigravityCoreCoordinator(
     }
 
     public companion object {
+        private const val MAX_BACKGROUND_HYDRATE_COUNT: Int = 32
+        private const val MAX_RECENT_STEP_PRELOAD_COUNT: Int = 8
+        private const val PRELOAD_RETRY_COOLDOWN_MS: Long = 30_000L
+
         public fun createEsddVerificationCoordinator(): AntigravityCoreCoordinator =
             EsddVerificationFixtures.createVerificationCoordinator()
     }

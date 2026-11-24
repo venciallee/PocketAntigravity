@@ -712,6 +712,55 @@ public enum CascadeDisplayItem: Identifiable, Sendable, Equatable {
     }
 }
 
+/// Shared title placeholder detection and step-based title derivation (1:1 parity with KMP `CascadeSummaryTitleResolver`).
+public enum CascadeSummaryTitleResolver {
+    public static let placeholderTitle: String = "New Conversation"
+    public static let untitledFallback: String = "Untitled conversation"
+
+    public static func isPlaceholderTitle(_ title: String?) -> Bool {
+        let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty || trimmed.caseInsensitiveCompare(placeholderTitle) == .orderedSame
+    }
+
+    public static func cleanSingleLine(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let collapsed = raw
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .split(whereSeparator: { $0 == " " || $0 == "\t" })
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return collapsed.isEmpty ? nil : collapsed
+    }
+
+    public static func truncateTitle(_ text: String, maxLength: Int = 64) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxLength else { return trimmed }
+        let limit = max(1, maxLength - 1)
+        return String(trimmed.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
+    public static func deriveTitle(from steps: [CascadeStep], maxLength: Int = 64) -> String? {
+        if let rawPrompt = steps.first(where: { $0.type == .userInput })?.userInput,
+           let firstPrompt = cleanSingleLine(rawPrompt) {
+            return truncateTitle(firstPrompt, maxLength: maxLength)
+        }
+        if let rawTask = steps.first(where: { $0.type == .taskBoundary })?.taskBoundary?.taskName,
+           let firstTask = cleanSingleLine(rawTask) {
+            return truncateTitle(firstTask, maxLength: maxLength)
+        }
+        if let replyRaw = steps.first(where: { $0.type == .plannerResponse || $0.type == .notifyUser })?.plannerResponse?.response {
+            for rawLine in replyRaw.components(separatedBy: .newlines) {
+                let cleaned = rawLine.trimmingCharacters(in: CharacterSet(charactersIn: "#*-> \t\r"))
+                if let single = cleanSingleLine(cleaned) {
+                    return truncateTitle(single, maxLength: maxLength)
+                }
+            }
+        }
+        return nil
+    }
+}
+
 /// Summary item emitted by `JetboxSubscribeToSummaries` and `GetAllCascadeTrajectories` (`UE01`, `UE03`, `UE04`, `UE13`).
 public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
     public var id: String { cascadeId }
@@ -740,6 +789,11 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
     public var originInstanceUuid: String?
     public var originHostName: String?
     public var lastUserViewTime: Date?
+    public var hasResolvedTitle: Bool
+
+    public var needsTitleHydration: Bool {
+        !hasResolvedTitle || CascadeSummaryTitleResolver.isPlaceholderTitle(title)
+    }
 
     public init(
         cascadeId: String,
@@ -766,7 +820,8 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         cloudProjectId: String? = nil,
         originInstanceUuid: String? = nil,
         originHostName: String? = nil,
-        lastUserViewTime: Date? = nil
+        lastUserViewTime: Date? = nil,
+        hasResolvedTitle: Bool? = nil
     ) {
         self.cascadeId = cascadeId
         self.title = title
@@ -793,6 +848,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         self.originInstanceUuid = originInstanceUuid
         self.originHostName = originHostName
         self.lastUserViewTime = lastUserViewTime
+        self.hasResolvedTitle = hasResolvedTitle ?? !CascadeSummaryTitleResolver.isPlaceholderTitle(title)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -821,6 +877,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         case originInstanceUuid
         case originHostName
         case lastUserViewTime
+        case hasResolvedTitle
     }
 
     public init(from decoder: Decoder) throws {
@@ -829,9 +886,10 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         let wsUri = try container.decode(String.self, forKey: .workspaceUri)
         let decodedStatus = try container.decode(CortexStepStatus.self, forKey: .status)
         let rawSub = try container.decodeIfPresent(String.self, forKey: .statusSubtitle) ?? ""
+        let decodedTitle = try container.decode(String.self, forKey: .title)
 
         self.cascadeId = cid
-        self.title = try container.decode(String.self, forKey: .title)
+        self.title = decodedTitle
         self.projectSlug = try container.decodeIfPresent(String.self, forKey: .projectSlug) ?? "ledger-svc"
         self.workspaceUri = wsUri
         self.branchName = try container.decodeIfPresent(String.self, forKey: .branchName) ?? "main"
@@ -856,5 +914,7 @@ public struct CascadeSummary: Codable, Sendable, Equatable, Identifiable {
         self.originInstanceUuid = try container.decodeIfPresent(String.self, forKey: .originInstanceUuid)
         self.originHostName = try container.decodeIfPresent(String.self, forKey: .originHostName)
         self.lastUserViewTime = try container.decodeIfPresent(Date.self, forKey: .lastUserViewTime)
+        self.hasResolvedTitle = try container.decodeIfPresent(Bool.self, forKey: .hasResolvedTitle)
+            ?? !CascadeSummaryTitleResolver.isPlaceholderTitle(decodedTitle)
     }
 }

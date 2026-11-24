@@ -96,6 +96,14 @@ public protocol AntigravityKmpEnginePort: Sendable {
         instanceUuidOverride: String?
     ) async throws -> [CascadeStep]
 
+    func preloadSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?,
+        requireRemoteRefresh: Bool
+    ) async throws -> [CascadeStep]
+
     func startConversation(
         workspaceUri: String,
         initialPrompt: String,
@@ -157,4 +165,19 @@ public protocol AntigravityKmpEnginePort: Sendable {
 public extension AntigravityKmpEnginePort {
     var lastHandshakeDiagnostic: String { "" }
     func fetchUserDisplayName() async -> String? { nil }
+
+    func preloadSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?,
+        requireRemoteRefresh: Bool
+    ) async throws -> [CascadeStep] {
+        try await syncSteps(
+            cascadeId: cascadeId,
+            knownStepCount: knownStepCount,
+            isCloud: isCloud,
+            instanceUuidOverride: instanceUuidOverride
+        )
+    }
 }
