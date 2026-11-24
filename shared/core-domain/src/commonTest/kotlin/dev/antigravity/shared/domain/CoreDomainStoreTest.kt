@@ -578,66 +578,70 @@ class CoreDomainStoreTest {
                 },
             )
 
-            coordinator.connectCloudRelay(
-                relayUrlString = "https://antigravity.google.com/r/$mbpUuid",
-                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
-                relayApiKey = validKey,
-                startSummaryStream = false,
-            )
+            try {
+                coordinator.connectCloudRelay(
+                    relayUrlString = "https://antigravity.google.com/r/$mbpUuid",
+                    sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                    relayApiKey = validKey,
+                    startSummaryStream = false,
+                )
 
-            // Initial handshake targets MacBook Pro (and federates both reachable Macs + Cloud)
-            val mbpScope = AgentsHostFilterScope.LocalHost(mbpUuid, "MacBook Pro")
-            val miniScope = AgentsHostFilterScope.LocalHost(macMiniUuid, macMiniName)
-            val cloudScope = AgentsHostFilterScope.AntigravityCloud
+                // Initial handshake targets MacBook Pro (and federates both reachable Macs + Cloud)
+                val mbpScope = AgentsHostFilterScope.LocalHost(mbpUuid, "MacBook Pro")
+                val miniScope = AgentsHostFilterScope.LocalHost(macMiniUuid, macMiniName)
+                val cloudScope = AgentsHostFilterScope.AntigravityCloud
 
-            // Switch to Mac mini -> scoped refresh must fetch vapor-backend & Mac mini PocketAntigravity and reconcile selectedProjectId
-            coordinator.selectHostScope(miniScope)
-            var miniProjects: List<ProjectWorkspace> = emptyList()
-            for (i in 0 until 60) {
-                miniProjects = coordinator.filteredProjects(hostScope = miniScope)
-                if (miniProjects.any { it.name == "vapor-backend" } &&
-                    coordinator.workspaceStore.state.value.selectedProjectId.let { selId ->
-                        miniProjects.any { it.id == selId }
+                // Switch to Mac mini -> scoped refresh must fetch vapor-backend & Mac mini PocketAntigravity and reconcile selectedProjectId
+                coordinator.selectHostScope(miniScope)
+                var miniProjects: List<ProjectWorkspace> = emptyList()
+                for (i in 0 until 60) {
+                    miniProjects = coordinator.filteredProjects(hostScope = miniScope)
+                    if (miniProjects.any { it.name == "vapor-backend" } &&
+                        coordinator.workspaceStore.state.value.selectedProjectId.let { selId ->
+                            miniProjects.any { it.id == selId }
+                        }
+                    ) {
+                        break
                     }
-                ) {
-                    break
+                    delay(25L)
                 }
-                delay(25L)
-            }
-            assertEquals(setOf("vapor-backend", "PocketAntigravity"), miniProjects.map { it.name }.toSet())
-            assertFalse(miniProjects.any { it.name == "ios-app" }, "MacBook Pro repo must not leak into Mac mini scope")
-            assertFalse(miniProjects.any { it.runtime == ProjectRuntimeTarget.CLOUD }, "Cloud repo must not leak into Mac mini scope")
-            val selectedMiniId = coordinator.workspaceStore.state.value.selectedProjectId
-            assertTrue(miniProjects.any { it.id == selectedMiniId }, "Selected project must belong to Mac mini after device switch")
+                assertEquals(setOf("vapor-backend", "PocketAntigravity"), miniProjects.map { it.name }.toSet())
+                assertFalse(miniProjects.any { it.name == "ios-app" }, "MacBook Pro repo must not leak into Mac mini scope")
+                assertFalse(miniProjects.any { it.runtime == ProjectRuntimeTarget.CLOUD }, "Cloud repo must not leak into Mac mini scope")
+                val selectedMiniId = coordinator.workspaceStore.state.value.selectedProjectId
+                assertTrue(miniProjects.any { it.id == selectedMiniId }, "Selected project must belong to Mac mini after device switch")
 
-            // Mac mini's PocketAntigravity summary must point to Mac mini's reconciled project ID
-            val miniSummary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == "cas-mini-1" }
-            val miniPocketProj = miniProjects.first { it.name == "PocketAntigravity" }
-            assertEquals(miniPocketProj.id, miniSummary?.projectSlug)
+                // Mac mini's PocketAntigravity summary must point to Mac mini's reconciled project ID
+                val miniSummary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == "cas-mini-1" }
+                val miniPocketProj = miniProjects.first { it.name == "PocketAntigravity" }
+                assertEquals(miniPocketProj.id, miniSummary?.projectSlug)
 
-            // 0-conversation Cloud project must survive local-host-only refresh
-            val cloudProjects = coordinator.filteredProjects(hostScope = cloudScope)
-            assertTrue(
-                cloudProjects.any { it.name == "venciallee/PocketAntigravity" },
-                "0-conversation Cloud project must remain available after local host refresh",
-            )
+                // 0-conversation Cloud project must survive local-host-only refresh
+                val cloudProjects = coordinator.filteredProjects(hostScope = cloudScope)
+                assertTrue(
+                    cloudProjects.any { it.name == "venciallee/PocketAntigravity" },
+                    "0-conversation Cloud project must remain available after local host refresh",
+                )
 
-            // Switch back to MacBook Pro -> scoped projects must isolate to MacBook Pro repos only
-            coordinator.selectHostScope(mbpScope)
-            var mbpProjects: List<ProjectWorkspace> = emptyList()
-            for (i in 0 until 60) {
-                mbpProjects = coordinator.filteredProjects(hostScope = mbpScope)
-                if (mbpProjects.any { it.name == "ios-app" } &&
-                    coordinator.workspaceStore.state.value.selectedProjectId.let { selId ->
-                        mbpProjects.any { it.id == selId }
+                // Switch back to MacBook Pro -> scoped projects must isolate to MacBook Pro repos only
+                coordinator.selectHostScope(mbpScope)
+                var mbpProjects: List<ProjectWorkspace> = emptyList()
+                for (i in 0 until 60) {
+                    mbpProjects = coordinator.filteredProjects(hostScope = mbpScope)
+                    if (mbpProjects.any { it.name == "ios-app" } &&
+                        coordinator.workspaceStore.state.value.selectedProjectId.let { selId ->
+                            mbpProjects.any { it.id == selId }
+                        }
+                    ) {
+                        break
                     }
-                ) {
-                    break
+                    delay(25L)
                 }
-                delay(25L)
+                assertEquals(setOf("ios-app", "PocketAntigravity"), mbpProjects.map { it.name }.toSet())
+                assertFalse(mbpProjects.any { it.name == "vapor-backend" }, "Mac mini repo must not leak into MacBook Pro scope")
+            } finally {
+                coordinator.close()
             }
-            assertEquals(setOf("ios-app", "PocketAntigravity"), mbpProjects.map { it.name }.toSet())
-            assertFalse(mbpProjects.any { it.name == "vapor-backend" }, "Mac mini repo must not leak into MacBook Pro scope")
         }
     }
 
