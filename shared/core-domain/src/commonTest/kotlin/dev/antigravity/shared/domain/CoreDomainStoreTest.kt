@@ -563,7 +563,6 @@ class CoreDomainStoreTest {
             }
 
             val coordinator = AntigravityCoreCoordinator(
-                scope = this,
                 autoPreloadConversations = false,
                 clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
                     AntigravityKmpRpcClient(
@@ -597,7 +596,8 @@ class CoreDomainStoreTest {
                 var miniProjects: List<ProjectWorkspace> = emptyList()
                 for (i in 0 until 60) {
                     miniProjects = coordinator.filteredProjects(hostScope = miniScope)
-                    if (miniProjects.any { it.name == "vapor-backend" } &&
+                    if (coordinator.connectionState.value.activeHost?.instanceId == macMiniUuid &&
+                        miniProjects.any { it.name == "vapor-backend" } &&
                         coordinator.workspaceStore.state.value.selectedProjectId.let { selId ->
                             miniProjects.any { it.id == selId }
                         }
@@ -606,6 +606,7 @@ class CoreDomainStoreTest {
                     }
                     delay(25L)
                 }
+                assertEquals(macMiniUuid, coordinator.connectionState.value.activeHost?.instanceId)
                 assertEquals(setOf("vapor-backend", "PocketAntigravity"), miniProjects.map { it.name }.toSet())
                 assertFalse(miniProjects.any { it.name == "ios-app" }, "MacBook Pro repo must not leak into Mac mini scope")
                 assertFalse(miniProjects.any { it.runtime == ProjectRuntimeTarget.CLOUD }, "Cloud repo must not leak into Mac mini scope")
@@ -629,7 +630,8 @@ class CoreDomainStoreTest {
                 var mbpProjects: List<ProjectWorkspace> = emptyList()
                 for (i in 0 until 60) {
                     mbpProjects = coordinator.filteredProjects(hostScope = mbpScope)
-                    if (mbpProjects.any { it.name == "ios-app" } &&
+                    if (coordinator.connectionState.value.activeHost?.instanceId == mbpUuid &&
+                        mbpProjects.any { it.name == "ios-app" } &&
                         coordinator.workspaceStore.state.value.selectedProjectId.let { selId ->
                             mbpProjects.any { it.id == selId }
                         }
@@ -638,10 +640,12 @@ class CoreDomainStoreTest {
                     }
                     delay(25L)
                 }
+                assertEquals(mbpUuid, coordinator.connectionState.value.activeHost?.instanceId)
                 assertEquals(setOf("ios-app", "PocketAntigravity"), mbpProjects.map { it.name }.toSet())
                 assertFalse(mbpProjects.any { it.name == "vapor-backend" }, "Mac mini repo must not leak into MacBook Pro scope")
             } finally {
                 coordinator.disconnectAndClearCredentials()
+                coordinator.close()
             }
         }
     }

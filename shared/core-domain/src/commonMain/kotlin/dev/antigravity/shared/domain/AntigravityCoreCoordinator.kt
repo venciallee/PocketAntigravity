@@ -46,6 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -856,7 +857,9 @@ public class AntigravityCoreCoordinator(
                         },
                     )
                     connectionStore.switchToRelayInstance(targetInstance)
-                    if (hostSwitchGeneration != generation) return@launch
+                    if (!isActive || hostSwitchGeneration != generation || !connectionStore.state.value.hasPairedBackend) {
+                        return@launch
+                    }
                     val nextHost = connectionStore.state.value.activeHost
                     if (nextHost != null && nextHost.isOnline) {
                         conversationSyncStore.startSummarySubscriptionStream(client, nextHost)
@@ -864,7 +867,9 @@ public class AntigravityCoreCoordinator(
                         conversationSyncStore.stopSummarySubscriptionStream()
                     }
                 }
-                if (hostSwitchGeneration != generation) return@launch
+                if (!isActive || hostSwitchGeneration != generation || !connectionStore.state.value.hasPairedBackend) {
+                    return@launch
+                }
                 refreshWorkspacesAndSummaries(
                     hostScope = targetScope,
                     skipRelayListRefresh = false,
@@ -1145,8 +1150,10 @@ public class AntigravityCoreCoordinator(
 
     @Throws(Throwable::class)
     public suspend fun disconnectAndClearCredentials() {
-        hostSwitchJob?.cancel()
+        hostSwitchGeneration += 1L
+        val activeHostSwitch = hostSwitchJob
         hostSwitchJob = null
+        activeHostSwitch?.cancelAndJoin()
         stopConversationPreload()
         preloadMutex.withLock {
             preloadQueue.clear()
@@ -1159,6 +1166,7 @@ public class AntigravityCoreCoordinator(
 
     @Throws(Throwable::class)
     public suspend fun close() {
+        hostSwitchGeneration += 1L
         hostSwitchJob?.cancel()
         hostSwitchJob = null
         stopConversationPreload()
