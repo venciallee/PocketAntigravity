@@ -640,7 +640,7 @@ class CoreDomainStoreTest {
                 assertEquals(setOf("ios-app", "PocketAntigravity"), mbpProjects.map { it.name }.toSet())
                 assertFalse(mbpProjects.any { it.name == "vapor-backend" }, "Mac mini repo must not leak into MacBook Pro scope")
             } finally {
-                coordinator.close()
+                coordinator.disconnectAndClearCredentials()
             }
         }
     }
