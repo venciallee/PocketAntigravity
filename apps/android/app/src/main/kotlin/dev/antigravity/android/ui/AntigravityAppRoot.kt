@@ -2,10 +2,22 @@ package dev.antigravity.android.ui
 
 import android.util.Log
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -13,8 +25,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import dev.antigravity.android.core.platform.CloudRelayCookieBridge
 import dev.antigravity.android.core.ui.theme.AntigravityTheme
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
@@ -32,7 +59,7 @@ import dev.antigravity.android.ui.chat.StructuredQuestionScreen
 import dev.antigravity.android.ui.chat.SwarmBoardSheet
 import dev.antigravity.android.ui.chat.VoiceModeSheet
 import dev.antigravity.android.ui.home.AgentsHomeScreen
-import dev.antigravity.android.ui.home.AgentsSidebarDrawerOverlay
+import dev.antigravity.android.ui.home.AgentsSidebarDrawerContent
 import dev.antigravity.android.ui.home.ConversationContextSheetScreen
 import dev.antigravity.android.ui.home.DisplayOptionsOverlayScreen
 import dev.antigravity.android.ui.liveprogress.AndroidLiveUpdatesSpecGallery
@@ -56,11 +83,11 @@ import dev.antigravity.shared.model.EsddVerifySceneCase
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.protocol.SapisidHashGenerator
+import kotlin.math.abs
 import kotlinx.coroutines.launch
 
 private sealed interface AppRoute {
     data object NewConversationHome : AppRoute
-    data object SidebarDrawer : AppRoute
     data class DisplayOptions(val expandSortMenu: Boolean = false) : AppRoute
     data class ContextMenu(val cascadeId: String) : AppRoute
     data class ProjectDetail(val projectId: String) : AppRoute
@@ -97,8 +124,8 @@ private enum class ChatOverlaySheet {
 
 /**
  * Root Jetpack Compose application shell routing across all 20 aligned UE states (`UE01`..`UE15`),
- * New Conversation Home + Left Modal Navigation Drawer (replacing legacy bottom tab bar),
- * v2.33 orchestration sheets, and pairing/settings flows.
+ * New Conversation Home + Interactive Left Modal Navigation Drawer (with left-to-right swipe open
+ * and right-to-left swipe close), v2.33 orchestration sheets, and pairing/settings flows.
  */
 @Composable
 fun AntigravityAppRoot(
@@ -121,6 +148,8 @@ fun AntigravityAppRoot(
     val syncState by coordinator.syncState.collectAsState()
     val workspaceState by coordinator.workspaceStore.state.collectAsState()
     val scope = rememberCoroutineScope()
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
 
     val appearance = settingsState.appearance
     val resolvedPreset = themePresetOverride ?: appearance.theme
@@ -130,6 +159,7 @@ fun AntigravityAppRoot(
         AppAppearanceMode.SYSTEM -> isSystemInDarkTheme()
     }
 
+    val startsWithSidebarOpen = initialVerifyScene == EsddVerifySceneCase.SIDEBAR_DRAWER
     val defaultStartRoute = remember(initialVerifyScene, connectionState.hasPairedBackend, syncState.summaries.isEmpty()) {
         if (initialVerifyScene != null) {
             routeForVerifyScene(initialVerifyScene)
@@ -143,9 +173,49 @@ fun AntigravityAppRoot(
     var currentRoute by remember(initialVerifyScene) { mutableStateOf(defaultStartRoute) }
     var previousRoute by remember(initialVerifyScene) { mutableStateOf<AppRoute>(AppRoute.NewConversationHome) }
     var activeChatOverlay by remember(initialVerifyScene) { mutableStateOf(ChatOverlaySheet.NONE) }
+    var isDrawerOpen by remember(initialVerifyScene) { mutableStateOf(startsWithSidebarOpen) }
+    val drawerProgress = remember(initialVerifyScene) { Animatable(if (startsWithSidebarOpen) 1f else 0f) }
+    var dragDrawerProgress by remember(initialVerifyScene) { mutableStateOf<Float?>(null) }
     var showRemoteLinkDialog by remember { mutableStateOf(false) }
     var userExplicitlyOpenedPairing by remember { mutableStateOf(false) }
     var stepSyncRetryNonce by remember { mutableStateOf(0) }
+
+    fun dismissKeyboard() {
+        keyboardController?.hide()
+        focusManager.clearFocus()
+    }
+
+    fun openDrawer(immediate: Boolean = false) {
+        dismissKeyboard()
+        isDrawerOpen = true
+        dragDrawerProgress = null
+        scope.launch {
+            if (immediate) {
+                drawerProgress.snapTo(1f)
+            } else {
+                drawerProgress.animateTo(
+                    targetValue = 1f,
+                    animationSpec = spring(dampingRatio = 0.92f, stiffness = 420f),
+                )
+            }
+        }
+    }
+
+    fun closeDrawer(immediate: Boolean = false) {
+        dismissKeyboard()
+        isDrawerOpen = false
+        dragDrawerProgress = null
+        scope.launch {
+            if (immediate) {
+                drawerProgress.snapTo(0f)
+            } else {
+                drawerProgress.animateTo(
+                    targetValue = 0f,
+                    animationSpec = spring(dampingRatio = 0.92f, stiffness = 460f),
+                )
+            }
+        }
+    }
 
     LaunchedEffect(
         initialVerifyScene,
@@ -203,15 +273,23 @@ fun AntigravityAppRoot(
         }
     }
 
-    fun navigateTo(destination: AppRoute) {
+    fun navigateTo(destination: AppRoute, keepDrawerOpen: Boolean = false) {
         previousRoute = currentRoute
         activeChatOverlay = ChatOverlaySheet.NONE
+        if (!keepDrawerOpen && (isDrawerOpen || drawerProgress.value > 0.001f)) {
+            closeDrawer(immediate = true)
+        }
         if (destination == AppRoute.Pairing) {
             userExplicitlyOpenedPairing = true
         } else if (destination == AppRoute.NewConversationHome) {
             userExplicitlyOpenedPairing = false
         }
         currentRoute = destination
+    }
+
+    fun returnToSidebarDrawer() {
+        navigateTo(AppRoute.NewConversationHome, keepDrawerOpen = true)
+        openDrawer(immediate = true)
     }
 
     fun openNewConversation(projectId: String = "") {
@@ -236,13 +314,16 @@ fun AntigravityAppRoot(
     }
 
     fun navigateBack() {
+        if (isDrawerOpen) {
+            closeDrawer()
+            return
+        }
         if (activeChatOverlay != ChatOverlaySheet.NONE) {
             activeChatOverlay = ChatOverlaySheet.NONE
             return
         }
         currentRoute = when (val route = currentRoute) {
             AppRoute.NewConversationHome -> AppRoute.NewConversationHome
-            AppRoute.SidebarDrawer,
             is AppRoute.DisplayOptions,
             is AppRoute.ContextMenu,
             is AppRoute.ProjectDetail,
@@ -279,9 +360,21 @@ fun AntigravityAppRoot(
         }
     }
 
-    BackHandler(enabled = currentRoute != AppRoute.NewConversationHome || activeChatOverlay != ChatOverlaySheet.NONE) {
+    BackHandler(enabled = isDrawerOpen || currentRoute != AppRoute.NewConversationHome || activeChatOverlay != ChatOverlaySheet.NONE) {
         navigateBack()
     }
+
+    val canSwipeOpenDrawer = !isDrawerOpen && when (currentRoute) {
+        AppRoute.NewConversationHome,
+        is AppRoute.Automations,
+        AppRoute.Settings,
+        -> true
+
+        is AppRoute.CascadeChat -> activeChatOverlay == ChatOverlaySheet.NONE
+        else -> false
+    }
+    val latestIsDrawerOpen by rememberUpdatedState(isDrawerOpen)
+    val latestCanSwipeOpen by rememberUpdatedState(canSwipeOpenDrawer)
 
     AntigravityTheme(
         preset = resolvedPreset,
@@ -289,420 +382,584 @@ fun AntigravityAppRoot(
         useDynamicColor = appearance.useDynamicColor,
     ) {
         val colors = LocalAntigravityColors.current
+        val density = LocalDensity.current
+        val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
 
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .background(colors.canvasObsidian),
         ) {
-            when (val route = currentRoute) {
-                AppRoute.NewConversationHome -> {
-                    AgentsHomeScreen(
-                        coordinator = coordinator,
-                        onOpenSidebar = { navigateTo(AppRoute.SidebarDrawer) },
-                        onOpenConversation = { cascadeId -> openConversation(cascadeId) },
-                        onOpenAddContext = { navigateTo(AppRoute.AddContext) },
-                        onOpenModelPicker = { navigateTo(AppRoute.ModelAndMode) },
-                        onOpenPermissionsPreset = { navigateTo(AppRoute.PermissionsPreset) },
-                        onOpenSlashMenu = { navigateTo(AppRoute.SlashMenu(includeSideQuestionPreview = false)) },
-                        onOpenVoiceMode = {
-                            coordinator.chatStore.setActiveCascade("cas-rate-limiter")
-                            currentRoute = AppRoute.CascadeChat("cas-rate-limiter")
-                            activeChatOverlay = ChatOverlaySheet.VOICE_MODE
-                        },
-                        onOpenReSignIn = {
-                            val relayUrl = connectionState.activeHost?.endpointUrl
-                                ?.takeIf { it.startsWith("https://") }
-                                ?: SapisidHashGenerator.DEFAULT_ORIGIN
-                            navigateTo(AppRoute.CloudRelaySignIn(relayUrl))
-                        },
-                    )
-                }
+            val drawerWidthPx = remember(maxWidth, density) {
+                with(density) { (maxWidth * 0.815f).toPx().coerceAtLeast(1f) }
+            }
+            val leadingEdgeBandPx = remember(density) {
+                with(density) { 40.dp.toPx() }
+            }
 
-                AppRoute.SidebarDrawer -> {
-                    AgentsSidebarDrawerOverlay(
-                        coordinator = coordinator,
-                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
-                        onNewConversation = { projectId -> openNewConversation(projectId) },
-                        onOpenAutomations = { navigateTo(AppRoute.Automations()) },
-                        onOpenCustomizations = {
-                            val activeProjName = workspaceState.projects
-                                .firstOrNull { it.id == workspaceState.selectedProjectId }?.name ?: "ledger-svc"
-                            navigateTo(AppRoute.RulesAndSkills(activeProjName))
-                        },
-                        onOpenDisplayOptions = { navigateTo(AppRoute.DisplayOptions(expandSortMenu = false)) },
-                        onOpenNewProject = { navigateTo(AppRoute.CreateProject) },
-                        onOpenProjectDetail = { projectId ->
-                            coordinator.workspaceStore.selectProject(projectId)
-                            navigateTo(AppRoute.ProjectDetail(projectId))
-                        },
-                        onOpenConversation = { cascadeId -> openConversation(cascadeId) },
-                        onLongPressConversation = { cascadeId -> navigateTo(AppRoute.ContextMenu(cascadeId)) },
-                        onOpenSettings = { navigateTo(AppRoute.Settings) },
-                    )
-                }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(isRtl, drawerWidthPx, leadingEdgeBandPx) {
+                        val touchSlop = viewConfiguration.touchSlop
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val drawerOpenAtDown = latestIsDrawerOpen
+                            val canOpenAtDown = latestCanSwipeOpen
+                            if (!drawerOpenAtDown && !canOpenAtDown) {
+                                return@awaitEachGesture
+                            }
 
-                is AppRoute.DisplayOptions -> {
-                    DisplayOptionsOverlayScreen(
-                        coordinator = coordinator,
-                        onDismiss = { navigateTo(AppRoute.SidebarDrawer) },
-                        initialSortMenuExpanded = route.expandSortMenu,
-                    )
-                }
+                            val leadingStartX = if (isRtl) (size.width - down.position.x) else down.position.x
+                            val isLeadingEdgeStart = !drawerOpenAtDown && leadingStartX <= leadingEdgeBandPx
+                            val detectPass = if (isLeadingEdgeStart) PointerEventPass.Initial else PointerEventPass.Main
 
-                is AppRoute.ContextMenu -> {
-                    ConversationContextSheetScreen(
-                        coordinator = coordinator,
-                        targetCascadeId = route.cascadeId,
-                        onDismiss = { navigateTo(AppRoute.SidebarDrawer) },
-                    )
-                }
+                            var locked = false
+                            var startDragX = down.position.x
+                            var activePointerId = down.id
 
-                is AppRoute.ProjectDetail -> {
-                    val projName = workspaceState.projects.firstOrNull { it.id == route.projectId }?.name ?: route.projectId
-                    ProjectDetailScreen(
-                        coordinator = coordinator,
-                        projectId = route.projectId,
-                        onBack = { navigateTo(AppRoute.SidebarDrawer) },
-                        onNewConversation = { openNewConversation(projectId = route.projectId) },
-                        onOpenConversation = { cascadeId -> openConversation(cascadeId) },
-                        onOpenAutomationDetail = { automationId ->
-                            coordinator.workspaceStore.selectAutomation(automationId)
-                            navigateTo(AppRoute.AutomationDetail(automationId))
-                        },
-                        onOpenRulesAndSkills = {
-                            navigateTo(AppRoute.RulesAndSkills(projectName = projName))
-                        },
-                    )
-                }
+                            while (true) {
+                                val event = awaitPointerEvent(detectPass)
+                                val change = event.changes.firstOrNull { it.id == activePointerId } ?: break
+                                if (!change.pressed) {
+                                    break
+                                }
+                                if (!isLeadingEdgeStart && change.isConsumed) {
+                                    break
+                                }
+                                val totalDx = change.position.x - down.position.x
+                                val totalDy = change.position.y - down.position.y
+                                val signedDx = if (isRtl) -totalDx else totalDx
 
-                AppRoute.CreateProject -> {
-                    CreateProjectScreen(
-                        coordinator = coordinator,
-                        onDismiss = { navigateTo(AppRoute.SidebarDrawer) },
-                        onCreated = { navigateTo(AppRoute.SidebarDrawer) },
-                    )
-                }
+                                if (abs(totalDy) > touchSlop && abs(totalDy) >= abs(totalDx)) {
+                                    // Yield immediately to vertical scrolling.
+                                    break
+                                }
+                                if (abs(totalDx) > touchSlop && abs(totalDx) > abs(totalDy) * 1.15f) {
+                                    val matchesDirection = if (drawerOpenAtDown) signedDx < 0f else signedDx > 0f
+                                    if (!matchesDirection) {
+                                        break
+                                    }
+                                    locked = true
+                                    startDragX = down.position.x
+                                    dismissKeyboard()
+                                    val baseline = (dragDrawerProgress ?: drawerProgress.value).coerceIn(0f, 1f)
+                                    val initialProgress = (baseline + signedDx / drawerWidthPx).coerceIn(0f, 1f)
+                                    dragDrawerProgress = initialProgress
+                                    change.consume()
 
-                is AppRoute.Automations -> {
-                    AutomationsScreen(
-                        coordinator = coordinator,
-                        onOpenSidebar = { navigateTo(AppRoute.SidebarDrawer) },
-                        onOpenAutomationDetail = { automationId ->
-                            coordinator.workspaceStore.selectAutomation(automationId)
-                            navigateTo(AppRoute.AutomationDetail(automationId))
-                        },
-                        onEditAutomation = { automationId ->
-                            coordinator.workspaceStore.selectAutomation(automationId)
-                            navigateTo(AppRoute.AutomationEdit(automationId))
-                        },
-                        initialExpandedMenuAutomationId = route.expandedMenuId,
-                    )
-                }
+                                    val velocityTracker = VelocityTracker()
+                                    velocityTracker.addPointerInputChange(down)
+                                    velocityTracker.addPointerInputChange(change)
 
-                is AppRoute.AutomationDetail -> {
-                    AutomationDetailScreen(
-                        coordinator = coordinator,
-                        automationId = route.automationId,
-                        onBack = { navigateBack() },
-                        onEdit = { aid -> navigateTo(AppRoute.AutomationEdit(aid)) },
-                        onOpenConversation = { cascadeId -> openConversation(cascadeId) },
-                    )
-                }
+                                    while (true) {
+                                        val dragEvent = awaitPointerEvent(detectPass)
+                                        val dragChange = dragEvent.changes.firstOrNull { it.id == activePointerId } ?: break
+                                        velocityTracker.addPointerInputChange(dragChange)
+                                        if (!dragChange.pressed) {
+                                            break
+                                        }
+                                        val dragDelta = dragChange.position.x - startDragX
+                                        val signedDragDelta = if (isRtl) -dragDelta else dragDelta
+                                        val updatedProgress = (baseline + signedDragDelta / drawerWidthPx).coerceIn(0f, 1f)
+                                        dragDrawerProgress = updatedProgress
+                                        dragChange.consume()
+                                    }
 
-                is AppRoute.AutomationEdit -> {
-                    AutomationEditScreen(
-                        coordinator = coordinator,
-                        automationId = route.automationId,
-                        onDismiss = { navigateTo(AppRoute.AutomationDetail(route.automationId)) },
-                        onDeleted = { navigateTo(AppRoute.Automations()) },
-                    )
-                }
-
-                is AppRoute.CascadeChat -> {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        CascadeChatScreen(
+                                    val rawVx = velocityTracker.calculateVelocity().x
+                                    val signedVx = if (isRtl) -rawVx else rawVx
+                                    val finalProgress = (dragDrawerProgress ?: drawerProgress.value).coerceIn(0f, 1f)
+                                    val shouldOpen = if (baseline < 0.5f) {
+                                        finalProgress >= 0.28f || (signedVx >= 600f && finalProgress > 0.04f)
+                                    } else {
+                                        !(finalProgress <= 0.72f || (signedVx <= -600f && finalProgress < 0.96f))
+                                    }
+                                    isDrawerOpen = shouldOpen
+                                    scope.launch {
+                                        drawerProgress.snapTo(finalProgress)
+                                        dragDrawerProgress = null
+                                        drawerProgress.animateTo(
+                                            targetValue = if (shouldOpen) 1f else 0f,
+                                            animationSpec = spring(dampingRatio = 0.92f, stiffness = 420f),
+                                        )
+                                    }
+                                    break
+                                }
+                            }
+                            if (!locked) {
+                                // Tap or vertical scroll: leave gesture unconsumed.
+                            }
+                        }
+                    },
+            ) {
+                when (val route = currentRoute) {
+                    AppRoute.NewConversationHome -> {
+                        AgentsHomeScreen(
                             coordinator = coordinator,
-                            onBack = { navigateBack() },
-                            onOpenSidebar = { navigateTo(AppRoute.SidebarDrawer) },
-                            onOpenDiffReview = { navigateTo(AppRoute.TurnDiffReview) },
-                            onOpenPlanReview = { navigateTo(AppRoute.PlanReview) },
-                            onOpenAddContext = { activeChatOverlay = ChatOverlaySheet.ADD_CONTEXT },
-                            onOpenModelAndMode = { activeChatOverlay = ChatOverlaySheet.MODEL_AND_MODE },
-                            onOpenPermissionsPreset = { activeChatOverlay = ChatOverlaySheet.PERMISSIONS_PRESET },
-                            onOpenOverview = { activeChatOverlay = ChatOverlaySheet.OVERVIEW },
-                            onOpenSideQuestion = { activeChatOverlay = ChatOverlaySheet.SIDE_QUESTION },
-                            onOpenSwarmBoard = { activeChatOverlay = ChatOverlaySheet.SWARM_BOARD },
-                            onOpenVoiceMode = { activeChatOverlay = ChatOverlaySheet.VOICE_MODE },
-                            onBiometricPrompt = onBiometricPrompt,
-                            onRetryLoadSteps = { stepSyncRetryNonce += 1 },
+                            onOpenSidebar = { openDrawer() },
+                            onOpenConversation = { cascadeId -> openConversation(cascadeId) },
+                            onOpenAddContext = { navigateTo(AppRoute.AddContext) },
+                            onOpenModelPicker = { navigateTo(AppRoute.ModelAndMode) },
+                            onOpenPermissionsPreset = { navigateTo(AppRoute.PermissionsPreset) },
+                            onOpenSlashMenu = { navigateTo(AppRoute.SlashMenu(includeSideQuestionPreview = false)) },
+                            onOpenVoiceMode = {
+                                coordinator.chatStore.setActiveCascade("cas-rate-limiter")
+                                currentRoute = AppRoute.CascadeChat("cas-rate-limiter")
+                                activeChatOverlay = ChatOverlaySheet.VOICE_MODE
+                            },
+                            onOpenReSignIn = {
+                                val relayUrl = connectionState.activeHost?.endpointUrl
+                                    ?.takeIf { it.startsWith("https://") }
+                                    ?: SapisidHashGenerator.DEFAULT_ORIGIN
+                                navigateTo(AppRoute.CloudRelaySignIn(relayUrl))
+                            },
+                            showNeedsApprovalBanner = !startsWithSidebarOpen,
                         )
+                    }
 
-                        when (activeChatOverlay) {
-                            ChatOverlaySheet.NONE -> Unit
-                            ChatOverlaySheet.ADD_CONTEXT -> {
-                                AddContextSheetScreen(
-                                    coordinator = coordinator,
-                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
-                                    showHomeBackdrop = false,
-                                )
-                            }
+                    is AppRoute.DisplayOptions -> {
+                        DisplayOptionsOverlayScreen(
+                            coordinator = coordinator,
+                            onDismiss = { returnToSidebarDrawer() },
+                            initialSortMenuExpanded = route.expandSortMenu,
+                        )
+                    }
 
-                            ChatOverlaySheet.MODEL_AND_MODE -> {
-                                ModelAndModeSheetScreen(
-                                    coordinator = coordinator,
-                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
-                                    showHomeBackdrop = false,
-                                )
-                            }
+                    is AppRoute.ContextMenu -> {
+                        ConversationContextSheetScreen(
+                            coordinator = coordinator,
+                            targetCascadeId = route.cascadeId,
+                            onDismiss = { returnToSidebarDrawer() },
+                        )
+                    }
 
-                            ChatOverlaySheet.PERMISSIONS_PRESET -> {
-                                PermissionsPresetOverlayScreen(
-                                    coordinator = coordinator,
-                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
-                                    onOpenSettings = { navigateTo(AppRoute.Settings) },
-                                    showHomeBackdrop = false,
-                                )
-                            }
+                    is AppRoute.ProjectDetail -> {
+                        val projName = workspaceState.projects.firstOrNull { it.id == route.projectId }?.name ?: route.projectId
+                        ProjectDetailScreen(
+                            coordinator = coordinator,
+                            projectId = route.projectId,
+                            onBack = { returnToSidebarDrawer() },
+                            onNewConversation = { openNewConversation(projectId = route.projectId) },
+                            onOpenConversation = { cascadeId -> openConversation(cascadeId) },
+                            onOpenAutomationDetail = { automationId ->
+                                coordinator.workspaceStore.selectAutomation(automationId)
+                                navigateTo(AppRoute.AutomationDetail(automationId))
+                            },
+                            onOpenRulesAndSkills = {
+                                navigateTo(AppRoute.RulesAndSkills(projectName = projName))
+                            },
+                        )
+                    }
 
-                            ChatOverlaySheet.SLASH_MENU -> {
-                                SlashMenuOverlayScreen(
-                                    coordinator = coordinator,
-                                    onSelectCommand = { cmd ->
-                                        coordinator.chatStore.setDraftInputText("$cmd ")
-                                        activeChatOverlay = ChatOverlaySheet.NONE
-                                    },
-                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
-                                    showHomeBackdrop = false,
-                                )
-                            }
+                    AppRoute.CreateProject -> {
+                        CreateProjectScreen(
+                            coordinator = coordinator,
+                            onDismiss = { returnToSidebarDrawer() },
+                            onCreated = { returnToSidebarDrawer() },
+                        )
+                    }
 
-                            ChatOverlaySheet.OVERVIEW -> {
-                                ConversationOverviewSheet(
-                                    coordinator = coordinator,
-                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
-                                    onOpenDiffReview = { navigateTo(AppRoute.TurnDiffReview) },
-                                    onOpenPlanReview = { navigateTo(AppRoute.PlanReview) },
-                                )
-                            }
+                    is AppRoute.Automations -> {
+                        AutomationsScreen(
+                            coordinator = coordinator,
+                            onOpenSidebar = { openDrawer() },
+                            onOpenAutomationDetail = { automationId ->
+                                coordinator.workspaceStore.selectAutomation(automationId)
+                                navigateTo(AppRoute.AutomationDetail(automationId))
+                            },
+                            onEditAutomation = { automationId ->
+                                coordinator.workspaceStore.selectAutomation(automationId)
+                                navigateTo(AppRoute.AutomationEdit(automationId))
+                            },
+                            initialExpandedMenuAutomationId = route.expandedMenuId,
+                        )
+                    }
 
-                            ChatOverlaySheet.SIDE_QUESTION -> {
-                                SideQuestionSheet(
-                                    coordinator = coordinator,
-                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
-                                )
-                            }
+                    is AppRoute.AutomationDetail -> {
+                        AutomationDetailScreen(
+                            coordinator = coordinator,
+                            automationId = route.automationId,
+                            onBack = { navigateBack() },
+                            onEdit = { aid -> navigateTo(AppRoute.AutomationEdit(aid)) },
+                            onOpenConversation = { cascadeId -> openConversation(cascadeId) },
+                        )
+                    }
 
-                            ChatOverlaySheet.SWARM_BOARD -> {
-                                SwarmBoardSheet(
-                                    coordinator = coordinator,
-                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
-                                )
-                            }
+                    is AppRoute.AutomationEdit -> {
+                        AutomationEditScreen(
+                            coordinator = coordinator,
+                            automationId = route.automationId,
+                            onDismiss = { navigateTo(AppRoute.AutomationDetail(route.automationId)) },
+                            onDeleted = { navigateTo(AppRoute.Automations()) },
+                        )
+                    }
 
-                            ChatOverlaySheet.VOICE_MODE -> {
-                                VoiceModeSheet(
-                                    coordinator = coordinator,
-                                    onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
-                                )
+                    is AppRoute.CascadeChat -> {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            CascadeChatScreen(
+                                coordinator = coordinator,
+                                onBack = { navigateBack() },
+                                onOpenSidebar = { openDrawer() },
+                                onOpenDiffReview = { navigateTo(AppRoute.TurnDiffReview) },
+                                onOpenPlanReview = { navigateTo(AppRoute.PlanReview) },
+                                onOpenAddContext = { activeChatOverlay = ChatOverlaySheet.ADD_CONTEXT },
+                                onOpenModelAndMode = { activeChatOverlay = ChatOverlaySheet.MODEL_AND_MODE },
+                                onOpenPermissionsPreset = { activeChatOverlay = ChatOverlaySheet.PERMISSIONS_PRESET },
+                                onOpenOverview = { activeChatOverlay = ChatOverlaySheet.OVERVIEW },
+                                onOpenSideQuestion = { activeChatOverlay = ChatOverlaySheet.SIDE_QUESTION },
+                                onOpenSwarmBoard = { activeChatOverlay = ChatOverlaySheet.SWARM_BOARD },
+                                onOpenVoiceMode = { activeChatOverlay = ChatOverlaySheet.VOICE_MODE },
+                                onBiometricPrompt = onBiometricPrompt,
+                                onRetryLoadSteps = { stepSyncRetryNonce += 1 },
+                            )
+
+                            when (activeChatOverlay) {
+                                ChatOverlaySheet.NONE -> Unit
+                                ChatOverlaySheet.ADD_CONTEXT -> {
+                                    AddContextSheetScreen(
+                                        coordinator = coordinator,
+                                        onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                        showHomeBackdrop = false,
+                                    )
+                                }
+
+                                ChatOverlaySheet.MODEL_AND_MODE -> {
+                                    ModelAndModeSheetScreen(
+                                        coordinator = coordinator,
+                                        onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                        showHomeBackdrop = false,
+                                    )
+                                }
+
+                                ChatOverlaySheet.PERMISSIONS_PRESET -> {
+                                    PermissionsPresetOverlayScreen(
+                                        coordinator = coordinator,
+                                        onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                        onOpenSettings = { navigateTo(AppRoute.Settings) },
+                                        showHomeBackdrop = false,
+                                    )
+                                }
+
+                                ChatOverlaySheet.SLASH_MENU -> {
+                                    SlashMenuOverlayScreen(
+                                        coordinator = coordinator,
+                                        onSelectCommand = { cmd ->
+                                            coordinator.chatStore.setDraftInputText("$cmd ")
+                                            activeChatOverlay = ChatOverlaySheet.NONE
+                                        },
+                                        onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                        showHomeBackdrop = false,
+                                    )
+                                }
+
+                                ChatOverlaySheet.OVERVIEW -> {
+                                    ConversationOverviewSheet(
+                                        coordinator = coordinator,
+                                        onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                        onOpenDiffReview = { navigateTo(AppRoute.TurnDiffReview) },
+                                        onOpenPlanReview = { navigateTo(AppRoute.PlanReview) },
+                                    )
+                                }
+
+                                ChatOverlaySheet.SIDE_QUESTION -> {
+                                    SideQuestionSheet(
+                                        coordinator = coordinator,
+                                        onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                    )
+                                }
+
+                                ChatOverlaySheet.SWARM_BOARD -> {
+                                    SwarmBoardSheet(
+                                        coordinator = coordinator,
+                                        onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                    )
+                                }
+
+                                ChatOverlaySheet.VOICE_MODE -> {
+                                    VoiceModeSheet(
+                                        coordinator = coordinator,
+                                        onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
-                AppRoute.PermissionsPreset -> {
-                    PermissionsPresetOverlayScreen(
-                        coordinator = coordinator,
-                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
-                        onOpenSettings = { navigateTo(AppRoute.Settings) },
-                        showHomeBackdrop = true,
-                    )
-                }
-
-                AppRoute.AddContext -> {
-                    AddContextSheetScreen(
-                        coordinator = coordinator,
-                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
-                        showHomeBackdrop = true,
-                    )
-                }
-
-                is AppRoute.SlashMenu -> {
-                    SlashMenuOverlayScreen(
-                        coordinator = coordinator,
-                        onSelectCommand = { cmd ->
-                            coordinator.chatStore.setDraftInputText("$cmd ")
-                            navigateTo(AppRoute.NewConversationHome)
-                        },
-                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
-                        includeSideQuestionPreview = route.includeSideQuestionPreview,
-                        showHomeBackdrop = true,
-                    )
-                }
-
-                AppRoute.ModelAndMode -> {
-                    ModelAndModeSheetScreen(
-                        coordinator = coordinator,
-                        onDismiss = { navigateTo(AppRoute.NewConversationHome) },
-                        showHomeBackdrop = true,
-                    )
-                }
-
-                AppRoute.StructuredQuestion -> {
-                    StructuredQuestionScreen(
-                        coordinator = coordinator,
-                        onBack = { navigateBack() },
-                    )
-                }
-
-                AppRoute.PlanReview -> {
-                    ImplementationPlanReviewScreen(
-                        coordinator = coordinator,
-                        onBack = { navigateBack() },
-                        onProceed = { navigateBack() },
-                    )
-                }
-
-                AppRoute.TurnDiffReview -> {
-                    TurnDiffReviewScreen(
-                        coordinator = coordinator,
-                        onBack = { navigateBack() },
-                    )
-                }
-
-                AppRoute.LiveUpdatesSpec -> {
-                    val liveSnapshot = remember(syncState.summaries) {
-                        coordinator.liveProgressSnapshot() ?: defaultLiveProgressSpecSnapshot()
+                    AppRoute.PermissionsPreset -> {
+                        PermissionsPresetOverlayScreen(
+                            coordinator = coordinator,
+                            onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                            onOpenSettings = { navigateTo(AppRoute.Settings) },
+                            showHomeBackdrop = true,
+                        )
                     }
-                    AndroidLiveUpdatesSpecGallery(snapshot = liveSnapshot)
-                }
 
-                is AppRoute.RulesAndSkills -> {
-                    ProjectRulesAndSkillsScreen(
-                        coordinator = coordinator,
-                        projectName = route.projectName,
-                        onBack = { navigateBack() },
-                    )
-                }
+                    AppRoute.AddContext -> {
+                        AddContextSheetScreen(
+                            coordinator = coordinator,
+                            onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                            showHomeBackdrop = true,
+                        )
+                    }
 
-                AppRoute.Settings -> {
-                    SettingsAndCustomizationsScreen(
-                        coordinator = coordinator,
-                        onOpenPairing = { navigateTo(AppRoute.Pairing) },
-                        onBack = { navigateTo(AppRoute.SidebarDrawer) },
-                    )
-                }
+                    is AppRoute.SlashMenu -> {
+                        SlashMenuOverlayScreen(
+                            coordinator = coordinator,
+                            onSelectCommand = { cmd ->
+                                coordinator.chatStore.setDraftInputText("$cmd ")
+                                navigateTo(AppRoute.NewConversationHome)
+                            },
+                            onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                            includeSideQuestionPreview = route.includeSideQuestionPreview,
+                            showHomeBackdrop = true,
+                        )
+                    }
 
-                AppRoute.Pairing -> {
-                    WelcomeAndPairingScreen(
-                        onScanQr = { showRemoteLinkDialog = true },
-                        onCloudRelaySignIn = {
-                            navigateTo(AppRoute.CloudRelaySignIn(SapisidHashGenerator.DEFAULT_ORIGIN))
-                        },
-                        onConnectDirectLan = { endpointUrl, csrf ->
-                            scope.launch {
-                                runCatching {
-                                    coordinator.connectDirectLan(
-                                        endpointUrlString = endpointUrl,
-                                        csrfToken = csrf,
-                                    )
-                                    navigateTo(AppRoute.NewConversationHome)
-                                }
-                            }
-                        },
-                        onContinueDemo = {
-                            EsddVerificationFixtures.seedCoordinator(coordinator)
-                            navigateTo(AppRoute.NewConversationHome)
-                        },
-                        isConnecting = connectionState.isConnecting,
-                        statusText = connectionState.statusText,
-                        errorText = connectionState.errorText,
-                        onCancelConnecting = { coordinator.cancelPendingConnectionAttempt() },
-                    )
+                    AppRoute.ModelAndMode -> {
+                        ModelAndModeSheetScreen(
+                            coordinator = coordinator,
+                            onDismiss = { navigateTo(AppRoute.NewConversationHome) },
+                            showHomeBackdrop = true,
+                        )
+                    }
 
-                    if (showRemoteLinkDialog) {
-                        RemoteControlLinkDialog(
-                            onSubmitLink = { rawLink ->
-                                showRemoteLinkDialog = false
-                                val trimmed = rawLink.trim()
-                                val relayTarget = RemoteHostInstance.parseRemoteControlTarget(trimmed)
-                                if (relayTarget != null) {
-                                    val existingCookie = CloudRelayCookieBridge.extractSessionCookieHeaderForHost(
-                                        relayTarget.relayOrigin.removePrefix("https://").removePrefix("http://"),
-                                    )
-                                    if (existingCookie.isNullOrBlank()) {
-                                        navigateTo(AppRoute.CloudRelaySignIn(relayTarget.canonicalRelayUrlString))
-                                    } else {
-                                        scope.launch {
-                                            val result = runCatching {
-                                                coordinator.connectCloudRelay(
-                                                    relayUrlString = relayTarget.canonicalRelayUrlString,
-                                                    sessionCookie = existingCookie,
-                                                    authUser = relayTarget.authUser,
-                                                )
-                                            }
-                                            if (result.isSuccess) {
-                                                navigateTo(AppRoute.NewConversationHome)
-                                            } else if (result.exceptionOrNull() is dev.antigravity.shared.protocol.AntigravityRpcError.Unauthorized) {
-                                                navigateTo(AppRoute.CloudRelaySignIn(relayTarget.canonicalRelayUrlString))
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    scope.launch {
-                                        runCatching {
-                                            coordinator.connectWithPairingUri(trimmed)
-                                            navigateTo(AppRoute.NewConversationHome)
-                                        }
+                    AppRoute.StructuredQuestion -> {
+                        StructuredQuestionScreen(
+                            coordinator = coordinator,
+                            onBack = { navigateBack() },
+                        )
+                    }
+
+                    AppRoute.PlanReview -> {
+                        ImplementationPlanReviewScreen(
+                            coordinator = coordinator,
+                            onBack = { navigateBack() },
+                            onProceed = { navigateBack() },
+                        )
+                    }
+
+                    AppRoute.TurnDiffReview -> {
+                        TurnDiffReviewScreen(
+                            coordinator = coordinator,
+                            onBack = { navigateBack() },
+                        )
+                    }
+
+                    AppRoute.LiveUpdatesSpec -> {
+                        val liveSnapshot = remember(syncState.summaries) {
+                            coordinator.liveProgressSnapshot() ?: defaultLiveProgressSpecSnapshot()
+                        }
+                        AndroidLiveUpdatesSpecGallery(snapshot = liveSnapshot)
+                    }
+
+                    is AppRoute.RulesAndSkills -> {
+                        ProjectRulesAndSkillsScreen(
+                            coordinator = coordinator,
+                            projectName = route.projectName,
+                            onBack = { navigateBack() },
+                        )
+                    }
+
+                    AppRoute.Settings -> {
+                        SettingsAndCustomizationsScreen(
+                            coordinator = coordinator,
+                            onOpenPairing = { navigateTo(AppRoute.Pairing) },
+                            onBack = { returnToSidebarDrawer() },
+                        )
+                    }
+
+                    AppRoute.Pairing -> {
+                        WelcomeAndPairingScreen(
+                            onScanQr = { showRemoteLinkDialog = true },
+                            onCloudRelaySignIn = {
+                                navigateTo(AppRoute.CloudRelaySignIn(SapisidHashGenerator.DEFAULT_ORIGIN))
+                            },
+                            onConnectDirectLan = { endpointUrl, csrf ->
+                                scope.launch {
+                                    runCatching {
+                                        coordinator.connectDirectLan(
+                                            endpointUrlString = endpointUrl,
+                                            csrfToken = csrf,
+                                        )
+                                        navigateTo(AppRoute.NewConversationHome)
                                     }
                                 }
                             },
-                            onDismiss = { showRemoteLinkDialog = false },
+                            onContinueDemo = {
+                                EsddVerificationFixtures.seedCoordinator(coordinator)
+                                navigateTo(AppRoute.NewConversationHome)
+                            },
+                            isConnecting = connectionState.isConnecting,
+                            statusText = connectionState.statusText,
+                            errorText = connectionState.errorText,
+                            onCancelConnecting = { coordinator.cancelPendingConnectionAttempt() },
+                        )
+
+                        if (showRemoteLinkDialog) {
+                            RemoteControlLinkDialog(
+                                onSubmitLink = { rawLink ->
+                                    showRemoteLinkDialog = false
+                                    val trimmed = rawLink.trim()
+                                    val relayTarget = RemoteHostInstance.parseRemoteControlTarget(trimmed)
+                                    if (relayTarget != null) {
+                                        val existingCookie = CloudRelayCookieBridge.extractSessionCookieHeaderForHost(
+                                            relayTarget.relayOrigin.removePrefix("https://").removePrefix("http://"),
+                                        )
+                                        if (existingCookie.isNullOrBlank()) {
+                                            navigateTo(AppRoute.CloudRelaySignIn(relayTarget.canonicalRelayUrlString))
+                                        } else {
+                                            scope.launch {
+                                                val result = runCatching {
+                                                    coordinator.connectCloudRelay(
+                                                        relayUrlString = relayTarget.canonicalRelayUrlString,
+                                                        sessionCookie = existingCookie,
+                                                        authUser = relayTarget.authUser,
+                                                    )
+                                                }
+                                                if (result.isSuccess) {
+                                                    navigateTo(AppRoute.NewConversationHome)
+                                                } else if (result.exceptionOrNull() is dev.antigravity.shared.protocol.AntigravityRpcError.Unauthorized) {
+                                                    navigateTo(AppRoute.CloudRelaySignIn(relayTarget.canonicalRelayUrlString))
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        scope.launch {
+                                            runCatching {
+                                                coordinator.connectWithPairingUri(trimmed)
+                                                navigateTo(AppRoute.NewConversationHome)
+                                            }
+                                        }
+                                    }
+                                },
+                                onDismiss = { showRemoteLinkDialog = false },
+                            )
+                        }
+                    }
+
+                    is AppRoute.CloudRelaySignIn -> {
+                        CloudRelaySignInScreen(
+                            targetRelayUrl = route.targetRelayUrl,
+                            onAuthenticated = { captured ->
+                                val effectiveUrl = RemoteHostInstance.resolveEffectiveRelayTarget(
+                                    scannedInput = route.targetRelayUrl,
+                                    webViewFinalUrl = captured.finalUrl,
+                                )
+                                val ckSummary = SapisidHashGenerator.summarizeCookieNames(captured.cookieHeader)
+                                val keySummary = captured.relayApiKey?.let { "len:${it.length}" } ?: "none"
+                                Log.i(
+                                    "CloudRelay",
+                                    "Android handshake start target=$effectiveUrl authUser=${captured.authUser ?: "auto"} key=$keySummary ck=$ckSummary",
+                                )
+                                currentRoute = AppRoute.Pairing
+                                scope.launch {
+                                    val result = runCatching {
+                                        coordinator.connectCloudRelay(
+                                            relayUrlString = effectiveUrl,
+                                            sessionCookie = captured.cookieHeader,
+                                            authUser = captured.authUser,
+                                            relayApiKey = captured.relayApiKey,
+                                        )
+                                    }
+                                    if (result.isSuccess) {
+                                        val hs = result.getOrNull()
+                                        Log.i(
+                                            "CloudRelay",
+                                            "Android handshake OK host=${hs?.resolvedHostname} instances=${hs?.availableRelayInstances?.size} latencyMs=${hs?.latencyMs}",
+                                        )
+                                        navigateTo(AppRoute.NewConversationHome)
+                                    } else {
+                                        Log.w(
+                                            "CloudRelay",
+                                            "Android handshake failed: ${result.exceptionOrNull()?.message}",
+                                        )
+                                    }
+                                }
+                            },
+                            onCancel = { currentRoute = AppRoute.Pairing },
                         )
                     }
                 }
 
-                is AppRoute.CloudRelaySignIn -> {
-                    CloudRelaySignInScreen(
-                        targetRelayUrl = route.targetRelayUrl,
-                        onAuthenticated = { captured ->
-                            val effectiveUrl = RemoteHostInstance.resolveEffectiveRelayTarget(
-                                scannedInput = route.targetRelayUrl,
-                                webViewFinalUrl = captured.finalUrl,
-                            )
-                            val ckSummary = SapisidHashGenerator.summarizeCookieNames(captured.cookieHeader)
-                            val keySummary = captured.relayApiKey?.let { "len:${it.length}" } ?: "none"
-                            Log.i(
-                                "CloudRelay",
-                                "Android handshake start target=$effectiveUrl authUser=${captured.authUser ?: "auto"} key=$keySummary ck=$ckSummary",
-                            )
-                            currentRoute = AppRoute.Pairing
-                            scope.launch {
-                                val result = runCatching {
-                                    coordinator.connectCloudRelay(
-                                        relayUrlString = effectiveUrl,
-                                        sessionCookie = captured.cookieHeader,
-                                        authUser = captured.authUser,
-                                        relayApiKey = captured.relayApiKey,
-                                    )
-                                }
-                                if (result.isSuccess) {
-                                    val hs = result.getOrNull()
-                                    Log.i(
-                                        "CloudRelay",
-                                        "Android handshake OK host=${hs?.resolvedHostname} instances=${hs?.availableRelayInstances?.size} latencyMs=${hs?.latencyMs}",
-                                    )
-                                    navigateTo(AppRoute.NewConversationHome)
-                                } else {
-                                    Log.w(
-                                        "CloudRelay",
-                                        "Android handshake failed: ${result.exceptionOrNull()?.message}",
-                                    )
-                                }
-                            }
-                        },
-                        onCancel = { currentRoute = AppRoute.Pairing },
+                // Interactive Slide-Over Left Sidebar Drawer Overlay (`UE01B_SIDEBAR_DRAWER`)
+                val effectiveDrawerProgress = (dragDrawerProgress ?: drawerProgress.value).coerceIn(0f, 1f)
+                val showDrawerLayer = isDrawerOpen || dragDrawerProgress != null || effectiveDrawerProgress > 0.001f
+
+                if (showDrawerLayer) {
+                    val baseScrimAlpha = if (colors.isDark) 0.62f else 0.36f
+                    val scrimInteraction = remember { MutableInteractionSource() }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = baseScrimAlpha * effectiveDrawerProgress))
+                            .testTag("sidebar-scrim")
+                            .clickable(
+                                enabled = effectiveDrawerProgress > 0.05f,
+                                interactionSource = scrimInteraction,
+                                indication = null,
+                                onClick = { closeDrawer() },
+                            ),
                     )
+
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(0.815f)
+                            .align(Alignment.CenterStart)
+                            .graphicsLayer {
+                                val sign = if (isRtl) 1f else -1f
+                                translationX = sign * drawerWidthPx * (1f - effectiveDrawerProgress)
+                            }
+                            .testTag("sidebar-drawer"),
+                        shape = RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp),
+                        color = colors.surfaceObsidian,
+                        border = BorderStroke(1.dp, colors.subtleDivider),
+                    ) {
+                        AgentsSidebarDrawerContent(
+                            coordinator = coordinator,
+                            onNewConversation = { projectId ->
+                                closeDrawer(immediate = true)
+                                openNewConversation(projectId)
+                            },
+                            onOpenAutomations = {
+                                closeDrawer(immediate = true)
+                                navigateTo(AppRoute.Automations())
+                            },
+                            onOpenCustomizations = {
+                                closeDrawer(immediate = true)
+                                val activeProjName = workspaceState.projects
+                                    .firstOrNull { it.id == workspaceState.selectedProjectId }?.name ?: "ledger-svc"
+                                navigateTo(AppRoute.RulesAndSkills(activeProjName))
+                            },
+                            onOpenDisplayOptions = {
+                                closeDrawer(immediate = true)
+                                navigateTo(AppRoute.DisplayOptions(expandSortMenu = false))
+                            },
+                            onOpenNewProject = {
+                                closeDrawer(immediate = true)
+                                navigateTo(AppRoute.CreateProject)
+                            },
+                            onOpenProjectDetail = { projectId ->
+                                closeDrawer(immediate = true)
+                                coordinator.workspaceStore.selectProject(projectId)
+                                navigateTo(AppRoute.ProjectDetail(projectId))
+                            },
+                            onOpenConversation = { cascadeId ->
+                                closeDrawer(immediate = true)
+                                openConversation(cascadeId)
+                            },
+                            onLongPressConversation = { cascadeId ->
+                                closeDrawer(immediate = true)
+                                navigateTo(AppRoute.ContextMenu(cascadeId))
+                            },
+                            onOpenSettings = {
+                                closeDrawer(immediate = true)
+                                navigateTo(AppRoute.Settings)
+                            },
+                            activeHighlightCascadeId = activeChatRouteId ?: "cas-rate-limiter",
+                        )
+                    }
                 }
             }
         }
@@ -711,7 +968,7 @@ fun AntigravityAppRoot(
 
 private fun routeForVerifyScene(scene: EsddVerifySceneCase): AppRoute = when (scene) {
     EsddVerifySceneCase.AGENTS_HOME -> AppRoute.NewConversationHome
-    EsddVerifySceneCase.SIDEBAR_DRAWER -> AppRoute.SidebarDrawer
+    EsddVerifySceneCase.SIDEBAR_DRAWER -> AppRoute.NewConversationHome
     EsddVerifySceneCase.DISPLAY_OPTIONS -> AppRoute.DisplayOptions(expandSortMenu = true)
     EsddVerifySceneCase.CONTEXT_MENU_PIN -> AppRoute.ContextMenu("cas-flaky-settlement")
     EsddVerifySceneCase.PROJECT_DETAIL -> AppRoute.ProjectDetail("ledger-svc")

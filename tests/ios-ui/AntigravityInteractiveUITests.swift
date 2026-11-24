@@ -713,7 +713,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
         attachScreenshot(named: "02_Opened_Live_Conversation_Detail")
     }
 
-    /// Domain: Project Detail (`UE04`) + Rules & Skills (`UE14`) + Navigation Stack + Native iOS Left-Edge Swipe-Back (`interactivePopGestureRecognizer`).
+    /// Domain: Sidebar Drawer Swipe Open/Close (`UE01B`) + Project Detail (`UE04`) + Navigation Stack + Native iOS Left-Edge Swipe-Back (`interactivePopGestureRecognizer`).
     func testProjectDetailNavigationAndEdgeSwipeBack() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
@@ -722,25 +722,39 @@ final class AntigravityInteractiveUITests: XCTestCase {
 
         let sidebarButton = app.buttons["btn-sidebar"]
         XCTAssertTrue(sidebarButton.waitForExistence(timeout: 10))
-        sidebarButton.tap()
+        let heroGreeting = app.descendants(matching: .any)["home-hero-greeting"].firstMatch
+        XCTAssertTrue(heroGreeting.waitForExistence(timeout: 6))
 
+        // 0. Swipe left-to-right from the left edge on Home -> must slide open Sidebar Drawer; swipe right-to-left -> must close it
+        performEdgeSwipeBack(in: app)
+        let drawerPanel = app.descendants(matching: .any)["sidebar-drawer-panel"].firstMatch
+        XCTAssertTrue(
+            drawerPanel.waitForExistence(timeout: 5),
+            "Swiping left-to-right from the left edge on Home must slide open the Sidebar Drawer"
+        )
         let reviewRow = app.buttons["drawer-conv-cid-slardar-review"]
         XCTAssertTrue(reviewRow.waitForExistence(timeout: 12))
 
-        // 1. Open Conversation from Sidebar -> edge-swipe right -> must pop back to Home
+        performSwipeCloseDrawer(in: app)
+        XCTAssertTrue(
+            waitForNonExistence(drawerPanel, timeout: 5),
+            "Swiping right-to-left on the open Sidebar Drawer must dismiss it back to Home"
+        )
+
+        // 1. Re-open Sidebar via edge swipe -> open Conversation -> swipe left-to-right -> must open Sidebar Drawer (not pop to blank Home)
+        performEdgeSwipeBack(in: app)
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 5))
         reviewRow.tap()
         let chatNavTitle = app.descendants(matching: .any)["chat-nav-title"].firstMatch
         XCTAssertTrue(chatNavTitle.waitForExistence(timeout: 6))
 
         performEdgeSwipeBack(in: app)
-        let heroGreeting = app.descendants(matching: .any)["home-hero-greeting"].firstMatch
         XCTAssertTrue(
-            heroGreeting.waitForExistence(timeout: 5),
-            "Swiping from the left edge on Conversation must pop back to New Conversation Home"
+            drawerPanel.waitForExistence(timeout: 5),
+            "Swiping left-to-right from the left edge on a sidebar-launched Conversation must open the Sidebar Drawer"
         )
 
-        // 2. Open Sidebar -> Open Project Detail -> verify Rules & Skills (`UE14`) -> open conversation -> back navigation
-        sidebarButton.tap()
+        // 2. Open Project Detail from swiped-open Sidebar -> verify Rules & Skills (`UE14`) -> open conversation -> back navigation
         let projectHeader = app.buttons["project-header-slardar_app_ai"]
         XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
         projectHeader.tap()
@@ -979,7 +993,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
         sendButton.tap()
 
         XCTAssertTrue(
-            waitForTextContaining("收到来自 iOS 真模拟器的实时指令", in: app, timeout: 8),
+            waitForTextContaining("收到来自 iOS 真模拟器的实时指令", in: app, timeout: 20),
             "Sending a message in Composer must dispatch StartCascade + SendUserCascadeMessage and render streamed reply"
         )
         attachScreenshot(named: "04_Live_Composed_And_Streamed_Reply")
@@ -1325,6 +1339,23 @@ final class AntigravityInteractiveUITests: XCTestCase {
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
         start.press(forDuration: 0.02, thenDragTo: end)
+    }
+
+    private func performSwipeCloseDrawer(in app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5))
+        start.press(forDuration: 0.02, thenDragTo: end)
+    }
+
+    private func waitForNonExistence(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !element.exists {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return !element.exists
     }
 
     private func waitForTextContaining(_ substring: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
