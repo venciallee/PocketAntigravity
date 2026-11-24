@@ -561,4 +561,37 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("input-remote-control-link").assertIsDisplayed()
         composeRule.onNodeWithTag("btn-submit-remote-link").assertIsDisplayed()
     }
+
+    @Test
+    fun atc24_cascadeChatRendersStepLoadErrorCardAndRetryButton() {
+        val coordinator = AntigravityCoreCoordinator()
+        coordinator.chatStore.setActiveCascade("v1/sync-mobile-concept")
+        coordinator.chatStore.setStepLoadError("HTTP 404: not_found: trajectory not found")
+        var retryTapped = 0
+
+        composeRule.setContent {
+            dev.antigravity.android.core.ui.theme.AntigravityTheme {
+                dev.antigravity.android.ui.chat.CascadeChatScreen(
+                    coordinator = coordinator,
+                    onBack = {},
+                    onOpenDiffReview = {},
+                    onOpenPlanReview = {},
+                    onOpenAddContext = {},
+                    onOpenModelAndMode = {},
+                    onOpenOverview = {},
+                    onOpenSideQuestion = {},
+                    onOpenSwarmBoard = {},
+                    onOpenVoiceMode = {},
+                    onBiometricPrompt = { _, onSuccess -> onSuccess() },
+                    onRetryLoadSteps = { retryTapped += 1 },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("chat-step-load-error-card").assertIsDisplayed()
+        composeRule.onNodeWithText("Could not load trajectory steps").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-chat-retry-steps").performClick()
+        assertEquals(1, retryTapped)
+        assertEquals(null, coordinator.chatState.value.stepLoadErrorText)
+    }
 }

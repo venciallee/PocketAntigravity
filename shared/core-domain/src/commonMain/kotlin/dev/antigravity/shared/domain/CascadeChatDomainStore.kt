@@ -18,7 +18,9 @@ import dev.antigravity.shared.protocol.AntigravityKmpRpcClient
 import dev.antigravity.shared.protocol.AntigravityRpcError
 import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.InteractionBuilder
+import dev.antigravity.shared.protocol.ProtocolCompatibilityEngine
 import dev.antigravity.shared.protocol.currentTimeMillis
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -304,6 +306,14 @@ public class CascadeChatDomainStore(
         return cached
     }
 
+    public fun clearStepLoadError() {
+        _state.update { it.copy(stepLoadErrorText = null) }
+    }
+
+    public fun setStepLoadError(message: String?) {
+        _state.update { it.copy(stepLoadErrorText = message?.takeIf { s -> s.isNotBlank() }) }
+    }
+
     @Throws(Throwable::class)
     public suspend fun syncSteps(
         client: AntigravityKmpRpcClient,
@@ -318,7 +328,13 @@ public class CascadeChatDomainStore(
             if (cached.isNotEmpty()) {
                 putSteps(cascadeId, cached)
             } else {
-                _state.update { it.copy(isLoadingSteps = true, stepLoadErrorText = null) }
+                _state.update {
+                    if (it.activeCascadeId == cascadeId) {
+                        it.copy(isLoadingSteps = true, stepLoadErrorText = null)
+                    } else {
+                        it
+                    }
+                }
             }
         }
         return try {
@@ -332,10 +348,29 @@ public class CascadeChatDomainStore(
                 putSteps(cascadeId, remoteSteps)
                 projectionStorage.saveSteps(cascadeId, remoteSteps)
             }
-            _state.update { it.copy(isLoadingSteps = false, stepLoadErrorText = null) }
+            _state.update {
+                if (it.activeCascadeId == cascadeId) {
+                    it.copy(isLoadingSteps = false, stepLoadErrorText = null)
+                } else {
+                    it
+                }
+            }
             remoteSteps
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
-            _state.update { it.copy(isLoadingSteps = false, stepLoadErrorText = e.message ?: "Failed to load steps") }
+            val formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(e)
+            _state.update {
+                if (it.activeCascadeId == cascadeId) {
+                    val hasExistingSteps = !it.stepsByCascadeId[cascadeId].isNullOrEmpty()
+                    it.copy(
+                        isLoadingSteps = false,
+                        stepLoadErrorText = if (hasExistingSteps) it.stepLoadErrorText else formatted,
+                    )
+                } else {
+                    it
+                }
+            }
             throw e
         }
     }

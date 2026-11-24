@@ -33,6 +33,18 @@ public actor AntigravityRPCClient {
     internal var cachedValidUpstreamModels: Set<String>?
     internal var cachedDefaultUpstreamModel: String?
     internal var capabilityProfilesByHost: [String: HostCapabilityProfile] = [:]
+
+    internal enum CloudTrajectoryBackendField: String, Sendable {
+        case backend = "backend"
+        case backendType = "backendType"
+        case none = ""
+
+        var jsonKey: String? {
+            rawValue.isEmpty ? nil : rawValue
+        }
+    }
+
+    internal var preferredCloudBackendFieldByHostAndMethod: [String: CloudTrajectoryBackendField] = [:]
     internal let urlSession: URLSession
     internal let streamingURLSession: URLSession
     internal let handshakeDiagBox: HandshakeDiagnosticBox
@@ -645,7 +657,8 @@ public actor AntigravityRPCClient {
         instanceUuidOverride: String? = nil,
         allowCrossHostFailover: Bool = false,
         timeoutInterval: TimeInterval? = nil,
-        respectNegativeCache: Bool = true
+        respectNegativeCache: Bool = true,
+        allowStripUnknownFields: Bool = true
     ) async throws -> [String: JSONValue] {
         // Inverse-allowlist negative cache: fast-fail any non-core RPC previously rejected as
         // unimplemented by this host (even future optional RPCs not yet assigned a HostCapability).
@@ -667,17 +680,20 @@ public actor AntigravityRPCClient {
                 body: body,
                 instanceUuidOverride: instanceUuidOverride,
                 allowCrossHostFailover: allowCrossHostFailover,
-                timeoutInterval: relayTimeout
+                timeoutInterval: relayTimeout,
+                allowStripUnknownFields: allowStripUnknownFields
             )
         }
 
         let url = endpointURL.appendingPathComponent("\(Self.servicePrefix)/\(method)")
         let profile = capabilityProfile(forHostKey: capabilityHostKey(for: instanceUuidOverride))
-        var workingBody = ProtocolCompatibilityEngine.applyKnownDowngrades(
-            to: body,
-            method: method,
-            profile: profile
-        )
+        var workingBody = allowStripUnknownFields
+            ? ProtocolCompatibilityEngine.applyKnownDowngrades(
+                to: body,
+                method: method,
+                profile: profile
+            )
+            : body
 
         for attempt in 1...4 {
             var request = URLRequest(url: url)
@@ -710,7 +726,7 @@ public actor AntigravityRPCClient {
             }
             guard (200..<300).contains(http.statusCode) else {
                 let text = String(data: data, encoding: .utf8) ?? ""
-                if http.statusCode == 400, attempt < 4,
+                if allowStripUnknownFields, http.statusCode == 400, attempt < 4,
                    attemptSelfHealingDowngrade(
                        for: text,
                        method: method,
@@ -774,11 +790,13 @@ public actor AntigravityRPCClient {
 
         let sanitized = try await sanitizeCloudRelayPayload(method: method, body: body)
         let profile = capabilityProfile(forHostKey: capabilityHostKey(for: instanceUuidOverride))
-        var workingBody = ProtocolCompatibilityEngine.applyKnownDowngrades(
-            to: sanitized,
-            method: method,
-            profile: profile
-        )
+        var workingBody = allowStripUnknownFields
+            ? ProtocolCompatibilityEngine.applyKnownDowngrades(
+                to: sanitized,
+                method: method,
+                profile: profile
+            )
+            : sanitized
 
         for attempt in 1...4 {
             let encodedPayload = workingBody.isEmpty ? Data("{}".utf8) : try JSONEncoder().encode(workingBody)
@@ -796,6 +814,19 @@ public actor AntigravityRPCClient {
                 rawRespData = res.payload
                 respHeaders = res.headers
             } catch let err {
+                if case let AntigravityRPCError.httpError(statusCode, errBody) = err,
+                   allowStripUnknownFields, attempt < 4,
+                   (statusCode == 400
+                       || ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: errBody) != nil
+                       || ProtocolCompatibilityEngine.extractInvalidEnumValue(from: errBody) != nil),
+                   attemptSelfHealingDowngrade(
+                       for: errBody,
+                       method: method,
+                       body: &workingBody,
+                       instanceUuidOverride: instanceUuidOverride
+                   ) {
+                    continue
+                }
                 if ProtocolCompatibilityEngine.isMethodUnimplementedError(err),
                    HostCapability.shouldNegativeCacheOnUnimplemented(method) {
                     mutateCapabilityProfile(for: instanceUuidOverride) { p in
@@ -828,7 +859,14 @@ public actor AntigravityRPCClient {
                        ) {
                         continue
                     }
-                    let statusCode = ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: combinedError) ? 501 : 400
+                    let statusCode: Int
+                    if ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: combinedError) {
+                        statusCode = 501
+                    } else if code.caseInsensitiveCompare("not_found") == .orderedSame {
+                        statusCode = 404
+                    } else {
+                        statusCode = 400
+                    }
                     if statusCode == 501,
                        HostCapability.shouldNegativeCacheOnUnimplemented(method) {
                         mutateCapabilityProfile(for: instanceUuidOverride) { p in
@@ -1053,7 +1091,9 @@ public actor AntigravityRPCClient {
                 }
                 return false
             }()
+            let isTrajectoryNotFound = ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error)
             let shouldFailover: Bool = {
+                if isTrajectoryNotFound { return false }
                 if error is URLError { return true }
                 if case let AntigravityRPCError.httpError(code, _) = error {
                     return code == 404 || code == 502 || code == 503 || code == 504

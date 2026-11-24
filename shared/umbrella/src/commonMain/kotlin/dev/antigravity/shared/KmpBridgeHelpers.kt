@@ -338,4 +338,17 @@ public object KmpBridgeHelpers {
         is AntigravityRpcError.InteractionRejected -> "interactionRejected"
         else -> "other"
     }
+
+    /**
+     * Returns the raw underlying detail/body without a duplicated `HTTP <code>: ` prefix
+     * when bridging [AntigravityRpcError] instances across SKIE to Swift.
+     */
+    public fun errorDetailMessage(throwable: Throwable): String = when (throwable) {
+        is AntigravityRpcError.Unauthorized -> throwable.detail
+        is AntigravityRpcError.InvalidEndpoint -> throwable.rawEndpoint
+        is AntigravityRpcError.HttpError -> throwable.body
+        is AntigravityRpcError.DecodingError -> throwable.detail
+        is AntigravityRpcError.InteractionRejected -> throwable.detail
+        else -> throwable.message ?: "Unknown error"
+    }
 }

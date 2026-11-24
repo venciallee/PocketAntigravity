@@ -1053,6 +1053,193 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(probe.jsonCount(), 1)
         XCTAssertEqual(probe.protoCount(), 1)
     }
+
+    // MARK: - 10. Historical Dormant Cloud/Local Trajectory Wake & Boq Error Unwrapping
+
+    func testCloudRelayDormantHistoricalCloudTrajectoryWakesViaBareLoadTrajectoryAndSkipsExtraListInstances() async throws {
+        let instanceUuid = "0f5819ac-9308-40d8-a308-98b55122c533-v2"
+        let state = CompatCloudWakeProbeState()
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            if path.hasSuffix("/ListInstances") {
+                state.recordListInstances()
+                let resp = HTTPURLResponse(
+                    url: req.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json+protobuf"]
+                )!
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.33.0\",true],1,[1740000000,0]]],5]"
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+                let rpcPath = arr.count > 1 ? (arr[1].stringValue ?? "") : ""
+                let method = rpcPath.split(separator: "/").last.map(String.init) ?? ""
+                let b64Payload = arr.count > 2 ? (arr[2].stringValue ?? "") : ""
+                let innerData = CloudRelayJSPBCodec.decodeBase64Flexible(b64Payload) ?? Data()
+                let innerObj = (try? JSONDecoder().decode([String: JSONValue].self, from: innerData)) ?? [:]
+                let cid = innerObj["cascadeId"]?.stringValue ?? ""
+
+                if method == "LoadTrajectory" {
+                    state.recordLoadPayload(innerObj)
+                    if innerObj["backend"] != nil {
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 400, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[3,\"invalid_argument: unknown field \\\"backend\\\"\"]".utf8))
+                    }
+                    if innerObj["backendType"] != nil {
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 400, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[3,\"invalid_argument: unknown field \\\"backendType\\\"\"]".utf8))
+                    }
+                    state.markWoken(cid)
+                    let okB64 = Data("{}".utf8).base64EncodedString()
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                }
+
+                if method == "GetCascadeTrajectorySteps" {
+                    if state.isWoken(cid) {
+                        let stepsJson = """
+                        {"steps":[
+                            {"stepIndex":0,"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"items":[{"text":"Sync mobile"}]}},
+                            {"stepIndex":1,"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Synced!"}}
+                        ]}
+                        """
+                        let okB64 = Data(stepsJson.utf8).base64EncodedString()
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                    } else {
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[5,\"not_found: trajectory not found (error ID: 721ffeb9b0bb4fb6b2a971dfa56087e2)\"]".utf8))
+                    }
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: instanceUuid,
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let steps1 = try await client.fetchAllTrajectorySteps(
+            cascadeId: "v1/sync-mobile-concept",
+            knownStepCount: 2,
+            isCloud: true
+        )
+        XCTAssertEqual(steps1.count, 2)
+        XCTAssertEqual(state.listInstancesCount(), 1, "Trajectory-level 404 must not trigger extra ListInstances RTT")
+        let firstLoads = state.loadPayloads()
+        XCTAssertEqual(firstLoads.count, 3)
+        XCTAssertNil(firstLoads.last?["backend"])
+        XCTAssertNil(firstLoads.last?["backendType"])
+
+        // Second dormant Cloud chat reuses cached bare `{cascadeId}` in 1 RTT
+        state.clearLoadPayloads()
+        let steps2 = try await client.fetchAllTrajectorySteps(
+            cascadeId: "v1/sync-mobile-concept-2",
+            knownStepCount: 2,
+            isCloud: true
+        )
+        XCTAssertEqual(steps2.count, 2)
+        XCTAssertEqual(state.loadPayloads().count, 1)
+        XCTAssertEqual(state.listInstancesCount(), 1)
+    }
+
+    func testLocalDormantTrajectoryWakesOnBinaryProtobuf404NotFound() async throws {
+        let fullProtoBytes = makeBinaryPlannerSteps(count: 3, prefix: "Woken local step")
+        let state = CompatCloudWakeProbeState()
+        let probe = CompatTrajectoryProbeState()
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let contentType = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if path.hasSuffix("/LoadTrajectory") {
+                state.markWoken("cas-dormant-local")
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                return (resp, Data("{}".utf8))
+            }
+            if path.hasSuffix("/GetCascadeTrajectorySteps") {
+                if contentType.contains("application/proto") {
+                    probe.recordProto()
+                    if state.isWoken("cas-dormant-local") {
+                        let resp = HTTPURLResponse(
+                            url: req.url!,
+                            statusCode: 200,
+                            httpVersion: "HTTP/1.1",
+                            headerFields: ["Content-Type": "application/proto"]
+                        )!
+                        return (resp, fullProtoBytes)
+                    } else {
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("{\"code\":\"not_found\",\"message\":\"trajectory not found\"}".utf8))
+                    }
+                } else {
+                    probe.recordJSON(stepOffset: nil)
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data("{\"steps\":[]}".utf8))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "local-dormant-404",
+            hostname: "Local Dormant Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18800")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        let steps = try await client.fetchAllTrajectorySteps(
+            cascadeId: "cas-dormant-local",
+            knownStepCount: 3,
+            isCloud: false
+        )
+        XCTAssertEqual(steps.count, 3)
+        XCTAssertEqual(probe.protoCount(), 2, "Must retry Binary Protobuf directly after LoadTrajectory")
+        XCTAssertEqual(probe.jsonCount(), 0, "Must not fall back to JSON GetCascadeTrajectorySteps")
+    }
+
+    func testBoqErrorUnwrappingTrajectory404AndFormattedUserFacingError() {
+        let boqUnknownBackend = "[3,\"invalid_argument: unknown field \\\"backend\\\"\"]"
+        XCTAssertEqual(
+            ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: boqUnknownBackend),
+            "backend"
+        )
+
+        let boqNotFound = "[5,\"not_found: trajectory not found (error ID: 721ffeb9b0bb4fb6b2a971dfa56087e2)\"]"
+        XCTAssertTrue(ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(statusCode: 404, body: boqNotFound))
+        XCTAssertFalse(
+            ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 404, body: boqNotFound),
+            "Trajectory-level 404 must not poison negative capability cache"
+        )
+
+        let stripped = ProtocolCompatibilityEngine.stripRedundantHttpPrefix(
+            from: "HTTP 404: HTTP 404: \(boqNotFound)",
+            statusCode: 404
+        )
+        XCTAssertEqual(stripped, boqNotFound)
+
+        let formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(
+            AntigravityRPCError.httpError(statusCode: 404, body: "HTTP 404: \(boqNotFound)")
+        )
+        XCTAssertFalse(formatted.contains("HTTP 404: HTTP 404:"))
+        XCTAssertFalse(formatted.contains("[5,"))
+        XCTAssertTrue(formatted.contains("not_found: trajectory not found"))
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers
@@ -1189,4 +1376,53 @@ private final class CompatMockURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {}
+}
+
+private final class CompatCloudWakeProbeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var listInstancesCalls: Int = 0
+    private var wokenCascadeIds = Set<String>()
+    private var recordedLoadPayloads: [[String: JSONValue]] = []
+
+    func recordListInstances() {
+        lock.lock()
+        defer { lock.unlock() }
+        listInstancesCalls += 1
+    }
+
+    func listInstancesCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return listInstancesCalls
+    }
+
+    func markWoken(_ cascadeId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        wokenCascadeIds.insert(cascadeId)
+    }
+
+    func isWoken(_ cascadeId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return wokenCascadeIds.contains(cascadeId)
+    }
+
+    func recordLoadPayload(_ payload: [String: JSONValue]) {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedLoadPayloads.append(payload)
+    }
+
+    func loadPayloads() -> [[String: JSONValue]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedLoadPayloads
+    }
+
+    func clearLoadPayloads() {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedLoadPayloads.removeAll()
+    }
 }
