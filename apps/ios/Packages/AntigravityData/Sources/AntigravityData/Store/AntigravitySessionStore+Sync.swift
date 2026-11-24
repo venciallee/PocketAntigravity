@@ -751,8 +751,12 @@ extension AntigravitySessionStore {
                     let existing = summaries[idx]
                     let prevStepCount = existing.stepCount
                     var merged = decoded
-                    if existing.title != "New Conversation" && merged.title == "New Conversation" {
+                    if existing.hasResolvedTitle && !merged.hasResolvedTitle {
                         merged.title = existing.title
+                        merged.hasResolvedTitle = true
+                    } else if merged.hasResolvedTitle {
+                        hydratingCascadeIds.remove(cid)
+                        settledEmptyTitleCascadeIds.remove(cid)
                     }
                     if existing.isCloud && !merged.isCloud {
                         merged.isCloud = true
@@ -876,7 +880,12 @@ extension AntigravitySessionStore {
             if let idx = summaries.firstIndex(where: { $0.cascadeId == cid }) {
                 summaries[idx].status = newStatus
                 if let stepCount { summaries[idx].stepCount = stepCount }
-                if let title, !title.isEmpty { summaries[idx].title = title }
+                if let title, !CascadeSummaryTitleResolver.isPlaceholderTitle(title) {
+                    summaries[idx].title = title
+                    summaries[idx].hasResolvedTitle = true
+                    hydratingCascadeIds.remove(cid)
+                    settledEmptyTitleCascadeIds.remove(cid)
+                }
                 summaries[idx].updatedAt = Date()
                 summaries[idx].relativeTimeLabel = "now"
                 summaries[idx].statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
@@ -1030,6 +1039,7 @@ extension AntigravitySessionStore {
                             self.stepsByCascadeId[cascadeId] = cached
                             self.harvestEmbedResources(from: cached)
                         }
+                        self.applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: cached, persist: false)
                         if self.activeCascadeId == cascadeId {
                             self.isLoadingSteps = false
                             self.stepLoadErrorText = nil
@@ -1072,6 +1082,7 @@ extension AntigravitySessionStore {
                 if !cached.isEmpty, let self, (self.stepsByCascadeId[cascadeId] ?? []).isEmpty {
                     self.stepsByCascadeId[cascadeId] = cached
                     self.harvestEmbedResources(from: cached)
+                    self.applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: cached, persist: false)
                     if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
                         self.isLoadingSteps = false
                     }
@@ -1174,12 +1185,22 @@ extension AntigravitySessionStore {
                             }
                         }
                         if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == cascadeId }) {
-                            self.summaries[sumIdx].stepCount = max(self.summaries[sumIdx].stepCount, remoteSteps.count)
-                            if self.summaries[sumIdx].title == "New Conversation",
-                               let firstPrompt = remoteSteps.first(where: { $0.type == .userInput })?.userInput?
-                                   .trimmingCharacters(in: .whitespacesAndNewlines),
-                               !firstPrompt.isEmpty {
-                                self.summaries[sumIdx].title = String(firstPrompt.prefix(56))
+                            var summaryDidMutate = false
+                            let prevStepCount = self.summaries[sumIdx].stepCount
+                            let nextStepCount = max(prevStepCount, remoteSteps.count)
+                            if nextStepCount != prevStepCount {
+                                self.summaries[sumIdx].stepCount = nextStepCount
+                                self.summaries[sumIdx].currentStepIndex = max(1, nextStepCount)
+                                self.summaries[sumIdx].totalSteps = max(self.summaries[sumIdx].totalSteps, nextStepCount)
+                                summaryDidMutate = true
+                            }
+                            if self.summaries[sumIdx].needsTitleHydration,
+                               let derivedTitle = CascadeSummaryTitleResolver.deriveTitle(from: remoteSteps) {
+                                self.summaries[sumIdx].title = derivedTitle
+                                self.summaries[sumIdx].hasResolvedTitle = true
+                                self.hydratingCascadeIds.remove(cascadeId)
+                                self.settledEmptyTitleCascadeIds.remove(cascadeId)
+                                summaryDidMutate = true
                             }
                             let reconciled = Self.reconcileSummaryStreamingStatus(
                                 currentStatus: self.summaries[sumIdx].status,
@@ -1196,6 +1217,9 @@ extension AntigravitySessionStore {
                                 stepCount: self.summaries[sumIdx].stepCount,
                                 isUnread: self.summaries[sumIdx].isUnread
                             )
+                            if summaryDidMutate {
+                                self.scheduleDebouncedHostProjectionPersist(for: self.summaries[sumIdx])
+                            }
                         } else {
                             stillActive = remoteSteps.contains { $0.status == .inProgress || $0.status == .pending }
                                 || withinOptimisticWindow
@@ -1204,6 +1228,10 @@ extension AntigravitySessionStore {
                         stillActive = withinOptimisticWindow
                             || summaryMeta?.status == .inProgress
                             || summaryMeta?.status == .pending
+                        if !stillActive && !isEmptyNewSessionNow && summaryMeta?.needsTitleHydration == true {
+                            self.hydratingCascadeIds.remove(cascadeId)
+                            self.settledEmptyTitleCascadeIds.insert(cascadeId)
+                        }
                     }
                     if belongsToActiveHost {
                         self.connectionLifecyclePhase = stillActive ? .onlineStreaming : .onlineIdle
@@ -1272,6 +1300,335 @@ extension AntigravitySessionStore {
                     }
                     try? await Task.sleep(nanoseconds: UInt64(fallbackInterval * 1_000_000_000))
                 }
+            }
+        }
+    }
+
+    // MARK: - Conversation Title Loading State & Smart Background Preloader
+
+    /// Returns `true` when `summary` is a server conversation whose title has not been hydrated yet
+    /// and should render an inline loading indicator instead of `"New Conversation"`.
+    public func isSummaryTitleLoading(_ summary: CascadeSummary) -> Bool {
+        if isVerificationMode && !hasPairedBackend && !isLiveBackendConnected {
+            return false
+        }
+        if locallyCreatedEmptyCascadeIds.contains(summary.cascadeId) {
+            return false
+        }
+        if summary.cascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(summary.cascadeId) {
+            return false
+        }
+        guard summary.needsTitleHydration else { return false }
+        if hydratingCascadeIds.contains(summary.cascadeId) {
+            return true
+        }
+        if settledEmptyTitleCascadeIds.contains(summary.cascadeId) {
+            return false
+        }
+        guard isDeviceNetworkReachable else { return false }
+        if !isLiveBackendConnected && (isConnectingToBackend || connectionLifecyclePhase == .connecting) {
+            return true
+        }
+        return isSummaryHostOnline(summary) && (isLiveBackendConnected || hasPairedBackend)
+    }
+
+    /// Returns the user-facing display title for `summary`, preventing unloaded server conversations
+    /// from falling back to `"New Conversation"`.
+    public func displayTitle(for summary: CascadeSummary) -> String {
+        if locallyCreatedEmptyCascadeIds.contains(summary.cascadeId)
+            || (summary.cascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(summary.cascadeId)) {
+            return summary.title.isEmpty ? CascadeSummaryTitleResolver.placeholderTitle : summary.title
+        }
+        if summary.needsTitleHydration {
+            return isSummaryTitleLoading(summary)
+                ? "Loading..."
+                : CascadeSummaryTitleResolver.untitledFallback
+        }
+        return summary.title
+    }
+
+    /// Applies hydrated title/stepCount metadata from locally cached or remotely fetched steps.
+    internal func applyHydratedMetadataIfNeeded(
+        cascadeId: String,
+        steps: [CascadeStep],
+        persist: Bool
+    ) {
+        guard let sumIdx = summaries.firstIndex(where: { $0.cascadeId == cascadeId }) else { return }
+        var changed = false
+        let nextStepCount = max(summaries[sumIdx].stepCount, steps.count)
+        if nextStepCount != summaries[sumIdx].stepCount {
+            summaries[sumIdx].stepCount = nextStepCount
+            summaries[sumIdx].currentStepIndex = max(1, nextStepCount)
+            summaries[sumIdx].totalSteps = max(summaries[sumIdx].totalSteps, nextStepCount)
+            changed = true
+        }
+        if summaries[sumIdx].needsTitleHydration,
+           let derivedTitle = CascadeSummaryTitleResolver.deriveTitle(from: steps) {
+            summaries[sumIdx].title = derivedTitle
+            summaries[sumIdx].hasResolvedTitle = true
+            hydratingCascadeIds.remove(cascadeId)
+            settledEmptyTitleCascadeIds.remove(cascadeId)
+            changed = true
+        }
+        if changed {
+            summaries[sumIdx].statusSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                status: summaries[sumIdx].status,
+                stepCount: summaries[sumIdx].stepCount,
+                isUnread: summaries[sumIdx].isUnread
+            )
+            if persist && !isVerificationMode {
+                scheduleDebouncedHostProjectionPersist(for: summaries[sumIdx])
+            }
+        }
+    }
+
+    internal func scheduleDebouncedHostProjectionPersist(for summary: CascadeSummary) {
+        guard !isVerificationMode else { return }
+        let key = Self.projectionHostKey(
+            isCloud: summary.isCloud,
+            instanceId: summary.originInstanceUuid,
+            hostname: summary.originHostName,
+            fallbackHostId: activeHost.instanceId,
+            fallbackHostName: activeHost.hostname
+        )
+        pendingPersistHostKeys.insert(key)
+        preloadPersistDebounceTask?.cancel()
+        preloadPersistDebounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard let self, !Task.isCancelled else { return }
+            let keys = self.pendingPersistHostKeys
+            self.pendingPersistHostKeys.removeAll()
+            guard !keys.isEmpty else { return }
+            await self.persistHostProjections(refreshedHostKeys: keys)
+        }
+    }
+
+    /// Cancels any active background conversation preload worker without clearing cached disk data.
+    public func cancelConversationPreload() {
+        conversationPreloadTask?.cancel()
+        conversationPreloadTask = nil
+        conversationPreloadQueue.removeAll()
+        hydratingCascadeIds.removeAll()
+    }
+
+    /// Prioritizes preloading a conversation as soon as its row scrolls into view in the sidebar or project list.
+    public func requestPreloadForVisibleConversation(_ cascadeId: String) {
+        guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
+        guard hasPairedBackend || isLiveBackendConnected else { return }
+        guard !cascadeId.isEmpty, !locallyCreatedEmptyCascadeIds.contains(cascadeId) else { return }
+        guard !(cascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(cascadeId)) else { return }
+        guard let summary = summaries.first(where: { $0.cascadeId == cascadeId }) else { return }
+        let hasCachedSteps = !(stepsByCascadeId[cascadeId] ?? []).isEmpty
+        if !summary.needsTitleHydration && hasCachedSteps {
+            return
+        }
+        scheduleConversationPreload(priorityCascadeIds: [cascadeId])
+    }
+
+    /// Schedules bounded-concurrency background preloading of unhydrated conversation titles and
+    /// top recent conversations' steps so sidebar rows resolve cleanly and entering cached chats is instant.
+    public func scheduleConversationPreload(priorityCascadeIds: [String] = []) {
+        guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
+        guard isLiveBackendConnected || (hasPairedBackend && activeHost.isOnline) else { return }
+        guard kmpEngine != nil || rpcClient != nil else { return }
+
+        let maxBackgroundHydrateCount = 32
+        let maxRecentStepPreloadCount = 8
+        let collapsedIds = appearancePreferences.collapsedProjectIds
+        var candidates: [String] = []
+        var seen = Set<String>()
+
+        func appendCandidate(_ cid: String) {
+            guard !cid.isEmpty,
+                  !locallyCreatedEmptyCascadeIds.contains(cid),
+                  !(cid.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(cid)),
+                  seen.insert(cid).inserted else {
+                return
+            }
+            candidates.append(cid)
+        }
+
+        for cid in priorityCascadeIds {
+            appendCandidate(cid)
+        }
+
+        // 1. Prioritize all unhydrated titles in expanded projects first
+        let unresolvedExpanded = summaries.filter { s in
+            !s.isArchived && s.needsTitleHydration
+                && !settledEmptyTitleCascadeIds.contains(s.cascadeId)
+                && !collapsedIds.contains(s.projectSlug)
+                && isSummaryHostOnline(s)
+        }
+        for s in unresolvedExpanded.prefix(maxBackgroundHydrateCount) {
+            appendCandidate(s.cascadeId)
+        }
+
+        // 2. Also hydrate unhydrated titles in collapsed projects so expanding them is instant
+        let unresolvedCollapsed = summaries.filter { s in
+            !s.isArchived && s.needsTitleHydration
+                && !settledEmptyTitleCascadeIds.contains(s.cascadeId)
+                && collapsedIds.contains(s.projectSlug)
+                && isSummaryHostOnline(s)
+        }
+        for s in unresolvedCollapsed.prefix(maxBackgroundHydrateCount) {
+            appendCandidate(s.cascadeId)
+        }
+
+        // 3. Preload steps for top recent conversations in expanded projects so opening them renders on Frame 0
+        let recentUncached = summaries.filter { s in
+            !s.isArchived
+                && !collapsedIds.contains(s.projectSlug)
+                && (stepsByCascadeId[s.cascadeId] ?? []).isEmpty
+                && isSummaryHostOnline(s)
+        }
+        for s in recentUncached.prefix(maxRecentStepPreloadCount) {
+            appendCandidate(s.cascadeId)
+        }
+
+        guard !candidates.isEmpty else { return }
+
+        // Place explicit priority IDs at the very front of the queue
+        for cid in priorityCascadeIds.reversed() where seen.contains(cid) {
+            conversationPreloadQueue.removeAll { $0 == cid }
+            conversationPreloadQueue.insert(cid, at: 0)
+        }
+        for cid in candidates where !conversationPreloadQueue.contains(cid) {
+            conversationPreloadQueue.append(cid)
+        }
+
+        guard conversationPreloadTask == nil else { return }
+        let maxConcurrency = (isLowPowerModeEnabled || isNetworkExpensiveOrConstrained) ? 1 : 2
+        let generation = hostSwitchGeneration
+
+        conversationPreloadTask = Task { [weak self] in
+            defer {
+                if let self, self.hostSwitchGeneration == generation {
+                    self.conversationPreloadTask = nil
+                }
+            }
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<maxConcurrency {
+                    group.addTask { [weak self] in
+                        while !Task.isCancelled {
+                            let nextId: String? = await MainActor.run {
+                                guard let self,
+                                      self.hostSwitchGeneration == generation,
+                                      !self.isNetworkingSuspended,
+                                      self.isDeviceNetworkReachable,
+                                      !self.conversationPreloadQueue.isEmpty else {
+                                    return nil
+                                }
+                                return self.conversationPreloadQueue.removeFirst()
+                            }
+                            guard let nextId else { break }
+                            await self?.preloadSingleConversation(nextId, expectedGeneration: generation)
+                        }
+                    }
+                }
+                await group.waitForAll()
+            }
+        }
+    }
+
+    internal func preloadSingleConversation(_ cascadeId: String, expectedGeneration: UInt64) async {
+        guard hostSwitchGeneration == expectedGeneration,
+              !isNetworkingSuspended,
+              isDeviceNetworkReachable else {
+            return
+        }
+        guard let summary = summaries.first(where: { $0.cascadeId == cascadeId }) else { return }
+        guard isSummaryHostOnline(summary) else { return }
+
+        let now = Date()
+        if let prevAttempt = preloadAttemptedAtByCascadeId[cascadeId],
+           now.timeIntervalSince(prevAttempt) < 30.0 {
+            return
+        }
+        preloadAttemptedAtByCascadeId[cascadeId] = now
+
+        // 1. Check in-memory & disk cache first (zero network RPCs when already cached)
+        let storeRef = projectionStore
+        let existingInMem = stepsByCascadeId[cascadeId] ?? []
+        if !existingInMem.isEmpty {
+            applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: existingInMem, persist: true)
+            let updatedNeed = summaries.first(where: { $0.cascadeId == cascadeId })?.needsTitleHydration ?? false
+            if !updatedNeed && (summary.stepCount <= 0 || existingInMem.count >= summary.stepCount) {
+                return
+            }
+        } else {
+            let diskCached = await storeRef.loadProjectedSteps(cascadeId: cascadeId)
+            guard !Task.isCancelled, hostSwitchGeneration == expectedGeneration else { return }
+            if !diskCached.isEmpty {
+                if (stepsByCascadeId[cascadeId] ?? []).isEmpty {
+                    stepsByCascadeId[cascadeId] = diskCached
+                    harvestEmbedResources(from: diskCached)
+                }
+                applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: diskCached, persist: true)
+                let updatedNeed = summaries.first(where: { $0.cascadeId == cascadeId })?.needsTitleHydration ?? false
+                if !updatedNeed && (summary.stepCount <= 0 || diskCached.count >= summary.stepCount) {
+                    return
+                }
+            }
+        }
+
+        // 2. Fetch remotely with non-intrusive preload path (never touches activeCascadeId / isLoadingSteps)
+        let latestSummary = summaries.first(where: { $0.cascadeId == cascadeId }) ?? summary
+        let shouldMarkHydrating = latestSummary.needsTitleHydration
+        if shouldMarkHydrating {
+            hydratingCascadeIds.insert(cascadeId)
+        }
+        defer {
+            hydratingCascadeIds.remove(cascadeId)
+        }
+
+        let summaryIsCloud: Bool = {
+            if latestSummary.isCloud || AntigravityCloudDetector.isCloudWorkspaceURI(latestSummary.workspaceUri, cascadeId: cascadeId) {
+                return true
+            }
+            if let matchedProj = projects.first(where: { $0.id == latestSummary.projectSlug || $0.name == latestSummary.projectSlug }),
+               matchedProj.runtime == .cloud {
+                return true
+            }
+            return false
+        }()
+
+        do {
+            let remoteSteps: [CascadeStep]
+            if let engine = kmpEngine {
+                remoteSteps = try await engine.preloadSteps(
+                    cascadeId: cascadeId,
+                    knownStepCount: latestSummary.stepCount,
+                    isCloud: summaryIsCloud,
+                    instanceUuidOverride: latestSummary.originInstanceUuid,
+                    requireRemoteRefresh: shouldMarkHydrating
+                )
+            } else if let client = rpcClient {
+                remoteSteps = try await client.fetchAllTrajectorySteps(
+                    cascadeId: cascadeId,
+                    knownStepCount: latestSummary.stepCount,
+                    isCloud: summaryIsCloud,
+                    instanceUuidOverride: latestSummary.originInstanceUuid
+                )
+            } else {
+                return
+            }
+            guard !Task.isCancelled, hostSwitchGeneration == expectedGeneration, !isNetworkingSuspended else { return }
+
+            if !remoteSteps.isEmpty {
+                locallyCreatedEmptyCascadeIds.remove(cascadeId)
+                stepsByCascadeId[cascadeId] = remoteSteps
+                harvestEmbedResources(from: remoteSteps)
+                await storeRef.saveProjectedSteps(remoteSteps, for: cascadeId)
+                applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: remoteSteps, persist: true)
+                if summaries.first(where: { $0.cascadeId == cascadeId })?.needsTitleHydration == true {
+                    settledEmptyTitleCascadeIds.insert(cascadeId)
+                }
+            } else if shouldMarkHydrating {
+                settledEmptyTitleCascadeIds.insert(cascadeId)
+            }
+        } catch {
+            if !Task.isCancelled && shouldMarkHydrating {
+                settledEmptyTitleCascadeIds.insert(cascadeId)
             }
         }
     }

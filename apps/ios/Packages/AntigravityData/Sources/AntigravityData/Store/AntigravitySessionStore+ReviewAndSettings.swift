@@ -513,7 +513,9 @@ extension AntigravitySessionStore {
         if let idx = projects.firstIndex(where: { $0.id == projectId }) {
             projects[idx].isExpandedInHome = !appearancePreferences.collapsedProjectIds.contains(projectId)
         }
-        saveAppearancePreferences()
+        if !isVerificationMode {
+            saveAppearancePreferences()
+        }
     }
 
     public func setAppearanceMode(_ mode: AppAppearanceMode) {
@@ -539,6 +541,9 @@ extension AntigravitySessionStore {
 
     public func loadPersistedV233Preferences() async {
         if var prefs = await projectionStore.loadAppearancePreferences() {
+            if isVerificationMode {
+                prefs.collapsedProjectIds = []
+            }
             if hasModifiedAppearanceModeInSession {
                 prefs.appearanceMode = appearancePreferences.appearanceMode
             } else {

@@ -2039,12 +2039,14 @@ public class AntigravityKmpRpcClient(
             existing
         }
         val resolvedTitle = when {
-            existing.title != "New Conversation" && incoming.title == "New Conversation" -> existing.title
-            incoming.title != "New Conversation" && existing.title == "New Conversation" -> incoming.title
+            existing.hasResolvedTitle && !incoming.hasResolvedTitle -> existing.title
+            incoming.hasResolvedTitle && !existing.hasResolvedTitle -> incoming.title
             else -> base.title
         }
+        val resolvedHasTitle = existing.hasResolvedTitle || incoming.hasResolvedTitle
         map[incoming.cascadeId] = base.copy(
             title = resolvedTitle,
+            hasResolvedTitle = resolvedHasTitle,
             stepCount = maxOf(existing.stepCount, incoming.stepCount),
             totalSteps = maxOf(existing.totalSteps, incoming.totalSteps),
             updatedAtEpochMs = maxOf(existing.updatedAtEpochMs, incoming.updatedAtEpochMs),

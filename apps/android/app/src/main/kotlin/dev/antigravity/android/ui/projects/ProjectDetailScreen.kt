@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -40,6 +41,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -341,6 +343,13 @@ fun ProjectDetailScreen(
             when (selectedTab) {
                 ProjectDetailTab.ACTIVE -> {
                     activeSummaries.forEach { summary ->
+                        val isTitleLoading = coordinator.isSummaryTitleLoading(summary)
+                        val rowTitle = coordinator.displayTitleForSummary(summary)
+                        LaunchedEffect(summary.cascadeId, summary.hasResolvedTitle) {
+                            if (!coordinator.isVerificationMode) {
+                                coordinator.prioritizeConversationPreload(summary.cascadeId)
+                            }
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -350,14 +359,37 @@ fun ProjectDetailScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Text(
-                                text = summary.title,
-                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
-                                color = colors.inkReading,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
+                            if (isTitleLoading) {
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("project-conv-loading-${summary.cascadeId}"),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    CircularProgressIndicator(
+                                        strokeWidth = 1.8.dp,
+                                        color = colors.inkMuted,
+                                        modifier = Modifier.size(13.dp),
+                                    )
+                                    Text(
+                                        text = "Loading...",
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+                                        color = colors.inkMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = rowTitle,
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                                    color = colors.inkReading,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                             DrawerConversationTrailingIndicator(summary = summary)
                         }
                     }
@@ -365,6 +397,13 @@ fun ProjectDetailScreen(
 
                 ProjectDetailTab.ARCHIVED -> {
                     archivedSummaries.forEach { summary ->
+                        val isTitleLoading = coordinator.isSummaryTitleLoading(summary)
+                        val rowTitle = coordinator.displayTitleForSummary(summary)
+                        LaunchedEffect(summary.cascadeId, summary.hasResolvedTitle) {
+                            if (!coordinator.isVerificationMode) {
+                                coordinator.prioritizeConversationPreload(summary.cascadeId)
+                            }
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -374,14 +413,37 @@ fun ProjectDetailScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Text(
-                                text = summary.title,
-                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
-                                color = colors.inkSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
+                            if (isTitleLoading) {
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("project-conv-loading-${summary.cascadeId}"),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    CircularProgressIndicator(
+                                        strokeWidth = 1.8.dp,
+                                        color = colors.inkMuted,
+                                        modifier = Modifier.size(13.dp),
+                                    )
+                                    Text(
+                                        text = "Loading...",
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+                                        color = colors.inkMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = rowTitle,
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                                    color = colors.inkSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                             Text(
                                 text = summary.relativeTimeLabel,
                                 style = MaterialTheme.typography.labelSmall,

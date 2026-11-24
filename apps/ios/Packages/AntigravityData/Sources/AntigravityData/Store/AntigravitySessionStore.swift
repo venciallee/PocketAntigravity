@@ -104,6 +104,8 @@ public final class AntigravitySessionStore {
     public var selectedFilterCategory: SessionFilterCategory = .all
     public var selectedWorktreeFilter: String? = nil
     public var isRefreshingSummaries: Bool = false
+    public var hydratingCascadeIds: Set<String> = []
+    public var settledEmptyTitleCascadeIds: Set<String> = []
     public var contextMenuTargetCascadeId: String = "cas-flaky-settlement"
     public var swipePreviewCascadeId: String = "cas-upgrade-go"
 
@@ -444,6 +446,11 @@ public final class AntigravitySessionStore {
     internal var hasReceivedCloudStreamEvent: Bool = false
     internal var summaryPollingTask: Task<Void, Never>? = nil
     internal var stepPollingTask: Task<Void, Never>? = nil
+    internal var conversationPreloadTask: Task<Void, Never>? = nil
+    internal var conversationPreloadQueue: [String] = []
+    internal var preloadAttemptedAtByCascadeId: [String: Date] = [:]
+    internal var preloadPersistDebounceTask: Task<Void, Never>? = nil
+    internal var pendingPersistHostKeys: Set<String> = []
     internal var hostSwitchTask: Task<Void, Never>? = nil
     internal var hostSwitchGeneration: UInt64 = 0
     internal var inFlightHostRefreshTasks: [String: Task<Bool, Never>] = [:]
@@ -511,8 +518,12 @@ public final class AntigravitySessionStore {
                     let cid = incoming.cascadeId
                     if let existing = byId[cid] {
                         var merged = incoming
-                        if existing.title != "New Conversation" && merged.title == "New Conversation" {
+                        if existing.hasResolvedTitle && !merged.hasResolvedTitle {
                             merged.title = existing.title
+                            merged.hasResolvedTitle = true
+                        } else if merged.hasResolvedTitle {
+                            self.hydratingCascadeIds.remove(cid)
+                            self.settledEmptyTitleCascadeIds.remove(cid)
                         }
                         if existing.isCloud && !merged.isCloud {
                             merged.isCloud = true

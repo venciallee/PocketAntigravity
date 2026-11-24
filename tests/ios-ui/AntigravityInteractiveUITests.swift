@@ -792,7 +792,27 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Swiping left-to-right from the left edge on a sidebar-launched Conversation must open the Sidebar Drawer"
         )
 
-        // 2. Open Project Detail from swiped-open Sidebar -> verify Rules & Skills (`UE14`) -> open conversation -> back navigation
+        // 2. Collapse & expand project conversation list, then open Project Detail from swiped-open Sidebar
+        let projectToggle = app.buttons["btn-toggle-project-slardar_app_ai"]
+        XCTAssertTrue(
+            projectToggle.waitForExistence(timeout: 5),
+            "Non-empty project group in sidebar must expose collapse/expand toggle button"
+        )
+        projectToggle.tap()
+        XCTAssertTrue(
+            waitForNonExistence(reviewRow, timeout: 4),
+            "Tapping project collapse toggle must hide project conversation rows"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["project-collapsed-count-slardar_app_ai"].firstMatch.waitForExistence(timeout: 4),
+            "Collapsed project header must display muted conversation count badge"
+        )
+        projectToggle.tap()
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 4),
+            "Tapping project collapse toggle a second time must expand project conversation rows back"
+        )
+
         let projectHeader = app.buttons["project-header-slardar_app_ai"]
         XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
         projectHeader.tap()

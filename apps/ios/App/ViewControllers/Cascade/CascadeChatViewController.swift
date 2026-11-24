@@ -560,8 +560,12 @@ public struct CascadeChatViewController: View {
 
     private var chatTopNavigationBar: some View {
         let isLiveOrPaired = store.hasPairedBackend || store.isLiveBackendConnected
+        let isNavTitleLoading: Bool = {
+            guard activePendingDraft == nil, let activeSummary = store.activeSummary else { return false }
+            return store.isSummaryTitleLoading(activeSummary)
+        }()
         let navTitle = activePendingDraft?.title
-            ?? store.activeSummary?.title
+            ?? store.activeSummary.map { store.displayTitle(for: $0) }
             ?? (isLiveOrPaired ? "Conversation" : "Add rate limiter to /transfers")
         let rawProjectLabel = activeProjectWorkspace?.name
             ?? activePendingDraft?.projectSlug
@@ -625,12 +629,25 @@ public struct CascadeChatViewController: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(navTitle)
-                    .font(.system(size: 15.5, weight: .bold))
-                    .foregroundStyle(AntigravityTheme.inkReading)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                if isNavTitleLoading {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(AntigravityTheme.inkSecondary)
+                        Text("Loading...")
+                            .font(.system(size: 15.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                            .lineLimit(1)
+                    }
                     .accessibilityIdentifier("chat-nav-title")
+                } else {
+                    Text(navTitle)
+                        .font(.system(size: 15.5, weight: .bold))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .accessibilityIdentifier("chat-nav-title")
+                }
 
                 Text(subtitleLine)
                     .font(.system(size: 12))
