@@ -1564,7 +1564,7 @@ public class AntigravityKmpRpcClient(
         }
     }
 
-    private fun sanitizeCloudRelayPayload(method: String, body: JsonObject): JsonObject {
+    internal fun sanitizeCloudRelayPayload(method: String, body: JsonObject): JsonObject {
         val desktopMetadata = buildJsonObject {
             put("ideName", "antigravity")
             put("extensionName", "antigravity")
@@ -1586,6 +1586,38 @@ public class AntigravityKmpRpcClient(
                     if (!fallbackText.isNullOrEmpty()) add(buildJsonObject { put("text", fallbackText) })
                 }
                 put("items", rawItems)
+                val rawMedia = body["media"] as? JsonArray
+                if (rawMedia != null && rawMedia.isNotEmpty()) {
+                    val cleanMedia = buildJsonArray {
+                        for (entry in rawMedia) {
+                            val m = entry as? JsonObject ?: continue
+                            val inlineData = (m["inlineData"] as? JsonPrimitive)?.contentOrNull
+                                ?: (m["inlineBase64Data"] as? JsonPrimitive)?.contentOrNull
+                            val mimeType = (m["mimeType"] as? JsonPrimitive)?.contentOrNull
+                            val uri = (m["uri"] as? JsonPrimitive)?.contentOrNull
+                            if (inlineData.isNullOrEmpty() && uri.isNullOrEmpty()) continue
+                            add(buildJsonObject {
+                                put("mimeType", mimeType ?: "image/jpeg")
+                                if (!inlineData.isNullOrEmpty()) {
+                                    put("inlineData", inlineData)
+                                }
+                                (m["description"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                                    put("description", it)
+                                }
+                                if (!uri.isNullOrEmpty() && (uri.startsWith("https://") || uri.startsWith("http://"))) {
+                                    put("uri", uri)
+                                }
+                                (m["thumbnail"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                                    put("thumbnail", it)
+                                }
+                                m["durationSeconds"]?.let { put("durationSeconds", it) }
+                            })
+                        }
+                    }
+                    if (cleanMedia.isNotEmpty()) {
+                        put("media", cleanMedia)
+                    }
+                }
                 put("metadata", desktopMetadata)
                 val cascadeCfg = body["cascadeConfig"] as? JsonObject
                 val plannerCfg = cascadeCfg?.get("plannerConfig") as? JsonObject
@@ -2798,37 +2830,40 @@ public class AntigravityKmpRpcClient(
         val effectivePermission = permissionPreset?.takeIf { it != AgentPermissionPreset.INHERIT_GLOBAL }
             ?: AgentPermissionPreset.defaultPreset(isRemote = isRemoteCloud)
 
+        val mediaEntries = mutableListOf<JsonObject>()
         val items = buildJsonArray {
             add(buildJsonObject { put("text", message) })
             for (chip in attachments) {
                 val uri = chip.targetUri ?: chip.label
+                if (!chip.inlinePayload.isNullOrEmpty()) {
+                    mediaEntries.add(buildJsonObject {
+                        put("mimeType", chip.mimeType ?: when (chip.kind) {
+                            ComposerAttachmentChip.Kind.IMAGE_SCREENSHOT -> "image/jpeg"
+                            ComposerAttachmentChip.Kind.PDF_DOCUMENT -> "application/pdf"
+                            ComposerAttachmentChip.Kind.AUDIO_CLIP -> "audio/m4a"
+                            ComposerAttachmentChip.Kind.VIDEO_CLIP -> "video/mp4"
+                            else -> "application/octet-stream"
+                        })
+                        put("inlineData", chip.inlinePayload)
+                        if (chip.label.isNotBlank()) {
+                            put("description", chip.label)
+                        }
+                    })
+                    continue
+                }
                 when (chip.kind) {
                     ComposerAttachmentChip.Kind.IMAGE_SCREENSHOT,
                     ComposerAttachmentChip.Kind.AUDIO_CLIP,
                     ComposerAttachmentChip.Kind.VIDEO_CLIP,
                     ComposerAttachmentChip.Kind.PDF_DOCUMENT -> {
-                        if (!chip.inlinePayload.isNullOrEmpty()) {
-                            add(buildJsonObject {
-                                put("item", buildJsonObject {
-                                    put("media", buildJsonObject {
-                                        put("uri", uri)
-                                        put("label", chip.label)
-                                        put("mimeType", chip.mimeType ?: "application/octet-stream")
-                                        put("inlineBase64Data", chip.inlinePayload)
-                                        put("kind", chip.kind.name.lowercase())
-                                    })
+                        add(buildJsonObject {
+                            put("item", buildJsonObject {
+                                put("file", buildJsonObject {
+                                    put("absoluteUri", uri)
+                                    put("label", chip.label)
                                 })
                             })
-                        } else {
-                            add(buildJsonObject {
-                                put("item", buildJsonObject {
-                                    put("file", buildJsonObject {
-                                        put("absoluteUri", uri)
-                                        put("label", chip.label)
-                                    })
-                                })
-                            })
-                        }
+                        })
                     }
                     ComposerAttachmentChip.Kind.DIFF_QUOTE -> add(buildJsonObject {
                         put("item", buildJsonObject {
@@ -2910,6 +2945,9 @@ public class AntigravityKmpRpcClient(
         val body = buildJsonObject {
             put("cascadeId", cascadeId)
             put("items", items)
+            if (mediaEntries.isNotEmpty()) {
+                put("media", JsonArray(mediaEntries))
+            }
             put("userResponse", message)
             put("metadata", buildJsonObject {
                 put("ideName", "antigravity-kmp")

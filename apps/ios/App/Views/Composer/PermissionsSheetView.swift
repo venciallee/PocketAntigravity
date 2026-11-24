@@ -599,12 +599,13 @@ func dockedBackdropComposerBar(
                     .frame(width: 34, height: 34)
                     .background(Circle().fill(highlightAdd ? AntigravityTheme.surfaceElevated : Color.clear))
 
-                VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
                     Text("Gemini 4 Neon")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textBody)
-                    Text("Extra High")
-                        .font(.system(size: 11.5))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
 

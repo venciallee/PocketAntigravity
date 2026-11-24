@@ -683,4 +683,88 @@ final class AntigravityV233Tests: XCTestCase {
         store.setAppLanguage(.zhHans)
         XCTAssertEqual(store.appearancePreferences.language, .zhHans)
     }
+
+    // MARK: - TC-26: Mobile Photo Attachments (`SendUserCascadeMessage.media`) & Home Image-Only Send
+
+    @MainActor
+    func testTC26_TopLevelMediaSanitizationDecodingAndHomeImageAttachmentSend() async throws {
+        // 1. Cloud Relay sanitizer preserves top-level `media` array (`mimeType`, `inlineData`, `description`)
+        //    and strips device-local `file://` URIs that remote hosts cannot read.
+        let host = RemoteHostInstance(
+            instanceId: "relay-media-ios",
+            hostname: "Antigravity Cloud",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/relay-media-ios")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=test-cookie-value"
+        )
+        let rawBody: [String: JSONValue] = [
+            "cascadeId": .string("cas-photo"),
+            "items": .array([.object(["text": .string("Inspect UI bug")])]),
+            "media": .array([
+                .object([
+                    "mimeType": .string("image/jpeg"),
+                    "inlineData": .string("iVBORw0KGgo="),
+                    "description": .string("photo-1.jpg"),
+                    "uri": .string("file:///private/var/mobile/photo-1.jpg")
+                ])
+            ])
+        ]
+        let sanitized = try await client.sanitizeCloudRelayPayload(
+            method: "SendUserCascadeMessage",
+            body: rawBody
+        )
+        let mediaArr = try XCTUnwrap(sanitized["media"]?.arrayValue)
+        XCTAssertEqual(mediaArr.count, 1)
+        let mediaObj = try XCTUnwrap(mediaArr[0].objectValue)
+        XCTAssertEqual(mediaObj["mimeType"]?.stringValue, "image/jpeg")
+        XCTAssertEqual(mediaObj["inlineData"]?.stringValue, "iVBORw0KGgo=")
+        XCTAssertEqual(mediaObj["description"]?.stringValue, "photo-1.jpg")
+        XCTAssertNil(mediaObj["uri"], "Device-local file:// URI must not leak to Cloud Relay media entry")
+
+        // 2. JSON step decoder extracts `userInput.media` labels into `attachedMentions`
+        let stepJson: JSONValue = .object([
+            "stepIndex": .int(0),
+            "type": .string("CORTEX_STEP_TYPE_USER_INPUT"),
+            "status": .string("CORTEX_STEP_STATUS_DONE"),
+            "userInput": .object([
+                "userResponse": .string("Inspect UI bug"),
+                "media": .array([
+                    .object([
+                        "mimeType": .string("image/jpeg"),
+                        "description": .string("photo-1.jpg")
+                    ])
+                ])
+            ])
+        ])
+        let decoded = AntigravityRPCClient.decodeJSONStep(stepJson, cascadeId: "cas-photo", fallbackIndex: 0)
+        XCTAssertEqual(decoded?.attachedMentions, ["photo-1.jpg"])
+
+        // 3. Creating a conversation from Home with image attachment only (empty text) dispatches message
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        let photoChip = ComposerAttachmentChip(
+            id: "photo-chip-1",
+            kind: .imageScreenshot,
+            label: "photo-1.jpg",
+            targetUri: "attachment://photo/photo-chip-1/photo-1.jpg",
+            mimeType: "image/jpeg",
+            byteSize: 16,
+            inlineBase64Data: "iVBORw0KGgo="
+        )
+        let newId = store.createConversationInProject(
+            "ledger-svc",
+            title: "photo-1.jpg",
+            initialPrompt: "",
+            initialAttachments: [photoChip]
+        )
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        let sentSteps = store.stepsByCascadeId[newId] ?? []
+        XCTAssertTrue(
+            sentSteps.contains(where: { $0.type == .userInput && $0.attachedMentions.contains("photo-1.jpg") }),
+            "Home image-only send must materialize and attach the picked photo on the created conversation"
+        )
+    }
 }
