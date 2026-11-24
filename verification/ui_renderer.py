@@ -439,7 +439,7 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
                     <span>Repo default</span>{ICONS['chev_down']}
                   </button>
                 </div>
-                <button data-testid="composer-cloud-toggle" data-cloud="false" style="width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; color:#8E929B; cursor:pointer;">{ICONS['cloud']}</button>
+                <button data-testid="composer-cloud-toggle" data-cloud="false" data-runtime-icon="laptop" style="width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; color:#8E929B; cursor:pointer;">{ICONS['laptop']}</button>
               </div>
 
               <div style="background:#1B1B1F; border:1px solid rgba(255,255,255,0.07); border-radius:20px; padding:12px;">
@@ -465,7 +465,10 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
           </div>
         </div>
         """
-        js = """
+        js = (
+            """
+        const CLOUD_RUNTIME_ICON = __CLOUD_ICON__;
+        const LAPTOP_RUNTIME_ICON = __LAPTOP_ICON__;
         document.querySelector("[data-testid='btn-open-sidebar']").addEventListener('click', () => {
           document.body.dataset.sidebarOpened = 'true';
         });
@@ -476,9 +479,15 @@ def render_scene_html(state_id: str, selectors: list, rpc_port: int = 0) -> str:
           const btn = e.currentTarget;
           const next = btn.dataset.cloud !== 'true';
           btn.dataset.cloud = String(next);
+          btn.dataset.runtimeIcon = next ? 'cloud' : 'laptop';
+          btn.innerHTML = next ? CLOUD_RUNTIME_ICON : LAPTOP_RUNTIME_ICON;
+          btn.style.color = next ? '#8EB4FF' : '#8E929B';
           document.body.dataset.cloudTarget = String(next);
         });
         """
+            .replace("__CLOUD_ICON__", json.dumps(ICONS["cloud"]))
+            .replace("__LAPTOP_ICON__", json.dumps(ICONS["laptop"]))
+        )
         return _wrap_mobile_page(state_id, body, js, selectors, rpc_port)
 
     if state_id == "UE02_DISPLAY_OPTIONS":

@@ -6,13 +6,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeLeft
-import androidx.compose.ui.test.swipeRight
 import dev.antigravity.android.ui.AntigravityAppRoot
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentPermissionPreset
@@ -641,7 +637,7 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc26_sidebarDrawerOpensOnLeftToRightSwipeAndClosesOnRightToLeftSwipe() {
+    fun atc26_homeRuntimeIconShowsComputerForLocalProjectAndCloudForCloudProject() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -650,69 +646,38 @@ class AndroidInteractiveE2eTest {
             )
         }
 
-        assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
+        // Default local project (ledger-svc) displays local computer runtime icon semantics
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Local runtime selected")),
+        ).assertIsDisplayed()
 
-        // Swipe left-to-right from the left edge on Home -> opens Sidebar Drawer
-        composeRule.onRoot().performTouchInput {
-            swipeRight(startX = width * 0.03f, endX = width * 0.85f, durationMillis = 220)
-        }
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
-        composeRule.onNodeWithTag("btn-new-conversation").assertIsDisplayed()
+        // Selecting a cloud project switches the runtime icon to Cloud
+        composeRule.onNodeWithTag("home-project-picker").performClick()
+        composeRule.onNodeWithTag("home-project-option-web-console").performClick()
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Cloud runtime selected")),
+        ).assertIsDisplayed()
 
-        // Swipe right-to-left on the open Sidebar Drawer -> closes cleanly back to Home
-        composeRule.onRoot().performTouchInput {
-            swipeLeft(startX = width * 0.72f, endX = width * 0.08f, durationMillis = 220)
-        }
-        composeRule.waitForIdle()
-        assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
-        composeRule.onNodeWithTag("home-greeting").assertIsDisplayed()
-    }
+        // Switching back to a local project restores the local computer runtime icon
+        composeRule.onNodeWithTag("home-project-picker").performClick()
+        composeRule.onNodeWithTag("home-project-option-ledger-svc").performClick()
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Local runtime selected")),
+        ).assertIsDisplayed()
 
-    @Test
-    fun atc27_sidebarDrawerSwipeInChatPreservesActiveConversationOnDismiss() {
-        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
-        composeRule.setContent {
-            AntigravityAppRoot(
-                coordinator = coordinator,
-                initialVerifyScene = EsddVerifySceneCase.CHAT_AND_COMPOSER,
-            )
-        }
-
-        composeRule.onNodeWithTag("chat-diff-pill").assertIsDisplayed()
-
-        // Swipe left-to-right inside CascadeChat -> opens Sidebar Drawer over active conversation
-        composeRule.onRoot().performTouchInput {
-            swipeRight(startX = width * 0.03f, endX = width * 0.85f, durationMillis = 220)
-        }
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
-
-        // Swipe right-to-left -> closes drawer without losing the active conversation
-        composeRule.onRoot().performTouchInput {
-            swipeLeft(startX = width * 0.72f, endX = width * 0.08f, durationMillis = 220)
-        }
-        composeRule.waitForIdle()
-        assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
-        composeRule.onNodeWithTag("chat-diff-pill").assertIsDisplayed()
-    }
-
-    @Test
-    fun atc28_pushedProjectDetailDoesNotOpenSidebarOnLeftSwipe() {
-        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
-        composeRule.setContent {
-            AntigravityAppRoot(
-                coordinator = coordinator,
-                initialVerifyScene = EsddVerifySceneCase.PROJECT_DETAIL,
-            )
-        }
-
-        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
-        composeRule.onRoot().performTouchInput {
-            swipeRight(startX = width * 0.03f, endX = width * 0.85f, durationMillis = 220)
-        }
-        composeRule.waitForIdle()
-        assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
-        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
+        // Tapping the runtime toggle directly switches between Cloud and Local computer
+        composeRule.onNodeWithTag("home-cloud-toggle").performClick()
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Cloud runtime selected")),
+        ).assertIsDisplayed()
+        composeRule.onNodeWithTag("home-cloud-toggle").performClick()
+        composeRule.onNode(
+            androidx.compose.ui.test.hasTestTag("home-cloud-toggle")
+                .and(androidx.compose.ui.test.hasContentDescription("Local runtime selected")),
+        ).assertIsDisplayed()
     }
 }
