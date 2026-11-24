@@ -562,7 +562,7 @@ public struct AgentsHomeViewController: View {
                     Text("Needs approval")
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.statusWaiting)
-                    Text(" · \(summary.title)")
+                    Text(" · \(store.displayTitle(for: summary))")
                         .font(.system(size: 14.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                         .lineLimit(1)
@@ -836,6 +836,7 @@ public struct AgentsSidebarDrawerView: View {
         let isPinned: Bool
         let timestampLabel: String
         let isSelected: Bool
+        var isTitleLoading: Bool = false
     }
 
     private struct DrawerProjectGroup: Identifiable {
@@ -1000,7 +1001,7 @@ public struct AgentsSidebarDrawerView: View {
     private func rowModel(from summary: CascadeSummary) -> DrawerConversationRow {
         DrawerConversationRow(
             id: summary.cascadeId,
-            title: summary.title,
+            title: store.displayTitle(for: summary),
             projectSlug: summary.projectSlug,
             status: summary.status,
             isUnread: summary.isUnread,
@@ -1009,7 +1010,8 @@ public struct AgentsSidebarDrawerView: View {
             isSelected: summary.cascadeId == store.activeCascadeId && {
                 if case .cascadeChat = store.activeRoute { return true }
                 return false
-            }()
+            }(),
+            isTitleLoading: store.isSummaryTitleLoading(summary)
         )
     }
 
@@ -1186,6 +1188,9 @@ public struct AgentsSidebarDrawerView: View {
 
                                 ForEach(pinnedConversations) { row in
                                     drawerConversationItem(row, indented: false)
+                                        .onAppear {
+                                            store.requestPreloadForVisibleConversation(row.id)
+                                        }
                                 }
                             }
 
@@ -1235,10 +1240,11 @@ public struct AgentsSidebarDrawerView: View {
                             .padding(.trailing, 10)
                             .padding(.top, 14)
 
-                            // Project Groups & Conversations
+                            // Project Groups & Conversations (with persistent collapse/expand)
                             ForEach(projectGroups) { group in
+                                let isCollapsed = searchQuery.isEmpty && store.isProjectCollapsed(group.id)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 8) {
+                                    HStack(spacing: 2) {
                                         Button {
                                             if let onOpenProjectDetail {
                                                 onOpenProjectDetail(group.id)
@@ -1256,12 +1262,41 @@ public struct AgentsSidebarDrawerView: View {
                                                     .font(.system(size: 15.5, weight: .regular))
                                                     .foregroundStyle(AntigravityTheme.textSecondary)
                                                     .lineLimit(1)
+                                                if isCollapsed && !group.conversations.isEmpty {
+                                                    Text("\(group.conversations.count)")
+                                                        .font(.system(size: 12, weight: .medium))
+                                                        .foregroundStyle(AntigravityTheme.textMuted)
+                                                        .padding(.horizontal, 6)
+                                                        .padding(.vertical, 2)
+                                                        .background(
+                                                            Capsule()
+                                                                .fill(AntigravityTheme.surfaceElevated)
+                                                        )
+                                                        .accessibilityIdentifier("project-collapsed-count-\(group.id)")
+                                                }
                                             }
                                             .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
                                             .contentShape(Rectangle())
                                         }
                                         .buttonStyle(.plain)
                                         .accessibilityIdentifier("project-header-\(group.id)")
+
+                                        if !group.conversations.isEmpty {
+                                            Button {
+                                                withAnimation(.snappy(duration: 0.2)) {
+                                                    store.toggleProjectCollapsedPersisted(group.id)
+                                                }
+                                            } label: {
+                                                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                                                    .font(.system(size: 11.5, weight: .semibold))
+                                                    .foregroundStyle(AntigravityTheme.textMuted)
+                                                    .frame(width: 32, height: 36)
+                                                    .contentShape(Rectangle())
+                                            }
+                                            .buttonStyle(.plain)
+                                            .accessibilityLabel(isCollapsed ? "Expand \(group.displayName)" : "Collapse \(group.displayName)")
+                                            .accessibilityIdentifier("btn-toggle-project-\(group.id)")
+                                        }
 
                                         Button {
                                             if let onOpenConversation {
@@ -1284,8 +1319,15 @@ public struct AgentsSidebarDrawerView: View {
                                     .padding(.trailing, 10)
                                     .padding(.top, 4)
 
-                                    ForEach(group.conversations) { row in
-                                        drawerConversationItem(row, indented: true)
+                                    if !isCollapsed {
+                                        LazyVStack(alignment: .leading, spacing: 2) {
+                                            ForEach(group.conversations) { row in
+                                                drawerConversationItem(row, indented: true)
+                                                    .onAppear {
+                                                        store.requestPreloadForVisibleConversation(row.id)
+                                                    }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1337,6 +1379,11 @@ public struct AgentsSidebarDrawerView: View {
             }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        .onChange(of: store.isSidebarPresented) { _, presented in
+            if presented {
+                store.scheduleConversationPreload()
+            }
+        }
     }
 
     private func drawerPrimaryNavRow(
@@ -1374,11 +1421,24 @@ public struct AgentsSidebarDrawerView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Text(row.title)
-                    .font(.system(size: 15.5, weight: .regular))
-                    .foregroundStyle(AntigravityTheme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                if row.isTitleLoading {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(AntigravityTheme.textMuted)
+                        Text("Loading...")
+                            .font(.system(size: 14.5, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.textMuted)
+                            .lineLimit(1)
+                    }
+                    .accessibilityIdentifier("drawer-conv-loading-\(row.id)")
+                } else {
+                    Text(row.title)
+                        .font(.system(size: 15.5, weight: .regular))
+                        .foregroundStyle(AntigravityTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
 
                 Spacer(minLength: 6)
 
@@ -1467,7 +1527,7 @@ private struct GlobalConversationSearchSheet: View {
         let base = store.summaries.filter { !$0.isArchived }
         guard !q.isEmpty else { return Array(base.prefix(8)) }
         return base.filter {
-            $0.title.lowercased().contains(q)
+            store.displayTitle(for: $0).lowercased().contains(q)
                 || $0.projectSlug.lowercased().contains(q)
                 || $0.statusSubtitle.lowercased().contains(q)
         }
@@ -1505,17 +1565,30 @@ private struct GlobalConversationSearchSheet: View {
             .padding(.top, 16)
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 6) {
+                LazyVStack(alignment: .leading, spacing: 6) {
                     ForEach(matchingConversations) { summary in
+                        let isTitleLoading = store.isSummaryTitleLoading(summary)
                         Button {
                             onSelectConversation(summary.cascadeId)
                         } label: {
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(summary.title)
-                                        .font(.system(size: 15.5, weight: .medium))
-                                        .foregroundStyle(AntigravityTheme.textPrimary)
-                                        .lineLimit(1)
+                                    if isTitleLoading {
+                                        HStack(spacing: 8) {
+                                            ProgressView()
+                                                .controlSize(.mini)
+                                                .tint(AntigravityTheme.textMuted)
+                                            Text("Loading...")
+                                                .font(.system(size: 14.5, weight: .medium))
+                                                .foregroundStyle(AntigravityTheme.textMuted)
+                                                .lineLimit(1)
+                                        }
+                                    } else {
+                                        Text(store.displayTitle(for: summary))
+                                            .font(.system(size: 15.5, weight: .medium))
+                                            .foregroundStyle(AntigravityTheme.textPrimary)
+                                            .lineLimit(1)
+                                    }
                                     Text("\(summary.projectSlug) · \(summary.statusSubtitle)")
                                         .font(.system(size: 13))
                                         .foregroundStyle(AntigravityTheme.textSecondary)
@@ -1534,6 +1607,9 @@ private struct GlobalConversationSearchSheet: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .onAppear {
+                            store.requestPreloadForVisibleConversation(summary.cascadeId)
+                        }
                     }
                 }
                 .padding(.horizontal, 16)

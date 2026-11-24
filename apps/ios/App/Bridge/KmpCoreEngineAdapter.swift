@@ -129,6 +129,27 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
         }
     }
 
+    public func preloadSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?,
+        requireRemoteRefresh: Bool
+    ) async throws -> [AntigravityData.CascadeStep] {
+        do {
+            let steps = try await coordinator.preloadSteps(
+                cascadeId: cascadeId,
+                knownStepCount: Int32(knownStepCount),
+                isCloud: isCloud,
+                instanceUuidOverride: instanceUuidOverride,
+                requireRemoteRefresh: requireRemoteRefresh
+            )
+            return steps.map(KmpModelConverters.toSwiftStep)
+        } catch {
+            throw KmpModelConverters.mapKmpError(error)
+        }
+    }
+
     public func startConversation(
         workspaceUri: String,
         initialPrompt: String,
@@ -305,6 +326,7 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
     public func probeHostReachability(allowCrossHostFallback: Bool) async throws -> AntigravityData.HostReachabilityProbeResult { throw AntigravityRPCError.invalidEndpoint }
     public func refreshWorkspacesAndSummaries(hostScope: AntigravityData.AgentsHostFilterScope, skipRelayListRefresh: Bool) async throws -> AntigravityData.KmpFederatedSyncResult { throw AntigravityRPCError.invalidEndpoint }
     public func syncSteps(cascadeId: String, knownStepCount: Int, isCloud: Bool, instanceUuidOverride: String?) async throws -> [AntigravityData.CascadeStep] { [] }
+    public func preloadSteps(cascadeId: String, knownStepCount: Int, isCloud: Bool, instanceUuidOverride: String?, requireRemoteRefresh: Bool) async throws -> [AntigravityData.CascadeStep] { [] }
     public func startConversation(workspaceUri: String, initialPrompt: String, modelId: String, cloudProjectId: String?, isCloud: Bool, instanceUuidOverride: String?) async throws -> String { "" }
     public func sendMessage(cascadeId: String, message: String, workspaceUri: String, attachments: [AntigravityData.ComposerAttachmentChip], modelId: String, effort: AntigravityData.ThinkingEffortLevel, mode: AntigravityData.CascadeExecutionMode, agentPersona: String, isCloud: Bool, cloudProjectId: String?, permissionPreset: AntigravityData.AgentPermissionPreset?, instanceUuidOverride: String?, isOptimisticDraft: Bool) async throws -> AntigravityData.KmpSendMessageResult { KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: false, queuedInOutbox: false) }
     public func resolveWaitingInteraction(step: AntigravityData.CascadeStep, decision: AntigravityData.InteractionDecision, workspaceUri: String?, instanceUuidOverride: String?) async throws -> AntigravityData.CascadeUserInteractionPayload { throw AntigravityRPCError.interactionRejected }

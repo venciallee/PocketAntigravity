@@ -164,7 +164,8 @@ enum KmpModelConverters {
             cloudProjectId: kmp.cloudProjectId,
             originInstanceUuid: kmp.originInstanceUuid,
             originHostName: kmp.originHostName,
-            lastUserViewTime: lastViewed
+            lastUserViewTime: lastViewed,
+            hasResolvedTitle: kmp.hasResolvedTitle
         )
     }
 

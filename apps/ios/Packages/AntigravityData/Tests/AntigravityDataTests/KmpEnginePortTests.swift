@@ -386,6 +386,295 @@ final class KmpEnginePortTests: XCTestCase {
         let plannerStep = CascadeStep(cascadeId: "cid-1", stepIndex: 1, type: .plannerResponse, status: .done, plannerResponse: PlannerResponsePayload(response: "hello"))
         XCTAssertNotEqual(CascadeDisplayItem.single(userStep).id, CascadeDisplayItem.single(plannerStep).id)
     }
+
+    @MainActor
+    func testConversationPreloadLoadingTitleDiskCacheWarmupAndReconnectPreservation() async throws {
+        // 1. Verify decoder distinguishes unresolved/placeholder titles from resolved titles & nested prompts
+        let missingSummaryEntry: JSONValue = .object([
+            "stepCount": .int(4),
+            "status": .string("CASCADE_RUN_STATUS_IDLE")
+        ])
+        let decodedUnresolved = try XCTUnwrap(
+            AntigravityRPCClient.decodeTrajectorySummaryEntry(
+                cascadeId: "8b52c910-1111-4000-8000-000000000001",
+                value: missingSummaryEntry
+            )
+        )
+        XCTAssertFalse(decodedUnresolved.hasResolvedTitle)
+        XCTAssertTrue(decodedUnresolved.needsTitleHydration)
+
+        let nestedSummaryEntry: JSONValue = .object([
+            "stepCount": .int(3),
+            "firstUserInputStep": .object([
+                "step": .object([
+                    "userInput": .object([
+                        "userResponse": .string("Investigate Slardar cold start\nperformance")
+                    ])
+                ])
+            ])
+        ])
+        let decodedNested = try XCTUnwrap(
+            AntigravityRPCClient.decodeTrajectorySummaryEntry(
+                cascadeId: "8b52c910-1111-4000-8000-000000000002",
+                value: nestedSummaryEntry
+            )
+        )
+        XCTAssertTrue(decodedNested.hasResolvedTitle)
+        XCTAssertEqual(decodedNested.title, "Investigate Slardar cold start performance")
+
+        // 2. Verify live store shows Loading... (never "New Conversation") for unhydrated remote conversations,
+        //    preloads & caches steps to disk, and survives reconnect + cold start
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AntigravityPreloadTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let projectionStore = LocalProjectionStore(storageDirectory: tempDir)
+        let unhydratedId = "8b52c910-1111-4000-8000-000000000001"
+        let engine = PreloadTestingKmpEngineDouble(unhydratedCascadeId: unhydratedId)
+        let prefs = InMemoryPreferencesStore()
+        let store = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projectionStore,
+            secretStore: InMemorySecretStore(),
+            preferencesStore: prefs,
+            kmpEngine: engine
+        )
+
+        // Before preload resolves, an unhydrated server summary shows Loading...
+        let previewUnresolved = CascadeSummary(
+            cascadeId: unhydratedId,
+            title: "New Conversation",
+            hasResolvedTitle: false,
+            projectSlug: "slardar_app_ai",
+            workspaceUri: "file:///Users/dev/slardar_app_ai",
+            status: .done,
+            stepCount: 2
+        )
+        XCTAssertTrue(store.isSummaryTitleLoading(previewUnresolved))
+        XCTAssertEqual(store.displayTitle(for: previewUnresolved), "Loading...")
+
+        let connected = await store.connectDirectLAN(
+            endpointURLString: "http://127.0.0.1:18787",
+            csrfToken: "csrf-preload-test",
+            hostName: "MacBook-Pro"
+        )
+        XCTAssertTrue(connected)
+
+        // Wait for background preloader to hydrate title and persist debounced projection shard
+        for _ in 0..<40 {
+            let summary = store.summaries.first(where: { $0.cascadeId == unhydratedId })
+            if summary?.hasResolvedTitle == true && !(store.stepsByCascadeId[unhydratedId] ?? []).isEmpty {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let hydratedSummary = try XCTUnwrap(store.summaries.first(where: { $0.cascadeId == unhydratedId }))
+        XCTAssertTrue(hydratedSummary.hasResolvedTitle)
+        XCTAssertEqual(hydratedSummary.title, "Fix Slardar startup tracing")
+        XCTAssertFalse(store.isSummaryTitleLoading(hydratedSummary))
+        XCTAssertEqual(store.stepsByCascadeId[unhydratedId]?.count, 2)
+        let preloadCalls = await engine.preloadCalls
+        XCTAssertTrue(preloadCalls.contains(unhydratedId))
+
+        // Wait briefly for debounced shard persistence to flush to disk
+        try? await Task.sleep(nanoseconds: 450_000_000)
+        let diskCachedSteps = await projectionStore.loadProjectedSteps(cascadeId: unhydratedId)
+        XCTAssertEqual(diskCachedSteps.count, 2)
+
+        // 3. Reconnecting with raw unhydrated server payload must NEVER revert hydrated title back to "New Conversation"
+        let reconnected = await store.connectDirectLAN(
+            endpointURLString: "http://127.0.0.1:18787",
+            csrfToken: "csrf-preload-test",
+            hostName: "MacBook-Pro"
+        )
+        XCTAssertTrue(reconnected)
+        let afterReconnect = try XCTUnwrap(store.summaries.first(where: { $0.cascadeId == unhydratedId }))
+        XCTAssertTrue(afterReconnect.hasResolvedTitle)
+        XCTAssertEqual(afterReconnect.title, "Fix Slardar startup tracing")
+
+        // 4. Persist project collapse state & verify cold-start store restores both cached steps/title and collapsed project
+        XCTAssertFalse(store.isProjectCollapsed("slardar_app_ai"))
+        store.toggleProjectCollapsedPersisted("slardar_app_ai")
+        XCTAssertTrue(store.isProjectCollapsed("slardar_app_ai"))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let coldStore = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projectionStore,
+            secretStore: InMemorySecretStore(),
+            preferencesStore: prefs
+        )
+        await coldStore.hydratePersistedHostProjectionsIfNeeded()
+        await coldStore.loadPersistedV233Preferences()
+
+        let restoredSummary = try XCTUnwrap(coldStore.summaries.first(where: { $0.cascadeId == unhydratedId }))
+        XCTAssertEqual(restoredSummary.title, "Fix Slardar startup tracing")
+        XCTAssertTrue(restoredSummary.hasResolvedTitle)
+        XCTAssertEqual(coldStore.stepsByCascadeId[unhydratedId]?.count, 2)
+        XCTAssertTrue(coldStore.isProjectCollapsed("slardar_app_ai"))
+
+        // Selecting a cached conversation renders immediately without blocking loading state
+        coldStore.selectCascade(unhydratedId)
+        XCTAssertFalse(coldStore.isLoadingSteps)
+        XCTAssertEqual(coldStore.activeSteps.count, 2)
+
+        // Locally created new draft still displays without loading spinner
+        let draftId = coldStore.createConversationInProject("slardar_app_ai")
+        let draftSummary = try XCTUnwrap(coldStore.summaries.first(where: { $0.cascadeId == draftId }))
+        XCTAssertFalse(coldStore.isSummaryTitleLoading(draftSummary))
+    }
+}
+
+private actor PreloadTestingKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "PreloadTestingKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=PreloadTestingKmpEngineDouble" }
+
+    let unhydratedCascadeId: String
+    var preloadCalls: [String] = []
+
+    init(unhydratedCascadeId: String) {
+        self.unhydratedCascadeId = unhydratedCascadeId
+    }
+
+    func connectDirectLan(
+        endpointURLString: String,
+        csrfToken: String,
+        certSHA256: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(
+            latencyMs: 12,
+            workspaces: [
+                WorkspaceInfo(
+                    workspaceUri: "file:///Users/dev/slardar_app_ai",
+                    displayName: "slardar_app_ai",
+                    activeBranch: "main"
+                )
+            ],
+            summaries: [
+                CascadeSummary(
+                    cascadeId: unhydratedCascadeId,
+                    title: "New Conversation",
+                    hasResolvedTitle: false,
+                    projectSlug: "slardar_app_ai",
+                    workspaceUri: "file:///Users/dev/slardar_app_ai",
+                    status: .done,
+                    stepCount: 2
+                )
+            ],
+            resolvedHostname: hostName,
+            isSelectedHostOnline: true
+        )
+    }
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(latencyMs: 10, workspaces: [], summaries: [], isSelectedHostOnline: true)
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        HostReachabilityProbeResult(latencyMs: 10, isSelectedHostOnline: true)
+    }
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult {
+        KmpFederatedSyncResult(workspaces: [], summaries: [], latencyMs: 10)
+    }
+
+    func syncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        [
+            CascadeStep(
+                cascadeId: cascadeId,
+                stepIndex: 0,
+                type: .userInput,
+                status: .done,
+                userInput: "Fix Slardar startup tracing"
+            ),
+            CascadeStep(
+                cascadeId: cascadeId,
+                stepIndex: 1,
+                type: .plannerResponse,
+                status: .done,
+                plannerResponse: PlannerResponsePayload(response: "Tracing optimized and cached.")
+            )
+        ]
+    }
+
+    func preloadSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?,
+        requireRemoteRefresh: Bool
+    ) async throws -> [CascadeStep] {
+        preloadCalls.append(cascadeId)
+        return try await syncSteps(
+            cascadeId: cascadeId,
+            knownStepCount: knownStepCount,
+            isCloud: isCloud,
+            instanceUuidOverride: instanceUuidOverride
+        )
+    }
+
+    func startConversation(
+        workspaceUri: String,
+        initialPrompt: String,
+        modelId: String,
+        cloudProjectId: String?,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> String { "cid-preload-created" }
+
+    func sendMessage(
+        cascadeId: String,
+        message: String,
+        workspaceUri: String,
+        attachments: [ComposerAttachmentChip],
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode,
+        agentPersona: String,
+        isCloud: Bool,
+        cloudProjectId: String?,
+        permissionPreset: AgentPermissionPreset?,
+        instanceUuidOverride: String?,
+        isOptimisticDraft: Bool
+    ) async throws -> KmpSendMessageResult {
+        KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: true, queuedInOutbox: false)
+    }
+
+    func resolveWaitingInteraction(
+        step: CascadeStep,
+        decision: InteractionDecision,
+        workspaceUri: String?,
+        instanceUuidOverride: String?
+    ) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> {
+        AsyncStream { $0.finish() }
+    }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
 }
 
 private final class StreamHub: @unchecked Sendable {

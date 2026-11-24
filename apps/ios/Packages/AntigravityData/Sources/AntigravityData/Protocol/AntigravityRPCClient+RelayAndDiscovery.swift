@@ -1538,15 +1538,19 @@ extension AntigravityRPCClient {
             ? resolved
             : existing
 
-        // 1. Title: never let default placeholder overwrite a real title
-        if existing.title != "New Conversation" && resolved.title == "New Conversation" {
+        // 1. Title: never let an unresolved placeholder overwrite a real/hydrated title
+        if existing.hasResolvedTitle && !resolved.hasResolvedTitle {
             merged.title = existing.title
-        } else if resolved.title != "New Conversation" && existing.title == "New Conversation" {
+            merged.hasResolvedTitle = true
+        } else if resolved.hasResolvedTitle && !existing.hasResolvedTitle {
             merged.title = resolved.title
-        } else if resolved.title != "New Conversation" && resolved.updatedAt >= existing.updatedAt {
+            merged.hasResolvedTitle = true
+        } else if resolved.hasResolvedTitle && resolved.updatedAt >= existing.updatedAt {
             merged.title = resolved.title
+            merged.hasResolvedTitle = true
         } else {
             merged.title = existing.title
+            merged.hasResolvedTitle = existing.hasResolvedTitle || resolved.hasResolvedTitle
         }
 
         // 2. Cloud identity & canonical project binding

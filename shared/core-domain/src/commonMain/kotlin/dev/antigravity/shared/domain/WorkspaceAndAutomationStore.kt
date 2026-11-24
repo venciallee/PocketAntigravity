@@ -10,6 +10,8 @@ import dev.antigravity.shared.model.NewProjectDraft
 import dev.antigravity.shared.model.ProjectDetailTab
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
+import dev.antigravity.shared.platform.InMemoryPreferencesStore
+import dev.antigravity.shared.platform.KeyValuePreferencesStore
 import dev.antigravity.shared.protocol.AntigravityKmpRpcClient
 import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.currentTimeMillis
@@ -17,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlin.random.Random
 
 public data class WorkspaceAndAutomationState(
@@ -39,9 +43,14 @@ public data class WorkspaceAndAutomationState(
  * Native Sidecar Automations (`UE06`), and Composer Add-Context candidates/chips (`UE08`).
  */
 public class WorkspaceAndAutomationStore(
+    private val preferencesStore: KeyValuePreferencesStore = InMemoryPreferencesStore(),
     private val onCapabilityError: (String) -> Unit = {},
 ) {
-    private val _state = MutableStateFlow(WorkspaceAndAutomationState())
+    private val _state = MutableStateFlow(
+        WorkspaceAndAutomationState(
+            collapsedProjectIds = loadPersistedCollapsedProjectIds(preferencesStore),
+        ),
+    )
     public val state: StateFlow<WorkspaceAndAutomationState> = _state.asStateFlow()
 
     public fun seedFixture(
@@ -78,7 +87,11 @@ public class WorkspaceAndAutomationStore(
         _state.update { it.copy(displayOptions = AgentDisplayOptions()) }
     }
 
-    public fun toggleProjectExpanded(projectId: String) {
+    public fun isProjectCollapsed(projectId: String): Boolean =
+        projectId in _state.value.collapsedProjectIds
+
+    public fun toggleProjectExpanded(projectId: String, persist: Boolean = true) {
+        var nextCollapsedSnapshot: Set<String> = emptySet()
         _state.update { prev ->
             val nowCollapsed = projectId !in prev.collapsedProjectIds
             val nextCollapsed = if (nowCollapsed) {
@@ -86,6 +99,7 @@ public class WorkspaceAndAutomationStore(
             } else {
                 prev.collapsedProjectIds - projectId
             }
+            nextCollapsedSnapshot = nextCollapsed
             val nextProjects = prev.projects.map { proj ->
                 if (proj.id == projectId) proj.copy(isExpandedInHome = !nowCollapsed) else proj
             }
@@ -94,10 +108,31 @@ public class WorkspaceAndAutomationStore(
                 projects = nextProjects,
             )
         }
+        if (persist) {
+            persistCollapsedProjectIds(nextCollapsedSnapshot)
+        }
+    }
+
+    private fun persistCollapsedProjectIds(ids: Set<String>) {
+        runCatching {
+            val encoded = Json.encodeToString(ids.sorted())
+            preferencesStore.putString(KEY_COLLAPSED_PROJECT_IDS, encoded)
+        }
     }
 
     public fun selectProject(projectId: String) {
         _state.update { it.copy(selectedProjectId = projectId) }
+    }
+
+    public companion object {
+        internal const val KEY_COLLAPSED_PROJECT_IDS: String = "antigravity.kmp.collapsedProjectIds.v1"
+
+        private fun loadPersistedCollapsedProjectIds(preferencesStore: KeyValuePreferencesStore): Set<String> {
+            val raw = preferencesStore.getString(KEY_COLLAPSED_PROJECT_IDS) ?: return emptySet()
+            return runCatching {
+                Json.decodeFromString<List<String>>(raw).toSet()
+            }.getOrDefault(emptySet())
+        }
     }
 
     public fun selectProjectTab(tab: ProjectDetailTab) {
