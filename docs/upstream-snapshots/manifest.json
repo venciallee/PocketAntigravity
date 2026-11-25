@@ -1,7 +1,28 @@
 {
+  "latestAppVersion": "v2.35.1",
+  "latestCliVersion": "v1.5.17",
+  "pageHashes": {
+    "changelog": "4ec1be16afa3fe078e4cba2d2d5bac0bf3a8e1e0aaf7dc19ff13fa797c78541c",
+    "cli_changelog": "06d52431b7040e1fff74fc6c34967383802641b229425661009fcd90a65bdbd3",
+    "cli_releases_atom": "e38cd3f848cfbfa939b0fb96bff083bda12ce8a2c0202f3c812b0915aeb1f420",
+    "docs/browser": "afaf3ea056972342f402cef44b87f1c37d87a03df8f575e9965a66140ca96915",
+    "docs/dynamic-workflows": "af7458360b7563ddf22dbaf7c06b11eae4dc8be92eb5fc0816f6ac5375af20d7",
+    "docs/features": "5f9e227ee7e51757446eec74b08eb5cd571fe82fa535902eba69bb451fd1b956",
+    "docs/mcp": "40ac8170c5f85978075b397f89952baeb6aa77c413b3b5d94f3441c51a453e63",
+    "docs/models": "b6cb7ff450b75b04ea9e8f6c676fbf83255fb1951cf7391db983530215794084",
+    "docs/permissions": "52f133f5b9a59422342b96655072bcd9cefa37e7d807b12ed472a99d9fbd7148",
+    "docs/plugins": "c4de2559256d32fb44df5419423ad5fbb3aa3b731d69a96c435d03daa1b33890",
+    "docs/remote-agents": "446d81e4aec6fb8317017cd664c3618a0e9ce2a4beb736f3772fecf41da6e702",
+    "docs/remote-control": "6da0dcfc7686be6f38136bae92377e47ace518e58a130d0d723a5486584b524e",
+    "docs/review-changes": "bbae2eb15db8303f4f4345610a16c7b78d699fea4d5833dd05391bfcce40543a",
+    "docs/side-panel": "406ee6ab10cbd6f6afc9a14b379b3d6a7f010a5c9040f1cd36d23e09db61ea6c",
+    "docs/sidecars": "d87b1d056260606405547fee324a632d3f9c1462eeacf7f53779dc5d1ecd6c39",
+    "docs/ssh": "7b82290190d869736a414feafc68a1239706edf56442235fb9add33b648796d2",
+    "docs/swarm": "e59ebb6c05dc6094a23b34d4c7071ed54e352b72fdf80a714962c7edad324541",
+    "docs/teamwork": "7fef51d9811ddf84af210cfde1de4fa0ae5b49e9a70574b50b336593473e31b0",
+    "docs/voice-mode": "02b6b1ceda0ca021ecd2e17fd0ef80e25f525dcb1ae7994915c71783f0c68c34",
+    "sdk_releases_atom": "862934c32217413ca4d21f5c9f905b1266711b37391f542c3893f4dec07b4f23"
+  },
   "schemaVersion": "1.0.0",
-  "latestAppVersion": "v2.33.0",
-  "latestCliVersion": "v1.5.11",
-  "syncedAtUtc": "2026-11-20T08:00:00+00:00",
-  "pageHashes": {}
+  "syncedAtUtc": "2026-11-25T18:18:52.060824+00:00"
 }
