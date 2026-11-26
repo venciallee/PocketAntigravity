@@ -486,6 +486,7 @@ public class CascadeChatDomainStore(
         isDeviceNetworkReachable: Boolean = true,
         isOptimisticDraft: Boolean = false,
         isVerificationMode: Boolean = this.isVerificationMode,
+        isModelAlias: Boolean = false,
     ): SendMessageOutcome {
         val trimmed = message.trim()
         if (trimmed.isEmpty() && attachments.isEmpty()) {
@@ -561,6 +562,7 @@ public class CascadeChatDomainStore(
                 isCloud = isCloud,
                 permissionPreset = permissionPreset,
                 instanceUuidOverride = instanceUuidOverride,
+                isModelAlias = isModelAlias,
             )
 
             projectionStorage.removeOutbox(outboxEntry.id)

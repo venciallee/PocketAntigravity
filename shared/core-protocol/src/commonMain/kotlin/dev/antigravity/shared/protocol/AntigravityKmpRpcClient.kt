@@ -3329,6 +3329,7 @@ public class AntigravityKmpRpcClient(
         isCloud: Boolean = false,
         permissionPreset: AgentPermissionPreset? = null,
         instanceUuidOverride: String? = null,
+        isModelAlias: Boolean = false,
     ) {
         val isRemoteCloud = isCloud || cascadeId.startsWith("v1/")
         val protoModel = JsonStepAndSummaryDecoder.normalizeProtoModelEnum(modelId)
@@ -3430,19 +3431,25 @@ public class AntigravityKmpRpcClient(
             }
         }
 
+        val requestedModelObj = if (isModelAlias) {
+            buildJsonObject { put("alias", modelId) }
+        } else {
+            buildJsonObject { put("model", protoModel) }
+        }
+
         val plannerConfig = buildJsonObject {
             put("conversational", buildJsonObject {
                 put("plannerMode", "CONVERSATIONAL_PLANNER_MODE_DEFAULT")
                 put("agenticMode", mode == CascadeExecutionMode.PLANNING)
             })
             put("toolConfig", toolConfig)
-            put("requestedModel", buildJsonObject { put("model", protoModel) })
+            put("requestedModel", requestedModelObj)
             put("thinkingEffort", effort.protoWireValue)
             if (agentPersona != "Default" && agentPersona.isNotEmpty()) {
                 put("agentPersona", agentPersona)
             }
             put("permissionPreset", effectivePermission.rawValue)
-            if (isRemoteCloud && protoModel.startsWith("MODEL_")) {
+            if (isRemoteCloud && !isModelAlias && protoModel.startsWith("MODEL_")) {
                 put("planModel", protoModel)
             }
         }

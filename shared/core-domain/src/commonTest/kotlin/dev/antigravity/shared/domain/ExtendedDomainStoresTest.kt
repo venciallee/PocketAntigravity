@@ -207,4 +207,93 @@ class ExtendedDomainStoresTest {
         ws.deleteAutomation(client = null, automationId = "auto-bundle-size")
         assertFalse(ws.state.value.automations.any { it.id == "auto-bundle-size" })
     }
+
+    @Test
+    fun modelFirstThenEffortSelectionResolvesVariantsAndClampsUnsupportedEfforts() {
+        val settings = SettingsAndCustomizationStore()
+        val neon = dev.antigravity.shared.model.CascadeModelConfig(
+            modelId = "MODEL_PLACEHOLDER_M41",
+            displayName = "Gemini 4 Neon",
+            subtitle = "Frontier reasoning",
+            thinkingEffort = ThinkingEffortLevel.HIGH,
+            supportedEfforts = listOf(
+                ThinkingEffortLevel.LOW,
+                ThinkingEffortLevel.MEDIUM,
+                ThinkingEffortLevel.HIGH,
+                ThinkingEffortLevel.EXTRA,
+            ),
+            isNewBadge = true,
+            effortVariantModelIds = mapOf(
+                "low" to "MODEL_PLACEHOLDER_M39",
+                "medium" to "MODEL_PLACEHOLDER_M40",
+                "high" to "MODEL_PLACEHOLDER_M41",
+                "xhigh" to "MODEL_PLACEHOLDER_M42",
+            ),
+        )
+        val carbon = dev.antigravity.shared.model.CascadeModelConfig(
+            modelId = "MODEL_PLACEHOLDER_M44",
+            displayName = "Gemini 4 Carbon",
+            subtitle = "Balanced SWE reasoning",
+            thinkingEffort = ThinkingEffortLevel.MEDIUM,
+            supportedEfforts = listOf(
+                ThinkingEffortLevel.LOW,
+                ThinkingEffortLevel.MEDIUM,
+                ThinkingEffortLevel.HIGH,
+            ),
+            effortVariantModelIds = mapOf(
+                "low" to "MODEL_PLACEHOLDER_M43",
+                "medium" to "MODEL_PLACEHOLDER_M44",
+                "high" to "MODEL_PLACEHOLDER_M45",
+            ),
+        )
+        val orchCarbon = dev.antigravity.shared.model.CascadeModelConfig(
+            modelId = "ORCHESTRATOR_CARBON",
+            displayName = "Orchestrator (Carbon)",
+            subtitle = "Carbon plans · Hydrogen executes",
+            isOrchestrator = true,
+            supportedEfforts = emptyList(),
+            isModelAlias = true,
+        )
+
+        settings.applyModelCatalog(
+            dev.antigravity.shared.model.LiveModelCatalogResult(
+                models = listOf(neon, carbon, orchCarbon),
+                defaultModelId = "MODEL_PLACEHOLDER_M41",
+            ),
+        )
+        assertEquals("MODEL_PLACEHOLDER_M41", settings.state.value.selectedModelId)
+        assertEquals(ThinkingEffortLevel.HIGH, settings.state.value.selectedEffort)
+
+        // Step 2: change effort on Gemini 4 Neon -> updates BOTH selectedEffort AND upstream variant modelId
+        settings.selectThinkingEffort(ThinkingEffortLevel.EXTRA)
+        assertEquals(ThinkingEffortLevel.EXTRA, settings.state.value.selectedEffort)
+        assertEquals("MODEL_PLACEHOLDER_M42", settings.state.value.selectedModelId)
+        assertEquals("Gemini 4 Neon", settings.state.value.selectedModel?.displayName)
+
+        // Step 1: switch to Gemini 4 Carbon -> clamps EXTRA down to Carbon's default MEDIUM & variant ID
+        settings.selectModel("MODEL_PLACEHOLDER_M44")
+        assertEquals("Gemini 4 Carbon", settings.state.value.selectedModel?.displayName)
+        assertEquals(ThinkingEffortLevel.MEDIUM, settings.state.value.selectedEffort)
+        assertEquals("MODEL_PLACEHOLDER_M44", settings.state.value.selectedModelId)
+
+        // Unsupported EXTRA on Carbon is ignored
+        settings.selectThinkingEffort(ThinkingEffortLevel.EXTRA)
+        assertEquals(ThinkingEffortLevel.MEDIUM, settings.state.value.selectedEffort)
+        assertEquals("MODEL_PLACEHOLDER_M44", settings.state.value.selectedModelId)
+
+        // Supported HIGH on Carbon resolves to M45
+        settings.selectThinkingEffort(ThinkingEffortLevel.HIGH)
+        assertEquals(ThinkingEffortLevel.HIGH, settings.state.value.selectedEffort)
+        assertEquals("MODEL_PLACEHOLDER_M45", settings.state.value.selectedModelId)
+
+        // Re-tapping Carbon family preserves chosen HIGH effort
+        settings.selectModel("MODEL_PLACEHOLDER_M44")
+        assertEquals(ThinkingEffortLevel.HIGH, settings.state.value.selectedEffort)
+        assertEquals("MODEL_PLACEHOLDER_M45", settings.state.value.selectedModelId)
+
+        // Selecting Orchestrator locks effort & preserves alias flag
+        settings.selectModel("ORCHESTRATOR_CARBON")
+        assertTrue(settings.state.value.isEffortLockedForOrchestrator)
+        assertTrue(settings.state.value.resolvedSelectedIsModelAlias)
+    }
 }

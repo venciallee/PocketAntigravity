@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.Throws
 
 public data class SettingsState(
     public val models: List<CascadeModelConfig> = CascadeModelConfig.liveDefaultCatalog,
@@ -45,16 +46,22 @@ public data class SettingsState(
     public val lastCapabilityError: String? = null,
 ) {
     public val selectedModel: CascadeModelConfig?
-        get() = models.firstOrNull { it.modelId == selectedModelId }
+        get() = models.firstOrNull { it.containsModelId(selectedModelId) }
             ?: if (selectedModelId == "MODEL_GOOGLE_GEMINI_3_1_PRO") {
                 models.firstOrNull {
-                    it.modelId == "MODEL_PLACEHOLDER_M37" ||
+                    it.containsModelId("MODEL_PLACEHOLDER_M37") ||
                         it.displayName.contains("Gemini 3.1 Pro", ignoreCase = true)
                 }
             } else {
                 null
             }
             ?: models.firstOrNull()
+
+    public val resolvedSelectedModelId: String
+        get() = selectedModel?.resolvedModelId(selectedEffort) ?: selectedModelId
+
+    public val resolvedSelectedIsModelAlias: Boolean
+        get() = selectedModel?.resolvedIsModelAlias(selectedEffort) ?: (selectedModel?.isModelAlias == true)
 
     public val isEffortLockedForOrchestrator: Boolean
         get() = selectedModel?.isOrchestrator == true ||
@@ -71,6 +78,7 @@ public class SettingsAndCustomizationStore(
     private val _state = MutableStateFlow(SettingsState())
     public val state: StateFlow<SettingsState> = _state.asStateFlow()
 
+    @Throws(Throwable::class)
     public suspend fun refreshModelCatalog(
         client: AntigravityKmpRpcClient?,
         forceRefresh: Boolean = false,
@@ -79,21 +87,7 @@ public class SettingsAndCustomizationStore(
         _state.update { it.copy(isRefreshingModels = true, lastCapabilityError = null) }
         return try {
             val result = client.fetchModelCatalog(forceRefresh = forceRefresh)
-            _state.update { prev ->
-                val nextSelectedModelId = if (result.models.any { it.modelId == prev.selectedModelId }) {
-                    prev.selectedModelId
-                } else {
-                    result.defaultModelId ?: prev.selectedModelId
-                }
-                prev.copy(
-                    models = result.models.ifEmpty { prev.models },
-                    selectedModelId = nextSelectedModelId,
-                    quota = result.quota ?: prev.quota,
-                    availableAgentPersonas = result.customAgents.ifEmpty { prev.availableAgentPersonas },
-                    isRefreshingModels = false,
-                    lastCapabilityError = null,
-                )
-            }
+            applyModelCatalog(result)
             result
         } catch (c: CancellationException) {
             throw c
@@ -104,17 +98,95 @@ public class SettingsAndCustomizationStore(
         }
     }
 
+    public fun applyModelCatalog(result: LiveModelCatalogResult) {
+        _state.update { prev ->
+            val nextModels = result.models.ifEmpty { prev.models }
+            val matchedByPrevId = nextModels.firstOrNull { it.containsModelId(prev.selectedModelId) }
+            val matchedByDefault = result.defaultModelId?.let { defId ->
+                nextModels.firstOrNull { it.containsModelId(defId) }
+            }
+            val prevDisplayName = prev.selectedModel?.canonicalDisplayName
+            val matchedByName = prevDisplayName?.let { name ->
+                nextModels.firstOrNull { it.canonicalDisplayName.equals(name, ignoreCase = true) }
+            }
+            val matched = matchedByPrevId ?: matchedByDefault ?: matchedByName ?: nextModels.firstOrNull()
+
+            val nextEffort = when {
+                matched == null -> prev.selectedEffort
+                matched.isOrchestrator || matched.supportedEfforts.isEmpty() -> matched.thinkingEffort
+                matchedByPrevId != null -> {
+                    matched.effortForVariantModelId(prev.selectedModelId)
+                        ?: prev.selectedEffort.takeIf { it in matched.supportedEfforts }
+                        ?: matched.clampedEffort(matched.thinkingEffort)
+                }
+                matchedByDefault != null && result.defaultModelId != null -> {
+                    matched.effortForVariantModelId(result.defaultModelId)
+                        ?: matched.clampedEffort(matched.thinkingEffort)
+                }
+                matchedByName != null && prev.selectedEffort in matched.supportedEfforts -> prev.selectedEffort
+                else -> matched.clampedEffort(matched.thinkingEffort)
+            }
+
+            val nextSelectedModelId = matched?.resolvedModelId(nextEffort)
+                ?: result.defaultModelId
+                ?: prev.selectedModelId
+
+            prev.copy(
+                models = nextModels,
+                selectedModelId = nextSelectedModelId,
+                selectedEffort = nextEffort,
+                quota = result.quota ?: prev.quota,
+                availableAgentPersonas = result.customAgents.ifEmpty { prev.availableAgentPersonas },
+                isRefreshingModels = false,
+                lastCapabilityError = null,
+            )
+        }
+    }
+
     public fun selectMode(mode: CascadeExecutionMode) {
         _state.update { it.copy(selectedMode = mode) }
     }
 
     public fun selectModel(modelId: String) {
-        _state.update { it.copy(selectedModelId = modelId) }
+        _state.update { prev ->
+            val target = prev.models.firstOrNull { it.containsModelId(modelId) }
+            if (target == null) {
+                prev.copy(selectedModelId = modelId)
+            } else {
+                val isSameFamily = prev.selectedModel?.modelId == target.modelId
+                val nextEffort = when {
+                    target.isOrchestrator || target.supportedEfforts.isEmpty() -> target.thinkingEffort
+                    else -> {
+                        val explicitVariantEffort = target.effortForVariantModelId(modelId)
+                        when {
+                            explicitVariantEffort != null && (!isSameFamily || modelId != target.modelId) -> explicitVariantEffort
+                            isSameFamily && prev.selectedEffort in target.supportedEfforts -> prev.selectedEffort
+                            target.thinkingEffort in target.supportedEfforts -> target.thinkingEffort
+                            else -> target.supportedEfforts.first()
+                        }
+                    }
+                }
+                val resolvedId = target.resolvedModelId(nextEffort)
+                prev.copy(
+                    selectedModelId = resolvedId,
+                    selectedEffort = nextEffort,
+                )
+            }
+        }
     }
 
     public fun selectThinkingEffort(effort: ThinkingEffortLevel) {
         _state.update { prev ->
-            if (prev.isEffortLockedForOrchestrator) prev else prev.copy(selectedEffort = effort)
+            if (prev.isEffortLockedForOrchestrator) return@update prev
+            val model = prev.selectedModel
+            if (model != null && model.supportedEfforts.isNotEmpty() && effort !in model.supportedEfforts) {
+                return@update prev
+            }
+            val nextModelId = model?.resolvedModelId(effort) ?: prev.selectedModelId
+            prev.copy(
+                selectedModelId = nextModelId,
+                selectedEffort = effort,
+            )
         }
     }
 

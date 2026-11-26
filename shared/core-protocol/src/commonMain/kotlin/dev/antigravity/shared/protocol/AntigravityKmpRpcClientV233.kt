@@ -76,7 +76,7 @@ internal object V233RpcPayloadCodec {
             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { s -> s.isNotEmpty() } }
             ?: emptyList()
 
-        val parsedModels = mutableListOf<CascadeModelConfig>()
+        val rawEntries = mutableListOf<CascadeModelConfig.RawModelVariantEntry>()
         val validIds = linkedSetOf<String>()
         var defaultModelId: String? = nonEmpty(obj.str("defaultModel"))?.takeIf { it != "MODEL_UNSPECIFIED" }
 
@@ -103,51 +103,60 @@ internal object V233RpcPayloadCodec {
                 lowerLabel.contains("pro") ||
                 lowerLabel.contains("opus")
 
+            val explicitEfforts = parseExplicitSupportedEfforts(cfg.arr("supportedEfforts"))
             val supportedEfforts = parseSupportedEfforts(
-                rawEfforts = cfg.arr("supportedEfforts"),
+                explicitEfforts = explicitEfforts,
                 isOrchestrator = isOrchestrator,
                 lowerLabel = lowerLabel,
             )
             val effort = inferDefaultEffort(lowerLabel)
-            val rawTag = nonEmpty(cfg.str("tagTitle"))
+            val rawTag = nonEmpty(cfg.str("tagTitle")) ?: nonEmpty(cfg.str("badge"))
             val rawDesc = nonEmpty(cfg.str("description"))
             val cleanDesc = rawDesc?.takeUnless { CascadeModelConfig.isGenericBadgeLabel(it) }
             val badgeTitle = rawTag ?: if (rawDesc != null && cleanDesc == null) rawDesc else null
             val baseSubtitle = cleanDesc ?: CascadeModelConfig.descriptiveSubtitle(label)
             val remFrac = cfg.obj("quotaInfo")?.dbl("remainingFraction")
-            val desc = if (remFrac != null && remFrac < 0.99) {
+            val quotaSuffix = if (remFrac != null && remFrac < 0.99) {
                 val pct = (remFrac * 100.0).roundToInt().coerceIn(0, 100)
-                val suffix = if (pct == 0) "Quota exhausted" else "$pct% quota left"
-                "$baseSubtitle · $suffix"
+                if (pct == 0) "Quota exhausted" else "$pct% quota left"
             } else {
-                baseSubtitle
+                null
             }
-            val isNew = (cfg.bool("isNew") == true) || lowerLabel.contains("gemini 4") || isOrchestrator
+            val desc = quotaSuffix?.let { "$baseSubtitle · $it" } ?: baseSubtitle
+            val hasNonNewTag = badgeTitle != null && !badgeTitle.equals("New", ignoreCase = true)
+            val isNew = !hasNonNewTag && ((cfg.bool("isNew") == true) || lowerLabel.contains("gemini 4") || isOrchestrator)
             val isRecommended = cfg.bool("isRecommended") == true
             if (isRecommended && defaultModelId == null) {
                 defaultModelId = modelId
             }
 
-            parsedModels.add(
-                CascadeModelConfig(
-                    modelId = modelId,
-                    displayName = label,
-                    subtitle = desc,
-                    mode = CascadeExecutionMode.PLANNING,
-                    supportsThinking = supportsThinking,
-                    isThinkingEnabled = supportsThinking,
-                    thinkingEffort = effort,
-                    badgeTag = badgeTitle ?: if (isNew) "New" else null,
-                    agentPersona = "Default",
-                    isDefault = isRecommended || modelId == defaultModelId,
-                    isOrchestrator = isOrchestrator,
-                    plannerModelName = nonEmpty(cfg.str("plannerModelName")),
-                    executorModelName = nonEmpty(cfg.str("executorModelName")),
-                    supportedEfforts = supportedEfforts,
-                    isNewBadge = isNew,
-                    requiresUpgradeNote = nonEmpty(cfg.str("upgradeNote")),
-                    isModelAlias = isAlias,
-                )
+            val config = CascadeModelConfig(
+                modelId = modelId,
+                displayName = label,
+                subtitle = desc,
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = supportsThinking,
+                isThinkingEnabled = supportsThinking,
+                thinkingEffort = effort,
+                badgeTag = badgeTitle ?: if (isNew) "New" else null,
+                agentPersona = "Default",
+                isDefault = isRecommended || modelId == defaultModelId,
+                isOrchestrator = isOrchestrator,
+                plannerModelName = nonEmpty(cfg.str("plannerModelName")),
+                executorModelName = nonEmpty(cfg.str("executorModelName")),
+                supportedEfforts = supportedEfforts,
+                isNewBadge = isNew,
+                requiresUpgradeNote = nonEmpty(cfg.str("upgradeNote")),
+                isModelAlias = isAlias,
+            )
+            rawEntries.add(
+                CascadeModelConfig.RawModelVariantEntry(
+                    config = config,
+                    explicitSupportedEfforts = explicitEfforts,
+                    isRecommended = isRecommended,
+                    rawDescription = cleanDesc,
+                    quotaSuffix = quotaSuffix,
+                ),
             )
         }
 
@@ -160,8 +169,13 @@ internal object V233RpcPayloadCodec {
             defaultModelId = overrideAlias
         }
 
+        val groupedModels = CascadeModelConfig.groupEffortVariants(
+            entries = rawEntries,
+            defaultModelId = defaultModelId,
+        )
+
         return DecodedModelCatalogSlice(
-            models = parsedModels,
+            models = groupedModels,
             validIds = validIds,
             defaultModelId = defaultModelId,
             quota = quota,
@@ -193,7 +207,7 @@ internal object V233RpcPayloadCodec {
             orderedKeys.addAll(modelsMap.keys.sorted())
         }
 
-        val parsedModels = mutableListOf<CascadeModelConfig>()
+        val rawEntries = mutableListOf<CascadeModelConfig.RawModelVariantEntry>()
         val validIds = linkedSetOf<String>()
         for (key in orderedKeys) {
             val details = modelsMap.obj(key) ?: continue
@@ -207,9 +221,14 @@ internal object V233RpcPayloadCodec {
             val isOrchestrator = (details.bool("isOrchestrator") == true) || lowerLabel.contains("orchestrator")
             val supportsThinking = (details.bool("supportsThinking") == true) ||
                 lowerLabel.contains("thinking") ||
-                lowerLabel.contains("neon")
+                lowerLabel.contains("neon") ||
+                lowerLabel.contains("carbon") ||
+                lowerLabel.contains("argon") ||
+                lowerLabel.contains("hydrogen") ||
+                lowerLabel.contains("opus")
+            val explicitEfforts = parseExplicitSupportedEfforts(details.arr("supportedEfforts"))
             val supportedEfforts = parseSupportedEfforts(
-                rawEfforts = details.arr("supportedEfforts"),
+                explicitEfforts = explicitEfforts,
                 isOrchestrator = isOrchestrator,
                 lowerLabel = lowerLabel,
             )
@@ -219,31 +238,39 @@ internal object V233RpcPayloadCodec {
             val cleanDesc = rawDesc?.takeUnless { CascadeModelConfig.isGenericBadgeLabel(it) }
             val badgeTitle = rawTag ?: if (rawDesc != null && cleanDesc == null) rawDesc else null
             val subtitle = cleanDesc ?: CascadeModelConfig.descriptiveSubtitle(displayName)
-            val isNew = lowerLabel.contains("gemini 4") || isOrchestrator
+            val hasNonNewTag = badgeTitle != null && !badgeTitle.equals("New", ignoreCase = true)
+            val isNew = !hasNonNewTag && (lowerLabel.contains("gemini 4") || isOrchestrator)
 
-            parsedModels.add(
-                CascadeModelConfig(
-                    modelId = modelId,
-                    displayName = displayName,
-                    subtitle = subtitle,
-                    mode = CascadeExecutionMode.PLANNING,
-                    supportsThinking = supportsThinking,
-                    isThinkingEnabled = supportsThinking,
-                    thinkingEffort = effort,
-                    badgeTag = badgeTitle ?: if (isNew) "New" else null,
-                    agentPersona = "Default",
-                    isDefault = parsedModels.isEmpty(),
-                    isOrchestrator = isOrchestrator,
-                    supportedEfforts = supportedEfforts,
-                    isNewBadge = isNew,
-                    isModelAlias = !modelId.startsWith("MODEL_"),
-                )
+            val config = CascadeModelConfig(
+                modelId = modelId,
+                displayName = displayName,
+                subtitle = subtitle,
+                mode = CascadeExecutionMode.PLANNING,
+                supportsThinking = supportsThinking,
+                isThinkingEnabled = supportsThinking,
+                thinkingEffort = effort,
+                badgeTag = badgeTitle ?: if (isNew) "New" else null,
+                agentPersona = "Default",
+                isDefault = rawEntries.isEmpty(),
+                isOrchestrator = isOrchestrator,
+                supportedEfforts = supportedEfforts,
+                isNewBadge = isNew,
+                isModelAlias = !modelId.startsWith("MODEL_"),
+            )
+            rawEntries.add(
+                CascadeModelConfig.RawModelVariantEntry(
+                    config = config,
+                    explicitSupportedEfforts = explicitEfforts,
+                    isRecommended = rawEntries.isEmpty(),
+                    rawDescription = cleanDesc,
+                ),
             )
         }
+        val groupedModels = CascadeModelConfig.groupEffortVariants(entries = rawEntries, defaultModelId = null)
         return DecodedModelCatalogSlice(
-            models = parsedModels,
+            models = groupedModels,
             validIds = validIds,
-            defaultModelId = parsedModels.firstOrNull()?.modelId,
+            defaultModelId = groupedModels.firstOrNull()?.modelId,
             quota = quota,
             inlineAgents = emptyList(),
         )
@@ -295,25 +322,28 @@ internal object V233RpcPayloadCodec {
         return names
     }
 
+    private fun parseExplicitSupportedEfforts(rawEfforts: JsonArray?): List<ThinkingEffortLevel>? {
+        if (rawEfforts == null || rawEfforts.isEmpty()) return null
+        val mapped = rawEfforts.mapNotNull { el ->
+            val raw = (el as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            CascadeModelConfig.parseEffortToken(raw)
+        }.toSet()
+        if (mapped.isEmpty()) return null
+        return listOf(
+            ThinkingEffortLevel.LOW,
+            ThinkingEffortLevel.MEDIUM,
+            ThinkingEffortLevel.HIGH,
+            ThinkingEffortLevel.EXTRA,
+        ).filter { it in mapped }
+    }
+
     private fun parseSupportedEfforts(
-        rawEfforts: JsonArray?,
+        explicitEfforts: List<ThinkingEffortLevel>?,
         isOrchestrator: Boolean,
         lowerLabel: String,
     ): List<ThinkingEffortLevel> {
         if (isOrchestrator) return emptyList()
-        if (rawEfforts != null) {
-            val mapped = rawEfforts.mapNotNull { el ->
-                val raw = (el as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase() ?: return@mapNotNull null
-                when (raw) {
-                    "xhigh", "extra", "x-high" -> ThinkingEffortLevel.EXTRA
-                    "high" -> ThinkingEffortLevel.HIGH
-                    "medium", "med" -> ThinkingEffortLevel.MEDIUM
-                    "low", "minimal" -> ThinkingEffortLevel.LOW
-                    else -> null
-                }
-            }
-            if (mapped.isNotEmpty()) return mapped
-        }
+        if (!explicitEfforts.isNullOrEmpty()) return explicitEfforts
         return if (lowerLabel.contains("neon") || lowerLabel.contains("hydrogen")) {
             listOf(
                 ThinkingEffortLevel.LOW,
@@ -327,7 +357,8 @@ internal object V233RpcPayloadCodec {
     }
 
     private fun inferDefaultEffort(lowerLabel: String): ThinkingEffortLevel = when {
-        lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") ->
+        lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") ||
+            lowerLabel.contains("(extra") || lowerLabel.contains("(max)") ->
             ThinkingEffortLevel.EXTRA
         lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") -> ThinkingEffortLevel.LOW
         lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") ->

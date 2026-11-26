@@ -2076,48 +2076,7 @@ extension AntigravitySessionStore {
             usageQuota = quota
             await projectionStore.saveUsageQuota(quota)
         }
-        if !result.models.isEmpty {
-            availableModels = result.models
-            availableAgents = result.agents.isEmpty ? ["Default"] : result.agents
-
-            let currentMode = selectedModelConfig.mode
-            let currentPersona = availableAgents.contains(selectedModelConfig.agentPersona)
-                ? selectedModelConfig.agentPersona
-                : (availableAgents.first ?? "Default")
-
-            let matchedModel: CascadeModelConfig = {
-                if let exact = result.models.first(where: { $0.modelId == selectedModelConfig.modelId }) {
-                    return exact
-                }
-                if let defId = result.defaultModelId,
-                   let defMatch = result.models.first(where: { $0.modelId == defId }) {
-                    return defMatch
-                }
-                return result.models[0]
-            }()
-
-            let preservedEffort = matchedModel.supportedEfforts.contains(selectedModelConfig.effort)
-                ? selectedModelConfig.effort
-                : matchedModel.effort
-
-            selectedModelConfig = CascadeModelConfig(
-                modelId: matchedModel.modelId,
-                displayName: matchedModel.displayName,
-                subtitle: matchedModel.subtitle,
-                hasThinkingBadge: matchedModel.hasThinkingBadge,
-                requiresUpgradeNote: matchedModel.requiresUpgradeNote,
-                mode: matchedModel.isOrchestrator ? .planning : currentMode,
-                agentPersona: currentPersona,
-                effort: matchedModel.isOrchestrator ? .high : preservedEffort,
-                isModelAlias: matchedModel.isModelAlias,
-                badgeTitle: matchedModel.badgeTitle,
-                isOrchestrator: matchedModel.isOrchestrator,
-                plannerModelName: matchedModel.plannerModelName,
-                executorModelName: matchedModel.executorModelName,
-                supportedEfforts: matchedModel.supportedEfforts,
-                isNewBadge: matchedModel.isNewBadge
-            )
-        }
+        applyModelCatalogResult(result)
 
         let cloudRepos = await client.fetchCloudGitHubRepos()
         if !cloudRepos.isEmpty {
@@ -2125,34 +2084,110 @@ extension AntigravitySessionStore {
         }
     }
 
+    public func applyModelCatalogResult(_ result: AntigravityRPCClient.LiveModelCatalogResult) {
+        if let quota = result.usageQuota {
+            usageQuota = quota
+        }
+        guard !result.models.isEmpty else { return }
+        availableModels = result.models
+        availableAgents = result.agents.isEmpty ? ["Default"] : result.agents
+
+        let currentMode = selectedModelConfig.mode
+        let currentPersona = availableAgents.contains(selectedModelConfig.agentPersona)
+            ? selectedModelConfig.agentPersona
+            : (availableAgents.first ?? "Default")
+
+        let matchedByPrevId = result.models.first(where: { $0.containsModelId(selectedModelConfig.modelId) })
+        let matchedByDefault = result.defaultModelId.flatMap { defId in
+            result.models.first(where: { $0.containsModelId(defId) })
+        }
+        let prevName = selectedModelConfig.canonicalDisplayName
+        let matchedByName = result.models.first(where: {
+            $0.canonicalDisplayName.caseInsensitiveCompare(prevName) == .orderedSame
+        })
+        let matchedModel = matchedByPrevId ?? matchedByDefault ?? matchedByName ?? result.models[0]
+
+        let resolvedEffort: ThinkingEffortLevel = {
+            if matchedModel.isOrchestrator || matchedModel.supportedEfforts.isEmpty {
+                return matchedModel.isOrchestrator ? .high : matchedModel.effort
+            }
+            if matchedByPrevId != nil {
+                if let variantEffort = matchedModel.effort(forVariantModelId: selectedModelConfig.modelId) {
+                    return variantEffort
+                }
+                if matchedModel.supportedEfforts.contains(selectedModelConfig.effort) {
+                    return selectedModelConfig.effort
+                }
+            } else if matchedByDefault != nil, let defId = result.defaultModelId,
+                      let defVariantEffort = matchedModel.effort(forVariantModelId: defId) {
+                return defVariantEffort
+            } else if matchedByName != nil,
+                      matchedModel.supportedEfforts.contains(selectedModelConfig.effort) {
+                return selectedModelConfig.effort
+            }
+            return matchedModel.clampedEffort(matchedModel.effort)
+        }()
+
+        var nextConfig = matchedModel.selectingEffort(resolvedEffort)
+        nextConfig.mode = matchedModel.isOrchestrator ? .planning : currentMode
+        nextConfig.agentPersona = currentPersona
+        selectedModelConfig = nextConfig
+    }
+
+    /// Selects a model family first, resolving its initial effort within `option.supportedEfforts`
+    /// and updating `modelId` to the exact upstream effort variant when applicable.
+    public func selectModel(_ option: CascadeModelConfig) {
+        let isSameFamily = option.containsModelId(selectedModelConfig.modelId)
+        let targetEffort: ThinkingEffortLevel = {
+            if option.isOrchestrator || option.supportedEfforts.isEmpty {
+                return option.isOrchestrator ? .high : option.effort
+            }
+            if isSameFamily, option.supportedEfforts.contains(selectedModelConfig.effort) {
+                return selectedModelConfig.effort
+            }
+            return option.clampedEffort(option.effort)
+        }()
+        var nextConfig = option.selectingEffort(targetEffort)
+        nextConfig.mode = option.isOrchestrator ? .planning : selectedModelConfig.mode
+        nextConfig.agentPersona = selectedModelConfig.agentPersona
+        selectedModelConfig = nextConfig
+    }
+
+    /// Selects a thinking effort for the currently selected model family, rejecting efforts
+    /// unsupported by that model and updating `modelId` / `isModelAlias` to the matching variant.
+    public func selectThinkingEffort(_ effort: ThinkingEffortLevel) {
+        guard !selectedModelConfig.isOrchestrator else { return }
+        let family = availableModels.first(where: { $0.containsModelId(selectedModelConfig.modelId) }) ?? selectedModelConfig
+        if !family.supportedEfforts.isEmpty && !family.supportedEfforts.contains(effort) {
+            return
+        }
+        var nextConfig = family.selectingEffort(effort)
+        nextConfig.mode = selectedModelConfig.mode
+        nextConfig.agentPersona = selectedModelConfig.agentPersona
+        selectedModelConfig = nextConfig
+    }
+
     internal func applyRecordedConversationConfig(from step: CascadeStep) {
         guard step.recordedExecutionMode != nil || step.recordedModelId != nil else { return }
         let nextMode = step.recordedExecutionMode ?? selectedModelConfig.mode
         var matchedModel: CascadeModelConfig? = nil
+        var matchedVariantEffort: ThinkingEffortLevel? = nil
         if let rawId = step.recordedModelId, !rawId.isEmpty {
-            let normalized = AntigravityRPCClient.normalizeProtoModelEnum(rawId)
-            matchedModel = availableModels.first(where: {
-                $0.modelId == rawId || AntigravityRPCClient.normalizeProtoModelEnum($0.modelId) == normalized
-            })
+            if let direct = availableModels.first(where: { $0.containsModelId(rawId) }) {
+                matchedModel = direct
+                matchedVariantEffort = direct.effort(forVariantModelId: rawId)
+            } else {
+                let normalized = AntigravityRPCClient.normalizeProtoModelEnum(rawId)
+                matchedModel = availableModels.first(where: {
+                    AntigravityRPCClient.normalizeProtoModelEnum($0.modelId) == normalized
+                })
+            }
         }
         if let m = matchedModel {
-            selectedModelConfig = CascadeModelConfig(
-                modelId: m.modelId,
-                displayName: m.displayName,
-                subtitle: m.subtitle,
-                hasThinkingBadge: m.hasThinkingBadge,
-                requiresUpgradeNote: m.requiresUpgradeNote,
-                mode: m.isOrchestrator ? .planning : nextMode,
-                agentPersona: selectedModelConfig.agentPersona,
-                effort: m.effort,
-                isModelAlias: m.isModelAlias,
-                badgeTitle: m.badgeTitle,
-                isOrchestrator: m.isOrchestrator,
-                plannerModelName: m.plannerModelName,
-                executorModelName: m.executorModelName,
-                supportedEfforts: m.supportedEfforts,
-                isNewBadge: m.isNewBadge
-            )
+            var nextConfig = matchedVariantEffort.map { m.selectingEffort($0) } ?? m
+            nextConfig.mode = m.isOrchestrator ? .planning : nextMode
+            nextConfig.agentPersona = selectedModelConfig.agentPersona
+            selectedModelConfig = nextConfig
         } else {
             selectedModelConfig.mode = nextMode
         }

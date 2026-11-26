@@ -1314,6 +1314,265 @@ public actor AntigravityRPCClient {
     /// Queries the connected `language_server` / `agy` daemon for its live model, custom agent catalog,
     /// and dual-pool usage quota via `GetCascadeModelConfigs`, `GetCascadeModelConfigData`, `GetAvailableModels`,
     /// and `GetAllCustomAgentConfigs`.
+    internal struct DecodedModelCatalogSlice: Sendable {
+        let models: [CascadeModelConfig]
+        let validIds: Set<String>
+        let defaultModelId: String?
+        let usageQuota: ModelUsageQuota?
+    }
+
+    internal static func parseExplicitSupportedEfforts(_ rawArray: [JSONValue]?) -> [ThinkingEffortLevel]? {
+        guard let rawArray, !rawArray.isEmpty else { return nil }
+        let mapped = Set(rawArray.compactMap { val -> ThinkingEffortLevel? in
+            guard let raw = val.stringValue else { return nil }
+            return CascadeModelConfig.parseEffortToken(raw)
+        })
+        guard !mapped.isEmpty else { return nil }
+        let order: [ThinkingEffortLevel] = [.low, .medium, .high, .extra]
+        return order.filter { mapped.contains($0) }
+    }
+
+    internal static func parseClientModelConfigsResponse(_ obj: [String: JSONValue]) -> DecodedModelCatalogSlice? {
+        guard let configs = obj["clientModelConfigs"]?.arrayValue, !configs.isEmpty else {
+            return nil
+        }
+        var parsedQuota: ModelUsageQuota? = nil
+        if let quotaObj = obj["usageQuota"]?.objectValue ?? obj["quotaSummary"]?.objectValue {
+            parsedQuota = Self.parseUsageQuota(quotaObj)
+        }
+        var rawEntries: [CascadeModelConfig.RawModelVariantEntry] = []
+        var validIds = Set<String>()
+        var defaultModelId: String? = Self.nonEmptyString(obj["defaultModel"]?.stringValue)
+            .flatMap { $0 == "MODEL_UNSPECIFIED" ? nil : $0 }
+
+        for entry in configs {
+            guard let cfg = entry.objectValue else { continue }
+            if cfg["disabled"]?.boolValue == true { continue }
+            let label = (cfg["label"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty else { continue }
+            let moa = cfg["modelOrAlias"]?.objectValue
+            let rawModel = moa?["model"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawAlias = moa?["alias"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isAlias = (rawModel == nil || rawModel == "MODEL_UNSPECIFIED" || rawModel?.isEmpty == true) && (rawAlias?.isEmpty == false)
+            guard let modelId = isAlias ? rawAlias : rawModel,
+                  !modelId.isEmpty,
+                  modelId != "MODEL_UNSPECIFIED",
+                  !validIds.contains(modelId) else {
+                continue
+            }
+            validIds.insert(modelId)
+
+            let lowerLabel = label.lowercased()
+            let isOrchestrator = (cfg["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
+            let supportsThinking = (cfg["supportsThoughtCirculation"]?.boolValue ?? false)
+                || (cfg["supportsThinking"]?.boolValue ?? false)
+                || lowerLabel.contains("thinking")
+                || lowerLabel.contains("neon")
+                || lowerLabel.contains("carbon")
+                || lowerLabel.contains("argon")
+                || lowerLabel.contains("hydrogen")
+                || lowerLabel.contains("pro")
+                || lowerLabel.contains("opus")
+            let explicitEfforts = Self.parseExplicitSupportedEfforts(cfg["supportedEfforts"]?.arrayValue)
+            let supportedEfforts: [ThinkingEffortLevel] = {
+                if isOrchestrator { return [] }
+                if let explicitEfforts, !explicitEfforts.isEmpty { return explicitEfforts }
+                if lowerLabel.contains("neon") || lowerLabel.contains("hydrogen") {
+                    return [.low, .medium, .high, .extra]
+                }
+                return [.low, .medium, .high]
+            }()
+            let effort: ThinkingEffortLevel = {
+                if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)")
+                    || lowerLabel.contains("(extra") || lowerLabel.contains("(max)") {
+                    return .extra
+                }
+                if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                    return .low
+                }
+                if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                    return .medium
+                }
+                return .high
+            }()
+            let rawTag = Self.nonEmptyString(cfg["tagTitle"]?.stringValue)
+                ?? Self.nonEmptyString(cfg["badge"]?.stringValue)
+            let rawDesc = Self.nonEmptyString(cfg["description"]?.stringValue)
+            let cleanDesc: String? = {
+                guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                return rawDesc
+            }()
+            let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+            let baseSubtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
+            let quotaSuffix: String? = {
+                if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue, rem < 0.99 {
+                    let pct = max(0, min(100, Int((rem * 100.0).rounded())))
+                    return pct == 0 ? "Quota exhausted" : "\(pct)% quota left"
+                }
+                return nil
+            }()
+            let desc = quotaSuffix.map { "\(baseSubtitle) · \($0)" } ?? baseSubtitle
+            let hasNonNewTag = badgeTitle != nil && badgeTitle?.caseInsensitiveCompare("New") != .orderedSame
+            let isNew = !hasNonNewTag && ((cfg["isNew"]?.boolValue ?? false) || lowerLabel.contains("gemini 4") || isOrchestrator)
+            let isRecommended = cfg["isRecommended"]?.boolValue == true
+            if isRecommended && defaultModelId == nil {
+                defaultModelId = modelId
+            }
+
+            let config = CascadeModelConfig(
+                modelId: modelId,
+                displayName: label,
+                subtitle: desc,
+                hasThinkingBadge: supportsThinking,
+                requiresUpgradeNote: Self.nonEmptyString(cfg["upgradeNote"]?.stringValue),
+                mode: .planning,
+                agentPersona: "Default",
+                effort: effort,
+                isModelAlias: isAlias,
+                badgeTitle: badgeTitle,
+                isOrchestrator: isOrchestrator,
+                plannerModelName: Self.nonEmptyString(cfg["plannerModelName"]?.stringValue),
+                executorModelName: Self.nonEmptyString(cfg["executorModelName"]?.stringValue),
+                supportedEfforts: supportedEfforts,
+                isNewBadge: isNew
+            )
+            rawEntries.append(
+                CascadeModelConfig.RawModelVariantEntry(
+                    config: config,
+                    explicitSupportedEfforts: explicitEfforts,
+                    isRecommended: isRecommended,
+                    rawDescription: cleanDesc,
+                    quotaSuffix: quotaSuffix
+                )
+            )
+        }
+
+        let overrideMoa = obj["defaultOverrideModelConfig"]?.objectValue?["modelOrAlias"]?.objectValue
+        if let defM = Self.nonEmptyString(overrideMoa?["model"]?.stringValue), defM != "MODEL_UNSPECIFIED" {
+            defaultModelId = defM
+        } else if let defA = Self.nonEmptyString(overrideMoa?["alias"]?.stringValue) {
+            defaultModelId = defA
+        }
+
+        let groupedModels = CascadeModelConfig.groupEffortVariants(rawEntries, defaultModelId: defaultModelId)
+        return DecodedModelCatalogSlice(
+            models: groupedModels,
+            validIds: validIds,
+            defaultModelId: defaultModelId,
+            usageQuota: parsedQuota
+        )
+    }
+
+    internal static func parseAvailableModelsResponse(_ availWrapper: [String: JSONValue]) -> DecodedModelCatalogSlice {
+        let resp = availWrapper["response"]?.objectValue ?? availWrapper
+        let parsedQuota = resp["usageQuota"]?.objectValue.map { Self.parseUsageQuota($0) }
+        guard let modelsMap = resp["models"]?.objectValue, !modelsMap.isEmpty else {
+            return DecodedModelCatalogSlice(models: [], validIds: [], defaultModelId: nil, usageQuota: parsedQuota)
+        }
+
+        var orderedKeys: [String] = []
+        let sorts = resp["agentModelSorts"]?.arrayValue ?? resp["battleModeModelSorts"]?.arrayValue ?? []
+        for sort in sorts {
+            for grp in sort.objectValue?["groups"]?.arrayValue ?? [] {
+                for midVal in grp.objectValue?["modelIds"]?.arrayValue ?? [] {
+                    if let mid = Self.nonEmptyString(midVal.stringValue), !orderedKeys.contains(mid) {
+                        orderedKeys.append(mid)
+                    }
+                }
+            }
+        }
+        if orderedKeys.isEmpty {
+            orderedKeys = modelsMap.keys.sorted()
+        }
+
+        var rawEntries: [CascadeModelConfig.RawModelVariantEntry] = []
+        var validIds = Set<String>()
+        for key in orderedKeys {
+            guard let details = modelsMap[key]?.objectValue else { continue }
+            if details["disabled"]?.boolValue == true || details["isInternal"]?.boolValue == true {
+                continue
+            }
+            let displayName = Self.nonEmptyString(details["displayName"]?.stringValue) ?? key
+            let protoEnum = Self.nonEmptyString(details["model"]?.stringValue)
+            let modelId = (protoEnum != nil && protoEnum != "MODEL_UNSPECIFIED") ? protoEnum! : key
+            guard !validIds.contains(modelId) else { continue }
+            validIds.insert(modelId)
+
+            let lowerLabel = displayName.lowercased()
+            let isOrchestrator = (details["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
+            let supportsThinking = (details["supportsThinking"]?.boolValue ?? false)
+                || lowerLabel.contains("thinking")
+                || lowerLabel.contains("neon")
+                || lowerLabel.contains("carbon")
+                || lowerLabel.contains("argon")
+                || lowerLabel.contains("hydrogen")
+                || lowerLabel.contains("opus")
+            let explicitEfforts = Self.parseExplicitSupportedEfforts(details["supportedEfforts"]?.arrayValue)
+            let supportedEfforts: [ThinkingEffortLevel] = {
+                if isOrchestrator { return [] }
+                if let explicitEfforts, !explicitEfforts.isEmpty { return explicitEfforts }
+                return (lowerLabel.contains("neon") || lowerLabel.contains("hydrogen"))
+                    ? [.low, .medium, .high, .extra] : [.low, .medium, .high]
+            }()
+            let effort: ThinkingEffortLevel = {
+                if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)")
+                    || lowerLabel.contains("(extra") || lowerLabel.contains("(max)") {
+                    return .extra
+                }
+                if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
+                    return .low
+                }
+                if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
+                    return .medium
+                }
+                return .high
+            }()
+            let rawTag = Self.nonEmptyString(details["tagTitle"]?.stringValue)
+                ?? Self.nonEmptyString(details["badge"]?.stringValue)
+            let rawDesc = Self.nonEmptyString(details["description"]?.stringValue)
+            let cleanDesc: String? = {
+                guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
+                return rawDesc
+            }()
+            let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
+            let subtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: displayName)
+            let hasNonNewTag = badgeTitle != nil && badgeTitle?.caseInsensitiveCompare("New") != .orderedSame
+            let isNew = !hasNonNewTag && (lowerLabel.contains("gemini 4") || isOrchestrator)
+
+            let config = CascadeModelConfig(
+                modelId: modelId,
+                displayName: displayName,
+                subtitle: subtitle,
+                hasThinkingBadge: supportsThinking,
+                requiresUpgradeNote: nil,
+                mode: .planning,
+                agentPersona: "Default",
+                effort: effort,
+                isModelAlias: !modelId.hasPrefix("MODEL_"),
+                badgeTitle: badgeTitle,
+                isOrchestrator: isOrchestrator,
+                supportedEfforts: supportedEfforts,
+                isNewBadge: isNew
+            )
+            rawEntries.append(
+                CascadeModelConfig.RawModelVariantEntry(
+                    config: config,
+                    explicitSupportedEfforts: explicitEfforts,
+                    isRecommended: rawEntries.isEmpty,
+                    rawDescription: cleanDesc
+                )
+            )
+        }
+
+        let groupedModels = CascadeModelConfig.groupEffortVariants(rawEntries, defaultModelId: nil)
+        return DecodedModelCatalogSlice(
+            models: groupedModels,
+            validIds: validIds,
+            defaultModelId: groupedModels.first?.modelId,
+            usageQuota: parsedQuota
+        )
+    }
+
     public func fetchModelCatalog(forceRefresh: Bool = false) async -> LiveModelCatalogResult {
         if forceRefresh {
             self.cachedValidUpstreamModels = nil
@@ -1334,115 +1593,13 @@ public actor AntigravityRPCClient {
         ]
         for method in ["GetCascadeModelConfigs", "GetCascadeModelConfigData"] {
             if let obj = try? await callUnaryJSON(method: method, body: metaReq, timeoutInterval: 8.0),
-               let configs = obj["clientModelConfigs"]?.arrayValue,
-               !configs.isEmpty {
-                if let quotaObj = obj["usageQuota"]?.objectValue ?? obj["quotaSummary"]?.objectValue {
-                    parsedQuota = Self.parseUsageQuota(quotaObj)
-                }
-                for entry in configs {
-                    guard let cfg = entry.objectValue else { continue }
-                    if cfg["disabled"]?.boolValue == true { continue }
-                    let label = (cfg["label"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !label.isEmpty else { continue }
-                    let moa = cfg["modelOrAlias"]?.objectValue
-                    let rawModel = moa?["model"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let rawAlias = moa?["alias"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let isAlias = (rawModel == nil || rawModel == "MODEL_UNSPECIFIED" || rawModel?.isEmpty == true) && (rawAlias?.isEmpty == false)
-                    guard let modelId = isAlias ? rawAlias : rawModel,
-                          !modelId.isEmpty,
-                          modelId != "MODEL_UNSPECIFIED",
-                          !validIds.contains(modelId) else {
-                        continue
-                    }
-                    validIds.insert(modelId)
-
-                    let lowerLabel = label.lowercased()
-                    let isOrchestrator = (cfg["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
-                    let supportsThinking = (cfg["supportsThoughtCirculation"]?.boolValue ?? false)
-                        || (cfg["supportsThinking"]?.boolValue ?? false)
-                        || lowerLabel.contains("thinking")
-                        || lowerLabel.contains("neon")
-                        || lowerLabel.contains("carbon")
-                        || lowerLabel.contains("argon")
-                        || lowerLabel.contains("hydrogen")
-                        || lowerLabel.contains("pro")
-                        || lowerLabel.contains("opus")
-                    let supportedEfforts: [ThinkingEffortLevel] = {
-                        if let rawEfforts = cfg["supportedEfforts"]?.arrayValue {
-                            let mapped = rawEfforts.compactMap { val -> ThinkingEffortLevel? in
-                                guard let s = val.stringValue?.lowercased() else { return nil }
-                                if s == "xhigh" || s == "extra" { return .extra }
-                                return ThinkingEffortLevel.allCases.first { $0.rawValue.lowercased() == s }
-                            }
-                            if !mapped.isEmpty { return mapped }
-                        }
-                        if isOrchestrator { return [.high] }
-                        if lowerLabel.contains("neon") || lowerLabel.contains("hydrogen") {
-                            return [.low, .medium, .high, .extra]
-                        }
-                        return [.low, .medium, .high]
-                    }()
-                    let effort: ThinkingEffortLevel = {
-                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
-                            return .extra
-                        }
-                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
-                            return .low
-                        }
-                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
-                            return .medium
-                        }
-                        return .high
-                    }()
-                    let rawTag = Self.nonEmptyString(cfg["tagTitle"]?.stringValue)
-                    let rawDesc = Self.nonEmptyString(cfg["description"]?.stringValue)
-                    let cleanDesc: String? = {
-                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
-                        return rawDesc
-                    }()
-                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
-                    let baseSubtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: label)
-                    let quotaSuffix: String? = {
-                        if let rem = cfg["quotaInfo"]?.objectValue?["remainingFraction"]?.doubleValue, rem < 0.99 {
-                            let pct = max(0, min(100, Int((rem * 100.0).rounded())))
-                            return pct == 0 ? "Quota exhausted" : "\(pct)% quota left"
-                        }
-                        return nil
-                    }()
-                    let desc = quotaSuffix.map { "\(baseSubtitle) · \($0)" } ?? baseSubtitle
-
-                    parsedModels.append(
-                        CascadeModelConfig(
-                            modelId: modelId,
-                            displayName: label,
-                            subtitle: desc,
-                            hasThinkingBadge: supportsThinking,
-                            requiresUpgradeNote: Self.nonEmptyString(cfg["upgradeNote"]?.stringValue),
-                            mode: .planning,
-                            agentPersona: "Default",
-                            effort: effort,
-                            isModelAlias: isAlias,
-                            badgeTitle: badgeTitle,
-                            isOrchestrator: isOrchestrator,
-                            plannerModelName: Self.nonEmptyString(cfg["plannerModelName"]?.stringValue),
-                            executorModelName: Self.nonEmptyString(cfg["executorModelName"]?.stringValue),
-                            supportedEfforts: supportedEfforts,
-                            isNewBadge: (cfg["isNew"]?.boolValue ?? false) || lowerLabel.contains("gemini 4") || isOrchestrator
-                        )
-                    )
-                    if cfg["isRecommended"]?.boolValue == true && defaultModelId == nil {
-                        defaultModelId = modelId
-                    }
-                }
-                let overrideMoa = obj["defaultOverrideModelConfig"]?.objectValue?["modelOrAlias"]?.objectValue
-                if let defM = Self.nonEmptyString(overrideMoa?["model"]?.stringValue), defM != "MODEL_UNSPECIFIED" {
-                    defaultModelId = defM
-                } else if let defA = Self.nonEmptyString(overrideMoa?["alias"]?.stringValue) {
-                    defaultModelId = defA
-                }
-                if !parsedModels.isEmpty {
-                    break
-                }
+               let slice = Self.parseClientModelConfigsResponse(obj),
+               !slice.models.isEmpty {
+                parsedModels = slice.models
+                validIds = slice.validIds
+                defaultModelId = slice.defaultModelId
+                parsedQuota = slice.usageQuota
+                break
             }
         }
 
@@ -1452,82 +1609,12 @@ public actor AntigravityRPCClient {
                body: ["forceRefresh": .bool(forceRefresh)],
                timeoutInterval: 8.0
            ) {
-            let resp = availWrapper["response"]?.objectValue ?? availWrapper
-            if parsedQuota == nil, let quotaObj = resp["usageQuota"]?.objectValue {
-                parsedQuota = Self.parseUsageQuota(quotaObj)
-            }
-            if let modelsMap = resp["models"]?.objectValue, !modelsMap.isEmpty {
-                var orderedKeys: [String] = []
-                let sorts = resp["agentModelSorts"]?.arrayValue ?? resp["battleModeModelSorts"]?.arrayValue ?? []
-                for sort in sorts {
-                    for grp in sort.objectValue?["groups"]?.arrayValue ?? [] {
-                        for midVal in grp.objectValue?["modelIds"]?.arrayValue ?? [] {
-                            if let mid = Self.nonEmptyString(midVal.stringValue), !orderedKeys.contains(mid) {
-                                orderedKeys.append(mid)
-                            }
-                        }
-                    }
-                }
-                if orderedKeys.isEmpty {
-                    orderedKeys = modelsMap.keys.sorted()
-                }
-                for key in orderedKeys {
-                    guard let details = modelsMap[key]?.objectValue else { continue }
-                    if details["disabled"]?.boolValue == true || details["isInternal"]?.boolValue == true {
-                        continue
-                    }
-                    let displayName = Self.nonEmptyString(details["displayName"]?.stringValue) ?? key
-                    let protoEnum = Self.nonEmptyString(details["model"]?.stringValue)
-                    let modelId = (protoEnum != nil && protoEnum != "MODEL_UNSPECIFIED") ? protoEnum! : key
-                    guard !validIds.contains(modelId) else { continue }
-                    validIds.insert(modelId)
-
-                    let lowerLabel = displayName.lowercased()
-                    let isOrchestrator = (details["isOrchestrator"]?.boolValue ?? false) || lowerLabel.contains("orchestrator")
-                    let supportsThinking = (details["supportsThinking"]?.boolValue ?? false)
-                        || lowerLabel.contains("thinking")
-                        || lowerLabel.contains("neon")
-                    let effort: ThinkingEffortLevel = {
-                        if lowerLabel.contains("(xhigh)") || lowerLabel.contains("(x-high)") || lowerLabel.contains("(extra") {
-                            return .extra
-                        }
-                        if lowerLabel.contains("(low)") || lowerLabel.contains("(minimal)") {
-                            return .low
-                        }
-                        if lowerLabel.contains("(medium)") || lowerLabel.contains("(med)") || lowerLabel.contains("flash") {
-                            return .medium
-                        }
-                        return .high
-                    }()
-                    let rawTag = Self.nonEmptyString(details["tagTitle"]?.stringValue)
-                        ?? Self.nonEmptyString(details["badge"]?.stringValue)
-                    let rawDesc = Self.nonEmptyString(details["description"]?.stringValue)
-                    let cleanDesc: String? = {
-                        guard let rawDesc, !CascadeModelConfig.isGenericBadgeLabel(rawDesc) else { return nil }
-                        return rawDesc
-                    }()
-                    let badgeTitle = rawTag ?? (rawDesc != nil && cleanDesc == nil ? rawDesc : nil)
-                    let subtitle = cleanDesc ?? CascadeModelConfig.descriptiveSubtitle(forModelLabel: displayName)
-
-                    parsedModels.append(
-                        CascadeModelConfig(
-                            modelId: modelId,
-                            displayName: displayName,
-                            subtitle: subtitle,
-                            hasThinkingBadge: supportsThinking,
-                            requiresUpgradeNote: nil,
-                            mode: .planning,
-                            agentPersona: "Default",
-                            effort: effort,
-                            isModelAlias: !modelId.hasPrefix("MODEL_"),
-                            badgeTitle: badgeTitle,
-                            isOrchestrator: isOrchestrator,
-                            supportedEfforts: (lowerLabel.contains("neon") || lowerLabel.contains("hydrogen"))
-                                ? [.low, .medium, .high, .extra] : [.low, .medium, .high],
-                            isNewBadge: lowerLabel.contains("gemini 4") || isOrchestrator
-                        )
-                    )
-                }
+            let slice = Self.parseAvailableModelsResponse(availWrapper)
+            parsedModels = slice.models
+            validIds = slice.validIds
+            defaultModelId = slice.defaultModelId
+            if parsedQuota == nil {
+                parsedQuota = slice.usageQuota
             }
         }
 
