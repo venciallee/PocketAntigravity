@@ -291,7 +291,7 @@ extension AntigravitySessionStore {
                     self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
                     self.composerDraftText = initialPrompt ?? ""
                     self.composerAttachments = initialAttachments
-                    self.sendCurrentDraft()
+                    self.sendCurrentDraft(bypassStreamingQueue: true)
                 } else if !self.locallyCreatedEmptyCascadeIds.contains(realCascadeId) {
                     self.syncStepsForCascade(realCascadeId, pollUntilIdle: false)
                 }
@@ -301,7 +301,7 @@ extension AntigravitySessionStore {
             if hasInitialPayload {
                 self?.composerDraftText = initialPrompt ?? ""
                 self?.composerAttachments = initialAttachments
-                self?.sendCurrentDraft()
+                self?.sendCurrentDraft(bypassStreamingQueue: true)
             }
         }
         return optimisticId
@@ -339,7 +339,7 @@ extension AntigravitySessionStore {
         }
         if let initialPrompt, !initialPrompt.isEmpty {
             composerDraftText = initialPrompt
-            sendCurrentDraft()
+            sendCurrentDraft(bypassStreamingQueue: true)
         }
     }
 

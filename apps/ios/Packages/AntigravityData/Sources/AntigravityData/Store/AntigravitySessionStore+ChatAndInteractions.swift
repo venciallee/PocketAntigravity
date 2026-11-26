@@ -59,7 +59,7 @@ extension AntigravitySessionStore {
         composerAttachments.removeAll { $0.id == chipId }
     }
 
-    public func sendCurrentDraft() {
+    public func sendCurrentDraft(bypassStreamingQueue: Bool = false) {
         let trimmed = composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
         let workflowPrefix = composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty || !composerAttachments.isEmpty || !workflowPrefix.isEmpty else { return }
@@ -104,7 +104,7 @@ extension AntigravitySessionStore {
             }
         }
 
-        if pendingDraftConversation == nil && isCascadeStreaming && (hasPairedBackend || isLiveBackendConnected) && !isVerificationMode {
+        if !bypassStreamingQueue && !activeSteps.isEmpty && pendingDraftConversation == nil && isCascadeStreaming && (hasPairedBackend || isLiveBackendConnected) && !isVerificationMode {
             enqueueFollowUpMessage(combinedText, attachments: composerAttachments)
             composerWorkflowCommand = nil
             composerDraftText = ""
