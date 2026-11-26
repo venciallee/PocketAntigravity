@@ -1037,7 +1037,7 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc32_offlineEmptyChatShowsCleanHostOfflineCardWithoutDuplicatePrefix() {
+    fun atc32_emptyChatStaysCleanWhenOnlineAndShowsCompactPillWhenOffline() {
         val hostUuid = "huangjiafandemac-mini-local-swift-vapor"
         val storage = dev.antigravity.shared.domain.InMemoryProjectionStorage()
         val coordinator = AntigravityCoreCoordinator(
@@ -1045,7 +1045,7 @@ class AndroidInteractiveE2eTest {
             projectionStorage = storage,
             autoPreloadConversations = false,
         )
-        val offlineHost = dev.antigravity.shared.model.RemoteHostInstance(
+        val pairedHost = dev.antigravity.shared.model.RemoteHostInstance(
             instanceId = hostUuid,
             hostname = hostUuid,
             channel = dev.antigravity.shared.model.RemoteConnectionChannel.CLOUD_RELAY,
@@ -1053,34 +1053,14 @@ class AndroidInteractiveE2eTest {
             isOnline = true,
         )
         coordinator.connectionStore.seedVerificationConnection(
-            activeHost = offlineHost,
-            knownHosts = listOf(offlineHost),
+            activeHost = pairedHost,
+            knownHosts = listOf(pairedHost),
             statusText = "Connected · $hostUuid",
         )
-        coordinator.connectionStore.markInstanceOffline(
-            instanceUuid = hostUuid,
-            errorMessage = "Antigravity Desktop is offline or unregistered on Cloud Relay.",
-        )
-
-        // Queue one message on a sibling draft so pendingOutboxCount == 1, then open an empty draft
-        val queuedDraftId = coordinator.createLocalDraftConversation(
-            workspaceUri = "",
-            projectSlug = "No Project",
-            title = "Queued follow-up",
-        )
-        kotlinx.coroutines.runBlocking {
-            coordinator.sendMessage(
-                cascadeId = queuedDraftId,
-                message = "没拉到任何 project 啊",
-                workspaceUri = "",
-                isOptimisticDraft = true,
-                instanceUuidOverride = hostUuid,
-            )
-        }
         val emptyDraftId = coordinator.createLocalDraftConversation(
             workspaceUri = "",
             projectSlug = "No Project",
-            title = "没拉到任何 project 啊",
+            title = "New Conversation",
         )
         coordinator.chatStore.setActiveCascade(emptyDraftId)
 
@@ -1102,10 +1082,37 @@ class AndroidInteractiveE2eTest {
             }
         }
 
-        composeRule.onNodeWithTag("chat-empty-session-card").assertIsDisplayed()
-        composeRule.onNodeWithText("Host Offline · 1 Queued", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithText("Unassigned conversation on $hostUuid", substring = true, useUnmergedTree = true).assertIsDisplayed()
+        // 1. When online & empty, canvas stays clean with NO "Ready for Prompt" / "Unassigned conversation" card or offline pill
+        assertEquals(0, composeRule.onAllNodesWithTag("chat-offline-status-pill").fetchSemanticsNodes().size)
+        composeRule.onNodeWithText("Ready for Prompt", substring = true, useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Unassigned conversation", substring = true, useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("No Project · $hostUuid", useUnmergedTree = true).assertIsDisplayed()
+
+        // 2. When host goes offline with 1 queued message, header shows Offline prefix and canvas shows only a compact pill
+        coordinator.connectionStore.markInstanceOffline(
+            instanceUuid = hostUuid,
+            errorMessage = "Antigravity Desktop is offline or unregistered on Cloud Relay.",
+        )
+        val queuedDraftId = coordinator.createLocalDraftConversation(
+            workspaceUri = "",
+            projectSlug = "No Project",
+            title = "Queued follow-up",
+        )
+        kotlinx.coroutines.runBlocking {
+            coordinator.sendMessage(
+                cascadeId = queuedDraftId,
+                message = "没拉到任何 project 啊",
+                workspaceUri = "",
+                isOptimisticDraft = true,
+                instanceUuidOverride = hostUuid,
+            )
+        }
+        coordinator.chatStore.setActiveCascade(emptyDraftId)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("chat-offline-status-pill").assertIsDisplayed()
+        composeRule.onNodeWithText("Host offline · 1 queued", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("No Project · Offline · $hostUuid", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithText("on Offline ·", substring = true, useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Unassigned conversation", substring = true, useUnmergedTree = true).assertDoesNotExist()
     }
 }
