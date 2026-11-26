@@ -965,7 +965,7 @@ class AndroidInteractiveE2eTest {
 
         // 3. Navigate into Chat and verify composer mic button never crashes and shows dismissible status when recognizer is absent
         composeRule.onNodeWithTag("btn-sidebar").performClick()
-        composeRule.onNodeWithTag("conv-cas-rate-limiter").performClick()
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").performClick()
         composeRule.onNodeWithTag("composer-btn-voice").assertIsDisplayed()
         composeRule.onNodeWithTag("composer-btn-voice").performClick()
         composeRule.waitForIdle()
