@@ -1379,6 +1379,40 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
     public var executorModelName: String?
     public var supportedEfforts: [ThinkingEffortLevel]
     public var isNewBadge: Bool
+    public var effortVariantModelIds: [String: String]
+    public var effortVariantAliases: [String: Bool]
+
+    public struct ParsedEffortLabel: Sendable, Equatable {
+        public let baseName: String
+        public let effort: ThinkingEffortLevel
+
+        public init(baseName: String, effort: ThinkingEffortLevel) {
+            self.baseName = baseName
+            self.effort = effort
+        }
+    }
+
+    public struct RawModelVariantEntry: Sendable, Equatable {
+        public let config: CascadeModelConfig
+        public let explicitSupportedEfforts: [ThinkingEffortLevel]?
+        public let isRecommended: Bool
+        public let rawDescription: String?
+        public let quotaSuffix: String?
+
+        public init(
+            config: CascadeModelConfig,
+            explicitSupportedEfforts: [ThinkingEffortLevel]? = nil,
+            isRecommended: Bool = false,
+            rawDescription: String? = nil,
+            quotaSuffix: String? = nil
+        ) {
+            self.config = config
+            self.explicitSupportedEfforts = explicitSupportedEfforts
+            self.isRecommended = isRecommended
+            self.rawDescription = rawDescription
+            self.quotaSuffix = quotaSuffix
+        }
+    }
 
     public init(
         modelId: String,
@@ -1395,7 +1429,9 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         plannerModelName: String? = nil,
         executorModelName: String? = nil,
         supportedEfforts: [ThinkingEffortLevel] = [.low, .medium, .high],
-        isNewBadge: Bool = false
+        isNewBadge: Bool = false,
+        effortVariantModelIds: [String: String] = [:],
+        effortVariantAliases: [String: Bool] = [:]
     ) {
         self.modelId = modelId
         self.displayName = displayName
@@ -1412,6 +1448,8 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         self.executorModelName = executorModelName
         self.supportedEfforts = isOrchestrator ? [] : supportedEfforts
         self.isNewBadge = isNewBadge || (badgeTitle?.caseInsensitiveCompare("New") == .orderedSame)
+        self.effortVariantModelIds = effortVariantModelIds
+        self.effortVariantAliases = effortVariantAliases
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1430,6 +1468,8 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         case executorModelName
         case supportedEfforts
         case isNewBadge
+        case effortVariantModelIds
+        case effortVariantAliases
     }
 
     public init(from decoder: Decoder) throws {
@@ -1452,21 +1492,320 @@ public struct CascadeModelConfig: Codable, Sendable, Equatable, Identifiable {
         self.supportedEfforts = try container.decodeIfPresent([ThinkingEffortLevel].self, forKey: .supportedEfforts)
             ?? (orchestrator ? [] : [.low, .medium, .high])
         self.isNewBadge = try container.decodeIfPresent(Bool.self, forKey: .isNewBadge) ?? false
+        self.effortVariantModelIds = try container.decodeIfPresent([String: String].self, forKey: .effortVariantModelIds) ?? [:]
+        self.effortVariantAliases = try container.decodeIfPresent([String: Bool].self, forKey: .effortVariantAliases) ?? [:]
     }
 
     public var supportsThinkingBadge: Bool { hasThinkingBadge }
     public var requiresProBadge: Bool { requiresUpgradeNote != nil }
-    public var supportsEffortAdjustment: Bool { !isOrchestrator && !supportedEfforts.isEmpty }
+    public var supportsEffortAdjustment: Bool { !isOrchestrator && supportedEfforts.count > 1 }
+    public var canonicalDisplayName: String { Self.canonicalDisplayName(for: displayName) }
+
+    public var shortOrchestratorRoleLabel: String {
+        if let planner = plannerModelName?.trimmingCharacters(in: .whitespacesAndNewlines), !planner.isEmpty {
+            return Self.stripGeminiFamilyPrefix(planner)
+        }
+        if let start = displayName.firstIndex(of: "("),
+           let end = displayName.lastIndex(of: ")"),
+           end > displayName.index(after: start) {
+            let inner = String(displayName[displayName.index(after: start)..<end])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !inner.isEmpty {
+                return Self.stripGeminiFamilyPrefix(inner)
+            }
+        }
+        return "Neon"
+    }
+
+    public var orchestratorSubtitle: String {
+        let plannerShort = shortOrchestratorRoleLabel
+        let executorShort: String = {
+            if let executor = executorModelName?.trimmingCharacters(in: .whitespacesAndNewlines), !executor.isEmpty {
+                return Self.stripGeminiFamilyPrefix(executor)
+            }
+            return "Hydrogen"
+        }()
+        return "\(plannerShort) plans · \(executorShort) executes"
+    }
+
+    public func resolvedModelId(for targetEffort: ThinkingEffortLevel? = nil) -> String {
+        let eff = targetEffort ?? effort
+        if let variantId = effortVariantModelIds[eff.cliValue], !variantId.isEmpty {
+            return variantId
+        }
+        return modelId
+    }
+
+    public func resolvedIsModelAlias(for targetEffort: ThinkingEffortLevel? = nil) -> Bool {
+        let eff = targetEffort ?? effort
+        return effortVariantAliases[eff.cliValue] ?? isModelAlias
+    }
+
+    public func effort(forVariantModelId id: String) -> ThinkingEffortLevel? {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let matchedKey = effortVariantModelIds.first(where: { $0.value == trimmed })?.key else {
+            return nil
+        }
+        return ThinkingEffortLevel.allCases.first { $0.cliValue == matchedKey }
+    }
+
+    public func containsModelId(_ id: String) -> Bool {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return modelId == trimmed || effortVariantModelIds.values.contains(trimmed)
+    }
+
+    public func clampedEffort(_ requested: ThinkingEffortLevel) -> ThinkingEffortLevel {
+        if isOrchestrator || supportedEfforts.isEmpty { return effort }
+        if supportedEfforts.contains(requested) { return requested }
+        if supportedEfforts.contains(effort) { return effort }
+        if supportedEfforts.contains(.high) { return .high }
+        if supportedEfforts.contains(.medium) { return .medium }
+        return supportedEfforts[0]
+    }
+
+    public func selectingEffort(_ targetEffort: ThinkingEffortLevel) -> CascadeModelConfig {
+        if isOrchestrator || supportedEfforts.isEmpty { return self }
+        let resolved = clampedEffort(targetEffort)
+        var copy = self
+        copy.effort = resolved
+        copy.modelId = resolvedModelId(for: resolved)
+        copy.isModelAlias = resolvedIsModelAlias(for: resolved)
+        return copy
+    }
+
+    private static let canonicalEffortOrder: [ThinkingEffortLevel] = [.low, .medium, .high, .extra]
+
+    private static let effortLabelSuffixes: [(String, ThinkingEffortLevel)] = [
+        (" (Extra High)", .extra),
+        (" (XHigh)", .extra),
+        (" (X-High)", .extra),
+        (" (Extra)", .extra),
+        (" (Max)", .extra),
+        (" (High)", .high),
+        (" (Medium)", .medium),
+        (" (Med)", .medium),
+        (" (Low)", .low),
+        (" (Minimal)", .low)
+    ]
+
+    private static func stripGeminiFamilyPrefix(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixes = ["Gemini 4 ", "Gemini 3.8 ", "Gemini 3.1 ", "Gemini 3 ", "Gemini "]
+        let lower = trimmed.lowercased()
+        for prefix in prefixes {
+            if lower.hasPrefix(prefix.lowercased()), trimmed.count > prefix.count {
+                return String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return trimmed
+    }
 
     /// Returns `true` when a short label (e.g. `"New"`, `"Beta"`, `"Preview"`) is a pill tag rather than a description.
     public static func isGenericBadgeLabel(_ text: String) -> Bool {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch normalized {
-        case "new", "beta", "preview", "alpha", "experimental", "recommended", "legacy":
+        case "new", "beta", "preview", "alpha", "experimental", "recommended", "legacy", "leaving soon", "notice":
             return true
         default:
             return false
         }
+    }
+
+    public static func canonicalDisplayName(for label: String) -> String {
+        var name = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.lowercased().hasSuffix(" (thinking)"), name.count > " (thinking)".count {
+            name = String(name.dropLast(" (thinking)".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return name
+    }
+
+    public static func stripEffortSuffix(from label: String) -> ParsedEffortLabel? {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        for (suffix, effort) in effortLabelSuffixes {
+            if lower.hasSuffix(suffix.lowercased()) {
+                let base = String(trimmed.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !base.isEmpty {
+                    return ParsedEffortLabel(baseName: base, effort: effort)
+                }
+            }
+        }
+        return nil
+    }
+
+    public static func parseEffortToken(_ rawToken: String) -> ThinkingEffortLevel? {
+        switch rawToken.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "xhigh", "x-high", "extra", "extra high", "extra_high", "max":
+            return .extra
+        case "high":
+            return .high
+        case "medium", "med":
+            return .medium
+        case "low", "minimal":
+            return .low
+        default:
+            return nil
+        }
+    }
+
+    /// Groups flat per-effort upstream `clientModelConfigs` entries (e.g. `Gemini 4 Neon (High)`,
+    /// `Gemini 4 Neon (XHigh)`, `Gemini 4 Neon (Medium)`, `Gemini 4 Neon (Low)`) into a single
+    /// selectable model family (`Gemini 4 Neon`) whose `supportedEfforts` and `effortVariantModelIds`
+    /// reflect the exact effort tiers advertised by the server.
+    public static func groupEffortVariants(
+        _ entries: [RawModelVariantEntry],
+        defaultModelId: String? = nil
+    ) -> [CascadeModelConfig] {
+        guard !entries.isEmpty else { return [] }
+
+        struct SuffixedMember {
+            let entry: RawModelVariantEntry
+            let baseName: String
+            let effort: ThinkingEffortLevel
+        }
+
+        var groupedByKey: [String: [SuffixedMember]] = [:]
+        var entryGroupKey: [String?] = Array(repeating: nil, count: entries.count)
+
+        for (idx, entry) in entries.enumerated() {
+            if entry.config.isOrchestrator { continue }
+            guard let parsed = stripEffortSuffix(from: entry.config.displayName) else { continue }
+            let cleanBase = canonicalDisplayName(for: parsed.baseName)
+            let key = cleanBase.lowercased()
+            entryGroupKey[idx] = key
+            groupedByKey[key, default: []].append(
+                SuffixedMember(entry: entry, baseName: cleanBase, effort: parsed.effort)
+            )
+        }
+
+        var emittedKeys = Set<String>()
+        var result: [CascadeModelConfig] = []
+
+        for (idx, entry) in entries.enumerated() {
+            guard let key = entryGroupKey[idx] else {
+                var cfg = entry.config
+                if cfg.isOrchestrator {
+                    cfg.supportedEfforts = []
+                }
+                result.append(cfg)
+                continue
+            }
+
+            guard emittedKeys.insert(key).inserted else { continue }
+            let members = groupedByKey[key] ?? []
+            if members.count == 1, let only = members.first?.entry {
+                var cfg = only.config
+                if let explicit = only.explicitSupportedEfforts, explicit.count > 1 {
+                    cfg.supportedEfforts = explicit
+                } else {
+                    cfg.supportedEfforts = []
+                }
+                result.append(cfg)
+                continue
+            }
+
+            var variantIds: [String: String] = [:]
+            var variantAliases: [String: Bool] = [:]
+            for member in members {
+                let effortKey = member.effort.cliValue
+                if variantIds[effortKey] == nil {
+                    variantIds[effortKey] = member.entry.config.modelId
+                    variantAliases[effortKey] = member.entry.config.isModelAlias
+                }
+            }
+            let sortedEfforts = canonicalEffortOrder.filter { variantIds[$0.cliValue] != nil }
+            let representative = members.first(where: { defaultModelId != nil && $0.entry.config.modelId == defaultModelId })
+                ?? members.first(where: { $0.entry.isRecommended })
+                ?? members[0]
+
+            let cleanName = members[0].baseName
+            let nonNewTag = members.compactMap { member -> String? in
+                guard let tag = member.entry.config.badgeTitle,
+                      !tag.isEmpty,
+                      tag.caseInsensitiveCompare("New") != .orderedSame else {
+                    return nil
+                }
+                return tag
+            }.first
+            let isNew = (nonNewTag == nil) && members.contains(where: { $0.entry.config.isNewBadge })
+            let resolvedBadgeTitle = nonNewTag
+                ?? members.compactMap { $0.entry.config.badgeTitle }.first(where: { !$0.isEmpty })
+                ?? (isNew ? "New" : nil)
+            let rawDesc = representative.entry.rawDescription
+                ?? members.compactMap(\.entry.rawDescription).first
+            let baseSubtitle = rawDesc ?? descriptiveSubtitle(forModelLabel: cleanName)
+            let finalSubtitle = representative.entry.quotaSuffix.map { "\(baseSubtitle) · \($0)" } ?? baseSubtitle
+
+            result.append(
+                CascadeModelConfig(
+                    modelId: representative.entry.config.modelId,
+                    displayName: cleanName,
+                    subtitle: finalSubtitle,
+                    hasThinkingBadge: members.contains(where: { $0.entry.config.hasThinkingBadge }),
+                    requiresUpgradeNote: representative.entry.config.requiresUpgradeNote
+                        ?? members.compactMap(\.entry.config.requiresUpgradeNote).first,
+                    mode: representative.entry.config.mode,
+                    agentPersona: representative.entry.config.agentPersona,
+                    effort: representative.effort,
+                    isModelAlias: representative.entry.config.isModelAlias,
+                    badgeTitle: resolvedBadgeTitle,
+                    isOrchestrator: false,
+                    plannerModelName: nil,
+                    executorModelName: nil,
+                    supportedEfforts: sortedEfforts,
+                    isNewBadge: isNew,
+                    effortVariantModelIds: variantIds,
+                    effortVariantAliases: variantAliases
+                )
+            )
+        }
+
+        return result
+    }
+
+    /// Partitions non-orchestrator models into primary picker rows (up to 6, ordered by official
+    /// Antigravity flagship priority using ID OR clean name matching so live `MODEL_PLACEHOLDER_Mxx`
+    /// IDs never fall back to duplicate flat entries) and remaining `More models` rows.
+    public static func partitionPrimaryAndExtraModels(
+        _ catalog: [CascadeModelConfig]
+    ) -> (primary: [CascadeModelConfig], extra: [CascadeModelConfig]) {
+        let nonOrch = catalog.filter { !$0.isOrchestrator }
+        guard !nonOrch.isEmpty else { return ([], []) }
+
+        let matchers: [(CascadeModelConfig) -> Bool] = [
+            { m in m.modelId == "MODEL_GOOGLE_GEMINI_4_NEON" || m.canonicalDisplayName.lowercased().contains("gemini 4 neon") },
+            { m in m.modelId == "MODEL_GOOGLE_GEMINI_4_CARBON" || m.canonicalDisplayName.lowercased().contains("gemini 4 carbon") },
+            { m in m.modelId == "MODEL_GOOGLE_GEMINI_4_ARGON" || m.canonicalDisplayName.lowercased().contains("gemini 4 argon") },
+            { m in m.modelId == "MODEL_GOOGLE_GEMINI_4_HYDROGEN" || m.canonicalDisplayName.lowercased().contains("gemini 4 hydrogen") },
+            { m in
+                let lower = m.canonicalDisplayName.lowercased()
+                return m.modelId == "MODEL_CLAUDE_5_5_OPUS_THINKING"
+                    || lower.contains("claude opus 5.5")
+                    || lower.contains("claude 5.5 opus")
+            },
+            { m in m.modelId == "MODEL_GOOGLE_GEMINI_3_8_FLASH" || m.canonicalDisplayName.lowercased().contains("gemini 3.8 flash") }
+        ]
+
+        var primary: [CascadeModelConfig] = []
+        var usedIds = Set<String>()
+
+        for matcher in matchers {
+            if let found = nonOrch.first(where: { !usedIds.contains($0.modelId) && matcher($0) }) {
+                primary.append(found)
+                usedIds.insert(found.modelId)
+            }
+        }
+        if primary.count < 6 {
+            for model in nonOrch where !usedIds.contains(model.modelId) {
+                primary.append(model)
+                usedIds.insert(model.modelId)
+                if primary.count >= 6 { break }
+            }
+        }
+        let extra = nonOrch.filter { !usedIds.contains($0.modelId) }
+        return (primary, extra)
     }
 
     /// Generates a concise, tier-aware subtitle when the backend omits a human description.

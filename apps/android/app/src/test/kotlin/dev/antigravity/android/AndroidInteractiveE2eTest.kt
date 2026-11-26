@@ -260,7 +260,104 @@ class AndroidInteractiveE2eTest {
 
         composeRule.onNodeWithTag("model-row-MODEL_CLAUDE_5_5_OPUS_THINKING").performClick()
         assertEquals("MODEL_CLAUDE_5_5_OPUS_THINKING", coordinator.settingsStore.state.value.selectedModelId)
+        // Claude Opus 5.5 supports only Low/Medium/High (no Extra High)
+        assertEquals(0, composeRule.onAllNodesWithTag("effort-chip-extra").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("effort-chip-medium").assertIsDisplayed()
         composeRule.onNodeWithTag("btn-model-done").assertIsDisplayed()
+    }
+
+    @Test
+    fun atc10b_modelPickerGroupsLiveVariantsAndScopesEffortsPerModel() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        val neon = dev.antigravity.shared.model.CascadeModelConfig(
+            modelId = "MODEL_PLACEHOLDER_M41",
+            displayName = "Gemini 4 Neon",
+            subtitle = "Frontier reasoning",
+            thinkingEffort = ThinkingEffortLevel.HIGH,
+            supportedEfforts = listOf(
+                ThinkingEffortLevel.LOW,
+                ThinkingEffortLevel.MEDIUM,
+                ThinkingEffortLevel.HIGH,
+                ThinkingEffortLevel.EXTRA,
+            ),
+            isNewBadge = true,
+            effortVariantModelIds = mapOf(
+                "low" to "MODEL_PLACEHOLDER_M39",
+                "medium" to "MODEL_PLACEHOLDER_M40",
+                "high" to "MODEL_PLACEHOLDER_M41",
+                "xhigh" to "MODEL_PLACEHOLDER_M42",
+            ),
+        )
+        val carbon = dev.antigravity.shared.model.CascadeModelConfig(
+            modelId = "MODEL_PLACEHOLDER_M44",
+            displayName = "Gemini 4 Carbon",
+            subtitle = "Balanced SWE reasoning",
+            thinkingEffort = ThinkingEffortLevel.MEDIUM,
+            supportedEfforts = listOf(
+                ThinkingEffortLevel.LOW,
+                ThinkingEffortLevel.MEDIUM,
+                ThinkingEffortLevel.HIGH,
+            ),
+            effortVariantModelIds = mapOf(
+                "low" to "MODEL_PLACEHOLDER_M43",
+                "medium" to "MODEL_PLACEHOLDER_M44",
+                "high" to "MODEL_PLACEHOLDER_M45",
+            ),
+        )
+        val orchNeon = dev.antigravity.shared.model.CascadeModelConfig(
+            modelId = "ORCHESTRATOR_NEON",
+            displayName = "Orchestrator (Neon)",
+            subtitle = "Neon plans · Hydrogen executes",
+            isOrchestrator = true,
+            plannerModelName = "Gemini 4 Neon",
+            executorModelName = "Gemini 4 Hydrogen",
+            supportedEfforts = emptyList(),
+            isModelAlias = true,
+        )
+        val orchCarbon = dev.antigravity.shared.model.CascadeModelConfig(
+            modelId = "ORCHESTRATOR_CARBON",
+            displayName = "Orchestrator (Carbon)",
+            subtitle = "Carbon plans · Hydrogen executes",
+            isOrchestrator = true,
+            plannerModelName = "Gemini 4 Carbon",
+            executorModelName = "Gemini 4 Hydrogen",
+            supportedEfforts = emptyList(),
+            isModelAlias = true,
+        )
+        coordinator.settingsStore.applyModelCatalog(
+            dev.antigravity.shared.model.LiveModelCatalogResult(
+                models = listOf(neon, carbon, orchNeon, orchCarbon),
+                defaultModelId = "MODEL_PLACEHOLDER_M41",
+            ),
+        )
+
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.MODEL_AND_MODE,
+            )
+        }
+
+        // Neon starts selected with 4 effort chips; tapping Extra High switches to variant M42
+        composeRule.onNodeWithTag("model-row-MODEL_PLACEHOLDER_M41").assertIsDisplayed()
+        composeRule.onNodeWithTag("effort-chip-extra").performClick()
+        assertEquals("MODEL_PLACEHOLDER_M42", coordinator.settingsStore.state.value.selectedModelId)
+        assertEquals(ThinkingEffortLevel.EXTRA, coordinator.settingsStore.state.value.selectedEffort)
+
+        // Switching to Gemini 4 Carbon reveals ONLY Low/Medium/High (NO Extra High)
+        composeRule.onNodeWithTag("model-row-MODEL_PLACEHOLDER_M44").performClick()
+        assertEquals("MODEL_PLACEHOLDER_M44", coordinator.settingsStore.state.value.selectedModelId)
+        assertEquals(ThinkingEffortLevel.MEDIUM, coordinator.settingsStore.state.value.selectedEffort)
+        assertEquals(0, composeRule.onAllNodesWithTag("effort-chip-extra").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("effort-chip-high").performClick()
+        assertEquals("MODEL_PLACEHOLDER_M45", coordinator.settingsStore.state.value.selectedModelId)
+
+        // Tapping Orchestrator exposes inline planner chips (Neon / Carbon) with zero effort chips
+        composeRule.onNodeWithTag("model-row-orchestrator").performClick()
+        assertEquals("ORCHESTRATOR_NEON", coordinator.settingsStore.state.value.selectedModelId)
+        assertEquals(0, composeRule.onAllNodesWithTag("effort-chip-high").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("orchestrator-chip-carbon").performClick()
+        assertEquals("ORCHESTRATOR_CARBON", coordinator.settingsStore.state.value.selectedModelId)
     }
 
     @Test

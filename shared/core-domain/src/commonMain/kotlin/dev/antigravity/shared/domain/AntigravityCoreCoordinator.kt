@@ -13,6 +13,7 @@ import dev.antigravity.shared.model.CascadeUserInteractionPayload
 import dev.antigravity.shared.model.ComposerAttachmentChip
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.InteractionDecision
+import dev.antigravity.shared.model.LiveModelCatalogResult
 import dev.antigravity.shared.model.LiveProgressAgentSummary
 import dev.antigravity.shared.model.LiveProgressPhase
 import dev.antigravity.shared.model.LiveProgressSnapshot
@@ -742,13 +743,16 @@ public class AntigravityCoreCoordinator(
     ): SendMessageOutcome {
         val client = connectionStore.activeClient()
         val isReachable = connectionStore.state.value.isDeviceNetworkReachable
+        val matchedModel = settingsStore.state.value.models.firstOrNull { it.containsModelId(modelId) }
+        val resolvedModelId = matchedModel?.resolvedModelId(effort) ?: modelId
+        val resolvedIsAlias = matchedModel?.resolvedIsModelAlias(effort) ?: !resolvedModelId.startsWith("MODEL_")
         val outcome = chatStore.sendMessage(
             client = client,
             cascadeId = cascadeId,
             message = message,
             workspaceUri = workspaceUri,
             attachments = attachments,
-            modelId = modelId,
+            modelId = resolvedModelId,
             effort = effort,
             mode = mode,
             agentPersona = agentPersona,
@@ -759,6 +763,7 @@ public class AntigravityCoreCoordinator(
             isDeviceNetworkReachable = isReachable,
             isOptimisticDraft = isOptimisticDraft,
             isVerificationMode = isVerificationMode,
+            isModelAlias = resolvedIsAlias,
         )
         if (outcome.resolvedCascadeId != cascadeId) {
             conversationSyncStore.replaceCascadeId(cascadeId, outcome.resolvedCascadeId)
@@ -1176,6 +1181,15 @@ public class AntigravityCoreCoordinator(
     }
 
     @Throws(Throwable::class)
+    public suspend fun refreshModelCatalog(forceRefresh: Boolean = false): LiveModelCatalogResult? {
+        if (isVerificationMode && !connectionStore.state.value.hasPairedBackend) {
+            return null
+        }
+        val client = connectionStore.activeClient() ?: return null
+        return settingsStore.refreshModelCatalog(client = client, forceRefresh = forceRefresh)
+    }
+
+    @Throws(Throwable::class)
     public suspend fun refreshUserProfile(): String? {
         if (isVerificationMode && !connectionStore.state.value.hasPairedBackend) {
             return connectionStore.state.value.userDisplayName
@@ -1223,6 +1237,15 @@ public class AntigravityCoreCoordinator(
                 }
             } else {
                 scheduleConversationPreload()
+            }
+            scope.launch {
+                try {
+                    refreshModelCatalog()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    // Best-effort live model catalog hydration; sheet refreshes again on open.
+                }
             }
             scope.launch {
                 try {

@@ -33,44 +33,25 @@ public struct ModelAndModeSheetView: View {
         store.availableModels.isEmpty ? CascadeModelConfig.liveDefaultCatalog : store.availableModels
     }
 
-    private var orchestratorModel: CascadeModelConfig {
-        catalogModels.first(where: \.isOrchestrator)
-            ?? CascadeModelConfig(
-                modelId: "MODEL_ORCHESTRATOR_NEON",
-                displayName: "Orchestrator",
-                subtitle: "Neon plans · Hydrogen executes",
-                isOrchestrator: true,
-                plannerModelName: "Gemini 4 Neon",
-                executorModelName: "Gemini 4 Hydrogen",
-                supportedEfforts: []
-            )
+    private var orchestratorModels: [CascadeModelConfig] {
+        catalogModels.filter(\.isOrchestrator)
+    }
+
+    private var activeOrchestrator: CascadeModelConfig? {
+        orchestratorModels.first(where: { $0.containsModelId(store.selectedModelConfig.modelId) })
+            ?? orchestratorModels.first
+    }
+
+    private var partitionedModels: (primary: [CascadeModelConfig], extra: [CascadeModelConfig]) {
+        CascadeModelConfig.partitionPrimaryAndExtraModels(catalogModels)
     }
 
     private var primaryModels: [CascadeModelConfig] {
-        let nonOrch = catalogModels.filter { !$0.isOrchestrator }
-        let preferredIds = [
-            "MODEL_GOOGLE_GEMINI_4_NEON",
-            "MODEL_GOOGLE_GEMINI_4_CARBON",
-            "MODEL_GOOGLE_GEMINI_4_ARGON",
-            "MODEL_GOOGLE_GEMINI_4_HYDROGEN",
-            "MODEL_CLAUDE_5_5_OPUS_THINKING",
-            "MODEL_GOOGLE_GEMINI_3_8_FLASH"
-        ]
-        var ordered: [CascadeModelConfig] = []
-        for pid in preferredIds {
-            if let found = nonOrch.first(where: { $0.modelId == pid }) {
-                ordered.append(found)
-            }
-        }
-        if ordered.isEmpty {
-            return Array(nonOrch.prefix(6))
-        }
-        return ordered
+        partitionedModels.primary
     }
 
     private var extraModels: [CascadeModelConfig] {
-        let primaryIds = Set(primaryModels.map(\.modelId))
-        return catalogModels.filter { !$0.isOrchestrator && !primaryIds.contains($0.modelId) }
+        partitionedModels.extra
     }
 
     public var body: some View {
@@ -114,9 +95,13 @@ public struct ModelAndModeSheetView: View {
         }
         .sensoryFeedback(.selection, trigger: store.selectedModelConfig.modelId)
         .sensoryFeedback(.selection, trigger: store.selectedModelConfig.effort)
+        .onAppear {
+            revealExtraModelsIfSelected()
+        }
         .task {
             if store.hasPairedBackend || store.isLiveBackendConnected {
                 await store.refreshModelCatalog()
+                revealExtraModelsIfSelected()
             }
         }
         .accessibilityElement(children: .contain)
@@ -175,82 +160,131 @@ public struct ModelAndModeSheetView: View {
     // MARK: - Single Grouped Model Card (`ios-model.png`)
 
     private var groupedModelCard: some View {
-        let orch = orchestratorModel
         let isOrchSelected = store.selectedModelConfig.isOrchestrator
+        let primaries = primaryModels
+        let extras = extraModels
 
         return VStack(spacing: 0) {
-            // Row 0: Orchestrator
-            Button {
-                selectModelOption(orch)
-            } label: {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Orchestrator")
-                            .font(.system(size: 16.5, weight: .medium))
-                            .foregroundStyle(AntigravityTheme.inkReading)
-                        Text("Neon plans · Hydrogen executes")
-                            .font(.system(size: 13.5, weight: .regular))
-                            .foregroundStyle(AntigravityTheme.inkSecondary)
+            // Row 0: Orchestrator (with inline planner selector when selected and multiple presets exist)
+            if let orch = activeOrchestrator {
+                VStack(alignment: .leading, spacing: 12) {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            selectModelOption(orch)
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Orchestrator")
+                                    .font(.system(size: 16.5, weight: isOrchSelected ? .semibold : .medium))
+                                    .foregroundStyle(AntigravityTheme.inkReading)
+                                Text(orch.orchestratorSubtitle)
+                                    .font(.system(size: 13.5, weight: .regular))
+                                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                            }
+                            Spacer()
+                            if isOrchSelected {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                            } else {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
-                    Spacer()
-                    if isOrchSelected {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("model-row-orchestrator")
+
+                    if isOrchSelected && orchestratorModels.count > 1 {
+                        HStack(spacing: 4) {
+                            ForEach(orchestratorModels, id: \.modelId) { preset in
+                                let isPresetSelected = preset.containsModelId(store.selectedModelConfig.modelId)
+                                Button {
+                                    selectModelOption(preset)
+                                } label: {
+                                    Text(preset.shortOrchestratorRoleLabel)
+                                        .font(.system(size: 13.5, weight: isPresetSelected ? .semibold : .regular))
+                                        .foregroundStyle(isPresetSelected ? AntigravityTheme.inkReading : AntigravityTheme.inkSecondary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.85)
+                                        .frame(maxWidth: .infinity, minHeight: 34)
+                                        .background(
+                                            Group {
+                                                if isPresetSelected {
+                                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                        .fill(AntigravityTheme.surfaceActiveTabSlot)
+                                                        .overlay(
+                                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                                .strokeBorder(AntigravityTheme.cardBorder, lineWidth: 1)
+                                                        )
+                                                }
+                                            }
+                                        )
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("orchestrator-chip-\(preset.shortOrchestratorRoleLabel.lowercased())")
+                            }
+                        }
+                        .padding(4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .fill(AntigravityTheme.surfaceObsidian)
+                        )
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 13)
+                .padding(.vertical, isOrchSelected && orchestratorModels.count > 1 ? 14 : 13)
                 .background(isOrchSelected ? AntigravityTheme.surfaceSelectionTint : Color.clear)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("model-row-orchestrator")
 
-            Divider().overlay(AntigravityTheme.subtleDivider)
-
-            // Primary Models (`Gemini 4 Neon` + inline 4-segment effort, Carbon, Argon, Hydrogen, Claude Opus 5.5, Gemini 3.8 Flash)
-            ForEach(Array(primaryModels.enumerated()), id: \.element.modelId) { idx, model in
-                modelRowView(model)
-                if idx < primaryModels.count - 1 {
+                if !primaries.isEmpty {
                     Divider().overlay(AntigravityTheme.subtleDivider)
                 }
             }
 
-            if showMoreModels && !extraModels.isEmpty {
-                ForEach(extraModels, id: \.modelId) { extra in
+            // Primary Models (one clean row per model family; effort selector expands only for the selected model)
+            ForEach(Array(primaries.enumerated()), id: \.element.modelId) { idx, model in
+                modelRowView(model)
+                if idx < primaries.count - 1 {
+                    Divider().overlay(AntigravityTheme.subtleDivider)
+                }
+            }
+
+            if showMoreModels && !extras.isEmpty {
+                ForEach(extras, id: \.modelId) { extra in
                     Divider().overlay(AntigravityTheme.subtleDivider)
                     modelRowView(extra)
                 }
             }
 
-            Divider().overlay(AntigravityTheme.subtleDivider)
+            if !extras.isEmpty {
+                Divider().overlay(AntigravityTheme.subtleDivider)
 
-            // More models expandable footer row
-            Button {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    showMoreModels.toggle()
+                // More models expandable footer row
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        showMoreModels.toggle()
+                    }
+                } label: {
+                    HStack {
+                        Text(showMoreModels ? "Fewer models" : "More models")
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        Spacer()
+                        Image(systemName: showMoreModels ? "chevron.up" : "chevron.right")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
                 }
-            } label: {
-                HStack {
-                    Text(showMoreModels ? "Fewer models" : "More models")
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                    Spacer()
-                    Image(systemName: showMoreModels ? "chevron.up" : "chevron.right")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("btn-more-models")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("btn-more-models")
         }
         .background(AntigravityTheme.surfaceSheetGroup)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -262,13 +296,25 @@ public struct ModelAndModeSheetView: View {
 
     @ViewBuilder
     private func modelRowView(_ model: CascadeModelConfig) -> some View {
-        let isSelected = (store.selectedModelConfig.modelId == model.modelId)
-        let cleanName = model.displayName.replacingOccurrences(of: " (Thinking)", with: "")
-        let supportsEfforts = !model.supportedEfforts.isEmpty
+        let isSelected = model.containsModelId(store.selectedModelConfig.modelId)
+        let cleanName = model.canonicalDisplayName
+        let supportsEfforts = model.supportsEffortAdjustment
+        let isFlagshipNeon = model.modelId == "MODEL_GOOGLE_GEMINI_4_NEON"
+            || cleanName.lowercased().contains("gemini 4 neon")
+        let nonNewStatusTag: String? = {
+            guard let tag = model.badgeTitle,
+                  !tag.isEmpty,
+                  tag.caseInsensitiveCompare("New") != .orderedSame else {
+                return nil
+            }
+            return tag
+        }()
 
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                selectModelOption(model)
+                withAnimation(.easeOut(duration: 0.18)) {
+                    selectModelOption(model)
+                }
             } label: {
                 HStack(spacing: 8) {
                     Text(cleanName)
@@ -276,7 +322,7 @@ public struct ModelAndModeSheetView: View {
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .lineLimit(1)
 
-                    if model.isNewBadge && model.modelId == "MODEL_GOOGLE_GEMINI_4_NEON" {
+                    if model.isNewBadge && isFlagshipNeon {
                         Text("New")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
@@ -285,6 +331,16 @@ public struct ModelAndModeSheetView: View {
                             .background(
                                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                                     .fill(AntigravityTheme.accentPeriwinkle.opacity(0.16))
+                            )
+                    } else if let statusTag = nonNewStatusTag {
+                        Text(statusTag)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(AntigravityTheme.surfaceElevated)
                             )
                     }
 
@@ -301,13 +357,13 @@ public struct ModelAndModeSheetView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier(Self.accessibilityId(for: model))
 
-            // Inline 4-segment Thinking Effort selector when selected model supports thinking tiers (`ios-model.png`)
+            // Step 2: Inline Thinking Effort selector showing ONLY the selected model's supported tiers
             if isSelected && supportsEfforts {
                 HStack(spacing: 4) {
                     ForEach(model.supportedEfforts, id: \.self) { effort in
                         let isEffortSelected = (store.selectedModelConfig.effort == effort)
                         Button {
-                            store.selectedModelConfig.effort = effort
+                            selectEffortOption(effort)
                         } label: {
                             Text(effortDisplayLabel(effort))
                                 .font(.system(size: 13.5, weight: isEffortSelected ? .semibold : .regular))
@@ -429,34 +485,26 @@ public struct ModelAndModeSheetView: View {
 
     // MARK: - Actions
 
+    private func revealExtraModelsIfSelected() {
+        if extraModels.contains(where: { $0.containsModelId(store.selectedModelConfig.modelId) }) {
+            showMoreModels = true
+        }
+    }
+
     private func selectModelOption(_ option: CascadeModelConfig) {
-        let isSameModel = (store.selectedModelConfig.modelId == option.modelId)
-        let resolvedEffort: ThinkingEffortLevel = {
-            if isSameModel, option.supportedEfforts.contains(store.selectedModelConfig.effort) {
-                return store.selectedModelConfig.effort
-            }
-            return option.effort
-        }()
-        store.selectedModelConfig = CascadeModelConfig(
-            modelId: option.modelId,
-            displayName: option.displayName,
-            subtitle: option.subtitle,
-            hasThinkingBadge: option.hasThinkingBadge,
-            requiresUpgradeNote: option.requiresUpgradeNote,
-            mode: store.selectedModelConfig.mode,
-            agentPersona: store.selectedModelConfig.agentPersona,
-            effort: resolvedEffort,
-            isModelAlias: option.isModelAlias,
-            badgeTitle: option.badgeTitle,
-            isOrchestrator: option.isOrchestrator,
-            plannerModelName: option.plannerModelName,
-            executorModelName: option.executorModelName,
-            supportedEfforts: option.supportedEfforts,
-            isNewBadge: option.isNewBadge
-        )
+        store.selectModel(option)
         onSelectConfiguration?(
             store.selectedModelConfig.mode.rawValue,
-            option.displayName,
+            store.selectedModelConfig.displayName,
+            store.selectedModelConfig.agentPersona
+        )
+    }
+
+    private func selectEffortOption(_ effort: ThinkingEffortLevel) {
+        store.selectThinkingEffort(effort)
+        onSelectConfiguration?(
+            store.selectedModelConfig.mode.rawValue,
+            store.selectedModelConfig.displayName,
             store.selectedModelConfig.agentPersona
         )
     }
@@ -476,10 +524,11 @@ public struct ModelAndModeSheetView: View {
     }
 
     private static func accessibilityId(for option: CascadeModelConfig) -> String {
-        let lower = option.displayName.lowercased()
-        if lower.contains("neon") { return "model-row-gemini-4-neon" }
+        let lower = option.canonicalDisplayName.lowercased()
+        if lower.contains("gemini 4 neon") { return "model-row-gemini-4-neon" }
+        if lower.contains("gemini 4 carbon") { return "model-row-gemini-4-carbon" }
         if lower.contains("opus") { return "model-row-claude-opus" }
-        if lower.contains("flash") { return "model-row-gemini-flash" }
+        if lower.contains("3.8 flash") { return "model-row-gemini-flash" }
         return "model-row-\(option.modelId)"
     }
 }

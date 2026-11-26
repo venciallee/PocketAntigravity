@@ -767,4 +767,169 @@ final class AntigravityV233Tests: XCTestCase {
             "Home image-only send must materialize and attach the picked photo on the created conversation"
         )
     }
+
+    // MARK: - TC-25: Model-First Grouping & Effort-Variant Resolution
+
+    @MainActor
+    func testTC25_FlatDesktopModelCatalogGroupingAndModelFirstEffortSelection() throws {
+        let rawPayload: [String: JSONValue] = [
+            "clientModelConfigs": .array([
+                .object([
+                    "label": .string("Gemini 4 Neon (High)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M41")]),
+                    "tagTitle": .string("New"),
+                    "isRecommended": .bool(true)
+                ]),
+                .object([
+                    "label": .string("Gemini 4 Neon (XHigh)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M42")]),
+                    "tagTitle": .string("New")
+                ]),
+                .object([
+                    "label": .string("Gemini 4 Neon (Medium)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M40")]),
+                    "tagTitle": .string("New")
+                ]),
+                .object([
+                    "label": .string("Gemini 4 Neon (Low)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M39")]),
+                    "tagTitle": .string("New")
+                ]),
+                .object([
+                    "label": .string("Gemini 4 Carbon (Medium)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M44")]),
+                    "tagTitle": .string("New")
+                ]),
+                .object([
+                    "label": .string("Gemini 4 Carbon (High)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M45")]),
+                    "tagTitle": .string("New")
+                ]),
+                .object([
+                    "label": .string("Gemini 4 Carbon (Low)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M43")]),
+                    "tagTitle": .string("New")
+                ]),
+                .object([
+                    "label": .string("Gemini 4 Argon (Medium)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M47")]),
+                    "tagTitle": .string("Leaving Soon")
+                ]),
+                .object([
+                    "label": .string("Gemini 4 Argon (High)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M48")]),
+                    "tagTitle": .string("Leaving Soon")
+                ]),
+                .object([
+                    "label": .string("Orchestrator (Neon)"),
+                    "modelOrAlias": .object(["alias": .string("ORCHESTRATOR_NEON")]),
+                    "isOrchestrator": .bool(true),
+                    "tagTitle": .string("New")
+                ]),
+                .object([
+                    "label": .string("Orchestrator (Carbon)"),
+                    "modelOrAlias": .object(["alias": .string("ORCHESTRATOR_CARBON")]),
+                    "isOrchestrator": .bool(true),
+                    "tagTitle": .string("New")
+                ]),
+                .object([
+                    "label": .string("GPT-OSS 120B (Medium)"),
+                    "modelOrAlias": .object(["model": .string("MODEL_OPENAI_GPT_OSS_120B_MEDIUM")]),
+                    "tagTitle": .string("Notice")
+                ])
+            ]),
+            "defaultOverrideModelConfig": .object([
+                "modelOrAlias": .object(["model": .string("MODEL_PLACEHOLDER_M41")])
+            ])
+        ]
+
+        let slice = try XCTUnwrap(AntigravityRPCClient.parseClientModelConfigsResponse(rawPayload))
+        XCTAssertEqual(slice.validIds.count, 12)
+        XCTAssertEqual(
+            slice.models.map(\.displayName),
+            [
+                "Gemini 4 Neon",
+                "Gemini 4 Carbon",
+                "Gemini 4 Argon",
+                "Orchestrator (Neon)",
+                "Orchestrator (Carbon)",
+                "GPT-OSS 120B (Medium)"
+            ]
+        )
+
+        let neon = try XCTUnwrap(slice.models.first(where: { $0.displayName == "Gemini 4 Neon" }))
+        XCTAssertEqual(neon.supportedEfforts, [.low, .medium, .high, .extra])
+        XCTAssertEqual(neon.effort, .high)
+        XCTAssertEqual(neon.modelId, "MODEL_PLACEHOLDER_M41")
+        XCTAssertEqual(neon.resolvedModelId(for: .extra), "MODEL_PLACEHOLDER_M42")
+        XCTAssertEqual(neon.resolvedModelId(for: .low), "MODEL_PLACEHOLDER_M39")
+
+        let carbon = try XCTUnwrap(slice.models.first(where: { $0.displayName == "Gemini 4 Carbon" }))
+        XCTAssertEqual(carbon.supportedEfforts, [.low, .medium, .high])
+        XCTAssertEqual(carbon.effort, .medium)
+        XCTAssertEqual(carbon.modelId, "MODEL_PLACEHOLDER_M44")
+        XCTAssertEqual(carbon.resolvedModelId(for: .high), "MODEL_PLACEHOLDER_M45")
+
+        let argon = try XCTUnwrap(slice.models.first(where: { $0.displayName == "Gemini 4 Argon" }))
+        XCTAssertEqual(argon.badgeTitle, "Leaving Soon")
+        XCTAssertFalse(argon.isNewBadge)
+
+        let gptOss = try XCTUnwrap(slice.models.first(where: { $0.displayName == "GPT-OSS 120B (Medium)" }))
+        XCTAssertTrue(gptOss.supportedEfforts.isEmpty)
+        XCTAssertFalse(gptOss.supportsEffortAdjustment)
+
+        // Partition works with live MODEL_PLACEHOLDER_Mxx IDs
+        let partitioned = CascadeModelConfig.partitionPrimaryAndExtraModels(slice.models)
+        XCTAssertEqual(
+            partitioned.primary.map(\.displayName),
+            ["Gemini 4 Neon", "Gemini 4 Carbon", "Gemini 4 Argon", "GPT-OSS 120B (Medium)"]
+        )
+
+        // Store model-first -> effort selection updates BOTH effort and variant modelId
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.applyModelCatalogResult(
+            AntigravityRPCClient.LiveModelCatalogResult(
+                models: slice.models,
+                defaultModelId: slice.defaultModelId,
+                agents: ["Default"],
+                usageQuota: slice.usageQuota
+            )
+        )
+        XCTAssertEqual(store.selectedModelConfig.displayName, "Gemini 4 Neon")
+        XCTAssertEqual(store.selectedModelConfig.modelId, "MODEL_PLACEHOLDER_M41")
+        XCTAssertEqual(store.selectedModelConfig.effort, .high)
+
+        // Change Neon effort to Extra High -> resolves to M42
+        store.selectThinkingEffort(.extra)
+        XCTAssertEqual(store.selectedModelConfig.effort, .extra)
+        XCTAssertEqual(store.selectedModelConfig.modelId, "MODEL_PLACEHOLDER_M42")
+
+        // Switch model to Carbon -> resets to Carbon's default Medium (M44), rejects Extra High
+        store.selectModel(carbon)
+        XCTAssertEqual(store.selectedModelConfig.displayName, "Gemini 4 Carbon")
+        XCTAssertEqual(store.selectedModelConfig.effort, .medium)
+        XCTAssertEqual(store.selectedModelConfig.modelId, "MODEL_PLACEHOLDER_M44")
+
+        store.selectThinkingEffort(.extra)
+        XCTAssertEqual(store.selectedModelConfig.effort, .medium)
+        XCTAssertEqual(store.selectedModelConfig.modelId, "MODEL_PLACEHOLDER_M44")
+
+        store.selectThinkingEffort(.high)
+        XCTAssertEqual(store.selectedModelConfig.effort, .high)
+        XCTAssertEqual(store.selectedModelConfig.modelId, "MODEL_PLACEHOLDER_M45")
+
+        // Re-applying recorded conversation config with M42 restores Neon + Extra High
+        let recordedStep = CascadeStep(
+            cascadeId: "cid-recorded-neon",
+            stepIndex: 0,
+            type: .userInput,
+            status: .done,
+            recordedExecutionMode: .planning,
+            recordedModelId: "MODEL_PLACEHOLDER_M42"
+        )
+        store.applyRecordedConversationConfig(from: recordedStep)
+        XCTAssertEqual(store.selectedModelConfig.displayName, "Gemini 4 Neon")
+        XCTAssertEqual(store.selectedModelConfig.effort, .extra)
+        XCTAssertEqual(store.selectedModelConfig.modelId, "MODEL_PLACEHOLDER_M42")
+    }
 }

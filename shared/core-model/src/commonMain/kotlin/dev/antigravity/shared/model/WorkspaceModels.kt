@@ -963,15 +963,121 @@ public data class CascadeModelConfig(
     public val isNewBadge: Boolean = false,
     public val requiresUpgradeNote: String? = null,
     public val isModelAlias: Boolean = false,
+    public val effortVariantModelIds: Map<String, String> = emptyMap(),
+    public val effortVariantAliases: Map<String, Boolean> = emptyMap(),
 ) {
     public val id: String get() = modelId
 
     public val hasThinkingBadge: Boolean get() = supportsThinking
 
     public val supportsEffortAdjustment: Boolean
-        get() = !isOrchestrator && supportedEfforts.isNotEmpty()
+        get() = !isOrchestrator && supportedEfforts.size > 1
+
+    public val canonicalDisplayName: String
+        get() = canonicalDisplayName(displayName)
+
+    public val shortOrchestratorRoleLabel: String
+        get() {
+            val planner = plannerModelName?.trim().orEmpty()
+            if (planner.isNotEmpty()) {
+                return stripGeminiFamilyPrefix(planner)
+            }
+            val start = displayName.indexOf('(')
+            val end = displayName.lastIndexOf(')')
+            if (start >= 0 && end > start + 1) {
+                return stripGeminiFamilyPrefix(displayName.substring(start + 1, end).trim())
+            }
+            return "Neon"
+        }
+
+    public val orchestratorSubtitle: String
+        get() {
+            val plannerShort = shortOrchestratorRoleLabel
+            val executorShort = executorModelName?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { stripGeminiFamilyPrefix(it) }
+                ?: "Hydrogen"
+            return "$plannerShort plans · $executorShort executes"
+        }
+
+    public fun resolvedModelId(effort: ThinkingEffortLevel = thinkingEffort): String =
+        effortVariantModelIds[effort.cliValue]?.takeIf { it.isNotEmpty() } ?: modelId
+
+    public fun resolvedIsModelAlias(effort: ThinkingEffortLevel = thinkingEffort): Boolean =
+        effortVariantAliases[effort.cliValue] ?: isModelAlias
+
+    public fun effortForVariantModelId(id: String): ThinkingEffortLevel? {
+        if (id.isBlank()) return null
+        val matchedKey = effortVariantModelIds.entries.firstOrNull { it.value == id }?.key ?: return null
+        return ThinkingEffortLevel.entries.firstOrNull { it.cliValue == matchedKey }
+    }
+
+    public fun containsModelId(id: String): Boolean =
+        id.isNotBlank() && (modelId == id || effortVariantModelIds.values.any { it == id })
+
+    public fun clampedEffort(requested: ThinkingEffortLevel): ThinkingEffortLevel {
+        if (isOrchestrator || supportedEfforts.isEmpty()) return thinkingEffort
+        if (requested in supportedEfforts) return requested
+        if (thinkingEffort in supportedEfforts) return thinkingEffort
+        if (ThinkingEffortLevel.HIGH in supportedEfforts) return ThinkingEffortLevel.HIGH
+        if (ThinkingEffortLevel.MEDIUM in supportedEfforts) return ThinkingEffortLevel.MEDIUM
+        return supportedEfforts.first()
+    }
+
+    public fun selectingEffort(targetEffort: ThinkingEffortLevel): CascadeModelConfig {
+        if (isOrchestrator || supportedEfforts.isEmpty()) return this
+        val resolved = clampedEffort(targetEffort)
+        return copy(
+            modelId = resolvedModelId(resolved),
+            thinkingEffort = resolved,
+            isModelAlias = resolvedIsModelAlias(resolved),
+        )
+    }
+
+    public data class ParsedEffortLabel(
+        public val baseName: String,
+        public val effort: ThinkingEffortLevel,
+    )
+
+    public data class RawModelVariantEntry(
+        public val config: CascadeModelConfig,
+        public val explicitSupportedEfforts: List<ThinkingEffortLevel>? = null,
+        public val isRecommended: Boolean = false,
+        public val rawDescription: String? = null,
+        public val quotaSuffix: String? = null,
+    )
 
     public companion object {
+        private val CANONICAL_EFFORT_ORDER: List<ThinkingEffortLevel> = listOf(
+            ThinkingEffortLevel.LOW,
+            ThinkingEffortLevel.MEDIUM,
+            ThinkingEffortLevel.HIGH,
+            ThinkingEffortLevel.EXTRA,
+        )
+
+        private val EFFORT_LABEL_SUFFIXES: List<Pair<String, ThinkingEffortLevel>> = listOf(
+            " (Extra High)" to ThinkingEffortLevel.EXTRA,
+            " (XHigh)" to ThinkingEffortLevel.EXTRA,
+            " (X-High)" to ThinkingEffortLevel.EXTRA,
+            " (Extra)" to ThinkingEffortLevel.EXTRA,
+            " (Max)" to ThinkingEffortLevel.EXTRA,
+            " (High)" to ThinkingEffortLevel.HIGH,
+            " (Medium)" to ThinkingEffortLevel.MEDIUM,
+            " (Med)" to ThinkingEffortLevel.MEDIUM,
+            " (Low)" to ThinkingEffortLevel.LOW,
+            " (Minimal)" to ThinkingEffortLevel.LOW,
+        )
+
+        private fun stripGeminiFamilyPrefix(name: String): String {
+            var cleaned = name.trim()
+            for (prefix in listOf("Gemini 4 ", "Gemini 3.8 ", "Gemini 3.1 ", "Gemini 3 ", "Gemini ")) {
+                if (cleaned.startsWith(prefix, ignoreCase = true) && cleaned.length > prefix.length) {
+                    cleaned = cleaned.drop(prefix.length).trim()
+                    break
+                }
+            }
+            return cleaned.ifEmpty { name.trim() }
+        }
+
         public val availableAgents: List<String> = listOf(
             "Default",
             "go-reviewer",
@@ -980,9 +1086,203 @@ public data class CascadeModelConfig(
 
         public fun isGenericBadgeLabel(text: String): Boolean {
             return when (text.trim().lowercase()) {
-                "new", "beta", "preview", "alpha", "experimental", "recommended", "legacy" -> true
+                "new", "beta", "preview", "alpha", "experimental", "recommended", "legacy", "leaving soon", "notice" -> true
                 else -> false
             }
+        }
+
+        public fun canonicalDisplayName(label: String): String {
+            var name = label.trim()
+            if (name.endsWith(" (Thinking)", ignoreCase = true) && name.length > " (Thinking)".length) {
+                name = name.dropLast(" (Thinking)".length).trim()
+            }
+            return name
+        }
+
+        public fun stripEffortSuffix(label: String): ParsedEffortLabel? {
+            val trimmed = label.trim()
+            for ((suffix, effort) in EFFORT_LABEL_SUFFIXES) {
+                if (trimmed.endsWith(suffix, ignoreCase = true)) {
+                    val base = trimmed.dropLast(suffix.length).trim()
+                    if (base.isNotEmpty()) {
+                        return ParsedEffortLabel(baseName = base, effort = effort)
+                    }
+                }
+            }
+            return null
+        }
+
+        public fun parseEffortToken(rawToken: String): ThinkingEffortLevel? =
+            when (rawToken.trim().lowercase()) {
+                "xhigh", "x-high", "extra", "extra high", "extra_high", "max" -> ThinkingEffortLevel.EXTRA
+                "high" -> ThinkingEffortLevel.HIGH
+                "medium", "med" -> ThinkingEffortLevel.MEDIUM
+                "low", "minimal" -> ThinkingEffortLevel.LOW
+                else -> null
+            }
+
+        private data class SuffixedMember(
+            val entry: RawModelVariantEntry,
+            val baseName: String,
+            val effort: ThinkingEffortLevel,
+        )
+
+        /**
+         * Groups flat per-effort upstream `clientModelConfigs` entries (e.g. `Gemini 4 Neon (High)`,
+         * `Gemini 4 Neon (XHigh)`, `Gemini 4 Neon (Medium)`, `Gemini 4 Neon (Low)`) into a single
+         * selectable model family (`Gemini 4 Neon`) whose `supportedEfforts` and `effortVariantModelIds`
+         * reflect the exact effort tiers advertised by the server.
+         *
+         * Single-variant models with a fixed effort suffix (e.g. `GPT-OSS 120B (Medium)`) remain
+         * ungrouped with `supportedEfforts = emptyList()` (matching Antigravity Desktop), and
+         * Orchestrator presets (`Orchestrator (Neon)`, `Orchestrator (Carbon)`, `Orchestrator (Argon)`)
+         * remain separate entries without effort tiers.
+         */
+        public fun groupEffortVariants(
+            entries: List<RawModelVariantEntry>,
+            defaultModelId: String? = null,
+        ): List<CascadeModelConfig> {
+            if (entries.isEmpty()) return emptyList()
+
+            val groupedByKey = linkedMapOf<String, MutableList<SuffixedMember>>()
+            val entryGroupKey = arrayOfNulls<String>(entries.size)
+
+            entries.forEachIndexed { idx, entry ->
+                if (entry.config.isOrchestrator) return@forEachIndexed
+                val parsed = stripEffortSuffix(entry.config.displayName) ?: return@forEachIndexed
+                val cleanBase = canonicalDisplayName(parsed.baseName)
+                val key = cleanBase.lowercase()
+                entryGroupKey[idx] = key
+                groupedByKey.getOrPut(key) { mutableListOf() }.add(
+                    SuffixedMember(entry = entry, baseName = cleanBase, effort = parsed.effort),
+                )
+            }
+
+            val emittedKeys = mutableSetOf<String>()
+            val result = mutableListOf<CascadeModelConfig>()
+
+            entries.forEachIndexed { idx, entry ->
+                val key = entryGroupKey[idx]
+                if (key == null) {
+                    val cfg = if (entry.config.isOrchestrator) {
+                        entry.config.copy(supportedEfforts = emptyList())
+                    } else {
+                        entry.config
+                    }
+                    result.add(cfg)
+                    return@forEachIndexed
+                }
+
+                if (!emittedKeys.add(key)) return@forEachIndexed
+                val members = groupedByKey[key].orEmpty()
+                if (members.size == 1) {
+                    val only = members.first().entry
+                    val explicit = only.explicitSupportedEfforts
+                    if (explicit != null && explicit.size > 1) {
+                        result.add(only.config.copy(supportedEfforts = explicit))
+                    } else {
+                        result.add(only.config.copy(supportedEfforts = emptyList()))
+                    }
+                    return@forEachIndexed
+                }
+
+                val variantIds = linkedMapOf<String, String>()
+                val variantAliases = linkedMapOf<String, Boolean>()
+                for (member in members) {
+                    val effortKey = member.effort.cliValue
+                    if (effortKey !in variantIds) {
+                        variantIds[effortKey] = member.entry.config.modelId
+                        variantAliases[effortKey] = member.entry.config.isModelAlias
+                    }
+                }
+                val sortedEfforts = CANONICAL_EFFORT_ORDER.filter { it.cliValue in variantIds }
+                val representative = members.firstOrNull { defaultModelId != null && it.entry.config.modelId == defaultModelId }
+                    ?: members.firstOrNull { it.entry.isRecommended }
+                    ?: members.first()
+
+                val cleanName = members.first().baseName
+                val nonNewTag = members.firstNotNullOfOrNull { member ->
+                    member.entry.config.badgeTag?.takeIf { it.isNotBlank() && !it.equals("New", ignoreCase = true) }
+                }
+                val isNew = nonNewTag == null && members.any { it.entry.config.isNewBadge }
+                val resolvedBadgeTag = nonNewTag
+                    ?: members.firstNotNullOfOrNull { it.entry.config.badgeTag?.takeIf { t -> t.isNotBlank() } }
+                    ?: if (isNew) "New" else null
+                val rawDesc = representative.entry.rawDescription
+                    ?: members.firstNotNullOfOrNull { it.entry.rawDescription }
+                val baseSubtitle = rawDesc ?: descriptiveSubtitle(cleanName)
+                val finalSubtitle = representative.entry.quotaSuffix?.let { "$baseSubtitle · $it" } ?: baseSubtitle
+
+                result.add(
+                    representative.entry.config.copy(
+                        modelId = representative.entry.config.modelId,
+                        displayName = cleanName,
+                        subtitle = finalSubtitle,
+                        supportsThinking = members.any { it.entry.config.supportsThinking },
+                        isThinkingEnabled = members.any { it.entry.config.isThinkingEnabled },
+                        thinkingEffort = representative.effort,
+                        badgeTag = resolvedBadgeTag,
+                        isDefault = members.any { it.entry.config.isDefault } ||
+                            (defaultModelId != null && members.any { it.entry.config.modelId == defaultModelId }),
+                        supportedEfforts = sortedEfforts,
+                        isNewBadge = isNew,
+                        requiresUpgradeNote = representative.entry.config.requiresUpgradeNote
+                            ?: members.firstNotNullOfOrNull { it.entry.config.requiresUpgradeNote },
+                        isModelAlias = representative.entry.config.isModelAlias,
+                        effortVariantModelIds = variantIds,
+                        effortVariantAliases = variantAliases,
+                    ),
+                )
+            }
+
+            return result
+        }
+
+        /**
+         * Partitions non-orchestrator models into primary picker rows (up to 6, ordered by official
+         * Antigravity flagship priority using ID OR clean name matching so live `MODEL_PLACEHOLDER_Mxx`
+         * IDs never fall back to stale offline defaults) and remaining `More models` rows.
+         */
+        public fun partitionPrimaryAndExtraModels(
+            catalog: List<CascadeModelConfig>,
+        ): Pair<List<CascadeModelConfig>, List<CascadeModelConfig>> {
+            val nonOrch = catalog.filterNot { it.isOrchestrator }
+            if (nonOrch.isEmpty()) return emptyList<CascadeModelConfig>() to emptyList()
+
+            val matchers: List<(CascadeModelConfig) -> Boolean> = listOf(
+                { m -> m.modelId == "MODEL_GOOGLE_GEMINI_4_NEON" || m.canonicalDisplayName.contains("gemini 4 neon", ignoreCase = true) },
+                { m -> m.modelId == "MODEL_GOOGLE_GEMINI_4_CARBON" || m.canonicalDisplayName.contains("gemini 4 carbon", ignoreCase = true) },
+                { m -> m.modelId == "MODEL_GOOGLE_GEMINI_4_ARGON" || m.canonicalDisplayName.contains("gemini 4 argon", ignoreCase = true) },
+                { m -> m.modelId == "MODEL_GOOGLE_GEMINI_4_HYDROGEN" || m.canonicalDisplayName.contains("gemini 4 hydrogen", ignoreCase = true) },
+                { m ->
+                    m.modelId == "MODEL_CLAUDE_5_5_OPUS_THINKING" ||
+                        m.canonicalDisplayName.contains("claude opus 5.5", ignoreCase = true) ||
+                        m.canonicalDisplayName.contains("claude 5.5 opus", ignoreCase = true)
+                },
+                { m -> m.modelId == "MODEL_GOOGLE_GEMINI_3_8_FLASH" || m.canonicalDisplayName.contains("gemini 3.8 flash", ignoreCase = true) },
+            )
+
+            val primary = mutableListOf<CascadeModelConfig>()
+            val usedIds = mutableSetOf<String>()
+
+            for (matcher in matchers) {
+                val found = nonOrch.firstOrNull { it.modelId !in usedIds && matcher(it) }
+                if (found != null) {
+                    primary.add(found)
+                    usedIds.add(found.modelId)
+                }
+            }
+            if (primary.size < 6) {
+                for (model in nonOrch) {
+                    if (model.modelId !in usedIds) {
+                        primary.add(model)
+                        usedIds.add(model.modelId)
+                        if (primary.size >= 6) break
+                    }
+                }
+            }
+            val extra = nonOrch.filterNot { it.modelId in usedIds }
+            return primary to extra
         }
 
         public fun descriptiveSubtitle(modelLabel: String): String {

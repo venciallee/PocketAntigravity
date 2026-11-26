@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +28,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,12 +48,13 @@ import dev.antigravity.android.ui.home.AgentsHomeScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.CascadeModelConfig
 import dev.antigravity.shared.model.ThinkingEffortLevel
+import kotlinx.coroutines.CancellationException
 
 /**
  * UE09_MODEL_AND_MODE (`and-model.png`): Official Antigravity 2.x Model & Thinking Effort
  * Material 3 bottom sheet — zero legacy Planning/Fast toggle, featuring Orchestrator,
- * Gemini 4 Neon + 4-level Thinking FilterChips (`Low`/`Medium`/`High`/`Extra High`),
- * Carbon/Argon/Hydrogen/Claude Opus 5.5/Gemini 3.8 Flash, expandable `More models`,
+ * grouped model families (one row per model; inline Thinking FilterChips expand ONLY for
+ * the selected model using that model's actual `supportedEfforts`), expandable `More models`,
  * and Five Hour / Weekly quota bars + `View Usage`.
  */
 @Composable
@@ -65,6 +66,7 @@ fun ModelAndModeSheetScreen(
 ) {
     val colors = LocalAntigravityColors.current
     val settingsState by coordinator.settingsStore.state.collectAsState()
+    val connectionState by coordinator.connectionState.collectAsState()
     var showMoreModels by remember { mutableStateOf(false) }
     var showUsageDetails by remember { mutableStateOf(false) }
 
@@ -72,12 +74,38 @@ fun ModelAndModeSheetScreen(
     val selectedEffort = settingsState.selectedEffort
     val quota = settingsState.quota
 
-    val primaryModels = remember(settingsState.models) {
-        buildPrimaryModelList(settingsState.models)
+    val catalogModels = remember(settingsState.models) {
+        settingsState.models.ifEmpty { CascadeModelConfig.liveDefaultCatalog }
     }
-    val extraModels = remember(settingsState.models, primaryModels) {
-        val primaryIds = primaryModels.map { it.modelId }.toSet()
-        settingsState.models.filterNot { it.modelId in primaryIds }
+    val orchestratorModels = remember(catalogModels) {
+        catalogModels.filter { it.isOrchestrator }
+    }
+    val activeOrchestrator = remember(orchestratorModels, selectedModelId) {
+        orchestratorModels.firstOrNull { it.containsModelId(selectedModelId) }
+            ?: orchestratorModels.firstOrNull()
+    }
+    val partitioned = remember(catalogModels) {
+        CascadeModelConfig.partitionPrimaryAndExtraModels(catalogModels)
+    }
+    val primaryModels = partitioned.first
+    val extraModels = partitioned.second
+
+    LaunchedEffect(connectionState.hasPairedBackend, connectionState.isConnected) {
+        if (connectionState.hasPairedBackend || connectionState.isConnected) {
+            try {
+                coordinator.refreshModelCatalog()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort live catalog refresh when opening model sheet.
+            }
+        }
+    }
+
+    LaunchedEffect(selectedModelId, extraModels) {
+        if (extraModels.any { it.containsModelId(selectedModelId) }) {
+            showMoreModels = true
+        }
     }
 
     Box(
@@ -166,111 +194,61 @@ fun ModelAndModeSheetScreen(
                     }
                 }
 
-                // Orchestrator row
-                val orchestratorSelected = selectedModelId.contains("ORCHESTRATOR", ignoreCase = true)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (orchestratorSelected) colors.surfaceElevated else Color.Transparent)
-                        .clickable { coordinator.settingsStore.selectModel("MODEL_ORCHESTRATOR_NEON") }
-                        .padding(horizontal = 24.dp, vertical = 12.dp)
-                        .testTag("model-row-orchestrator"),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = "Orchestrator",
-                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.5.sp),
-                            color = colors.inkReading,
-                        )
-                        if (orchestratorSelected) {
-                            Icon(
-                                imageVector = Icons.Rounded.Check,
-                                contentDescription = "Selected",
-                                tint = colors.accentPeriwinkle,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
-                    Text(
-                        text = "Neon plans · Hydrogen executes",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
-                        color = colors.inkSecondary,
-                    )
-                }
-
-                // Primary Models List (`Gemini 4 Neon` expanded with 4 FilterChips when selected)
-                primaryModels.forEach { model ->
-                    val isSelected = selectedModelId == model.modelId
-                    val supportsEffort = model.supportedEfforts.isNotEmpty()
+                // Orchestrator row (with inline planner selector when selected and multiple presets exist)
+                if (activeOrchestrator != null) {
+                    val orchestratorSelected = settingsState.isEffortLockedForOrchestrator
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(if (isSelected) colors.surfaceElevated else Color.Transparent)
-                            .clickable { coordinator.settingsStore.selectModel(model.modelId) }
-                            .padding(horizontal = 24.dp, vertical = 14.dp)
-                            .testTag("model-row-${model.modelId}"),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                            .background(if (orchestratorSelected) colors.surfaceElevated else Color.Transparent)
+                            .clickable { coordinator.settingsStore.selectModel(activeOrchestrator.modelId) }
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                            .testTag("model-row-orchestrator"),
+                        verticalArrangement = Arrangement.spacedBy(if (orchestratorSelected && orchestratorModels.size > 1) 10.dp else 2.dp),
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Text(
-                                text = model.displayName,
-                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.5.sp),
-                                color = colors.inkReading,
-                            )
-                            if (model.displayName == "Gemini 4 Neon") {
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = colors.surfaceActiveTab,
-                                ) {
-                                    Text(
-                                        text = "New",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontSize = 11.5.sp,
-                                            fontWeight = FontWeight.Medium,
-                                        ),
-                                        color = colors.pillActiveForeground,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = "Orchestrator",
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.5.sp),
+                                    color = colors.inkReading,
+                                )
+                                if (orchestratorSelected) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Check,
+                                        contentDescription = "Selected",
+                                        tint = colors.accentPeriwinkle,
+                                        modifier = Modifier.size(18.dp),
                                     )
                                 }
                             }
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "Selected",
-                                    tint = colors.accentPeriwinkle,
-                                    modifier = Modifier.size(19.dp),
-                                )
-                            }
+                            Text(
+                                text = activeOrchestrator.orchestratorSubtitle,
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
+                                color = colors.inkSecondary,
+                            )
                         }
 
-                        if (isSelected && supportsEffort) {
+                        if (orchestratorSelected && orchestratorModels.size > 1) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                listOf(
-                                    ThinkingEffortLevel.LOW to "Low",
-                                    ThinkingEffortLevel.MEDIUM to "Medium",
-                                    ThinkingEffortLevel.HIGH to "High",
-                                    ThinkingEffortLevel.EXTRA to "Extra High",
-                                ).forEach { (level, label) ->
-                                    val chipSelected = selectedEffort == level
+                                orchestratorModels.forEach { preset ->
+                                    val presetSelected = preset.containsModelId(selectedModelId)
+                                    val roleLabel = preset.shortOrchestratorRoleLabel
                                     Surface(
-                                        onClick = { coordinator.settingsStore.selectThinkingEffort(level) },
-                                        modifier = Modifier.testTag("effort-chip-${level.name.lowercase()}"),
+                                        onClick = { coordinator.settingsStore.selectModel(preset.modelId) },
+                                        modifier = Modifier.testTag("orchestrator-chip-${roleLabel.lowercase()}"),
                                         shape = RoundedCornerShape(8.dp),
-                                        color = if (chipSelected) colors.surfaceActiveTab else Color.Transparent,
+                                        color = if (presetSelected) colors.surfaceActiveTab else Color.Transparent,
                                         border = BorderStroke(
                                             width = 1.dp,
-                                            color = if (chipSelected) colors.surfaceActiveTab else colors.cardBorder,
+                                            color = if (presetSelected) colors.surfaceActiveTab else colors.cardBorder,
                                         ),
                                     ) {
                                         Row(
@@ -278,7 +256,7 @@ fun ModelAndModeSheetScreen(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(5.dp),
                                         ) {
-                                            if (chipSelected) {
+                                            if (presetSelected) {
                                                 Icon(
                                                     imageVector = Icons.Rounded.Check,
                                                     contentDescription = null,
@@ -287,12 +265,12 @@ fun ModelAndModeSheetScreen(
                                                 )
                                             }
                                             Text(
-                                                text = label,
+                                                text = roleLabel,
                                                 style = MaterialTheme.typography.labelLarge.copy(
                                                     fontSize = 13.5.sp,
                                                     fontWeight = FontWeight.Medium,
                                                 ),
-                                                color = if (chipSelected) colors.pillActiveForeground else colors.inkReading,
+                                                color = if (presetSelected) colors.pillActiveForeground else colors.inkReading,
                                                 maxLines = 1,
                                             )
                                         }
@@ -303,47 +281,50 @@ fun ModelAndModeSheetScreen(
                     }
                 }
 
-                // Expandable `More models ⌄`
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showMoreModels = !showMoreModels }
-                        .padding(horizontal = 24.dp, vertical = 14.dp)
-                        .testTag("btn-more-models"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        text = "More models",
-                        style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
-                        color = colors.accentPeriwinkle,
-                    )
-                    Icon(
-                        imageVector = if (showMoreModels) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = null,
-                        tint = colors.accentPeriwinkle,
-                        modifier = Modifier.size(18.dp),
+                // Step 1: Primary Models List (one row per model family; Step 2 effort chips expand when selected)
+                primaryModels.forEach { model ->
+                    ModelPickerRow(
+                        model = model,
+                        isSelected = model.containsModelId(selectedModelId),
+                        selectedEffort = selectedEffort,
+                        onSelectModel = { coordinator.settingsStore.selectModel(model.modelId) },
+                        onSelectEffort = { level -> coordinator.settingsStore.selectThinkingEffort(level) },
                     )
                 }
 
-                if (showMoreModels) {
-                    extraModels.forEach { extra ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { coordinator.settingsStore.selectModel(extra.modelId) }
-                                .padding(horizontal = 24.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = extra.displayName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = colors.inkLabel,
-                                modifier = Modifier.weight(1f),
+                // Expandable `More models ⌄`
+                if (extraModels.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showMoreModels = !showMoreModels }
+                            .padding(horizontal = 24.dp, vertical = 14.dp)
+                            .testTag("btn-more-models"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = if (showMoreModels) "Fewer models" else "More models",
+                            style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
+                            color = colors.accentPeriwinkle,
+                        )
+                        Icon(
+                            imageVector = if (showMoreModels) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = colors.accentPeriwinkle,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+
+                    if (showMoreModels) {
+                        extraModels.forEach { extra ->
+                            ModelPickerRow(
+                                model = extra,
+                                isSelected = extra.containsModelId(selectedModelId),
+                                selectedEffort = selectedEffort,
+                                onSelectModel = { coordinator.settingsStore.selectModel(extra.modelId) },
+                                onSelectEffort = { level -> coordinator.settingsStore.selectThinkingEffort(level) },
                             )
-                            if (selectedModelId == extra.modelId) {
-                                Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.accentPeriwinkle, modifier = Modifier.size(18.dp))
-                            }
                         }
                     }
                 }
@@ -390,6 +371,136 @@ fun ModelAndModeSheetScreen(
 }
 
 @Composable
+private fun ModelPickerRow(
+    model: CascadeModelConfig,
+    isSelected: Boolean,
+    selectedEffort: ThinkingEffortLevel,
+    onSelectModel: () -> Unit,
+    onSelectEffort: (ThinkingEffortLevel) -> Unit,
+) {
+    val colors = LocalAntigravityColors.current
+    val cleanName = model.canonicalDisplayName
+    val supportsEffort = model.supportsEffortAdjustment
+    val isFlagshipNeon = model.modelId == "MODEL_GOOGLE_GEMINI_4_NEON" ||
+        cleanName.contains("gemini 4 neon", ignoreCase = true)
+    val nonNewTag = model.badgeTag?.takeIf { it.isNotBlank() && !it.equals("New", ignoreCase = true) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (isSelected) colors.surfaceElevated else Color.Transparent)
+            .clickable(onClick = onSelectModel)
+            .padding(horizontal = 24.dp, vertical = 14.dp)
+            .testTag("model-row-${model.modelId}"),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = cleanName,
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.5.sp),
+                color = colors.inkReading,
+            )
+            if (model.isNewBadge && isFlagshipNeon) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = colors.surfaceActiveTab,
+                ) {
+                    Text(
+                        text = "New",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        color = colors.pillActiveForeground,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                    )
+                }
+            } else if (nonNewTag != null) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = colors.surfaceElevated,
+                ) {
+                    Text(
+                        text = nonNewTag,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        color = colors.inkSecondary,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = "Selected",
+                    tint = colors.accentPeriwinkle,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+        }
+
+        if (isSelected && supportsEffort) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                model.supportedEfforts.forEach { level ->
+                    val label = effortDisplayLabel(level)
+                    val chipSelected = selectedEffort == level
+                    Surface(
+                        onClick = { onSelectEffort(level) },
+                        modifier = Modifier.testTag("effort-chip-${level.name.lowercase()}"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (chipSelected) colors.surfaceActiveTab else Color.Transparent,
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = if (chipSelected) colors.surfaceActiveTab else colors.cardBorder,
+                        ),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            if (chipSelected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = colors.pillActiveForeground,
+                                    modifier = Modifier.size(15.dp),
+                                )
+                            }
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                                color = if (chipSelected) colors.pillActiveForeground else colors.inkReading,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun effortDisplayLabel(level: ThinkingEffortLevel): String = when (level) {
+    ThinkingEffortLevel.LOW -> "Low"
+    ThinkingEffortLevel.MEDIUM -> "Medium"
+    ThinkingEffortLevel.HIGH -> "High"
+    ThinkingEffortLevel.EXTRA -> "Extra High"
+}
+
+@Composable
 private fun QuotaProgressBarRow(
     label: String,
     trailing: String,
@@ -427,19 +538,4 @@ private fun QuotaProgressBarRow(
             )
         }
     }
-}
-
-private fun buildPrimaryModelList(catalog: List<CascadeModelConfig>): List<CascadeModelConfig> {
-    val preferredIds = listOf(
-        "MODEL_GOOGLE_GEMINI_4_NEON",
-        "MODEL_GOOGLE_GEMINI_4_CARBON",
-        "MODEL_GOOGLE_GEMINI_4_ARGON",
-        "MODEL_GOOGLE_GEMINI_4_HYDROGEN",
-        "MODEL_CLAUDE_5_5_OPUS_THINKING",
-        "MODEL_GOOGLE_GEMINI_3_8_FLASH",
-    )
-    val byId = catalog.associateBy { it.modelId }
-    val resolved = preferredIds.mapNotNull { byId[it] }
-    if (resolved.isNotEmpty()) return resolved
-    return CascadeModelConfig.liveDefaultCatalog.filterNot { it.isOrchestrator }.take(6)
 }
