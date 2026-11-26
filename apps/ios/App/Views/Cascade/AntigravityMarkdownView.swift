@@ -59,6 +59,7 @@ public struct AntigravityMarkdownView: View {
     public let markdown: String
     public let variant: MarkdownRenderVariant
     public let store: AntigravitySessionStore?
+    @Environment(\.appLanguage) private var lang
 
     @State private var copiedRefLabel: String? = nil
     @State private var copyGeneration: Int = 0
@@ -93,7 +94,7 @@ public struct AntigravityMarkdownView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.statusDone)
-                    Text("Copied \(copiedRefLabel)")
+                    Text(lang.t("Copied \(copiedRefLabel)", "已复制 \(copiedRefLabel)"))
                         .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.inkLabel)
                         .lineLimit(1)
@@ -159,6 +160,7 @@ internal struct AntigravityMarkdownBlocksView: View {
     let blocks: [MarkdownBlock]
     let variant: MarkdownRenderVariant
     let store: AntigravitySessionStore?
+    @Environment(\.appLanguage) private var lang
 
     var body: some View {
         VStack(alignment: .leading, spacing: variant.blockSpacing) {
@@ -239,7 +241,7 @@ internal struct AntigravityMarkdownBlocksView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "scribble.variable")
                             .font(.system(size: 11, weight: .semibold))
-                        Text("SVG Graphic")
+                        Text(lang.t("SVG Graphic", "SVG 矢量图"))
                             .font(.system(size: 11, weight: .semibold))
                     }
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)

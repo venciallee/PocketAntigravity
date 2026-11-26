@@ -87,8 +87,11 @@ import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.components.statusColorFor
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AntigravityCloudDetector
+import dev.antigravity.shared.model.localizedTitle
 import dev.antigravity.shared.model.CascadeDisplayItem
 import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.ComposerAttachmentChip
@@ -190,8 +193,9 @@ fun CascadeChatScreen(
     val totalDeletions = activeSummary?.totalDeletions ?: 14
 
     val displayItems = chatState.activeDisplayItems
+    val lang = LocalAppLanguage.current
     val modelDisplayName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
-    val permissionLabel = settingsState.activePermissionPreset.displayTitle
+    val permissionLabel = settingsState.activePermissionPreset.localizedTitle(lang)
     val voiceController = rememberVoiceDictationController()
 
     Scaffold(
@@ -219,7 +223,7 @@ fun CascadeChatScreen(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = tr("Back", "返回"),
                         tint = colors.inkReading,
                     )
                 }
@@ -240,7 +244,7 @@ fun CascadeChatScreen(
                                 modifier = Modifier.size(13.dp),
                             )
                             Text(
-                                text = "Loading...",
+                                text = tr("Loading...", "加载中…"),
                                 style = MaterialTheme.typography.titleLarge.copy(
                                     fontSize = 17.5.sp,
                                     fontWeight = FontWeight.Normal,
@@ -313,7 +317,7 @@ fun CascadeChatScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "Conversation overview",
+                        contentDescription = tr("Conversation overview", "会话概览"),
                         tint = colors.inkReading,
                     )
                 }
@@ -420,7 +424,7 @@ fun CascadeChatScreen(
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                             ) {
                                 Text(
-                                    text = "Dismiss",
+                                    text = tr("Dismiss", "关闭"),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = colors.accentPeriwinkle,
                                 )
@@ -523,15 +527,15 @@ fun CascadeChatScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            text = "Loading conversation history...",
+                            text = tr("Loading conversation history...", "正在加载会话记录…"),
                             style = MaterialTheme.typography.titleSmall,
                             color = colors.inkReading,
                         )
                         Text(
                             text = if (!connectionState.isConnected && connectionState.isConnecting) {
-                                "Connecting to $cleanHostLabel..."
+                                tr("Connecting to $cleanHostLabel...", "正在连接 $cleanHostLabel…")
                             } else {
-                                "Syncing trajectory steps from $cleanHostLabel"
+                                tr("Syncing trajectory steps from $cleanHostLabel", "正在从 $cleanHostLabel 同步执行轨迹")
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.inkSecondary,
@@ -569,7 +573,7 @@ fun CascadeChatScreen(
                                     .background(colors.statusError),
                             )
                             Text(
-                                text = "Could not load trajectory steps",
+                                text = tr("Could not load trajectory steps", "无法加载会话执行记录"),
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = colors.inkReading,
                             )
@@ -591,7 +595,7 @@ fun CascadeChatScreen(
                             modifier = Modifier.testTag("btn-chat-retry-steps"),
                         ) {
                             Text(
-                                text = "Retry",
+                                text = tr("Retry", "重试"),
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                             )
                         }
@@ -639,24 +643,38 @@ fun CascadeChatScreen(
                             )
                             Text(
                                 text = when {
-                                    isNoInternet -> "No Internet · Queued Outbox Ready"
+                                    isNoInternet -> tr("No Internet · Queued Outbox Ready", "无网络连接 · 离线发件箱已就绪")
                                     isOfflinePaired -> if (chatState.pendingOutboxCount > 0) {
-                                        "Host Offline · ${chatState.pendingOutboxCount} Queued"
+                                        tr(
+                                            "Host Offline · ${chatState.pendingOutboxCount} Queued",
+                                            "主机离线 · ${chatState.pendingOutboxCount} 条排队中",
+                                        )
                                     } else {
-                                        "Host Offline · Queued Outbox Ready"
+                                        tr("Host Offline · Queued Outbox Ready", "主机离线 · 离线发件箱已就绪")
                                     }
-                                    connectionState.isConnected -> "Ready for Prompt"
-                                    else -> "New Session Ready"
+                                    connectionState.isConnected -> tr("Ready for Prompt", "准备就绪")
+                                    else -> tr("New Session Ready", "新会话已就绪")
                                 },
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = colors.inkReading,
                             )
                         }
+                        val runtimeTargetName = if (resolvedIsCloud) {
+                            tr("Antigravity Cloud", "Antigravity 云端")
+                        } else {
+                            tr("Antigravity Desktop", "Antigravity 桌面端")
+                        }
                         Text(
                             text = if (isNoProj) {
-                                "Unassigned conversation on $cleanHostLabel. Send a message below to run on ${if (resolvedIsCloud) "Antigravity Cloud" else "Antigravity Desktop"}."
+                                tr(
+                                    "Unassigned conversation on $cleanHostLabel. Send a message below to run on $runtimeTargetName.",
+                                    "位于 $cleanHostLabel 的未归属对话。在下方发送消息即可在${runtimeTargetName}上运行。",
+                                )
                             } else {
-                                "Bound to $rawSlug on $cleanHostLabel. Send a message below to run on ${if (resolvedIsCloud) "Antigravity Cloud" else "Antigravity Desktop"}."
+                                tr(
+                                    "Bound to $rawSlug on $cleanHostLabel. Send a message below to run on $runtimeTargetName.",
+                                    "已绑定 $cleanHostLabel 上的项目 $rawSlug。在下方发送消息即可在${runtimeTargetName}上运行。",
+                                )
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.inkSecondary,
@@ -865,7 +883,7 @@ private fun UserInputStepView(step: CascadeStep) {
                 )
                 if (step.isQueuedInOutbox) {
                     Text(
-                        text = "Queued offline · will sync automatically",
+                        text = tr("Queued offline · will sync automatically", "已离线排队 · 连网后自动同步"),
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.statusWaiting,
                     )
@@ -884,9 +902,15 @@ private fun EvidenceGroupCompactRow(
     val colors = LocalAntigravityColors.current
     val fileNames = item.steps.mapNotNull { it.viewFile?.fileName ?: it.codeAction?.fileName }.distinct()
     val summaryLabel = if (fileNames.isNotEmpty()) {
-        "Inspected ${fileNames.size} files · ${fileNames.joinToString(", ")}"
+        tr(
+            "Inspected ${fileNames.size} files · ${fileNames.joinToString(", ")}",
+            "已查看 ${fileNames.size} 个文件 · ${fileNames.joinToString(", ")}",
+        )
     } else {
-        "Completed ${item.steps.size} workspace actions"
+        tr(
+            "Completed ${item.steps.size} workspace actions",
+            "已完成 ${item.steps.size} 项工作区操作",
+        )
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -931,9 +955,17 @@ private fun EvidenceGroupCompactRow(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     item.steps.forEach { ev ->
-                        val label = ev.codeAction?.let { "Edited ${it.fileName} (+${it.additions} -${it.deletions})" }
-                            ?: ev.viewFile?.let { "Viewed ${it.fileName} (L${it.startLine}–${it.endLine})" }
-                            ?: ev.type.name
+                        val label = ev.codeAction?.let {
+                            tr(
+                                "Edited ${it.fileName} (+${it.additions} -${it.deletions})",
+                                "已编辑 ${it.fileName} (+${it.additions} -${it.deletions})",
+                            )
+                        } ?: ev.viewFile?.let {
+                            tr(
+                                "Viewed ${it.fileName} (L${it.startLine}–${it.endLine})",
+                                "已查看 ${it.fileName} (L${it.startLine}–${it.endLine})",
+                            )
+                        } ?: ev.type.name
                         Text(
                             text = label,
                             style = MaterialTheme.typography.labelSmall,
@@ -1009,7 +1041,7 @@ private fun PlannerResponseStepView(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Rounded.Description,
-                                contentDescription = "Implementation Plan",
+                                contentDescription = tr("Implementation Plan", "实施计划"),
                                 tint = colors.accentPeriwinkle,
                                 modifier = Modifier.size(20.dp),
                             )
@@ -1020,7 +1052,7 @@ private fun PlannerResponseStepView(
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Text(
-                            text = "Implementation Plan",
+                            text = tr("Implementation Plan", "实施计划"),
                             style = MaterialTheme.typography.titleSmall.copy(
                                 fontSize = 15.5.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -1028,14 +1060,14 @@ private fun PlannerResponseStepView(
                             color = colors.inkReading,
                         )
                         Text(
-                            text = "Approved · 2 comments addressed",
+                            text = tr("Approved · 2 comments addressed", "已批准 · 已处理 2 条评论"),
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
                             color = colors.inkSecondary,
                         )
                     }
                     Icon(
                         imageVector = Icons.Rounded.ChevronRight,
-                        contentDescription = "Open Plan Review",
+                        contentDescription = tr("Open Plan Review", "打开计划审查"),
                         tint = colors.inkSecondary,
                         modifier = Modifier.size(20.dp),
                     )
@@ -1067,7 +1099,10 @@ private fun TaskBoundaryProgressCard(taskBoundary: TaskBoundaryPayload) {
         ) {
             Text(
                 text = taskBoundary.taskName.ifBlank {
-                    "Task · ${taskBoundary.completedCount} of ${taskBoundary.totalCount} done"
+                    tr(
+                        "Task · ${taskBoundary.completedCount} of ${taskBoundary.totalCount} done",
+                        "任务 · 已完成 ${taskBoundary.completedCount}/${taskBoundary.totalCount}",
+                    )
                 },
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 15.5.sp,
@@ -1095,7 +1130,7 @@ private fun TaskBoundaryProgressCard(taskBoundary: TaskBoundaryPayload) {
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-            text = waitingItem?.title?.let { "Waiting: $it" } ?: taskBoundary.taskStatus,
+            text = waitingItem?.title?.let { tr("Waiting: $it", "等待中：$it") } ?: taskBoundary.taskStatus,
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = if (hasWaiting) colors.statusWaiting else colors.inkSecondary,
             maxLines = 1,
@@ -1183,10 +1218,10 @@ private fun CommandApprovalCard(
             )
             Text(
                 text = when {
-                    isWaiting -> "Run this command?"
-                    isApproved -> "Command approved"
-                    isDenied -> "Command denied"
-                    else -> "Command"
+                    isWaiting -> tr("Run this command?", "是否运行此命令？")
+                    isApproved -> tr("Command approved", "命令已批准")
+                    isDenied -> tr("Command denied", "命令已拒绝")
+                    else -> tr("Command", "命令")
                 },
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 15.5.sp,
@@ -1239,7 +1274,7 @@ private fun CommandApprovalCard(
                     contentPadding = PaddingValues(horizontal = 22.dp, vertical = 10.dp),
                 ) {
                     Text(
-                        text = "Deny",
+                        text = tr("Deny", "拒绝"),
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Medium,
@@ -1261,12 +1296,12 @@ private fun CommandApprovalCard(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Fingerprint,
-                        contentDescription = "Biometric verification",
+                        contentDescription = tr("Biometric verification", "生物识别验证"),
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Allow",
+                        text = tr("Allow", "允许"),
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -1293,7 +1328,10 @@ private fun GenericFallbackInteractionCard(
     val title = formatForwardStepTitle(step.rawTypeName ?: interaction?.rawMemberKey)
     val summary = interaction?.rawSummary?.takeIf { it.isNotBlank() }
         ?: step.fallbackSummary?.takeIf { it.isNotBlank() }
-        ?: "Upstream host requested approval for ${interaction?.rawMemberKey ?: "action"}."
+        ?: tr(
+            "Upstream host requested approval for ${interaction?.rawMemberKey ?: "action"}.",
+            "上游主机请求批准操作：${interaction?.rawMemberKey ?: "未知操作"}。",
+        )
 
     AntigravitySurfaceCard(
         modifier = Modifier
@@ -1361,7 +1399,7 @@ private fun GenericFallbackInteractionCard(
                     contentColor = colors.inkReading,
                 ),
             ) {
-                Text("Deny", style = MaterialTheme.typography.labelLarge)
+                Text(tr("Deny", "拒绝"), style = MaterialTheme.typography.labelLarge)
             }
 
             Button(
@@ -1382,7 +1420,7 @@ private fun GenericFallbackInteractionCard(
                     modifier = Modifier.size(17.dp),
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Allow Once", style = MaterialTheme.typography.labelLarge)
+                Text(tr("Allow Once", "允许一次"), style = MaterialTheme.typography.labelLarge)
             }
         }
     }
@@ -1497,7 +1535,7 @@ private fun SubagentStepCard(
         }
         if (subagent.status == CortexStepStatus.IN_PROGRESS || subagent.status == CortexStepStatus.WAITING) {
             TextButton(onClick = onStop) {
-                Text("Stop Subagent", color = colors.statusError)
+                Text(tr("Stop Subagent", "停止子智能体"), color = colors.statusError)
             }
         }
     }
@@ -1529,7 +1567,7 @@ private fun DynamicWorkflowStepCard(workflow: DynamicWorkflowPayload) {
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = "Dynamic Workflow · ${workflow.currentPhase}",
+                    text = tr("Dynamic Workflow · ${workflow.currentPhase}", "动态工作流 · ${workflow.currentPhase}"),
                     style = MaterialTheme.typography.titleSmall,
                     color = colors.accentPeriwinkle,
                 )
@@ -1570,7 +1608,7 @@ private fun DynamicWorkflowStepCard(workflow: DynamicWorkflowPayload) {
         if (workflow.pythonScript.isNotBlank()) {
             TextButton(onClick = { showScript = !showScript }) {
                 Text(
-                    text = if (showScript) "Hide Python Script" else "Inspect Python Script",
+                    text = if (showScript) tr("Hide Python Script", "隐藏 Python 脚本") else tr("Inspect Python Script", "查看 Python 脚本"),
                     color = colors.accentPeriwinkle,
                 )
             }
@@ -1620,13 +1658,13 @@ private fun SwarmStepCard(
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = "Agent Swarm · ${board.title}",
+                    text = tr("Agent Swarm · ${board.title}", "智能体协作群 · ${board.title}"),
                     style = MaterialTheme.typography.titleSmall,
                     color = colors.accentPeriwinkle,
                 )
             }
             Text(
-                text = "${board.members.size} specialists",
+                text = tr("${board.members.size} specialists", "${board.members.size} 位专家"),
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.inkSecondary,
             )
@@ -1697,7 +1735,7 @@ private fun VoiceSummaryCard(summary: VoiceCallTranscriptSummary) {
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                text = "Voice Call Summary (${summary.durationLabel})",
+                text = tr("Voice Call Summary (${summary.durationLabel})", "语音通话摘要（${summary.durationLabel}）"),
                 style = MaterialTheme.typography.titleSmall,
                 color = colors.inkReading,
                 modifier = Modifier.weight(1f),
@@ -1782,7 +1820,7 @@ private fun ChatComposerCard(
             ) {
                 if (draftText.isEmpty()) {
                     Text(
-                        text = "Ask anything, @ to mention, / for actions",
+                        text = tr("Ask anything, @ to mention, / for actions", "输入任何内容，@ 引用上下文，/ 快捷操作"),
                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                         color = colors.inkMuted,
                     )
@@ -1817,7 +1855,7 @@ private fun ChatComposerCard(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Add,
-                        contentDescription = "Add context",
+                        contentDescription = tr("Add context", "添加上下文"),
                         tint = colors.inkReading,
                         modifier = Modifier.size(22.dp),
                     )
@@ -1845,7 +1883,7 @@ private fun ChatComposerCard(
                     )
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = "Select model",
+                        contentDescription = tr("Select model", "选择模型"),
                         tint = colors.inkSecondary,
                         modifier = Modifier.size(16.dp),
                     )
@@ -1875,7 +1913,7 @@ private fun ChatComposerCard(
                     )
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = "Select permissions",
+                        contentDescription = tr("Select permissions", "选择权限"),
                         tint = colors.inkSecondary,
                         modifier = Modifier.size(16.dp),
                     )
@@ -1891,7 +1929,7 @@ private fun ChatComposerCard(
                 ) {
                     Icon(
                         imageVector = if (isVoiceRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                        contentDescription = if (isVoiceRecording) "Stop dictation" else "Dictate message",
+                        contentDescription = if (isVoiceRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
                         tint = when {
                             isVoiceRecording -> colors.statusError
                             isVoiceStarting -> colors.accentPeriwinkle
@@ -1913,7 +1951,7 @@ private fun ChatComposerCard(
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                            contentDescription = "Send message",
+                            contentDescription = tr("Send message", "发送消息"),
                             tint = if (hasContent) colors.inkOnPrimaryCta else colors.inkSecondary,
                             modifier = Modifier.size(19.dp),
                         )

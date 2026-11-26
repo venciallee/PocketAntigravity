@@ -28,7 +28,18 @@ public struct AutomationsViewController: View {
         case paused = "Paused"
 
         var id: String { rawValue }
+
+        func localizedTitle(for lang: AppLanguage) -> String {
+            switch self {
+            case .all: return lang.t("All", "全部")
+            case .scheduled: return lang.t("Scheduled", "定时")
+            case .alwaysOn: return lang.t("Always On", "常驻")
+            case .paused: return lang.t("Paused", "已暂停")
+            }
+        }
     }
+
+    private var lang: AppLanguage { store.appearancePreferences.language }
 
     @State private var quickPromptText: String = ""
     @State private var isPausedResumed: Bool = false
@@ -87,7 +98,7 @@ public struct AutomationsViewController: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 10) {
                 topFilterToolbar
-                Text("Automations")
+                Text(lang.t("Automations", "自动化"))
                     .font(.system(size: 32, weight: .bold))
                     .tracking(-0.5)
                     .foregroundStyle(AntigravityTheme.textPrimary)
@@ -164,22 +175,27 @@ public struct AutomationsViewController: View {
             )
         }
         .alert(
-            "Delete Automation?",
+            lang.t("Delete Automation?", "删除自动化任务？"),
             isPresented: Binding(
                 get: { deletingAutomation != nil },
                 set: { if !$0 { deletingAutomation = nil } }
             ),
             presenting: deletingAutomation
         ) { target in
-            Button("Delete", role: .destructive) {
+            Button(lang.t("Delete", "删除"), role: .destructive) {
                 store.deleteAutomation(target.id)
                 deletingAutomation = nil
             }
-            Button("Cancel", role: .cancel) {
+            Button(lang.t("Cancel", "取消"), role: .cancel) {
                 deletingAutomation = nil
             }
         } message: { target in
-            Text("This removes \"\(target.title)\" from \(store.activeHost.hostname). Existing conversation history will remain intact.")
+            Text(
+                lang.t(
+                    "This removes \"\(target.title)\" from \(store.activeHost.hostname). Existing conversation history will remain intact.",
+                    "这将从 \(store.activeHost.hostname) 移除“\(target.title)”。已有对话记录将保留。"
+                )
+            )
         }
     }
 
@@ -209,7 +225,7 @@ public struct AutomationsViewController: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Open sidebar")
+            .accessibilityLabel(lang.t("Open sidebar", "打开侧边栏"))
             .accessibilityIdentifier("btn-sidebar")
 
             if isLiveMode && sectionFilter != .all {
@@ -217,7 +233,7 @@ public struct AutomationsViewController: View {
                     sectionFilter = .all
                 } label: {
                     HStack(spacing: 6) {
-                        Text(sectionFilter.rawValue)
+                        Text(sectionFilter.localizedTitle(for: lang))
                             .font(.system(size: 13, weight: .semibold))
                         Image(systemName: "xmark")
                             .font(.system(size: 10.5, weight: .bold))
@@ -246,9 +262,9 @@ public struct AutomationsViewController: View {
                             sectionFilter = option
                         } label: {
                             if sectionFilter == option {
-                                Label(option.rawValue, systemImage: "checkmark")
+                                Label(option.localizedTitle(for: lang), systemImage: "checkmark")
                             } else {
-                                Text(option.rawValue)
+                                Text(option.localizedTitle(for: lang))
                             }
                         }
                     }
@@ -256,14 +272,14 @@ public struct AutomationsViewController: View {
                     Button {
                         Task { await store.refreshAutomations() }
                     } label: {
-                        Label("Refresh Automations", systemImage: "arrow.clockwise")
+                        Label(lang.t("Refresh Automations", "刷新自动化"), systemImage: "arrow.clockwise")
                     }
                     Button {
                         let seed = quickPromptText
                         quickPromptText = ""
                         store.openAutomationPromptDraft(prompt: seed)
                     } label: {
-                        Label("Create with Prompt", systemImage: "sparkles")
+                        Label(lang.t("Create with Prompt", "用提示词创建"), systemImage: "sparkles")
                     }
                 } label: {
                     ZStack(alignment: .topTrailing) {
@@ -308,7 +324,7 @@ public struct AutomationsViewController: View {
                     .font(.system(size: 14.5, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textSecondary)
 
-                TextField("Every weekday at 9, summarize", text: $quickPromptText)
+                TextField(lang.t("Every weekday at 9, summarize", "每个工作日 9 点汇总变更"), text: $quickPromptText)
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textPrimary)
                     .tint(AntigravityTheme.accentPeriwinkle)
@@ -331,7 +347,7 @@ public struct AutomationsViewController: View {
                             .tint(AntigravityTheme.textPrimary)
                             .scaleEffect(0.8)
                     } else {
-                        Text("Create")
+                        Text(lang.t("Create", "创建"))
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.textPrimary)
                     }
@@ -368,7 +384,7 @@ public struct AutomationsViewController: View {
 
     private var scheduledSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("SCHEDULED · \(scheduledAutomations.count)")
+            Text(lang.t("SCHEDULED · \(scheduledAutomations.count)", "定时运行 · \(scheduledAutomations.count)"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -396,7 +412,7 @@ public struct AutomationsViewController: View {
                         .buttonStyle(.plain)
 
                         Button {
-                            scheduledAutomations[index].lastRunText = "Running · just now"
+                            scheduledAutomations[index].lastRunText = lang.t("Running · just now", "运行中 · 刚刚")
                             scheduledAutomations[index].needsReview = false
                         } label: {
                             Image(systemName: "play.fill")
@@ -422,7 +438,7 @@ public struct AutomationsViewController: View {
                     HStack(spacing: 9) {
                         // NEXT RUN Stat Box
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("NEXT RUN")
+                            Text(lang.t("NEXT RUN", "下次运行"))
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .tracking(0.5)
                                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -440,7 +456,7 @@ public struct AutomationsViewController: View {
 
                         // LAST RUN Stat Box
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("LAST RUN")
+                            Text(lang.t("LAST RUN", "上次运行"))
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .tracking(0.5)
                                 .foregroundStyle(
@@ -501,7 +517,7 @@ public struct AutomationsViewController: View {
 
     private var alwaysOnSection: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("ALWAYS ON · 1")
+            Text(lang.t("ALWAYS ON · 1", "常驻运行 · 1"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -554,7 +570,7 @@ public struct AutomationsViewController: View {
 
     private var pausedSection: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("PAUSED · \(isPausedResumed ? 0 : 1)")
+            Text(lang.t("PAUSED · \(isPausedResumed ? 0 : 1)", "已暂停 · \(isPausedResumed ? 0 : 1)"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -580,7 +596,7 @@ public struct AutomationsViewController: View {
                 Button {
                     isPausedResumed.toggle()
                 } label: {
-                    Text(isPausedResumed ? "Active" : "Resume")
+                    Text(isPausedResumed ? lang.t("Active", "运行中") : lang.t("Resume", "恢复"))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                         .padding(.horizontal, 16)
@@ -623,7 +639,7 @@ public struct AutomationsViewController: View {
                 VStack(spacing: 12) {
                     ProgressView()
                         .tint(AntigravityTheme.accentPeriwinkle)
-                    Text("Loading automations from \(store.activeHost.hostname)...")
+                    Text(lang.t("Loading automations from \(store.activeHost.hostname)...", "正在从 \(store.activeHost.hostname) 加载自动化任务..."))
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
@@ -643,11 +659,16 @@ public struct AutomationsViewController: View {
                         Image(systemName: "bolt.slash")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.statusWaiting)
-                        Text("Pair a Host to Use Automations")
+                        Text(lang.t("Pair a Host to Use Automations", "配对主机以使用自动化"))
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.textPrimary)
                     }
-                    Text("Connect to Antigravity Desktop via Cloud Relay or Direct LAN in Settings to view, create, and trigger scheduled Automations.")
+                    Text(
+                        lang.t(
+                            "Connect to Antigravity Desktop via Cloud Relay or Direct LAN in Settings to view, create, and trigger scheduled Automations.",
+                            "请在“设置”中通过云端中继或局域网直连绑定 Antigravity 桌面端，以查看、创建和触发定时自动化任务。"
+                        )
+                    )
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .lineSpacing(2)
@@ -655,7 +676,7 @@ public struct AutomationsViewController: View {
                     Button {
                         onSelectTab?(.settings)
                     } label: {
-                        Text("Open Settings")
+                        Text(lang.t("Open Settings", "打开设置"))
                             .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                             .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
@@ -687,16 +708,21 @@ public struct AutomationsViewController: View {
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("No automations yet")
+                            Text(lang.t("No automations yet", "暂无自动化任务"))
                                 .font(.system(size: 16.5, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
-                            Text("Running on \(store.activeHost.hostname)")
+                            Text(lang.t("Running on \(store.activeHost.hostname)", "运行主机：\(store.activeHost.hostname)"))
                                 .font(.system(size: 12.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textMuted)
                         }
                     }
 
-                    Text("Run a prompt on a schedule, like a morning summary of yesterday's changes. Runs show up here.")
+                    Text(
+                        lang.t(
+                            "Run a prompt on a schedule, like a morning summary of yesterday's changes. Runs show up here.",
+                            "按计划定时执行提示词，例如每天早上汇总昨天的变更。运行记录将显示在此处。"
+                        )
+                    )
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .lineSpacing(2)
@@ -710,7 +736,7 @@ public struct AutomationsViewController: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "sparkles")
                                     .font(.system(size: 13, weight: .semibold))
-                                Text("Create with Prompt")
+                                Text(lang.t("Create with Prompt", "用提示词创建"))
                                     .font(.system(size: 14, weight: .semibold))
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.88)
@@ -735,7 +761,7 @@ public struct AutomationsViewController: View {
                             HStack(spacing: 5) {
                                 Image(systemName: "plus")
                                     .font(.system(size: 13, weight: .bold))
-                                Text("New")
+                                Text(lang.t("New", "新建"))
                                     .font(.system(size: 14, weight: .semibold))
                                     .lineLimit(1)
                             }
@@ -768,11 +794,11 @@ public struct AutomationsViewController: View {
 
             if !showScheduled && !showAlwaysOn && !showPaused {
                 HStack {
-                    Text("No \(sectionFilter.rawValue.lowercased()) automations.")
+                    Text(lang.t("No \(sectionFilter.rawValue.lowercased()) automations.", "暂无\(sectionFilter.localizedTitle(for: lang))自动化任务。"))
                         .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                     Spacer()
-                    Button("Show All") {
+                    Button(lang.t("Show All", "显示全部")) {
                         sectionFilter = .all
                     }
                     .font(.system(size: 14, weight: .semibold))
@@ -791,7 +817,7 @@ public struct AutomationsViewController: View {
 
             if showScheduled {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("SCHEDULED · \(store.scheduledAutomations.count)")
+                    Text(lang.t("SCHEDULED · \(store.scheduledAutomations.count)", "定时运行 · \(store.scheduledAutomations.count)"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .tracking(0.8)
                         .foregroundStyle(AntigravityTheme.textMuted)
@@ -806,7 +832,7 @@ public struct AutomationsViewController: View {
 
             if showAlwaysOn {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("ALWAYS ON · \(store.alwaysOnAutomations.count)")
+                    Text(lang.t("ALWAYS ON · \(store.alwaysOnAutomations.count)", "常驻运行 · \(store.alwaysOnAutomations.count)"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .tracking(0.8)
                         .foregroundStyle(AntigravityTheme.textMuted)
@@ -821,7 +847,7 @@ public struct AutomationsViewController: View {
 
             if showPaused {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("PAUSED · \(store.pausedAutomations.count)")
+                    Text(lang.t("PAUSED · \(store.pausedAutomations.count)", "已暂停 · \(store.pausedAutomations.count)"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .tracking(0.8)
                         .foregroundStyle(AntigravityTheme.textMuted)
@@ -856,7 +882,7 @@ public struct AutomationsViewController: View {
                         Button {
                             isShowingGoogleSignIn = true
                         } label: {
-                            Text("重新登录 Google")
+                            Text(lang.t("Sign in to Google", "重新登录 Google"))
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                                 .padding(.horizontal, 12)
@@ -870,7 +896,7 @@ public struct AutomationsViewController: View {
                         Button {
                             Task { await store.refreshAutomations() }
                         } label: {
-                            Text("Retry")
+                            Text(lang.t("Retry", "重试"))
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         }
@@ -957,33 +983,33 @@ public struct AutomationsViewController: View {
                     Button {
                         store.triggerAutomationNow(item.id)
                     } label: {
-                        Label("Run Now", systemImage: "play.fill")
+                        Label(lang.t("Run Now", "立即运行"), systemImage: "play.fill")
                     }
                     if item.isScheduleBuiltin {
                         Button {
                             editingAutomation = item
                             isShowingEditorSheet = true
                         } label: {
-                            Label("Edit Schedule & Prompt", systemImage: "pencil")
+                            Label(lang.t("Edit Schedule & Prompt", "编辑计划与提示词"), systemImage: "pencil")
                         }
                     }
                     if let cid = item.lastRunCascadeId, !cid.isEmpty {
                         Button {
                             store.selectCascade(cid)
                         } label: {
-                            Label("Open Last Run", systemImage: "bubble.left.and.text.bubble.right")
+                            Label(lang.t("Open Last Run", "打开上次运行"), systemImage: "bubble.left.and.text.bubble.right")
                         }
                     }
                     Button {
                         store.pauseAutomation(item.id)
                     } label: {
-                        Label("Pause", systemImage: "pause.circle")
+                        Label(lang.t("Pause", "暂停"), systemImage: "pause.circle")
                     }
                     Divider()
                     Button(role: .destructive) {
                         deletingAutomation = item
                     } label: {
-                        Label("Delete", systemImage: "trash")
+                        Label(lang.t("Delete", "删除"), systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -995,7 +1021,7 @@ public struct AutomationsViewController: View {
 
             HStack(spacing: 9) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("NEXT RUN")
+                    Text(lang.t("NEXT RUN", "下次运行"))
                         .font(.system(size: 10.5, weight: .semibold))
                         .tracking(0.5)
                         .foregroundStyle(AntigravityTheme.textMuted)
@@ -1031,7 +1057,7 @@ public struct AutomationsViewController: View {
     private func liveLastRunBox(_ item: AutomationItem) -> some View {
         let boxContent = VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
-                Text("LAST RUN")
+                Text(lang.t("LAST RUN", "上次运行"))
                     .font(.system(size: 10.5, weight: .semibold))
                     .tracking(0.5)
                     .foregroundStyle(item.needsReview ? AntigravityTheme.statusWaiting : AntigravityTheme.textMuted)
@@ -1134,24 +1160,24 @@ public struct AutomationsViewController: View {
                     Button {
                         store.selectCascade(cid)
                     } label: {
-                        Label("Open Last Run", systemImage: "bubble.left.and.text.bubble.right")
+                        Label(lang.t("Open Last Run", "打开上次运行"), systemImage: "bubble.left.and.text.bubble.right")
                     }
                 }
                 Button {
                     store.restartAutomation(item.id)
                 } label: {
-                    Label("Restart", systemImage: "arrow.clockwise")
+                    Label(lang.t("Restart", "重启"), systemImage: "arrow.clockwise")
                 }
                 Button {
                     store.pauseAutomation(item.id)
                 } label: {
-                    Label("Pause", systemImage: "pause.circle")
+                    Label(lang.t("Pause", "暂停"), systemImage: "pause.circle")
                 }
                 Divider()
                 Button(role: .destructive) {
                     deletingAutomation = item
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label(lang.t("Delete", "删除"), systemImage: "trash")
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -1189,7 +1215,7 @@ public struct AutomationsViewController: View {
             Button {
                 store.resumeAutomation(item.id)
             } label: {
-                Text("Resume")
+                Text(lang.t("Resume", "恢复"))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.textPrimary)
                     .padding(.horizontal, 16)
@@ -1209,21 +1235,21 @@ public struct AutomationsViewController: View {
                 Button {
                     store.resumeAutomation(item.id)
                 } label: {
-                    Label("Resume", systemImage: "play.circle")
+                    Label(lang.t("Resume", "恢复"), systemImage: "play.circle")
                 }
                 if item.isScheduleBuiltin {
                     Button {
                         editingAutomation = item
                         isShowingEditorSheet = true
                     } label: {
-                        Label("Edit Schedule & Prompt", systemImage: "pencil")
+                        Label(lang.t("Edit Schedule & Prompt", "编辑计划与提示词"), systemImage: "pencil")
                     }
                 }
                 Divider()
                 Button(role: .destructive) {
                     deletingAutomation = item
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label(lang.t("Delete", "删除"), systemImage: "trash")
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -1280,6 +1306,8 @@ private struct AutomationEditorSheetView: View {
     let onRequestSignIn: () -> Void
     let onDismiss: () -> Void
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private enum TriggerFrequency: String, CaseIterable, Identifiable {
         case daily = "Every day"
         case weekdays = "Weekdays"
@@ -1287,6 +1315,15 @@ private struct AutomationEditorSheetView: View {
         case hourly = "Every hour"
 
         var id: String { rawValue }
+
+        func localizedTitle(for lang: AppLanguage) -> String {
+            switch self {
+            case .daily: return lang.t("Every day", "每天")
+            case .weekdays: return lang.t("Weekdays", "工作日")
+            case .weekly: return lang.t("Every week", "每周")
+            case .hourly: return lang.t("Every hour", "每小时")
+            }
+        }
     }
 
     private struct TimeSlot: Hashable, Identifiable {
@@ -1302,8 +1339,9 @@ private struct AutomationEditorSheetView: View {
         }
     }
 
-    private static let weekdayItems: [(Int, String)] = [
-        (1, "Mon"), (2, "Tue"), (3, "Wed"), (4, "Thu"), (5, "Fri"), (6, "Sat"), (0, "Sun")
+    private static let weekdayItems: [(Int, String, String)] = [
+        (1, "Mon", "周一"), (2, "Tue", "周二"), (3, "Wed", "周三"),
+        (4, "Thu", "周四"), (5, "Fri", "周五"), (6, "Sat", "周六"), (0, "Sun", "周日")
     ]
 
     private static let defaultProjectToken = "__default__"
@@ -1423,10 +1461,10 @@ private struct AutomationEditorSheetView: View {
 
     private var targetDisplayLabel: String {
         if selectedProjectToken == Self.defaultProjectToken {
-            return "This computer"
+            return lang.t("This computer", "此电脑")
         }
         if selectedProjectToken == Self.allProjectsToken {
-            return "All projects"
+            return lang.t("All projects", "所有项目")
         }
         return selectedProjectToken
     }
@@ -1505,7 +1543,7 @@ private struct AutomationEditorSheetView: View {
 
     private var headerBar: some View {
         HStack(alignment: .center, spacing: 10) {
-            TextField("Untitled", text: $displayName)
+            TextField(lang.t("Untitled", "未命名"), text: $displayName)
                 .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.textPrimary)
                 .tint(AntigravityTheme.accentPeriwinkle)
@@ -1514,7 +1552,7 @@ private struct AutomationEditorSheetView: View {
             Button {
                 onDismiss()
             } label: {
-                Text("Cancel")
+                Text(lang.t("Cancel", "取消"))
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textBody)
                     .padding(.horizontal, 14)
@@ -1535,7 +1573,7 @@ private struct AutomationEditorSheetView: View {
                             .tint(AntigravityTheme.inkOnPrimaryCTA)
                             .scaleEffect(0.8)
                     } else {
-                        Text(editingItem == nil ? "Create" : "Save")
+                        Text(editingItem == nil ? lang.t("Create", "创建") : lang.t("Save", "保存"))
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(canSubmit ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.textMuted)
                     }
@@ -1556,10 +1594,10 @@ private struct AutomationEditorSheetView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Menu {
-                    Button("This computer") {
+                    Button(lang.t("This computer", "此电脑")) {
                         selectedProjectToken = Self.defaultProjectToken
                     }
-                    Button("All projects") {
+                    Button(lang.t("All projects", "所有项目")) {
                         selectedProjectToken = Self.allProjectsToken
                     }
                     if !localProjects.isEmpty {
@@ -1589,7 +1627,7 @@ private struct AutomationEditorSheetView: View {
                         selectedModelArg = nil
                         selectedModelLabel = store.selectedModelConfig.displayName
                     } label: {
-                        Text("\(store.selectedModelConfig.displayName) (Default)")
+                        Text(lang.t("\(store.selectedModelConfig.displayName) (Default)", "\(store.selectedModelConfig.displayName)（默认）"))
                     }
                     Divider()
                     if !store.availableModels.isEmpty {
@@ -1640,7 +1678,7 @@ private struct AutomationEditorSheetView: View {
                 Spacer(minLength: 0)
             }
 
-            Text("Uses your local files and tools. Schedules only.")
+            Text(lang.t("Uses your local files and tools. Schedules only.", "使用本地文件与工具，仅支持定时调度。"))
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(AntigravityTheme.textMuted)
         }
@@ -1660,7 +1698,7 @@ private struct AutomationEditorSheetView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
                 if authExpired {
-                    Button("重新登录") {
+                    Button(lang.t("Sign In", "重新登录")) {
                         onRequestSignIn()
                     }
                     .font(.system(size: 12.5, weight: .semibold))
@@ -1685,7 +1723,7 @@ private struct AutomationEditorSheetView: View {
 
     private var triggerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Trigger")
+            Text(lang.t("Trigger", "触发方式"))
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(AntigravityTheme.textSecondary)
 
@@ -1694,7 +1732,7 @@ private struct AutomationEditorSheetView: View {
                     Image(systemName: "clock")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
-                    Text("Scheduled")
+                    Text(lang.t("Scheduled", "定时执行"))
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                 }
@@ -1706,15 +1744,15 @@ private struct AutomationEditorSheetView: View {
                                 frequency = option
                             } label: {
                                 if frequency == option {
-                                    Label(option.rawValue, systemImage: "checkmark")
+                                    Label(option.localizedTitle(for: lang), systemImage: "checkmark")
                                 } else {
-                                    Text(option.rawValue)
+                                    Text(option.localizedTitle(for: lang))
                                 }
                             }
                         }
                     } label: {
                         HStack(spacing: 6) {
-                            Text(frequency.rawValue)
+                            Text(frequency.localizedTitle(for: lang))
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
                             Image(systemName: "chevron.down")
@@ -1733,7 +1771,7 @@ private struct AutomationEditorSheetView: View {
                         )
                     }
 
-                    Text("at")
+                    Text(lang.t("at", "于"))
                         .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
 
@@ -1782,12 +1820,12 @@ private struct AutomationEditorSheetView: View {
 
                 if frequency == .weekly {
                     HStack(spacing: 6) {
-                        ForEach(Self.weekdayItems, id: \.0) { dayNum, label in
+                        ForEach(Self.weekdayItems, id: \.0) { dayNum, enLabel, zhLabel in
                             let active = (selectedWeekday == dayNum)
                             Button {
                                 selectedWeekday = dayNum
                             } label: {
-                                Text(label)
+                                Text(lang.t(enLabel, zhLabel))
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(active ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.textSecondary)
                                     .frame(maxWidth: .infinity, minHeight: 30)
@@ -1816,13 +1854,18 @@ private struct AutomationEditorSheetView: View {
 
     private var instructionsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Instructions")
+            Text(lang.t("Instructions", "执行指令"))
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(AntigravityTheme.textSecondary)
 
             ZStack(alignment: .topLeading) {
                 if promptText.isEmpty {
-                    Text("What should the agent do on each run? For example: summarize new bugs assigned to me and anything that changed overnight.")
+                    Text(
+                        lang.t(
+                            "What should the agent do on each run? For example: summarize new bugs assigned to me and anything that changed overnight.",
+                            "希望 Agent 在每次运行时做什么？例如：汇总分配给我的新缺陷及隔夜代码变更。"
+                        )
+                    )
                         .font(.system(size: 14.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textMuted)
                         .padding(.horizontal, 14)
@@ -1898,7 +1941,7 @@ private struct AutomationEditorSheetView: View {
         if success {
             onDismiss()
         } else {
-            submitError = store.automationsErrorText ?? "Failed to save automation."
+            submitError = store.automationsErrorText ?? lang.t("Failed to save automation.", "保存自动化任务失败。")
         }
     }
 }

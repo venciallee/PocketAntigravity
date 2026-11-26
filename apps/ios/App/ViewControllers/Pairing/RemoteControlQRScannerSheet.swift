@@ -15,6 +15,7 @@ public struct RemoteControlQRScannerSheet: View {
     public var onScannedQR: (String) -> Void
     public var onDismiss: () -> Void
 
+    @Environment(\.appLanguage) private var lang
     @State private var manualLinkDraft: String = ""
     @State private var scannerErrorMessage: String? = nil
     @State private var selectedPhotoItem: PhotosPickerItem? = nil
@@ -36,7 +37,7 @@ public struct RemoteControlQRScannerSheet: View {
                 Button {
                     onDismiss()
                 } label: {
-                    Text("Cancel")
+                    Text(lang.t("Cancel", "取消"))
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -45,7 +46,7 @@ public struct RemoteControlQRScannerSheet: View {
 
                 Spacer()
 
-                Text("Scan Remote Control QR")
+                Text(lang.t("Scan Remote Control QR", "扫描远程控制二维码"))
                     .font(.system(size: 16.5, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkReading)
 
@@ -57,7 +58,7 @@ public struct RemoteControlQRScannerSheet: View {
                     HStack(spacing: 4) {
                         Image(systemName: "doc.on.clipboard")
                             .font(.system(size: 13.5, weight: .semibold))
-                        Text("Paste")
+                        Text(lang.t("Paste", "粘贴"))
                             .font(.system(size: 14.5, weight: .semibold))
                     }
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
@@ -109,7 +110,10 @@ public struct RemoteControlQRScannerSheet: View {
             )
             .padding(.horizontal, 16)
 
-            Text("Open Antigravity on Mac/PC → click **Remote Control** and point your camera at the QR code.")
+            Text(LocalizedStringKey(lang.t(
+                "Open Antigravity on Mac/PC → click **Remote Control** and point your camera at the QR code.",
+                "在 Mac/PC 上打开 Antigravity → 点击 **远程控制**，并将相机对准二维码。"
+            )))
                 .font(.system(size: 13.5, weight: .regular))
                 .foregroundStyle(AntigravityTheme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -129,7 +133,7 @@ public struct RemoteControlQRScannerSheet: View {
                 HStack(spacing: 8) {
                     Image(systemName: "photo.on.rectangle")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Choose QR from Photos")
+                    Text(lang.t("Choose QR from Photos", "从相册选择二维码"))
                         .font(.system(size: 15, weight: .semibold))
                 }
                 .foregroundStyle(AntigravityTheme.textPrimary)
@@ -155,7 +159,7 @@ public struct RemoteControlQRScannerSheet: View {
 
             if !isCameraAvailable || showManualEntry {
                 HStack(spacing: 8) {
-                    TextField("https://antigravity.google.com/r/... or device ID", text: $manualLinkDraft)
+                    TextField(lang.t("https://antigravity.google.com/r/... or device ID", "https://antigravity.google.com/r/... 或设备 ID"), text: $manualLinkDraft)
                         .font(.system(size: 13, weight: .regular, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                         .textInputAutocapitalization(.never)
@@ -172,7 +176,7 @@ public struct RemoteControlQRScannerSheet: View {
                     Button {
                         _ = handleScannedCandidate(manualLinkDraft)
                     } label: {
-                        Text("Connect")
+                        Text(lang.t("Connect", "连接"))
                             .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                             .padding(.horizontal, 16)
@@ -192,7 +196,7 @@ public struct RemoteControlQRScannerSheet: View {
                         showManualEntry = true
                     }
                 } label: {
-                    Text("Enter link or device ID manually")
+                    Text(lang.t("Enter link or device ID manually", "手动输入链接或设备 ID"))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .frame(minHeight: 34)
@@ -210,10 +214,13 @@ public struct RemoteControlQRScannerSheet: View {
             Image(systemName: "qrcode.viewfinder")
                 .font(.system(size: 46, weight: .light))
                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-            Text("Camera Unavailable")
+            Text(lang.t("Camera Unavailable", "相机不可用"))
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
-            Text("Choose a QR screenshot from Photos or paste the https://antigravity.google.com/r/... link below.")
+            Text(lang.t(
+                "Choose a QR screenshot from Photos or paste the https://antigravity.google.com/r/... link below.",
+                "请从相册选择二维码截图，或在下方粘贴 https://antigravity.google.com/r/... 链接。"
+            ))
                 .font(.system(size: 12.5, weight: .regular))
                 .foregroundStyle(AntigravityTheme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -228,7 +235,7 @@ public struct RemoteControlQRScannerSheet: View {
             manualLinkDraft = pasted
             _ = handleScannedCandidate(pasted)
         } else {
-            scannerErrorMessage = "Clipboard is empty."
+            scannerErrorMessage = lang.t("Clipboard is empty.", "剪贴板为空。")
         }
         #endif
     }
@@ -248,7 +255,10 @@ public struct RemoteControlQRScannerSheet: View {
         } else {
             let singleLine = trimmed.replacingOccurrences(of: "\n", with: " ")
             let preview = singleLine.count <= 44 ? singleLine : "\(singleLine.prefix(41))..."
-            scannerErrorMessage = "Unrecognized QR content (\"\(preview)\"). Point at Antigravity Desktop's Remote Control QR or paste the link."
+            scannerErrorMessage = lang.t(
+                "Unrecognized QR content (\"\(preview)\"). Point at Antigravity Desktop's Remote Control QR or paste the link.",
+                "无法识别二维码内容（\"\(preview)\"）。请对准 Antigravity 桌面端的远程控制二维码或粘贴链接。"
+            )
             return false
         }
     }
@@ -256,7 +266,7 @@ public struct RemoteControlQRScannerSheet: View {
     #if canImport(PhotosUI)
     private func decodeQRFromPhotoItem(_ item: PhotosPickerItem) async {
         guard let imageData = try? await item.loadTransferable(type: Data.self) else {
-            scannerErrorMessage = "Could not load selected image."
+            scannerErrorMessage = lang.t("Could not load selected image.", "无法加载所选图片。")
             return
         }
         #if canImport(UIKit) && canImport(CoreImage)
@@ -266,13 +276,13 @@ public struct RemoteControlQRScannerSheet: View {
                   context: nil,
                   options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
               ) else {
-            scannerErrorMessage = "Could not initialize QR detector."
+            scannerErrorMessage = lang.t("Could not initialize QR detector.", "无法初始化二维码识别器。")
             return
         }
         let features = detector.features(in: ciImage).compactMap { $0 as? CIQRCodeFeature }
         let payloads = features.compactMap(\.messageString).filter { !$0.isEmpty }
         guard !payloads.isEmpty else {
-            scannerErrorMessage = "No QR code found in the selected image."
+            scannerErrorMessage = lang.t("No QR code found in the selected image.", "所选图片中未检测到二维码。")
             return
         }
         // Prefer the first recognized Antigravity QR if the screenshot contains multiple QR codes

@@ -12,13 +12,15 @@ public struct SideQuestionSheetView: View {
         self.store = store
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     public var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Image(systemName: "questionmark.bubble.fill")
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    Text("Read-only side thread · Does not mutate main conversation history")
+                    Text(lang.t("Read-only side thread · Does not mutate main conversation history", "只读旁路对话 · 不会修改主对话历史"))
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Spacer()
@@ -34,10 +36,10 @@ public struct SideQuestionSheetView: View {
                                 Image(systemName: "sparkles.rectangle.stack")
                                     .font(.system(size: 28))
                                     .foregroundStyle(AntigravityTheme.inkMuted)
-                                Text("Ask a quick `/btw` follow-up")
+                                Text(lang.t("Ask a quick `/btw` follow-up", "发起快捷 `/btw` 旁路提问"))
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(AntigravityTheme.inkReading)
-                                Text("Inspect code, verify edge cases, or clarify design choices without interrupting the main agent turn.")
+                                Text(lang.t("Inspect code, verify edge cases, or clarify design choices without interrupting the main agent turn.", "在不打断主 Agent 任务的情况下，随时查看代码、验证边界情况或澄清设计方案。"))
                                     .font(.system(size: 13))
                                     .foregroundStyle(AntigravityTheme.inkSecondary)
                                     .multilineTextAlignment(.center)
@@ -65,7 +67,7 @@ public struct SideQuestionSheetView: View {
                         if store.sideQuestionThread.isStreaming {
                             HStack(spacing: 8) {
                                 ProgressView().tint(AntigravityTheme.accentPeriwinkle)
-                                Text("Thinking on side thread...")
+                                Text(lang.t("Thinking on side thread...", "正在旁路线程中思考..."))
                                     .font(.system(size: 13))
                                     .foregroundStyle(AntigravityTheme.inkSecondary)
                             }
@@ -79,7 +81,7 @@ public struct SideQuestionSheetView: View {
                         store.insertSideQuestionAnswerIntoMain()
                         dismiss()
                     } label: {
-                        Label("Insert into main conversation", systemImage: "arrow.uturn.left.circle.fill")
+                        Label(lang.t("Insert into main conversation", "插入主对话"), systemImage: "arrow.uturn.left.circle.fill")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                             .frame(maxWidth: .infinity)
@@ -92,7 +94,7 @@ public struct SideQuestionSheetView: View {
                 }
 
                 HStack(spacing: 10) {
-                    TextField("Ask a side question...", text: $draftText, axis: .vertical)
+                    TextField(lang.t("Ask a side question...", "输入旁路问题..."), text: $draftText, axis: .vertical)
                         .lineLimit(1...4)
                         .font(.system(size: 15))
                         .foregroundStyle(AntigravityTheme.inkReading)
@@ -120,17 +122,17 @@ public struct SideQuestionSheetView: View {
                 .background(AntigravityTheme.surfaceObsidian)
             }
             .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
-            .navigationTitle("/btw Side Question")
+            .navigationTitle(lang.t("/btw Side Question", "/btw 旁路提问"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Clear") {
+                    Button(lang.t("Clear", "清空")) {
                         store.resetSideQuestionThread()
                     }
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button(lang.t("Done", "完成")) {
                         store.presentedSheet = nil
                         dismiss()
                     }

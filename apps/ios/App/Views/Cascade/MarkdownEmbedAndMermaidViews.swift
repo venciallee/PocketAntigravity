@@ -17,6 +17,7 @@ internal struct MarkdownAgentEmbedCardView: View {
     let store: AntigravitySessionStore?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var lang
     @State private var resolved: ResolvedEmbedResource? = nil
     @State private var isLoading: Bool = false
     @State private var webViewHeight: CGFloat = 260
@@ -111,7 +112,7 @@ internal struct MarkdownAgentEmbedCardView: View {
             if isStreamingIncomplete {
                 HStack(spacing: 10) {
                     AntigravityFourDotLoadingView(isAnimated: true, dotSize: 4.0, spacing: 3.0, tint: AntigravityTheme.accentPeriwinkle)
-                    Text("Streaming interactive embed…")
+                    Text(lang.t("Streaming interactive embed…", "正在流式接收交互式组件…"))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Spacer()
@@ -122,7 +123,7 @@ internal struct MarkdownAgentEmbedCardView: View {
                     ProgressView()
                         .tint(AntigravityTheme.accentPeriwinkle)
                         .scaleEffect(0.85)
-                    Text("Loading \(shortFilename.isEmpty ? "artifact" : shortFilename)…")
+                    Text(lang.t("Loading \(shortFilename.isEmpty ? "artifact" : shortFilename)…", "正在加载 \(shortFilename.isEmpty ? "产物" : shortFilename)…"))
                         .font(.system(size: 13))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Spacer()
@@ -152,7 +153,7 @@ internal struct MarkdownAgentEmbedCardView: View {
                 .frame(height: min(500, max(160, webViewHeight)))
                 .background(AntigravityTheme.canvasObsidian)
                 #else
-                unavailableEmbedFooter(reason: "Interactive HTML preview is available on iOS.")
+                unavailableEmbedFooter(reason: lang.t("Interactive HTML preview is available on iOS.", "交互式 HTML 预览仅在 iOS 上可用。"))
                 #endif
             } else if let res = resolved, res.source == .directNetwork, let url = URL(string: res.uri) {
                 #if canImport(WebKit) && canImport(UIKit)
@@ -178,10 +179,10 @@ internal struct MarkdownAgentEmbedCardView: View {
                         .background(AntigravityTheme.surfaceCodeBlock)
                         .onTapGesture { showFullScreenSheet = true }
                 } else {
-                    unavailableEmbedFooter(reason: "Could not decode image data.")
+                    unavailableEmbedFooter(reason: lang.t("Could not decode image data.", "无法解码图片数据。"))
                 }
                 #else
-                unavailableEmbedFooter(reason: "Image preview is available on iOS.")
+                unavailableEmbedFooter(reason: lang.t("Image preview is available on iOS.", "图片预览仅在 iOS 上可用。"))
                 #endif
             } else if let res = resolved, let mdText = res.textContent, kind == .markdown {
                 AntigravityMarkdownView(markdown: mdText, variant: .blockquote, store: store)
@@ -245,8 +246,11 @@ internal struct MarkdownAgentEmbedCardView: View {
             Text(
                 reason ?? (
                     src.lowercased().hasPrefix("file://")
-                        ? "Host-local interactive artifact on your paired Mac. Tap Retry when Desktop or Companion Bridge is online, or copy the file path."
-                        : "Interactive embed preview unavailable."
+                        ? lang.t(
+                            "Host-local interactive artifact on your paired Mac. Tap Retry when Desktop or Companion Bridge is online, or copy the file path.",
+                            "此交互产物位于已配对的 Mac 本地。请在桌面端或桥接服务在线时点击重试，或复制文件路径。"
+                        )
+                        : lang.t("Interactive embed preview unavailable.", "暂无法预览交互式嵌入内容。")
                 )
             )
             .font(.system(size: 12.5))
@@ -261,7 +265,7 @@ internal struct MarkdownAgentEmbedCardView: View {
                         HStack(spacing: 5) {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 11, weight: .semibold))
-                            Text("Retry")
+                            Text(lang.t("Retry", "重试"))
                                 .font(.system(size: 12, weight: .semibold))
                         }
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
@@ -288,7 +292,7 @@ internal struct MarkdownAgentEmbedCardView: View {
                     HStack(spacing: 5) {
                         Image(systemName: didCopyPath ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 11, weight: .semibold))
-                        Text(didCopyPath ? "Path Copied" : "Copy Path")
+                        Text(didCopyPath ? lang.t("Path Copied", "已复制路径") : lang.t("Copy Path", "复制路径"))
                             .font(.system(size: 12, weight: .semibold))
                     }
                     .foregroundStyle(didCopyPath ? AntigravityTheme.statusDone : AntigravityTheme.inkLabel)
@@ -312,6 +316,7 @@ internal struct EmbedFullScreenModalView: View {
     let resolved: ResolvedEmbedResource?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var lang
     @State private var dummyHeight: CGFloat = 600
 
     private var isDarkMode: Bool {
@@ -374,7 +379,7 @@ internal struct EmbedFullScreenModalView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(lang.t("Done", "完成")) { dismiss() }
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 }
             }
@@ -386,6 +391,7 @@ internal struct RemoteArtifactPreviewSheet: View {
     let uri: String
     let store: AntigravitySessionStore?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appLanguage) private var lang
 
     var body: some View {
         NavigationStack {
@@ -406,7 +412,7 @@ internal struct RemoteArtifactPreviewSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(lang.t("Done", "完成")) { dismiss() }
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 }
             }
@@ -657,6 +663,7 @@ internal struct SandboxedHTMLWidgetWebView: UIViewRepresentable {
 internal struct MarkdownMermaidCardView: View {
     let source: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var lang
     @State private var showCode: Bool = false
     @State private var didCopy: Bool = false
     @State private var diagramHeight: CGFloat = 240
@@ -693,7 +700,7 @@ internal struct MarkdownMermaidCardView: View {
                             showCode.toggle()
                         }
                     } label: {
-                        Text(showCode ? "Diagram" : "Code")
+                        Text(showCode ? lang.t("Diagram", "图表") : lang.t("Code", "源码"))
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkLabel)
                             .padding(.horizontal, 8)
@@ -727,7 +734,7 @@ internal struct MarkdownMermaidCardView: View {
                     HStack(spacing: 4) {
                         Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 10.5, weight: .semibold))
-                        Text(didCopy ? "Copied" : "Copy")
+                        Text(didCopy ? lang.t("Copied", "已复制") : lang.t("Copy", "复制"))
                             .font(.system(size: 11.5, weight: .semibold))
                     }
                     .foregroundStyle(didCopy ? AntigravityTheme.statusDone : AntigravityTheme.accentPeriwinkle)
@@ -782,7 +789,7 @@ internal struct MarkdownMermaidCardView: View {
         .sheet(isPresented: $showFullScreen) {
             if let html = renderedHTML {
                 EmbedFullScreenModalView(
-                    title: "Mermaid Diagram",
+                    title: lang.t("Mermaid Diagram", "Mermaid 图表"),
                     src: "mermaid://diagram",
                     resolved: ResolvedEmbedResource(
                         uri: "mermaid://diagram",

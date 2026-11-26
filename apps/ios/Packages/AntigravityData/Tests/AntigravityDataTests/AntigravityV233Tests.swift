@@ -932,4 +932,97 @@ final class AntigravityV233Tests: XCTestCase {
         XCTAssertEqual(store.selectedModelConfig.effort, .extra)
         XCTAssertEqual(store.selectedModelConfig.modelId, "MODEL_PLACEHOLDER_M42")
     }
+
+    // MARK: - TC-27: Real-Time Bilingual Localization, Synchronous Frame 0 Hydration & Race Protection
+
+    @MainActor
+    func testTC27_RealtimeBilingualLocalizationAndColdStartLanguagePersistence() async {
+        // 1. Tag parsing, locale identifiers & bilingual helper
+        XCTAssertEqual(AppLanguage.fromTag(nil), .english)
+        XCTAssertEqual(AppLanguage.fromTag("en"), .english)
+        XCTAssertEqual(AppLanguage.fromTag("zh-Hans"), .zhHans)
+        XCTAssertEqual(AppLanguage.fromTag("zh_CN"), .zhHans)
+        XCTAssertEqual(AppLanguage.english.localeIdentifier, "en")
+        XCTAssertEqual(AppLanguage.zhHans.localeIdentifier, "zh-Hans")
+        XCTAssertEqual(AppLanguage.english.t("Settings", "设置"), "Settings")
+        XCTAssertEqual(AppLanguage.zhHans.t("Settings", "设置"), "设置")
+
+        // 2. Model localization & formatters
+        XCTAssertEqual(PrimaryTab.settings.localizedTitle(for: .zhHans), "设置")
+        XCTAssertEqual(AppAppearanceMode.system.localizedTitle(for: .zhHans), "跟随系统")
+        XCTAssertEqual(AppThemePreset.nord.localizedTitle(for: .zhHans), "北欧")
+        XCTAssertEqual(DiffCompareMode.uncommitted.localizedTitle(for: .zhHans), "未提交")
+        XCTAssertEqual(AgentPermissionPreset.turbo.localizedTitle(for: .zhHans), "极速")
+        XCTAssertEqual(CortexStepStatus.inProgress.localizedTitle(for: .zhHans), "运行中")
+        XCTAssertEqual(CortexStepStatus.waiting.localizedTitle(for: .english), "WAITING")
+        XCTAssertEqual(
+            AppLocalizationFormatter.localizeConnectionStatus("Offline · MacBook Pro", language: .zhHans),
+            "离线 · MacBook Pro"
+        )
+        XCTAssertEqual(
+            AppLocalizationFormatter.localizeRelativeTime("4m ago", language: .zhHans),
+            "4分钟前"
+        )
+        XCTAssertEqual(
+            AppLocalizationFormatter.localizeAgentPersona("Default", language: .zhHans),
+            "默认"
+        )
+
+        // 3. Cold-start synchronous Frame 0 hydration & stale-disk race protection
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AntigravityV233Lang-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let projStore = LocalProjectionStore(storageDirectory: tempDir)
+        let prefsStore = InMemoryPreferencesStore()
+
+        // Seed stale disk JSON with English while UserDefaults has zh-Hans (simulating immediate kill)
+        await projStore.saveAppearancePreferences(AppAppearancePreferences(language: .english))
+        let liveStore1 = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projStore,
+            secretStore: InMemorySecretStore(),
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(),
+            preferencesStore: prefsStore
+        )
+        XCTAssertEqual(liveStore1.appearancePreferences.language, .english)
+
+        liveStore1.setAppLanguage(.zhHans)
+        XCTAssertEqual(liveStore1.appearancePreferences.language, .zhHans)
+        XCTAssertEqual(
+            prefsStore.string(forKey: AntigravitySessionStore.appLanguageDefaultsKey),
+            AppLanguage.zhHans.rawValue
+        )
+
+        // Overwrite disk JSON back to stale .english to test race protection on cold start
+        await projStore.saveAppearancePreferences(AppAppearancePreferences(language: .english))
+
+        let liveStore2 = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projStore,
+            secretStore: InMemorySecretStore(),
+            networkMonitor: NoopNetworkReachabilityMonitor(),
+            powerStateProvider: StaticPowerStateProvider(),
+            preferencesStore: prefsStore
+        )
+        XCTAssertEqual(
+            liveStore2.appearancePreferences.language,
+            .zhHans,
+            "Cold-start makeLiveStore must synchronously hydrate .zhHans on Frame 0 from preferencesStore"
+        )
+
+        await liveStore2.loadPersistedV233Preferences()
+        XCTAssertEqual(
+            liveStore2.appearancePreferences.language,
+            .zhHans,
+            "Stale disk JSON must not revert synchronously persisted language preference"
+        )
+
+        // Switching back to English updates store & preferencesStore synchronously
+        liveStore2.setAppLanguage(.english)
+        XCTAssertEqual(liveStore2.appearancePreferences.language, .english)
+        XCTAssertEqual(
+            prefsStore.string(forKey: AntigravitySessionStore.appLanguageDefaultsKey),
+            AppLanguage.english.rawValue
+        )
+    }
 }

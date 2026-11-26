@@ -20,6 +20,10 @@ public struct ConversationContextPreviewMenu: View {
         self.onDismiss = onDismiss
     }
 
+    private var lang: AppLanguage {
+        store.appearancePreferences.language
+    }
+
     public var body: some View {
         ZStack(alignment: .topLeading) {
             // Soft ambient blurred glow matching UE03 backdrop
@@ -90,7 +94,7 @@ public struct ConversationContextPreviewMenu: View {
                         Image(systemName: "doc.text")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textBody)
-                        Text("Implementation Plan")
+                        Text(lang.t("Implementation Plan", "实施计划"))
                             .font(.system(size: 13.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textPrimary)
                     }
@@ -111,7 +115,7 @@ public struct ConversationContextPreviewMenu: View {
                 Button {
                     onDismiss?()
                 } label: {
-                    Text("Awaiting review")
+                    Text(lang.t("Awaiting review", "等待审查"))
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.statusWaiting)
                         .padding(.horizontal, 14)
@@ -146,7 +150,7 @@ public struct ConversationContextPreviewMenu: View {
     private var contextActionMenuCard: some View {
         VStack(spacing: 0) {
             menuRowButton(
-                title: isPinned ? "Unpin" : "Pin",
+                title: isPinned ? lang.t("Unpin", "取消置顶") : lang.t("Pin", "置顶"),
                 symbol: "pin",
                 isHighlighted: true,
                 isDestructive: false,
@@ -159,7 +163,7 @@ public struct ConversationContextPreviewMenu: View {
             Divider().overlay(AntigravityTheme.subtleDivider)
 
             menuRowButton(
-                title: isUnread ? "Mark as Read" : "Mark as Unread",
+                title: isUnread ? lang.t("Mark as Read", "标为已读") : lang.t("Mark as Unread", "标为未读"),
                 symbol: "circle.inset.filled",
                 isHighlighted: false,
                 isDestructive: false,
@@ -172,7 +176,7 @@ public struct ConversationContextPreviewMenu: View {
             Divider().overlay(AntigravityTheme.subtleDivider)
 
             menuRowButton(
-                title: "Rename",
+                title: lang.t("Rename", "重命名"),
                 symbol: "pencil",
                 isHighlighted: false,
                 isDestructive: false,
@@ -184,7 +188,7 @@ public struct ConversationContextPreviewMenu: View {
             Divider().overlay(AntigravityTheme.subtleDivider)
 
             menuRowButton(
-                title: "Move to Project",
+                title: lang.t("Move to Project", "移动到项目"),
                 symbol: "chevron.right",
                 isHighlighted: false,
                 isDestructive: false,
@@ -198,7 +202,7 @@ public struct ConversationContextPreviewMenu: View {
                 .frame(height: 7)
 
             menuRowButton(
-                title: "Archive",
+                title: lang.t("Archive", "归档"),
                 symbol: "archivebox",
                 isHighlighted: false,
                 isDestructive: false,
@@ -211,7 +215,7 @@ public struct ConversationContextPreviewMenu: View {
             Divider().overlay(AntigravityTheme.subtleDivider)
 
             menuRowButton(
-                title: "Delete",
+                title: lang.t("Delete", "删除"),
                 symbol: "trash",
                 isHighlighted: false,
                 isDestructive: true,
@@ -264,7 +268,7 @@ public struct ConversationContextPreviewMenu: View {
 
     private var swipeShortcutPreviewSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("SWIPE SHORTCUT")
+            Text(lang.t("SWIPE SHORTCUT", "滑动快捷操作"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -275,7 +279,7 @@ public struct ConversationContextPreviewMenu: View {
                         .font(.system(size: 15.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                         .lineLimit(1)
-                    Text(swipeTargetArchived ? "Archived · 4h" : "4h")
+                    Text(swipeTargetArchived ? lang.t("Archived · 4h", "已归档 · 4小时前") : AppLocalizationFormatter.localizeRelativeTime("4h", language: lang))
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textMuted)
                 }
@@ -289,7 +293,7 @@ public struct ConversationContextPreviewMenu: View {
                     VStack(spacing: 4) {
                         Image(systemName: "pin")
                             .font(.system(size: 14.5, weight: .semibold))
-                        Text(swipeTargetPinned ? "Pinned" : "Pin")
+                        Text(swipeTargetPinned ? lang.t("Pinned", "已置顶") : lang.t("Pin", "置顶"))
                             .font(.system(size: 13, weight: .bold))
                     }
                     .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
@@ -305,7 +309,7 @@ public struct ConversationContextPreviewMenu: View {
                     VStack(spacing: 4) {
                         Image(systemName: "archivebox")
                             .font(.system(size: 14.5, weight: .medium))
-                        Text("Archive")
+                        Text(lang.t("Archive", "归档"))
                             .font(.system(size: 13, weight: .semibold))
                     }
                     .foregroundStyle(AntigravityTheme.textPrimary)

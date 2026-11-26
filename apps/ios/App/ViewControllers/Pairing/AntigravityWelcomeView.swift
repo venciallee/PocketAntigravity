@@ -24,6 +24,10 @@ public struct AntigravityWelcomeView: View {
         self.onConnected = onConnected
     }
 
+    private var lang: AppLanguage {
+        store.appearancePreferences.language
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -44,11 +48,14 @@ public struct AntigravityWelcomeView: View {
                         .tracking(-0.6)
                         .foregroundStyle(AntigravityTheme.inkReading)
 
-                    Text("Companion for Antigravity")
+                    Text(lang.t("Companion for Antigravity", "Antigravity 移动伴侣"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
 
-                    Text("Scan the Remote Control QR code in Antigravity Desktop to sync your conversations over Wi-Fi or 5G.")
+                    Text(lang.t(
+                        "Scan the Remote Control QR code in Antigravity Desktop to sync your conversations over Wi-Fi or 5G.",
+                        "扫描 Antigravity 桌面端中的远程控制二维码，即可通过 Wi-Fi 或 5G 同步您的对话。"
+                    ))
                         .font(.system(size: 15, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .multilineTextAlignment(.center)
@@ -68,8 +75,8 @@ public struct AntigravityWelcomeView: View {
 
                         Text(
                             store.isConnectingToBackend
-                                ? store.connectionStatusText
-                                : "Checking saved connection..."
+                                ? AppLocalizationFormatter.localizeConnectionStatus(store.connectionStatusText, language: lang)
+                                : lang.t("Checking saved connection...", "正在检查已保存的连接...")
                         )
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
@@ -80,7 +87,7 @@ public struct AntigravityWelcomeView: View {
                             Button {
                                 store.cancelPendingConnectionAttempt()
                             } label: {
-                                Text("Cancel")
+                                Text(lang.t("Cancel", "取消"))
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(AntigravityTheme.textSecondary)
                                     .padding(.horizontal, 16)
@@ -124,7 +131,7 @@ public struct AntigravityWelcomeView: View {
                             HStack(spacing: 9) {
                                 Image(systemName: "person.crop.circle.badge.checkmark")
                                     .font(.system(size: 17, weight: .semibold))
-                                Text("Sign in with Google")
+                                Text(lang.t("Sign in with Google", "使用 Google 登录"))
                                     .font(.system(size: 16.5, weight: .semibold))
                             }
                             .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
@@ -144,7 +151,7 @@ public struct AntigravityWelcomeView: View {
                         HStack(spacing: 9) {
                             Image(systemName: "qrcode.viewfinder")
                                 .font(.system(size: 17, weight: .semibold))
-                            Text("Scan Remote Control QR")
+                            Text(lang.t("Scan Remote Control QR", "扫描远程控制二维码"))
                                 .font(.system(size: 16.5, weight: .semibold))
                         }
                         .foregroundStyle(
@@ -175,11 +182,17 @@ public struct AntigravityWelcomeView: View {
                     .accessibilityIdentifier("btn-welcome-scan-qr")
 
                     VStack(spacing: 4) {
-                        Text("Open Antigravity on Mac / PC → Remote Control")
+                        Text(lang.t(
+                            "Open Antigravity on Mac / PC → Remote Control",
+                            "在 Mac / PC 上打开 Antigravity → 远程控制"
+                        ))
                             .font(.system(size: 12.5, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textMuted)
 
-                        Text("Independent third-party companion · Not affiliated with Google LLC")
+                        Text(lang.t(
+                            "Independent third-party companion · Not affiliated with Google LLC",
+                            "独立第三方伴侣客户端 · 与 Google LLC 无隶属关系"
+                        ))
                             .font(.system(size: 11, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textMuted.opacity(0.8))
                             .multilineTextAlignment(.center)

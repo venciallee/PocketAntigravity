@@ -27,6 +27,8 @@ public struct RichArtifactViewerSheet: View {
         self.artifactPath = artifactPath
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var artifact: ArtifactSnapshot? {
         store.activeArtifacts.first(where: { $0.artifactPath == artifactPath })
             ?? store.activeArtifacts.first
@@ -51,17 +53,17 @@ public struct RichArtifactViewerSheet: View {
                         markdownFallbackView(art)
                     }
                 } else {
-                    Text("Artifact not found: \(artifactPath)")
+                    Text(lang.t("Artifact not found: \(artifactPath)", "未找到产物：\(artifactPath)"))
                         .font(.system(size: 14))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
             }
             .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
-            .navigationTitle(artifact?.title ?? "Artifact Viewer")
+            .navigationTitle(artifact?.title ?? lang.t("Artifact Viewer", "产物查看器"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button(lang.t("Done", "完成")) {
                         store.presentedSheet = nil
                         dismiss()
                     }
@@ -81,17 +83,17 @@ public struct RichArtifactViewerSheet: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
             #else
-            Text("PDF preview: \(art.title)")
+            Text(lang.t("PDF preview: \(art.title)", "PDF 预览：\(art.title)"))
                 .foregroundStyle(AntigravityTheme.inkReading)
             #endif
 
             HStack(spacing: 10) {
-                TextField("Comment or quote PDF passage...", text: $commentDraft)
+                TextField(lang.t("Comment or quote PDF passage...", "评论或引用 PDF 段落…"), text: $commentDraft)
                     .font(.system(size: 14))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(10)
                     .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 12))
-                Button("Quote") {
+                Button(lang.t("Quote", "引用")) {
                     let quote = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     store.quoteDiffLinesToComposer(
                         filePath: art.artifactPath,
@@ -117,9 +119,9 @@ public struct RichArtifactViewerSheet: View {
 
     private func jupyterArtifactView(_ art: ArtifactSnapshot) -> some View {
         VStack(spacing: 12) {
-            Picker("Mode", selection: $showRawNotebook) {
-                Text("Preview").tag(false)
-                Text("Raw JSON").tag(true)
+            Picker(lang.t("Mode", "模式"), selection: $showRawNotebook) {
+                Text(lang.t("Preview", "预览")).tag(false)
+                Text(lang.t("Raw JSON", "原始 JSON")).tag(true)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
@@ -137,11 +139,11 @@ public struct RichArtifactViewerSheet: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Label("Kernel: \(doc.kernelName)", systemImage: "cpu")
+                            Label(lang.t("Kernel: \(doc.kernelName)", "内核：\(doc.kernelName)"), systemImage: "cpu")
                                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             Spacer()
-                            Text("\(doc.cells.count) cells")
+                            Text(lang.t("\(doc.cells.count) cells", "\(doc.cells.count) 个单元格"))
                                 .font(.system(size: 12))
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                         }
@@ -152,7 +154,7 @@ public struct RichArtifactViewerSheet: View {
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .foregroundStyle(AntigravityTheme.inkSecondary)
                                     Spacer()
-                                    Button("Comment") {
+                                    Button(lang.t("Comment", "评论")) {
                                         store.quoteDiffLinesToComposer(
                                             filePath: art.artifactPath,
                                             startLine: idx + 1,
@@ -173,7 +175,7 @@ public struct RichArtifactViewerSheet: View {
                                     .background(AntigravityTheme.surfaceObsidian, in: RoundedRectangle(cornerRadius: 10))
                                 ForEach(cell.outputs) { out in
                                     if let errVal = out.errorValue {
-                                        Text("\(out.errorName ?? "Error"): \(errVal)")
+                                        Text("\(out.errorName ?? lang.t("Error", "错误")): \(errVal)")
                                             .font(.system(size: 12, design: .monospaced))
                                             .foregroundStyle(AntigravityTheme.statusError)
                                     } else if let txt = out.text, !txt.isEmpty {
@@ -190,7 +192,7 @@ public struct RichArtifactViewerSheet: View {
                     .padding(16)
                 }
             } else {
-                Text("Unable to parse Jupyter Notebook JSON.")
+                Text(lang.t("Unable to parse Jupyter Notebook JSON.", "无法解析 Jupyter Notebook JSON。"))
                     .font(.system(size: 14))
                     .foregroundStyle(AntigravityTheme.statusError)
                     .padding()
@@ -215,7 +217,7 @@ public struct RichArtifactViewerSheet: View {
                                 Text(art.title)
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundStyle(AntigravityTheme.inkReading)
-                                Text("Drag across image to annotate a specific region")
+                                Text(lang.t("Drag across image to annotate a specific region", "在图片上拖动以标注特定区域"))
                                     .font(.system(size: 12))
                                     .foregroundStyle(AntigravityTheme.inkSecondary)
                             }
@@ -263,12 +265,12 @@ public struct RichArtifactViewerSheet: View {
             .frame(height: 300)
 
             HStack(spacing: 10) {
-                TextField("Comment on selected region...", text: $commentDraft)
+                TextField(lang.t("Comment on selected region...", "评论所选区域…"), text: $commentDraft)
                     .font(.system(size: 14))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(10)
                     .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 12))
-                Button("Add") {
+                Button(lang.t("Add", "添加")) {
                     let body = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !body.isEmpty else { return }
                     let rect = selectedRegion ?? CGRect(x: 40, y: 40, width: 120, height: 80)
@@ -296,7 +298,10 @@ public struct RichArtifactViewerSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(existingComments) { item in
-                            Text("Region (\(Int(item.normalizedX * 100))%, \(Int(item.normalizedY * 100))%): \(item.body)")
+                            Text(lang.t(
+                                "Region (\(Int(item.normalizedX * 100))%, \(Int(item.normalizedY * 100))%): \(item.body)",
+                                "区域（\(Int(item.normalizedX * 100))%, \(Int(item.normalizedY * 100))%）：\(item.body)"
+                            ))
                                 .font(.system(size: 13))
                                 .foregroundStyle(AntigravityTheme.inkReading)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -338,7 +343,7 @@ public struct RichArtifactViewerSheet: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                         if let rawKind = art.rawKindName, !rawKind.isEmpty {
-                            Text("Format: \(rawKind)")
+                            Text(lang.t("Format: \(rawKind)", "格式：\(rawKind)"))
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                         }
@@ -356,14 +361,17 @@ public struct RichArtifactViewerSheet: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(AntigravityTheme.surfaceCard, in: RoundedRectangle(cornerRadius: 10))
-                Text("This artifact format isn't natively previewable in this iOS build yet. Open it in Antigravity Desktop or update the iOS app.")
+                Text(lang.t(
+                    "This artifact format isn't natively previewable in this iOS build yet. Open it in Antigravity Desktop or update the iOS app.",
+                    "当前 iOS 版本暂不支持原生预览此产物格式。请在 Antigravity 桌面端打开，或更新 iOS 客户端。"
+                ))
                     .font(.system(size: 12.5))
                     .foregroundStyle(AntigravityTheme.inkMuted)
                 #if canImport(UIKit)
                 Button {
                     UIPasteboard.general.string = art.artifactPath
                 } label: {
-                    Label("Copy Artifact Path", systemImage: "doc.on.doc")
+                    Label(lang.t("Copy Artifact Path", "复制产物路径"), systemImage: "doc.on.doc")
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(maxWidth: .infinity, minHeight: 42)

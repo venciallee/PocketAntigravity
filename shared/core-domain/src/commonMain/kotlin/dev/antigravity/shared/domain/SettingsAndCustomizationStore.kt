@@ -2,6 +2,7 @@ package dev.antigravity.shared.domain
 
 import dev.antigravity.shared.model.AgentPermissionPreset
 import dev.antigravity.shared.model.AppAppearancePreferences
+import dev.antigravity.shared.model.AppLanguage
 import dev.antigravity.shared.model.CascadeExecutionMode
 import dev.antigravity.shared.model.CascadeModelConfig
 import dev.antigravity.shared.model.CustomizationsCatalog
@@ -9,6 +10,8 @@ import dev.antigravity.shared.model.LiveModelCatalogResult
 import dev.antigravity.shared.model.ModelUsageQuota
 import dev.antigravity.shared.model.PermissionRuleEntry
 import dev.antigravity.shared.model.ThinkingEffortLevel
+import dev.antigravity.shared.platform.InMemoryPreferencesStore
+import dev.antigravity.shared.platform.KeyValuePreferencesStore
 import dev.antigravity.shared.protocol.AntigravityKmpRpcClient
 import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.ProtocolCompatibilityEngine
@@ -17,6 +20,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlin.Throws
 
 public data class SettingsState(
@@ -73,9 +78,16 @@ public data class SettingsState(
  * Permission Presets & Allow/Deny Rules, Customizations/MCP/Plugins, and Appearance/Theme preferences.
  */
 public class SettingsAndCustomizationStore(
+    private val preferencesStore: KeyValuePreferencesStore = InMemoryPreferencesStore(),
     private val onCapabilityError: (String) -> Unit = {},
 ) {
-    private val _state = MutableStateFlow(SettingsState())
+    public var persistPreferences: Boolean = true
+
+    private val _state = MutableStateFlow(
+        SettingsState(
+            appearance = loadPersistedAppearance(preferencesStore),
+        ),
+    )
     public val state: StateFlow<SettingsState> = _state.asStateFlow()
 
     @Throws(Throwable::class)
@@ -348,19 +360,67 @@ public class SettingsAndCustomizationStore(
     }
 
     public fun updateAppearance(transform: (AppAppearancePreferences) -> AppAppearancePreferences) {
-        _state.update { it.copy(appearance = transform(it.appearance)) }
+        var updated: AppAppearancePreferences? = null
+        _state.update { prev ->
+            val next = transform(prev.appearance)
+            updated = next
+            prev.copy(appearance = next)
+        }
+        updated?.let(::persistAppearanceIfEnabled)
     }
 
-    public fun setAppLanguage(language: dev.antigravity.shared.model.AppLanguage) {
-        _state.update { it.copy(appearance = it.appearance.copy(language = language)) }
+    public fun setAppLanguage(language: AppLanguage) {
+        updateAppearance { it.copy(language = language) }
     }
 
     public fun clearCapabilityError() {
         _state.update { it.copy(lastCapabilityError = null) }
     }
 
+    private fun persistAppearanceIfEnabled(appearance: AppAppearancePreferences) {
+        if (!persistPreferences) return
+        preferencesStore.putString(KEY_APP_LANGUAGE, appearance.language.languageTag)
+        runCatching {
+            preferencesStore.putString(KEY_APPEARANCE_PREFERENCES, persistenceJson.encodeToString(appearance))
+        }
+    }
+
     private fun recordCapabilityError(message: String) {
         _state.update { it.copy(lastCapabilityError = message) }
         onCapabilityError(message)
+    }
+
+    public companion object {
+        public const val KEY_APP_LANGUAGE: String = "antigravity.kmp.appLanguage.v1"
+        public const val KEY_APPEARANCE_PREFERENCES: String = "antigravity.kmp.appearancePreferences.v1"
+
+        private val persistenceJson: Json = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        }
+
+        private fun loadPersistedAppearance(preferencesStore: KeyValuePreferencesStore): AppAppearancePreferences {
+            val rawJson = preferencesStore.getString(KEY_APPEARANCE_PREFERENCES)
+            val decoded = if (!rawJson.isNullOrBlank()) {
+                runCatching {
+                    persistenceJson.decodeFromString<AppAppearancePreferences>(rawJson)
+                }.getOrNull()
+            } else {
+                null
+            }
+            val rawLang = preferencesStore.getString(KEY_APP_LANGUAGE)
+            if (decoded != null) {
+                return if (!rawLang.isNullOrBlank()) {
+                    decoded.copy(language = AppLanguage.fromTag(rawLang))
+                } else {
+                    decoded
+                }
+            }
+            return if (!rawLang.isNullOrBlank()) {
+                AppAppearancePreferences(language = AppLanguage.fromTag(rawLang))
+            } else {
+                AppAppearancePreferences()
+            }
+        }
     }
 }

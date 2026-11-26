@@ -47,6 +47,27 @@ final class UserGreetingTests: XCTestCase {
             UserGreetingFormatter.addContextBackdropGreeting(displayName: nil),
             "Welcome back.\nWhere should we pick\nup?"
         )
+        // Chinese greeting copy renders real name when present, or clean nameless fallback
+        XCTAssertEqual(
+            UserGreetingFormatter.homeHeroGreeting(displayName: "Vencial Lee", language: .zhHans),
+            "欢迎回来，\nVencial。\n今天从哪里开始？"
+        )
+        XCTAssertEqual(
+            UserGreetingFormatter.homeHeroGreeting(displayName: nil, language: .zhHans),
+            "欢迎回来。\n今天从哪里\n开始？"
+        )
+        XCTAssertEqual(
+            UserGreetingFormatter.compactBackdropGreeting(displayName: "Vencial Lee", language: .zhHans),
+            "欢迎回来，Vencial。"
+        )
+        XCTAssertEqual(
+            UserGreetingFormatter.compactBackdropGreeting(displayName: nil, language: .zhHans),
+            "欢迎回来。"
+        )
+        XCTAssertEqual(
+            UserGreetingFormatter.addContextBackdropGreeting(displayName: nil, language: .zhHans),
+            "欢迎回来。\n今天从哪里开始？"
+        )
     }
 
     func testParseUserProfileResponseSupportsMultipleSchemas() {
@@ -98,6 +119,12 @@ final class UserGreetingTests: XCTestCase {
         XCTAssertEqual(liveStore.userDisplayName, "Vencial")
         XCTAssertEqual(liveStore.homeHeroGreetingText, "Welcome back,\nVencial. Where\nshould we pick up?")
         XCTAssertFalse(liveStore.homeHeroGreetingText.contains("Alex"))
+
+        // Switching app language updates hero greeting immediately
+        liveStore.setAppLanguage(.zhHans)
+        XCTAssertEqual(liveStore.homeHeroGreetingText, "欢迎回来，\nVencial。\n今天从哪里开始？")
+        liveStore.setAppLanguage(.english)
+        XCTAssertEqual(liveStore.homeHeroGreetingText, "Welcome back,\nVencial. Where\nshould we pick up?")
 
         // Cold-starting a new live store immediately restores the cached real name
         let restarted = AntigravitySessionStore.makeLiveStore(

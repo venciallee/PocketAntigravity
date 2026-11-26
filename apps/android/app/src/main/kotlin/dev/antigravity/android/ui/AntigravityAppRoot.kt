@@ -402,6 +402,7 @@ fun AntigravityAppRoot(
         preset = resolvedPreset,
         darkTheme = resolvedDark,
         useDynamicColor = appearance.useDynamicColor,
+        language = appearance.language,
     ) {
         val colors = LocalAntigravityColors.current
         val density = LocalDensity.current

@@ -67,7 +67,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.components.AntigravitySurfaceCard
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentPermissionPreset
 import dev.antigravity.shared.model.AgentsHostFilterScope
@@ -75,6 +77,7 @@ import dev.antigravity.shared.model.AppAppearanceMode
 import dev.antigravity.shared.model.AppLanguage
 import dev.antigravity.shared.model.AppThemePreset
 import dev.antigravity.shared.model.RemoteConnectionChannel
+import dev.antigravity.shared.model.localizedTitle
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
@@ -90,6 +93,7 @@ fun SettingsAndCustomizationsScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val syncState by coordinator.syncState.collectAsStateWithLifecycle()
     val settingsState by coordinator.settingsStore.state.collectAsStateWithLifecycle()
@@ -102,7 +106,7 @@ fun SettingsAndCustomizationsScreen(
     var selectedHostId by rememberSaveable(connectionState.activeHost?.instanceId) {
         mutableStateOf(connectionState.activeHost?.instanceId ?: "macbook-pro-local")
     }
-    var refreshNotice by remember { mutableStateOf<String?>(null) }
+    var didRefreshHosts by remember { mutableStateOf(false) }
 
     val appearance = settingsState.appearance
     val activeHost = connectionState.activeHost
@@ -149,7 +153,7 @@ fun SettingsAndCustomizationsScreen(
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = tr("Back", "返回"),
                 tint = colors.inkReading,
                 modifier = Modifier.size(22.dp),
             )
@@ -159,7 +163,7 @@ fun SettingsAndCustomizationsScreen(
 
         // Large Settings Title
         Text(
-            text = "Settings",
+            text = tr("Settings", "设置"),
             style = MaterialTheme.typography.headlineMedium.copy(
                 fontSize = 30.sp,
                 lineHeight = 36.sp,
@@ -197,7 +201,7 @@ fun SettingsAndCustomizationsScreen(
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = { coordinator.dismissCapabilityError() }) {
-                        Text("Dismiss", color = colors.statusWaiting)
+                        Text(tr("Dismiss", "关闭"), color = colors.statusWaiting)
                     }
                 }
             }
@@ -239,8 +243,9 @@ fun SettingsAndCustomizationsScreen(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
+                        val hostDisplayName = activeHost?.hostname ?: "MacBook Pro"
                         Text(
-                            text = "Connected: ${activeHost?.hostname ?: "MacBook Pro"}",
+                            text = tr("Connected: $hostDisplayName", "已连接：$hostDisplayName"),
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -250,13 +255,16 @@ fun SettingsAndCustomizationsScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                         val channelLabel = when (activeHost?.channel) {
-                            RemoteConnectionChannel.DIRECT_HOST -> "Direct LAN"
-                            else -> "Cloud Relay"
+                            RemoteConnectionChannel.DIRECT_HOST -> tr("Direct LAN", "局域网直连")
+                            else -> tr("Cloud Relay", "云中继")
                         }
                         val latencyMs = connectionState.lastPingLatencyMs ?: activeHost?.latencyMs ?: 42
                         val sessionCount = if (coordinator.isVerificationMode) 12 else syncState.summaries.size
                         Text(
-                            text = "$channelLabel · ${latencyMs}ms · $sessionCount sessions",
+                            text = tr(
+                                "$channelLabel · ${latencyMs}ms · $sessionCount sessions",
+                                "$channelLabel · ${latencyMs}ms · $sessionCount 个会话",
+                            ),
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                             color = colors.inkSecondary,
                             maxLines = 1,
@@ -285,7 +293,7 @@ fun SettingsAndCustomizationsScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Scan New QR",
+                        text = tr("Scan New QR", "扫描新二维码"),
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontSize = 14.5.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -304,7 +312,7 @@ fun SettingsAndCustomizationsScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "Available hosts",
+                text = tr("Available hosts", "可用主机"),
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
@@ -312,7 +320,7 @@ fun SettingsAndCustomizationsScreen(
                 color = colors.accentPeriwinkle,
             )
             Text(
-                text = refreshNotice ?: "Refresh",
+                text = if (didRefreshHosts) tr("Refreshed", "已刷新") else tr("Refresh", "刷新"),
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
@@ -321,7 +329,7 @@ fun SettingsAndCustomizationsScreen(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .clickable {
-                        refreshNotice = "Refreshed"
+                        didRefreshHosts = true
                         scope.launch {
                             runCatching { coordinator.refreshWorkspacesAndSummaries() }
                         }
@@ -366,8 +374,9 @@ fun SettingsAndCustomizationsScreen(
                         ),
                         color = colors.inkReading,
                     )
+                    val onlineText = if (host.isOnline) tr("Online", "在线") else tr("Offline", "离线")
                     Text(
-                        text = "${if (host.isOnline) "Online" else "Offline"} · ${host.version.removePrefix("v")}",
+                        text = "$onlineText · ${host.version.removePrefix("v")}",
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = if (host.isOnline) colors.statusDone else colors.inkSecondary,
                     )
@@ -379,7 +388,7 @@ fun SettingsAndCustomizationsScreen(
 
         // 3. Appearance
         Text(
-            text = "Appearance",
+            text = tr("Appearance", "外观"),
             style = MaterialTheme.typography.titleSmall.copy(
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
@@ -436,7 +445,7 @@ fun SettingsAndCustomizationsScreen(
                             )
                         }
                         Text(
-                            text = mode.displayTitle,
+                            text = mode.localizedTitle(lang),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontSize = 13.5.sp,
                                 fontWeight = FontWeight.Medium,
@@ -491,7 +500,7 @@ fun SettingsAndCustomizationsScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = preset.displayTitle,
+                            text = preset.localizedTitle(lang),
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontSize = 12.5.sp,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
@@ -535,12 +544,15 @@ fun SettingsAndCustomizationsScreen(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = "Dynamic color",
+                    text = tr("Dynamic color", "动态取色"),
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                     color = colors.inkReading,
                 )
                 Text(
-                    text = "Material You from wallpaper · status colors stay fixed",
+                    text = tr(
+                        "Material You from wallpaper · status colors stay fixed",
+                        "跟随壁纸自动适配 Material You · 状态色保持固定",
+                    ),
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 18.sp),
                     color = colors.inkSecondary,
                 )
@@ -582,7 +594,7 @@ fun SettingsAndCustomizationsScreen(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
-                        text = "Language",
+                        text = tr("Language", "语言"),
                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                         color = colors.inkReading,
                     )
@@ -606,7 +618,7 @@ fun SettingsAndCustomizationsScreen(
                     )
                     Icon(
                         imageVector = Icons.Rounded.ArrowDropDown,
-                        contentDescription = "Select language",
+                        contentDescription = tr("Select language", "选择语言"),
                         tint = colors.inkSecondary,
                         modifier = Modifier.size(20.dp),
                     )
@@ -618,19 +630,19 @@ fun SettingsAndCustomizationsScreen(
                 onDismissRequest = { languageMenuExpanded = false },
                 containerColor = colors.surfacePopover,
             ) {
-                AppLanguage.entries.forEach { lang ->
+                AppLanguage.entries.forEach { option ->
                     DropdownMenuItem(
                         text = {
                             Text(
-                                text = lang.displayTitle,
-                                color = if (appearance.language == lang) colors.accentPeriwinkle else colors.inkReading,
+                                text = option.displayTitle,
+                                color = if (appearance.language == option) colors.accentPeriwinkle else colors.inkReading,
                             )
                         },
                         onClick = {
-                            coordinator.settingsStore.setAppLanguage(lang)
+                            coordinator.settingsStore.setAppLanguage(option)
                             languageMenuExpanded = false
                         },
-                        modifier = Modifier.testTag("language-option-${lang.name.lowercase()}"),
+                        modifier = Modifier.testTag("language-option-${option.name.lowercase()}"),
                     )
                 }
             }
@@ -652,7 +664,7 @@ fun SettingsAndCustomizationsScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Permissions, notifications & about",
+                text = tr("Permissions, notifications & about", "权限、通知与关于"),
                 style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                 color = colors.inkReading,
                 modifier = Modifier.weight(1f),
@@ -678,9 +690,8 @@ private fun SettingsMoreSubpage(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     val scope = rememberCoroutineScope()
-    var approvalAlertsEnabled by rememberSaveable { mutableStateOf(true) }
-    var quietOnManualStop by rememberSaveable { mutableStateOf(true) }
 
     Column(
         modifier = modifier
@@ -704,13 +715,13 @@ private fun SettingsMoreSubpage(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = tr("Back", "返回"),
                     tint = colors.inkReading,
                     modifier = Modifier.size(22.dp),
                 )
             }
             Text(
-                text = "Settings",
+                text = tr("Settings", "设置"),
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Normal,
@@ -723,22 +734,22 @@ private fun SettingsMoreSubpage(
 
         // Permissions
         Text(
-            text = "Permissions",
+            text = tr("Permissions", "权限"),
             style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
             color = colors.accentPeriwinkle,
         )
         Text(
-            text = "Default policy for commands & tools",
+            text = tr("Default policy for commands & tools", "命令与工具的默认权限策略"),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
             color = colors.inkSecondary,
             modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
         )
 
         val presets = listOf(
-            AgentPermissionPreset.REQUEST_REVIEW to "Every command requires approval",
-            AgentPermissionPreset.DEFAULT_POLICY to "Ask before sensitive operations",
-            AgentPermissionPreset.AUTO to "Automatically decide if commands run",
-            AgentPermissionPreset.TURBO to "Run all commands without restrictions",
+            AgentPermissionPreset.REQUEST_REVIEW to tr("Every command requires approval", "每条命令都需要审批"),
+            AgentPermissionPreset.DEFAULT_POLICY to tr("Ask before sensitive operations", "敏感操作前先征求确认"),
+            AgentPermissionPreset.AUTO to tr("Automatically decide if commands run", "自动判断是否直接执行命令"),
+            AgentPermissionPreset.TURBO to tr("Run all commands without restrictions", "无限制自动执行所有命令"),
         )
         presets.forEach { (preset, desc) ->
             val selected = activePermissionPreset == preset
@@ -777,7 +788,7 @@ private fun SettingsMoreSubpage(
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = preset.displayTitle,
+                        text = preset.localizedTitle(lang),
                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                         color = colors.inkReading,
                     )
@@ -791,7 +802,10 @@ private fun SettingsMoreSubpage(
         }
 
         Text(
-            text = "Applies to new turns on your paired Mac/PC. Fine-grained rules are managed in Antigravity Desktop.",
+            text = tr(
+                "Applies to new turns on your paired Mac/PC. Fine-grained rules are managed in Antigravity Desktop.",
+                "适用于已配对 Mac/PC 上的新轮次。精细化权限规则请在 Antigravity Desktop 中管理。",
+            ),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
             color = colors.inkSecondary,
             modifier = Modifier.padding(top = 8.dp, bottom = 22.dp),
@@ -799,34 +813,38 @@ private fun SettingsMoreSubpage(
 
         // Notifications
         Text(
-            text = "Notifications",
+            text = tr("Notifications", "通知"),
             style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
             color = colors.accentPeriwinkle,
         )
         Text(
-            text = "Alerts while agents run in the background",
+            text = tr("Alerts while agents run in the background", "代理在后台运行时的提醒"),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
             color = colors.inkSecondary,
             modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
         )
 
         NotificationSwitchRow(
-            title = "Approval & Completion Alerts",
-            subtitle = "Notify on waiting approval, run complete, or error",
-            checked = approvalAlertsEnabled,
-            onCheckedChange = { approvalAlertsEnabled = it },
+            title = tr("Approval & Completion Alerts", "审批与完成提醒"),
+            subtitle = tr("Notify on waiting approval, run complete, or error", "在等待审批、任务完成或出错时推送通知"),
+            checked = appearance.notificationsEnabled,
+            onCheckedChange = { enabled ->
+                coordinator.settingsStore.updateAppearance { it.copy(notificationsEnabled = enabled) }
+            },
             testTag = "switch-notif-approval",
         )
         NotificationSwitchRow(
-            title = "Quiet on Manual Stop",
-            subtitle = "Skip the alert when you stop a run yourself",
-            checked = quietOnManualStop,
-            onCheckedChange = { quietOnManualStop = it },
+            title = tr("Quiet on Manual Stop", "手动停止时静音"),
+            subtitle = tr("Skip the alert when you stop a run yourself", "由你主动停止运行时不发送提醒"),
+            checked = appearance.suppressManualStopNotification,
+            onCheckedChange = { enabled ->
+                coordinator.settingsStore.updateAppearance { it.copy(suppressManualStopNotification = enabled) }
+            },
             testTag = "switch-notif-quiet-stop",
         )
         NotificationSwitchRow(
-            title = "Live updates",
-            subtitle = "Show run progress as a live notification",
+            title = tr("Live updates", "实时进度通知"),
+            subtitle = tr("Show run progress as a live notification", "在状态栏与锁屏中实时显示运行进度"),
             checked = appearance.liveUpdatesEnabled,
             onCheckedChange = { enabled ->
                 coordinator.settingsStore.updateAppearance { it.copy(liveUpdatesEnabled = enabled) }
@@ -849,7 +867,7 @@ private fun SettingsMoreSubpage(
             ),
         ) {
             Text(
-                text = "Sign out & disconnect host",
+                text = tr("Sign out & disconnect host", "退出登录并断开主机"),
                 style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold),
             )
         }
@@ -864,7 +882,7 @@ private fun SettingsMoreSubpage(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "About",
+                text = tr("About", "关于"),
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
                 color = colors.accentPeriwinkle,
             )
@@ -879,7 +897,7 @@ private fun SettingsMoreSubpage(
                         color = colors.inkReading,
                     )
                     Text(
-                        text = "Companion for Antigravity",
+                        text = tr("Companion for Antigravity", "Antigravity 移动伴侣客户端"),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = colors.inkSecondary,
                     )
@@ -891,7 +909,10 @@ private fun SettingsMoreSubpage(
                 )
             }
             Text(
-                text = "Independent third-party client, not affiliated with Google LLC.",
+                text = tr(
+                    "Independent third-party client, not affiliated with Google LLC.",
+                    "独立第三方客户端，与 Google LLC 无隶属或官方关联关系。",
+                ),
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
                 color = colors.inkMuted,
             )

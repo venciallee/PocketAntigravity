@@ -53,8 +53,18 @@ public object UserGreetingFormatter {
     /**
      * Builds the centered Home (`UE01`) hero greeting copy.
      */
-    public fun homeHeroGreeting(displayName: String?): String {
+    public fun homeHeroGreeting(
+        displayName: String?,
+        language: AppLanguage = AppLanguage.ENGLISH,
+    ): String {
         val clean = formatGreetingName(displayName)
+        if (language.isChinese) {
+            return if (clean != null) {
+                "欢迎回来，\n$clean。\n今天从哪里开始？"
+            } else {
+                "欢迎回来。\n今天从哪里\n开始？"
+            }
+        }
         return if (clean != null) {
             "Welcome back,\n$clean. Where\nshould we pick up?"
         } else {
@@ -65,8 +75,18 @@ public object UserGreetingFormatter {
     /**
      * Builds the dimmed Add Context popover backdrop greeting copy.
      */
-    public fun addContextBackdropGreeting(displayName: String?): String {
+    public fun addContextBackdropGreeting(
+        displayName: String?,
+        language: AppLanguage = AppLanguage.ENGLISH,
+    ): String {
         val clean = formatGreetingName(displayName)
+        if (language.isChinese) {
+            return if (clean != null) {
+                "欢迎回来，$clean。\n今天从哪里开始？"
+            } else {
+                "欢迎回来。\n今天从哪里开始？"
+            }
+        }
         return if (clean != null) {
             "Welcome back, $clean.\nWhere should we pick\nup?"
         } else {
@@ -77,8 +97,18 @@ public object UserGreetingFormatter {
     /**
      * Builds the compact dimmed Permissions Preset popover backdrop greeting copy.
      */
-    public fun compactBackdropGreeting(displayName: String?): String {
+    public fun compactBackdropGreeting(
+        displayName: String?,
+        language: AppLanguage = AppLanguage.ENGLISH,
+    ): String {
         val clean = formatGreetingName(displayName)
+        if (language.isChinese) {
+            return if (clean != null) {
+                "欢迎回来，$clean。"
+            } else {
+                "欢迎回来。"
+            }
+        }
         return if (clean != null) {
             "Welcome back, $clean."
         } else {

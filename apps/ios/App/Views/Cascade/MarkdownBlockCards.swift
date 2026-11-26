@@ -10,6 +10,7 @@ internal struct MarkdownCarouselCardView: View {
     let slides: [[MarkdownBlock]]
     let variant: MarkdownRenderVariant
     let store: AntigravitySessionStore?
+    @Environment(\.appLanguage) private var lang
     @State private var activeIndex: Int = 0
 
     var body: some View {
@@ -18,7 +19,7 @@ internal struct MarkdownCarouselCardView: View {
                 Image(systemName: "rectangle.stack")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                Text("Carousel")
+                Text(lang.t("Carousel", "轮播卡片"))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkLabel)
                 Spacer()
@@ -170,6 +171,7 @@ internal struct MarkdownDetailsCardView: View {
 internal struct MarkdownPluginCardView: View {
     let catalogId: String
     let explicitTitle: String?
+    @Environment(\.appLanguage) private var lang
 
     private var displayTitle: String {
         if let explicitTitle, !explicitTitle.isEmpty { return explicitTitle }
@@ -194,7 +196,7 @@ internal struct MarkdownPluginCardView: View {
                 Text(displayTitle)
                     .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkReading)
-                Text("Plugin · Connect in Antigravity Customizations")
+                Text(lang.t("Plugin · Connect in Antigravity Customizations", "插件 · 在 Antigravity 自定义设置中连接"))
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
             }
@@ -219,6 +221,7 @@ internal struct MarkdownImageBlockView: View {
     let title: String?
     let store: AntigravitySessionStore?
 
+    @Environment(\.appLanguage) private var lang
     @State private var resolved: ResolvedEmbedResource? = nil
     @State private var isLoading: Bool = false
     @State private var showFullScreen: Bool = false
@@ -247,7 +250,7 @@ internal struct MarkdownImageBlockView: View {
                     case .empty:
                         HStack(spacing: 8) {
                             ProgressView().tint(AntigravityTheme.accentPeriwinkle)
-                            Text("Loading image…")
+                            Text(lang.t("Loading image…", "正在加载图片…"))
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                         }
@@ -284,7 +287,7 @@ internal struct MarkdownImageBlockView: View {
             } else if isLoading {
                 HStack(spacing: 8) {
                     ProgressView().tint(AntigravityTheme.accentPeriwinkle)
-                    Text("Loading \(MarkdownLinkFormatting.shortFileBadge(src))…")
+                    Text(lang.t("Loading \(MarkdownLinkFormatting.shortFileBadge(src))…", "正在加载 \(MarkdownLinkFormatting.shortFileBadge(src))…"))
                         .font(.system(size: 12.5))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
@@ -313,7 +316,7 @@ internal struct MarkdownImageBlockView: View {
             }
         }
         .sheet(isPresented: $showFullScreen) {
-            EmbedFullScreenModalView(title: captionText.isEmpty ? "Image" : captionText, src: src, resolved: resolved)
+            EmbedFullScreenModalView(title: captionText.isEmpty ? lang.t("Image", "图片") : captionText, src: src, resolved: resolved)
         }
     }
 
@@ -323,7 +326,7 @@ internal struct MarkdownImageBlockView: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
             VStack(alignment: .leading, spacing: 2) {
-                Text(captionText.isEmpty ? "Host Image" : captionText)
+                Text(captionText.isEmpty ? lang.t("Host Image", "主机图片") : captionText)
                     .font(.system(size: 13.5, weight: .medium))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .lineLimit(1)
@@ -333,7 +336,7 @@ internal struct MarkdownImageBlockView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button("Copy") {
+            Button(lang.t("Copy", "复制")) {
                 MarkdownClipboardHelper.copyText(MarkdownLinkFormatting.cleanDisplayPath(src))
             }
             .font(.system(size: 12, weight: .semibold))
@@ -386,6 +389,7 @@ internal struct MarkdownFootnoteSectionView: View {
 internal struct MarkdownCodeBlockCardView: View {
     let language: String?
     let code: String
+    @Environment(\.appLanguage) private var lang
     @State private var didCopy: Bool = false
     @State private var wrapLines: Bool = false
 
@@ -412,7 +416,7 @@ internal struct MarkdownCodeBlockCardView: View {
                         wrapLines.toggle()
                     }
                 } label: {
-                    Text(wrapLines ? "Scroll" : "Wrap")
+                    Text(wrapLines ? lang.t("Scroll", "滚动") : lang.t("Wrap", "换行"))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                         .padding(.horizontal, 8)
@@ -437,7 +441,7 @@ internal struct MarkdownCodeBlockCardView: View {
                     HStack(spacing: 4) {
                         Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 10.5, weight: .semibold))
-                        Text(didCopy ? "Copied" : "Copy")
+                        Text(didCopy ? lang.t("Copied", "已复制") : lang.t("Copy", "复制"))
                             .font(.system(size: 11.5, weight: .semibold))
                     }
                     .foregroundStyle(didCopy ? AntigravityTheme.statusDone : AntigravityTheme.accentPeriwinkle)

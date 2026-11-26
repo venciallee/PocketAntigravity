@@ -47,10 +47,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.ConversationSortField
 import dev.antigravity.shared.model.DisplayGroupBy
+import dev.antigravity.shared.model.localizedTitle
 
 /**
  * UE02_DISPLAY_OPTIONS (`and-display-options.png`): Material 3 Modal Bottom Sheet over
@@ -137,6 +140,7 @@ fun DisplayOptionsSheetContent(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     val workspaceState by coordinator.workspaceStore.state.collectAsStateWithLifecycle()
     val syncState by coordinator.syncState.collectAsStateWithLifecycle()
     val options = workspaceState.displayOptions
@@ -173,7 +177,7 @@ fun DisplayOptionsSheetContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Display options",
+                    text = tr("Display options", "显示选项"),
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Normal,
@@ -189,7 +193,7 @@ fun DisplayOptionsSheetContent(
                     modifier = Modifier.testTag("sheet-reset-btn"),
                 ) {
                     Text(
-                        text = "Reset",
+                        text = tr("Reset", "重置"),
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Medium,
@@ -201,8 +205,8 @@ fun DisplayOptionsSheetContent(
 
             // Group by
             DisplayOptionFlatRow(
-                label = "Group by",
-                value = options.groupBy.displayTitle,
+                label = tr("Group by", "分组方式"),
+                value = options.groupBy.localizedTitle(lang),
                 trailingIcon = Icons.Rounded.KeyboardArrowDown,
                 onClick = {
                     onSortMenuExpandedChange(false)
@@ -215,11 +219,11 @@ fun DisplayOptionsSheetContent(
 
             // Sort conversations (highlighted when dropdown menu is open)
             DisplayOptionFlatRow(
-                label = "Sort conversations",
+                label = tr("Sort conversations", "会话排序"),
                 value = when (options.sortBy) {
-                    ConversationSortField.LAST_UPDATED -> "Last updated"
-                    ConversationSortField.DATE_CREATED -> "Date created"
-                    ConversationSortField.TITLE -> "Title"
+                    ConversationSortField.LAST_UPDATED -> tr("Last updated", "最近更新")
+                    ConversationSortField.DATE_CREATED -> tr("Date created", "创建时间")
+                    ConversationSortField.TITLE -> tr("Title", "标题")
                 },
                 trailingIcon = if (sortMenuExpanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
                 highlighted = sortMenuExpanded,
@@ -228,9 +232,14 @@ fun DisplayOptionsSheetContent(
             )
 
             // Sort projects
+            val localizedProjectsOrder = when (options.sortProjectsOrder) {
+                "Custom Order" -> tr("Custom Order", "自定义顺序")
+                "Alphabetical" -> tr("Alphabetical", "按字母排序")
+                else -> options.sortProjectsOrder
+            }
             DisplayOptionFlatRow(
-                label = "Sort projects",
-                value = if (sortMenuExpanded) "" else options.sortProjectsOrder,
+                label = tr("Sort projects", "项目排序"),
+                value = if (sortMenuExpanded) "" else localizedProjectsOrder,
                 trailingIcon = if (sortMenuExpanded) null else Icons.Rounded.KeyboardArrowDown,
                 onClick = {
                     onSortMenuExpandedChange(false)
@@ -246,9 +255,15 @@ fun DisplayOptionsSheetContent(
             )
 
             // Filter
+            val localizedFilterScope = when (options.filterScopeLabel) {
+                "All conversations" -> tr("All conversations", "全部会话")
+                "Only Unread" -> tr("Only Unread", "仅未读")
+                "Only Automations" -> tr("Only Automations", "仅自动化")
+                else -> options.filterScopeLabel
+            }
             DisplayOptionFlatRow(
-                label = "Filter",
-                value = if (sortMenuExpanded) "" else options.filterScopeLabel,
+                label = tr("Filter", "筛选"),
+                value = if (sortMenuExpanded) "" else localizedFilterScope,
                 trailingIcon = if (sortMenuExpanded) null else Icons.Rounded.ChevronRight,
                 onClick = {
                     val next = when (options.filterScopeLabel) {
@@ -263,8 +278,12 @@ fun DisplayOptionsSheetContent(
 
             // Display
             DisplayOptionFlatRow(
-                label = "Display",
-                value = if (options.densityLabel.contains("Compact", ignoreCase = true)) "Compact" else "Comfortable",
+                label = tr("Display", "密度"),
+                value = if (options.densityLabel.contains("Compact", ignoreCase = true)) {
+                    tr("Compact", "紧凑")
+                } else {
+                    tr("Comfortable", "舒适")
+                },
                 trailingIcon = Icons.Rounded.ChevronRight,
                 onClick = {
                     val next = if (options.densityLabel.contains("Compact", ignoreCase = true)) {
@@ -297,12 +316,12 @@ fun DisplayOptionsSheetContent(
             ) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "Auto pin",
+                        text = tr("Auto pin", "自动置顶"),
                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                         color = colors.inkReading,
                     )
                     Text(
-                        text = "Pin a conversation when you message it",
+                        text = tr("Pin a conversation when you message it", "发送消息后自动置顶该会话"),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = colors.inkSecondary,
                     )
@@ -337,7 +356,7 @@ fun DisplayOptionsSheetContent(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "Archived only",
+                    text = tr("Archived only", "仅看已归档"),
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                     color = colors.inkReading,
                     modifier = Modifier.weight(1f),
@@ -368,7 +387,7 @@ fun DisplayOptionsSheetContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "$unreadCount unread",
+                    text = tr("$unreadCount unread", "$unreadCount 条未读"),
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                     color = colors.inkSecondary,
                     modifier = Modifier.weight(1f),
@@ -388,7 +407,7 @@ fun DisplayOptionsSheetContent(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "Mark all as read",
+                            text = tr("Mark all as read", "全部标为已读"),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium,
@@ -416,9 +435,9 @@ fun DisplayOptionsSheetContent(
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     listOf(
-                        ConversationSortField.LAST_UPDATED to "Last updated",
-                        ConversationSortField.DATE_CREATED to "Date created",
-                        ConversationSortField.TITLE to "Title",
+                        ConversationSortField.LAST_UPDATED to tr("Last updated", "最近更新"),
+                        ConversationSortField.DATE_CREATED to tr("Date created", "创建时间"),
+                        ConversationSortField.TITLE to tr("Title", "标题"),
                     ).forEachIndexed { idx, (field, label) ->
                         val selected = options.sortBy == field
                         Row(

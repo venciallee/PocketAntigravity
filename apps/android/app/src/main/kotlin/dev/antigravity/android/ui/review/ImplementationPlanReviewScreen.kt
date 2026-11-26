@@ -64,6 +64,8 @@ import dev.antigravity.android.core.ui.components.AntigravitySurfaceCard
 import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.PlanInlineComment
 import dev.antigravity.shared.model.PlanProposedFileChange
@@ -123,7 +125,7 @@ fun ImplementationPlanReviewScreen(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = tr("Back", "返回"),
                         tint = colors.accentPeriwinkle,
                     )
                 }
@@ -133,7 +135,7 @@ fun ImplementationPlanReviewScreen(
                     verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
                     Text(
-                        text = "Implementation Plan",
+                        text = tr("Implementation Plan", "实施计划"),
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
@@ -168,7 +170,7 @@ fun ImplementationPlanReviewScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.ChatBubbleOutline,
-                            contentDescription = "Comments",
+                            contentDescription = tr("Comments", "评论"),
                             tint = colors.inkReading,
                             modifier = Modifier.size(14.dp),
                         )
@@ -189,13 +191,14 @@ fun ImplementationPlanReviewScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "More options",
+                        contentDescription = tr("More options", "更多选项"),
                         tint = colors.inkSecondary,
                     )
                 }
             }
         },
         bottomBar = {
+            val lang = LocalAppLanguage.current
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -225,7 +228,7 @@ fun ImplementationPlanReviewScreen(
                         ),
                     ) {
                         Text(
-                            text = "Proceed",
+                            text = tr("Proceed", "继续执行"),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -242,7 +245,10 @@ fun ImplementationPlanReviewScreen(
                                     cascadeId = activeCascadeId,
                                 )
                             }
-                            statusNotice = "Sent $pendingCount review comments to agent"
+                            statusNotice = lang.t(
+                                "Sent $pendingCount review comments to agent",
+                                "已向代理发送 $pendingCount 条评审意见",
+                            )
                         },
                         modifier = Modifier
                             .weight(1.25f)
@@ -255,7 +261,7 @@ fun ImplementationPlanReviewScreen(
                         ),
                     ) {
                         Text(
-                            text = "Send $pendingCount comments",
+                            text = tr("Send $pendingCount comments", "发送 $pendingCount 条评论"),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontSize = 14.5.sp,
                                 fontWeight = FontWeight.Bold,
@@ -267,6 +273,7 @@ fun ImplementationPlanReviewScreen(
             }
         },
     ) { innerPadding ->
+        val bodyLang = LocalAppLanguage.current
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -294,7 +301,10 @@ fun ImplementationPlanReviewScreen(
                 ) {
                     StatusDot(color = colors.statusWaiting, size = 8.dp)
                     Text(
-                        text = "Agent is paused until you review. Tap or select any text to comment.",
+                        text = tr(
+                            "Agent is paused until you review. Tap or select any text to comment.",
+                            "代理已暂停等待你审阅。点击或选中任意文本即可添加评论。",
+                        ),
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 13.5.sp,
                             fontWeight = FontWeight.Medium,
@@ -340,7 +350,7 @@ fun ImplementationPlanReviewScreen(
 
             // 3. Proposed Changes Section
             Text(
-                text = "Proposed changes",
+                text = tr("Proposed changes", "拟定改动"),
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
@@ -391,12 +401,12 @@ fun ImplementationPlanReviewScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.ChatBubbleOutline,
-                                contentDescription = "Add comment",
+                                contentDescription = tr("Add comment", "添加评论"),
                                 tint = colors.pillActiveForeground,
                                 modifier = Modifier.size(16.dp),
                             )
                             Text(
-                                text = "Comment",
+                                text = tr("Comment", "评论"),
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                                 color = colors.pillActiveForeground,
                             )
@@ -407,12 +417,14 @@ fun ImplementationPlanReviewScreen(
                         )
                         Box(
                             modifier = Modifier
-                                .clickable { statusNotice = "Copied selected plan snippet" }
+                                .clickable {
+                                    statusNotice = bodyLang.t("Copied selected plan snippet", "已复制选中的计划片段")
+                                }
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                text = "Copy",
+                                text = tr("Copy", "复制"),
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                                 color = colors.pillActiveForeground,
                             )
@@ -437,7 +449,10 @@ fun ImplementationPlanReviewScreen(
                     contentPadding = PaddingValues(12.dp),
                 ) {
                     Text(
-                        text = "New comment on settlement/settlement_test.go",
+                        text = tr(
+                            "New comment on settlement/settlement_test.go",
+                            "针对 settlement/settlement_test.go 的新评论",
+                        ),
                         style = MaterialTheme.typography.labelMedium,
                         color = colors.accentPeriwinkle,
                     )
@@ -445,7 +460,7 @@ fun ImplementationPlanReviewScreen(
                     Box(modifier = Modifier.fillMaxWidth()) {
                         if (newCommentText.isEmpty()) {
                             Text(
-                                text = "Write your review feedback...",
+                                text = tr("Write your review feedback...", "输入你的审阅意见…"),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = colors.inkMuted,
                             )
@@ -488,7 +503,7 @@ fun ImplementationPlanReviewScreen(
                                 contentColor = colors.inkOnPrimaryCta,
                             ),
                         ) {
-                            Text("Add comment")
+                            Text(tr("Add comment", "添加评论"))
                         }
                     }
                 }
@@ -504,7 +519,7 @@ fun ImplementationPlanReviewScreen(
 
             // 4. Verification Section
             Text(
-                text = "Verification",
+                text = tr("Verification", "验证步骤"),
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,

@@ -11,6 +11,8 @@ public struct ConversationOverviewSheetView: View {
         self.store = store
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     public var body: some View {
         NavigationStack {
             ScrollView {
@@ -27,11 +29,11 @@ public struct ConversationOverviewSheetView: View {
                 .padding(.vertical, 12)
             }
             .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
-            .navigationTitle("Conversation Overview")
+            .navigationTitle(lang.t("Conversation Overview", "对话概览"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button(lang.t("Done", "完成")) {
                         store.presentedSheet = nil
                         dismiss()
                     }
@@ -48,7 +50,7 @@ public struct ConversationOverviewSheetView: View {
     private var reviewCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Review & Diffs", systemImage: "doc.text.magnifyingglass")
+                Label(lang.t("Review & Diffs", "审查与变更"), systemImage: "doc.text.magnifyingglass")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                 Spacer()
@@ -64,7 +66,7 @@ public struct ConversationOverviewSheetView: View {
                     store.presentedSheet = nil
                     store.activeRoute = .turnDiffReview
                 } label: {
-                    Text("Open Diff Review")
+                    Text(lang.t("Open Diff Review", "打开变更审查"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(maxWidth: .infinity)
@@ -75,7 +77,7 @@ public struct ConversationOverviewSheetView: View {
                     store.presentedSheet = nil
                     store.activeRoute = .planReview
                 } label: {
-                    Text("Plan Review")
+                    Text(lang.t("Plan Review", "方案审查"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .frame(maxWidth: .infinity)
@@ -94,7 +96,7 @@ public struct ConversationOverviewSheetView: View {
         let prs = store.conversationOverview.pullRequests
         if !prs.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Pull Requests (\(prs.count))", systemImage: "arrow.triangle.pull")
+                Label(lang.t("Pull Requests (\(prs.count))", "拉取请求 (\(prs.count))"), systemImage: "arrow.triangle.pull")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                 ForEach(prs) { pr in
@@ -131,11 +133,11 @@ public struct ConversationOverviewSheetView: View {
 
     private var subagentsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Subagents (\(store.conversationOverview.subagents.count))", systemImage: "person.3.sequence")
+            Label(lang.t("Subagents (\(store.conversationOverview.subagents.count))", "子代理 (\(store.conversationOverview.subagents.count))"), systemImage: "person.3.sequence")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
             if store.conversationOverview.subagents.isEmpty {
-                Text("No active subagents spawned in this conversation.")
+                Text(lang.t("No active subagents spawned in this conversation.", "此对话中暂无活跃子代理。"))
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
             } else {
@@ -146,7 +148,7 @@ public struct ConversationOverviewSheetView: View {
                                 Text(sub.role)
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(AntigravityTheme.inkReading)
-                                Text(sub.status.displayBadgeText)
+                                Text(sub.status.localizedTitle(for: lang))
                                     .font(.system(size: 10, weight: .bold))
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
@@ -162,7 +164,7 @@ public struct ConversationOverviewSheetView: View {
                         }
                         Spacer()
                         if sub.status == .inProgress || sub.status == .waiting {
-                            Button("Stop") {
+                            Button(lang.t("Stop", "停止")) {
                                 store.stopSubagent(sub.subagentId)
                             }
                             .font(.system(size: 12, weight: .semibold))
@@ -184,11 +186,11 @@ public struct ConversationOverviewSheetView: View {
 
     private var backgroundTasksCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Background Tasks (\(store.conversationOverview.backgroundTasks.count))", systemImage: "gearshape.2")
+            Label(lang.t("Background Tasks (\(store.conversationOverview.backgroundTasks.count))", "后台任务 (\(store.conversationOverview.backgroundTasks.count))"), systemImage: "gearshape.2")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
             if store.conversationOverview.backgroundTasks.isEmpty {
-                Text("No background shell or daemon tasks running.")
+                Text(lang.t("No background shell or daemon tasks running.", "当前无后台 Shell 或守护进程任务。"))
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
             } else {
@@ -205,7 +207,7 @@ public struct ConversationOverviewSheetView: View {
                         }
                         Spacer()
                         if task.canCancel && task.status == .inProgress {
-                            Button("Cancel") {
+                            Button(lang.t("Cancel", "取消")) {
                                 store.cancelBackgroundTask(task.id)
                             }
                             .font(.system(size: 12, weight: .semibold))
@@ -215,7 +217,7 @@ public struct ConversationOverviewSheetView: View {
                             .background(AntigravityTheme.statusError.opacity(0.14), in: Capsule())
                             .accessibilityIdentifier("btn_cancel_bg_task_\(task.id)")
                         } else {
-                            Text(task.status.displayBadgeText)
+                            Text(task.status.localizedTitle(for: lang))
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                         }
@@ -234,7 +236,7 @@ public struct ConversationOverviewSheetView: View {
     private var goalsCard: some View {
         if !store.conversationOverview.goals.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Goals (\(store.conversationOverview.goals.count))", systemImage: "target")
+                Label(lang.t("Goals (\(store.conversationOverview.goals.count))", "目标 (\(store.conversationOverview.goals.count))"), systemImage: "target")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                 ForEach(store.conversationOverview.goals) { goal in
@@ -259,11 +261,11 @@ public struct ConversationOverviewSheetView: View {
 
     private var artifactsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Artifacts (\(store.activeArtifacts.count))", systemImage: "doc.richtext")
+            Label(lang.t("Artifacts (\(store.activeArtifacts.count))", "产物 (\(store.activeArtifacts.count))"), systemImage: "doc.richtext")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
             if store.activeArtifacts.isEmpty {
-                Text("No artifacts captured yet.")
+                Text(lang.t("No artifacts captured yet.", "暂未生成产物。"))
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
             } else {
@@ -307,11 +309,11 @@ public struct ConversationOverviewSheetView: View {
 
     private var filesAndLinksCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Modified Files (\(store.conversationOverview.modifiedFiles.count))", systemImage: "folder")
+            Label(lang.t("Modified Files (\(store.conversationOverview.modifiedFiles.count))", "修改的文件 (\(store.conversationOverview.modifiedFiles.count))"), systemImage: "folder")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
             if store.conversationOverview.modifiedFiles.isEmpty {
-                Text("No modified files tracked yet.")
+                Text(lang.t("No modified files tracked yet.", "暂未跟踪到修改的文件。"))
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
             } else {

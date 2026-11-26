@@ -991,7 +991,53 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc31_offlineEmptyChatShowsCleanHostOfflineCardWithoutDuplicatePrefix() {
+    fun atc31_realtimeBilingualLanguageSwitchingUpdatesUiImmediatelyAndPersists() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.SETTINGS,
+            )
+        }
+
+        // 1. Initial English baseline renders Settings, Language, and Scan New QR
+        composeRule.onNodeWithText("Settings").assertIsDisplayed()
+        composeRule.onNodeWithText("Language").assertIsDisplayed()
+        composeRule.onNodeWithText("Scan New QR").assertIsDisplayed()
+
+        // 2. Switch to Simplified Chinese -> UI recomposes in real time without recreating Activity
+        composeRule.onNodeWithTag("row-settings-language").performClick()
+        composeRule.onNodeWithTag("language-option-zh_hans").performClick()
+        assertEquals(AppLanguage.ZH_HANS, coordinator.settingsStore.state.value.appearance.language)
+        composeRule.onNodeWithText("设置").assertIsDisplayed()
+        composeRule.onNodeWithText("语言").assertIsDisplayed()
+        composeRule.onNodeWithText("扫描新二维码").assertIsDisplayed()
+
+        // 3. Navigate into More subpage -> Chinese labels + Google LLC trademark attribution preserved
+        composeRule.onNodeWithTag("row-settings-more").performClick()
+        composeRule.onNodeWithTag("settings-more-subpage").assertIsDisplayed()
+        composeRule.onNodeWithText("权限").assertIsDisplayed()
+        composeRule.onNodeWithTag("card-about-copyright").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-settings-more-back").performClick()
+
+        // 4. Switch back to English -> UI immediately restores English labels
+        composeRule.onNodeWithTag("row-settings-language").performClick()
+        composeRule.onNodeWithTag("language-option-english").performClick()
+        assertEquals(AppLanguage.ENGLISH, coordinator.settingsStore.state.value.appearance.language)
+        composeRule.onNodeWithText("Settings").assertIsDisplayed()
+        composeRule.onNodeWithText("Language").assertIsDisplayed()
+        composeRule.onNodeWithText("Scan New QR").assertIsDisplayed()
+
+        // 5. Cold-start persistence across live coordinator instances sharing preferences store
+        val sharedPrefs = dev.antigravity.shared.platform.InMemoryPreferencesStore()
+        val live1 = AntigravityCoreCoordinator(preferencesStore = sharedPrefs)
+        live1.settingsStore.setAppLanguage(AppLanguage.ZH_HANS)
+        val live2 = AntigravityCoreCoordinator(preferencesStore = sharedPrefs)
+        assertEquals(AppLanguage.ZH_HANS, live2.settingsStore.state.value.appearance.language)
+    }
+
+    @Test
+    fun atc32_offlineEmptyChatShowsCleanHostOfflineCardWithoutDuplicatePrefix() {
         val hostUuid = "huangjiafandemac-mini-local-swift-vapor"
         val storage = dev.antigravity.shared.domain.InMemoryProjectionStorage()
         val coordinator = AntigravityCoreCoordinator(

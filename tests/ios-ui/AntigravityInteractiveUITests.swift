@@ -975,6 +975,16 @@ final class AntigravityInteractiveUITests: XCTestCase {
         let langZhButton = app.buttons["btn-lang-zh-Hans"]
         scrollUntilHittable(langZhButton, in: app, maxSwipes: 4)
         XCTAssertTrue(langZhButton.waitForExistence(timeout: 5), "Settings must render Language switcher")
+        langZhButton.tap()
+        XCTAssertTrue(
+            waitForTextContaining("设置", in: app, timeout: 5),
+            "Tapping 简体中文 must immediately update Settings title to 设置 without app restart"
+        )
+        XCTAssertTrue(
+            waitForTextContaining("语言", in: app, timeout: 5),
+            "Tapping 简体中文 must immediately update Language section label to 语言"
+        )
+        attachScreenshot(named: "03c_Settings_Chinese_Realtime")
 
         let copyrightCard = app.descendants(matching: .any)["card-about-copyright"].firstMatch
         scrollUntilHittable(copyrightCard, in: app, maxSwipes: 8)
@@ -985,6 +995,20 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertTrue(
             waitForTextContaining("Google LLC", in: app, timeout: 5),
             "Settings screen must display Google LLC App Icon & Trademark copyright attribution"
+        )
+
+        // Restore English so subsequent tests start cleanly in the default English locale
+        let langEnButton = app.buttons["btn-lang-en"]
+        scrollUntilHittable(langEnButton, in: app, maxSwipes: 8)
+        XCTAssertTrue(langEnButton.waitForExistence(timeout: 5), "Settings must render English language toggle")
+        langEnButton.tap()
+        XCTAssertTrue(
+            waitForTextContaining("Settings", in: app, timeout: 5),
+            "Tapping English must immediately restore Settings title"
+        )
+        XCTAssertTrue(
+            waitForTextContaining("Language", in: app, timeout: 5),
+            "Tapping English must immediately restore Language label"
         )
     }
 
