@@ -926,6 +926,24 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "App must automatically reconnect and restore online status when Desktop returns"
         )
 
+        // 1b. Verify Host Switcher menu shows "All Hosts (Cloud & Local)" and hides "Host & Pairing Settings" once paired
+        hostPill.tap()
+        let allHostsOption = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "All Hosts (Cloud & Local)"))
+            .firstMatch
+        XCTAssertTrue(
+            allHostsOption.waitForExistence(timeout: 5),
+            "Host switcher menu must display 'All Hosts (Cloud & Local)'"
+        )
+        let pairingSettingsOption = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", "Host & Pairing Settings"))
+            .firstMatch
+        XCTAssertFalse(
+            pairingSettingsOption.exists,
+            "Host switcher menu must not display 'Host & Pairing Settings' once a backend is already paired"
+        )
+        allHostsOption.tap()
+
         // 2. Open Sidebar -> Settings (`UE15`) -> verify Copyright / Trademark attribution & Language switcher
         let sidebarButton = app.buttons["btn-sidebar"]
         XCTAssertTrue(sidebarButton.waitForExistence(timeout: 5))

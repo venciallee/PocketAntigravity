@@ -7,6 +7,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -275,9 +276,20 @@ class AndroidSidebarDrawerGestureTest {
         // Initially scoped to MacBook Pro -> repo picker displays mbp-ios-app
         composeRule.onNodeWithTag("home-project-picker").assertTextContains("mbp-ios-app", substring = true)
 
-        // Switch to Mac mini via top Host Switcher menu -> repo picker must switch to vapor-backend
+        // Switch to Mac mini via top Host Switcher menu -> verify menu labels and repo picker switch
         composeRule.onNodeWithTag("host-switcher-pill").performClick()
         composeRule.waitForIdle()
+        composeRule.onNodeWithTag("host-option-all")
+            .assertIsDisplayed()
+            .assertTextContains("All Hosts (Cloud & Local)", substring = false)
+        composeRule.onNodeWithTag("host-option-cloud")
+            .assertIsDisplayed()
+            .assertTextContains("Antigravity (Cloud)", substring = false)
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithText("Host & Pairing Settings", substring = true, ignoreCase = true)
+                .fetchSemanticsNodes().size,
+        )
         composeRule.onNodeWithTag("host-option-uuid-macmini").performClick()
         composeRule.waitForIdle()
 

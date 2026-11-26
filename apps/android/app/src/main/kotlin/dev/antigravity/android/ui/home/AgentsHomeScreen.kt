@@ -386,7 +386,7 @@ fun AgentsHomeScreen(
                             containerColor = colors.surfacePopover,
                         ) {
                             DropdownMenuItem(
-                                text = { Text("All Hosts", color = colors.inkReading) },
+                                text = { Text("All Hosts (Cloud & Local)", color = colors.inkReading) },
                                 leadingIcon = {
                                     Icon(Icons.Rounded.Hub, contentDescription = null, tint = colors.accentPeriwinkle)
                                 },
@@ -402,7 +402,7 @@ fun AgentsHomeScreen(
                                 modifier = Modifier.testTag("host-option-all"),
                             )
                             DropdownMenuItem(
-                                text = { Text("Antigravity Cloud", color = colors.inkReading) },
+                                text = { Text("Antigravity (Cloud)", color = colors.inkReading) },
                                 leadingIcon = {
                                     Icon(Icons.Rounded.Cloud, contentDescription = null, tint = colors.accentPeriwinkle)
                                 },
