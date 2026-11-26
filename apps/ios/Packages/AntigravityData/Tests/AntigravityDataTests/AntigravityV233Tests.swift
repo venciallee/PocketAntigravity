@@ -953,6 +953,8 @@ final class AntigravityV233Tests: XCTestCase {
         XCTAssertEqual(AppThemePreset.nord.localizedTitle(for: .zhHans), "北欧")
         XCTAssertEqual(DiffCompareMode.uncommitted.localizedTitle(for: .zhHans), "未提交")
         XCTAssertEqual(AgentPermissionPreset.turbo.localizedTitle(for: .zhHans), "极速")
+        XCTAssertEqual(CortexStepStatus.inProgress.localizedTitle(for: .zhHans), "运行中")
+        XCTAssertEqual(CortexStepStatus.waiting.localizedTitle(for: .english), "WAITING")
         XCTAssertEqual(
             AppLocalizationFormatter.localizeConnectionStatus("Offline · MacBook Pro", language: .zhHans),
             "离线 · MacBook Pro"

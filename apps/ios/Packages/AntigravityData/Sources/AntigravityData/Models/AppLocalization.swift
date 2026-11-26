@@ -256,6 +256,21 @@ public extension DiffCompareMode {
     }
 }
 
+public extension CortexStepStatus {
+    func localizedTitle(for language: AppLanguage) -> String {
+        switch self {
+        case .unspecified: return language.t("IDLE", "空闲")
+        case .pending: return language.t("QUEUED", "排队中")
+        case .inProgress: return language.t("RUNNING", "运行中")
+        case .done: return language.t("DONE", "已完成")
+        case .error: return language.t("ERROR", "错误")
+        case .cancelled: return language.t("STOPPED", "已停止")
+        case .blocked: return language.t("BLOCKED", "已阻塞")
+        case .waiting: return language.t("WAITING", "等待中")
+        }
+    }
+}
+
 public enum AppLocalizationFormatter: Sendable {
     public static func localizeConnectionStatus(_ raw: String, language: AppLanguage) -> String {
         guard language.isChinese else { return raw }

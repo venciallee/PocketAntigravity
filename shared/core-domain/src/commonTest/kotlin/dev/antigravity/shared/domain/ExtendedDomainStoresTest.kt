@@ -316,8 +316,10 @@ class ExtendedDomainStoresTest {
         assertEquals("设置", dev.antigravity.shared.model.PrimaryTab.SETTINGS.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
         assertEquals("跟随系统", AppAppearanceMode.SYSTEM.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
         assertEquals("北欧", AppThemePreset.NORD.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
-        assertEquals("工作区", DiffCompareMode.WORKING_TREE.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
-        assertEquals("极速", AgentPermissionPreset.TURBO.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
+        assertEquals("工作区", DiffCompareMode.WORKING_TREE.localizedTitle(AppLanguage.ZH_HANS))
+        assertEquals("极速", AgentPermissionPreset.TURBO.localizedTitle(AppLanguage.ZH_HANS))
+        assertEquals("运行中", dev.antigravity.shared.model.CortexStepStatus.IN_PROGRESS.localizedTitle(AppLanguage.ZH_HANS))
+        assertEquals("WAITING", dev.antigravity.shared.model.CortexStepStatus.WAITING.localizedTitle(AppLanguage.ENGLISH))
         assertEquals(
             "离线 · MacBook Pro",
             dev.antigravity.shared.model.AppLocalizationFormatter.localizeConnectionStatus(

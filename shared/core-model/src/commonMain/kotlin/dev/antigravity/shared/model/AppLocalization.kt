@@ -162,6 +162,17 @@ public fun RemoteConnectionChannel.localizedTitle(language: AppLanguage): String
     RemoteConnectionChannel.DIRECT_HOST -> language.t("Direct LAN / Tailscale", "局域网 / Tailscale 直连")
 }
 
+public fun CortexStepStatus.localizedTitle(language: AppLanguage): String = when (this) {
+    CortexStepStatus.UNSPECIFIED -> language.t("IDLE", "空闲")
+    CortexStepStatus.PENDING -> language.t("QUEUED", "排队中")
+    CortexStepStatus.IN_PROGRESS -> language.t("RUNNING", "运行中")
+    CortexStepStatus.DONE -> language.t("DONE", "已完成")
+    CortexStepStatus.ERROR -> language.t("ERROR", "错误")
+    CortexStepStatus.CANCELLED -> language.t("STOPPED", "已停止")
+    CortexStepStatus.BLOCKED -> language.t("BLOCKED", "已阻塞")
+    CortexStepStatus.WAITING -> language.t("WAITING", "等待中")
+}
+
 public object AppLocalizationFormatter {
     public fun localizeConnectionStatus(raw: String, language: AppLanguage): String {
         if (!language.isChinese) return raw

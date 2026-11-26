@@ -1122,7 +1122,7 @@ private struct UnknownStepFallbackCardView: View {
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .lineLimit(1)
                 Spacer()
-                Text(status.displayBadgeText)
+                Text(status.localizedTitle(for: lang))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .padding(.horizontal, 7)
