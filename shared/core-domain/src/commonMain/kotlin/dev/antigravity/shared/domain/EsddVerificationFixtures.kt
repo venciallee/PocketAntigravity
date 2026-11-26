@@ -26,7 +26,6 @@ import dev.antigravity.shared.model.NewProjectDraft
 import dev.antigravity.shared.model.PlanInlineComment
 import dev.antigravity.shared.model.PlanProposedFileChange
 import dev.antigravity.shared.model.PlannerResponsePayload
-import dev.antigravity.shared.model.ProjectDetailTab
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
 import dev.antigravity.shared.model.RemoteConnectionChannel
@@ -1082,7 +1081,6 @@ public object EsddVerificationFixtures {
             contextCandidates = contextCandidates,
             attachedComposerChips = initialComposerChips,
             selectedProjectId = "ledger-svc",
-            selectedProjectTab = ProjectDetailTab.ACTIVE,
         )
         coordinator.reviewStore.seedFixture(
             artifacts = artifacts,
@@ -1118,11 +1116,6 @@ public object EsddVerificationFixtures {
             }
             EsddVerifySceneCase.CONTEXT_MENU_PIN -> {
                 coordinator.chatStore.setActiveCascade("cas-flaky-settlement")
-            }
-            EsddVerifySceneCase.PROJECT_DETAIL -> {
-                coordinator.workspaceStore.selectProject("ledger-svc")
-                coordinator.workspaceStore.selectProjectTab(ProjectDetailTab.ACTIVE)
-                // Align ledger-svc to Active 4 / Archived 2 as depicted in UE04 (ios-project-detail / and-project)
             }
             EsddVerifySceneCase.CREATE_PROJECT -> {
                 coordinator.workspaceStore.updateNewProjectDraft {

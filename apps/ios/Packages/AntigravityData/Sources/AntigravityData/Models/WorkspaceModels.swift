@@ -12,13 +12,12 @@ public enum PrimaryTab: String, ResilientStringEnum, CaseIterable, Identifiable 
     public static var unknownFallback: PrimaryTab { .agents }
 }
 
-/// Deterministic ESDD verification scene identifiers (`UE01` .. `UE15`, 20 aligned boards).
+/// Deterministic ESDD verification scene identifiers (`UE01` .. `UE15`, 19 aligned boards).
 public enum ESDDVerifySceneCase: String, ResilientStringEnum, CaseIterable, Identifiable {
     case agentsHome = "UE01_AGENTS_HOME"
     case sidebarDrawer = "UE01B_SIDEBAR_DRAWER"
     case displayOptions = "UE02_DISPLAY_OPTIONS"
     case contextMenuPin = "UE03_CONTEXT_MENU_PIN"
-    case projectDetail = "UE04_PROJECT_DETAIL"
     case createProject = "UE05_CREATE_PROJECT"
     case automations = "UE06_AUTOMATIONS"
     case automationDetail = "UE06B_AUTOMATION_DETAIL"
@@ -142,7 +141,7 @@ public struct AgentDisplayOptions: Codable, Sendable, Equatable {
     }
 }
 
-/// Execution host target for a project (`UE01`, `UE04`, `UE05`).
+/// Execution host target for a project (`UE01`, `UE05`).
 public enum ProjectRuntimeTarget: String, ResilientStringEnum, CaseIterable, Identifiable {
     case macBookPro = "MacBook Pro"
     case cloud = "Cloud"
@@ -167,16 +166,6 @@ public enum ProjectSourceKind: String, ResilientStringEnum, CaseIterable, Identi
 
     public var id: String { rawValue }
     public static var unknownFallback: ProjectSourceKind { .githubRepo }
-}
-
-/// Underline section tab in `ProjectDetailViewController` (`UE04`).
-public enum ProjectDetailTab: String, ResilientStringEnum, CaseIterable, Identifiable {
-    case active = "Active"
-    case archived = "Archived"
-    case automations = "Automations"
-
-    public var id: String { rawValue }
-    public static var unknownFallback: ProjectDetailTab { .active }
 }
 
 /// GitHub repository candidate row in `CreateProjectSheetView` (`UE05`).

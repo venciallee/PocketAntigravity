@@ -721,8 +721,8 @@ final class AntigravityInteractiveUITests: XCTestCase {
         attachScreenshot(named: "02_Opened_Live_Conversation_Detail")
     }
 
-    /// Domain: Sidebar Drawer Swipe Open/Close (`UE01B`) + Project Detail (`UE04`) + Navigation Stack + Native iOS Left-Edge Swipe-Back (`interactivePopGestureRecognizer`).
-    func testProjectDetailNavigationAndEdgeSwipeBack() throws {
+    /// Domain: Sidebar Drawer Swipe Open/Close (`UE01B`) + Direct Project Collapse/Expand + Conversation Navigation & Left-Edge Swipe-Back.
+    func testSidebarProjectCollapseAndConversationNavigationBack() throws {
         let server = try EmbeddedDesktopMockServer()
         defer { server.stop() }
 
@@ -824,7 +824,7 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Tapping btn-sidebar on Home must re-open the Sidebar Drawer"
         )
 
-        // 2. Collapse & expand project conversation list, then open Project Detail from swiped-open Sidebar
+        // 2. Both the chevron toggle AND tapping the project header directly collapse/expand conversations (no Project Detail page)
         let projectToggle = app.buttons["btn-toggle-project-slardar_app_ai"]
         XCTAssertTrue(
             projectToggle.waitForExistence(timeout: 5),
@@ -835,8 +835,9 @@ final class AntigravityInteractiveUITests: XCTestCase {
             waitForNonExistence(reviewRow, timeout: 4),
             "Tapping project collapse toggle must hide project conversation rows"
         )
+        let collapsedBadge = app.descendants(matching: .any)["project-collapsed-count-slardar_app_ai"].firstMatch
         XCTAssertTrue(
-            app.descendants(matching: .any)["project-collapsed-count-slardar_app_ai"].firstMatch.waitForExistence(timeout: 4),
+            collapsedBadge.waitForExistence(timeout: 4),
             "Collapsed project header must display muted conversation count badge"
         )
         projectToggle.tap()
@@ -848,53 +849,45 @@ final class AntigravityInteractiveUITests: XCTestCase {
         let projectHeader = app.buttons["project-header-slardar_app_ai"]
         XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
         projectHeader.tap()
-
-        let backToAgentsButton = app.buttons["btn-back-agents"]
         XCTAssertTrue(
-            backToAgentsButton.waitForExistence(timeout: 5),
-            "Tapping project header must open ProjectDetailViewController"
+            waitForNonExistence(reviewRow, timeout: 4),
+            "Tapping project header directly must collapse project conversation rows instead of opening a detail screen"
         )
-        attachScreenshot(named: "03_Opened_Live_Project_Detail")
+        XCTAssertTrue(
+            collapsedBadge.waitForExistence(timeout: 4),
+            "Collapsed project header must show count badge after tapping project row"
+        )
+        XCTAssertTrue(
+            drawerPanel.exists,
+            "Sidebar drawer must stay open when collapsing/expanding a project row"
+        )
+        projectHeader.tap()
+        XCTAssertTrue(
+            reviewRow.waitForExistence(timeout: 4),
+            "Tapping project header a second time must expand project conversation rows back"
+        )
 
-        let projectConvRow = app.buttons["project-conv-row-cid-slardar-tracking"]
-        XCTAssertTrue(projectConvRow.waitForExistence(timeout: 5))
-        projectConvRow.tap()
+        // 3. Open tracking conversation from sidebar -> verify NOTIFY_USER content -> edge-swipe back to Home
+        let trackingRow = app.buttons["drawer-conv-cid-slardar-tracking"]
+        XCTAssertTrue(trackingRow.waitForExistence(timeout: 5))
+        trackingRow.tap()
 
         let backToSessionsButton = app.buttons["btn-back-sessions"]
         XCTAssertTrue(
             backToSessionsButton.waitForExistence(timeout: 5),
-            "Tapping a conversation row inside ProjectDetailViewController must open CascadeChatViewController with back button"
+            "Tapping a conversation row in Sidebar must open CascadeChatViewController with back button"
         )
         XCTAssertTrue(app.descendants(matching: .any)["chat-nav-title"].firstMatch.label.contains("Slardar App AI 埋点梳理"))
         XCTAssertTrue(
             waitForTextContaining("已整理完冷启动", in: app, timeout: 5),
             "CORTEX_STEP_TYPE_NOTIFY_USER content must render in CascadeChatViewController"
         )
-
-        // Back button from project-launched chat returns to ProjectDetail, then back to Home
-        backToSessionsButton.tap()
-        XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
-        backToAgentsButton.tap()
-        XCTAssertTrue(heroGreeting.waitForExistence(timeout: 5))
-
-        // 3. Re-enter Project Detail via Sidebar -> Conversation -> edge-swipe back to Project Detail -> edge-swipe back to Home
-        sidebarButton.tap()
-        XCTAssertTrue(projectHeader.waitForExistence(timeout: 5))
-        projectHeader.tap()
-        XCTAssertTrue(backToAgentsButton.waitForExistence(timeout: 5))
-        projectConvRow.tap()
-        XCTAssertTrue(backToSessionsButton.waitForExistence(timeout: 5))
-
-        performEdgeSwipeBack(in: app)
-        XCTAssertTrue(
-            backToAgentsButton.waitForExistence(timeout: 5),
-            "Edge-swipe back from a project-launched Conversation must pop back to Project Detail"
-        )
+        attachScreenshot(named: "03_Opened_Live_Conversation_From_Sidebar")
 
         performEdgeSwipeBack(in: app)
         XCTAssertTrue(
             heroGreeting.waitForExistence(timeout: 5),
-            "Edge-swipe back from Project Detail must pop back to Home"
+            "Edge-swipe back from Conversation must pop directly back to Home"
         )
     }
 

@@ -80,22 +80,6 @@
       ]
     },
     {
-      "id": "UE04_PROJECT_DETAIL",
-      "title": "Project Detail Page & Extended FAB",
-      "androidReferencePng": "docs/ue/android/and-project.png",
-      "iosReferencePng": "docs/ue/ios/ios-project-detail.png",
-      "composeScreen": "ProjectDetailScreen",
-      "requiredTestTags": [
-        "btn-back-agents",
-        "project-hero-title",
-        "btn-new-conv-in-project",
-        "project-tab-active",
-        "project-conv-list",
-        "project-row-automation",
-        "project-row-skills"
-      ]
-    },
-    {
       "id": "UE05_CREATE_PROJECT",
       "title": "Create New Project Full-Screen Dialog",
       "androidReferencePng": "docs/ue/android/and-new-project.png",

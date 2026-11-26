@@ -123,15 +123,6 @@ class AndroidUeScreenshotTest {
     }
 
     @Test
-    fun capture_UE04_PROJECT_DETAIL() {
-        capturePortraitScreen(
-            scene = EsddVerifySceneCase.PROJECT_DETAIL,
-            fileName = "UE04_PROJECT_DETAIL",
-            touchTargetTags = listOf("btn-back", "btn-new-conv-in-project", "project-row-rules-skills"),
-        )
-    }
-
-    @Test
     fun capture_UE05_CREATE_PROJECT() {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.CREATE_PROJECT,

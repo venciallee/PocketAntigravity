@@ -21,7 +21,6 @@ public enum class EsddVerifySceneCase(public val rawValue: String) {
     SIDEBAR_DRAWER("UE01B_SIDEBAR_DRAWER"),
     DISPLAY_OPTIONS("UE02_DISPLAY_OPTIONS"),
     CONTEXT_MENU_PIN("UE03_CONTEXT_MENU_PIN"),
-    PROJECT_DETAIL("UE04_PROJECT_DETAIL"),
     CREATE_PROJECT("UE05_CREATE_PROJECT"),
     AUTOMATIONS("UE06_AUTOMATIONS"),
     AUTOMATION_DETAIL("UE06B_AUTOMATION_DETAIL"),
@@ -126,19 +125,6 @@ public object ProjectSourceKindSerializer : ResilientEnumSerializer<ProjectSourc
     serialName = "dev.antigravity.shared.model.ProjectSourceKind",
     entriesProvider = { ProjectSourceKind.entries },
     fallbackProvider = { ProjectSourceKind.GITHUB_REPO },
-)
-
-@Serializable(with = ProjectDetailTabSerializer::class)
-public enum class ProjectDetailTab(public val displayTitle: String) {
-    ACTIVE("Active"),
-    ARCHIVED("Archived"),
-    AUTOMATIONS("Automations"),
-}
-
-public object ProjectDetailTabSerializer : ResilientEnumSerializer<ProjectDetailTab>(
-    serialName = "dev.antigravity.shared.model.ProjectDetailTab",
-    entriesProvider = { ProjectDetailTab.entries },
-    fallbackProvider = { ProjectDetailTab.ACTIVE },
 )
 
 @Serializable

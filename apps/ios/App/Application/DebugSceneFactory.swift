@@ -14,7 +14,6 @@ public extension ESDDVerifySceneCase {
         case .sidebarDrawer:      return "CLAIM-14"
         case .displayOptions:     return "CLAIM-02"
         case .contextMenuPin:     return "CLAIM-03"
-        case .projectDetail:      return "CLAIM-04"
         case .createProject:      return "CLAIM-05"
         case .automations:        return "CLAIM-06"
         case .automationDetail:   return "CLAIM-15"
@@ -83,8 +82,6 @@ public enum DebugSceneFactory {
             return .displayOptions
         case "ue03", "context-menu-pin", "context-menu":
             return .contextMenuPin
-        case "ue04", "project-detail":
-            return .projectDetail
         case "ue05", "create-project", "new-project":
             return .createProject
         case "ue06", "automations":

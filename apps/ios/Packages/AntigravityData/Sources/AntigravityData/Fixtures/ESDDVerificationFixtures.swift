@@ -54,11 +54,6 @@ extension AntigravitySessionStore {
             contextMenuTargetCascadeId = "cas-flaky-settlement"
             swipePreviewCascadeId = "cas-upgrade-go"
             presentedSheet = .contextMenuPreview(cascadeId: "cas-flaky-settlement")
-        case .projectDetail:
-            selectedTab = .agents
-            selectedProjectId = "ledger-svc"
-            selectedProjectTab = .active
-            activeRoute = .projectDetail("ledger-svc")
         case .createProject:
             selectedTab = .agents
             activeRoute = .tabRoot

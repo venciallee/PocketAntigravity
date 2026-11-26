@@ -1081,7 +1081,9 @@ fun AgentsSidebarDrawerOverlay(
     onOpenCustomizations: () -> Unit,
     onOpenDisplayOptions: () -> Unit,
     onOpenNewProject: () -> Unit,
-    onOpenProjectDetail: (String) -> Unit,
+    onSelectProject: (String) -> Unit = {},
+    onOpenProjectCustomizations: (projectId: String, projectName: String) -> Unit = { _, _ -> },
+    onRevealProjectInFinder: (String) -> Unit = {},
     onOpenConversation: (String) -> Unit,
     onLongPressConversation: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -1132,7 +1134,9 @@ fun AgentsSidebarDrawerOverlay(
                 onOpenCustomizations = onOpenCustomizations,
                 onOpenDisplayOptions = onOpenDisplayOptions,
                 onOpenNewProject = onOpenNewProject,
-                onOpenProjectDetail = onOpenProjectDetail,
+                onSelectProject = onSelectProject,
+                onOpenProjectCustomizations = onOpenProjectCustomizations,
+                onRevealProjectInFinder = onRevealProjectInFinder,
                 onOpenConversation = onOpenConversation,
                 onLongPressConversation = onLongPressConversation,
                 onOpenSettings = onOpenSettings,
@@ -1151,7 +1155,9 @@ fun AgentsSidebarDrawerContent(
     onOpenCustomizations: () -> Unit,
     onOpenDisplayOptions: () -> Unit,
     onOpenNewProject: () -> Unit,
-    onOpenProjectDetail: (String) -> Unit,
+    onSelectProject: (String) -> Unit = {},
+    onOpenProjectCustomizations: (projectId: String, projectName: String) -> Unit = { _, _ -> },
+    onRevealProjectInFinder: (String) -> Unit = {},
     onOpenConversation: (String) -> Unit,
     onLongPressConversation: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -1379,86 +1385,163 @@ fun AgentsSidebarDrawerContent(
 
             dedupedGroups.forEach { (project, projectItems) ->
                 val isCollapsed = project.id in workspaceState.collapsedProjectIds
+                val isNoProjectGroup = project.isNoProject || AntigravityCloudDetector.isNoProjectSlug(project.id)
+                val isLocalProject = project.runtime != ProjectRuntimeTarget.CLOUD && !isNoProjectGroup
                 item(key = "project-header-${project.id}") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpenProjectDetail(project.id) }
-                            .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
-                            .testTag("project-header-${project.id}"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (project.runtime == ProjectRuntimeTarget.CLOUD) Icons.Rounded.Cloud else Icons.Rounded.Folder,
-                            contentDescription = null,
-                            tint = colors.inkSecondary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(
-                            text = if (coordinator.isVerificationMode && project.runtime == ProjectRuntimeTarget.CLOUD && !project.name.contains("/")) {
-                                "acme/${project.name}"
-                            } else {
-                                project.name
-                            },
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.Medium,
-                            ),
-                            color = colors.inkSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (isCollapsed && projectItems.isNotEmpty()) {
-                            Surface(
-                                shape = RoundedCornerShape(100.dp),
-                                color = colors.surfaceActiveTab,
-                                modifier = Modifier.testTag("project-collapsed-count-${project.id}"),
-                            ) {
-                                Text(
-                                    text = "${projectItems.size}",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                    ),
-                                    color = colors.inkMuted,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                                )
-                            }
-                        }
-                        if (projectItems.isNotEmpty()) {
-                            IconButton(
-                                onClick = {
-                                    coordinator.workspaceStore.toggleProjectExpanded(
-                                        projectId = project.id,
-                                        persist = !coordinator.isVerificationMode,
-                                    )
-                                },
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .testTag("project-toggle-${project.id}"),
-                            ) {
-                                Icon(
-                                    imageVector = if (isCollapsed) Icons.Rounded.ChevronRight else Icons.Rounded.KeyboardArrowDown,
-                                    contentDescription = if (isCollapsed) "Expand ${project.name}" else "Collapse ${project.name}",
-                                    tint = colors.inkMuted,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = { onNewConversation(project.id) },
+                    var projectMenuExpanded by remember(project.id) { mutableStateOf(false) }
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Row(
                             modifier = Modifier
-                                .size(34.dp)
-                                .testTag("project-add-${project.id}"),
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = {
+                                        if (projectItems.isNotEmpty()) {
+                                            coordinator.workspaceStore.toggleProjectExpanded(
+                                                projectId = project.id,
+                                                persist = !coordinator.isVerificationMode,
+                                            )
+                                        } else {
+                                            onSelectProject(project.id)
+                                        }
+                                    },
+                                    onLongClick = { projectMenuExpanded = true },
+                                )
+                                .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
+                                .testTag("project-header-${project.id}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Add,
-                                contentDescription = "New conversation in ${project.name}",
-                                tint = colors.inkLabel,
-                                modifier = Modifier.size(19.dp),
+                                imageVector = if (project.runtime == ProjectRuntimeTarget.CLOUD) Icons.Rounded.Cloud else Icons.Rounded.Folder,
+                                contentDescription = null,
+                                tint = colors.inkSecondary,
+                                modifier = Modifier.size(18.dp),
                             )
+                            Text(
+                                text = if (coordinator.isVerificationMode && project.runtime == ProjectRuntimeTarget.CLOUD && !project.name.contains("/")) {
+                                    "acme/${project.name}"
+                                } else {
+                                    project.name
+                                },
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 14.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                                color = colors.inkSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (isCollapsed && projectItems.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(100.dp),
+                                    color = colors.surfaceActiveTab,
+                                    modifier = Modifier.testTag("project-collapsed-count-${project.id}"),
+                                ) {
+                                    Text(
+                                        text = "${projectItems.size}",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        ),
+                                        color = colors.inkMuted,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                            if (projectItems.isNotEmpty()) {
+                                IconButton(
+                                    onClick = {
+                                        coordinator.workspaceStore.toggleProjectExpanded(
+                                            projectId = project.id,
+                                            persist = !coordinator.isVerificationMode,
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .testTag("project-toggle-${project.id}"),
+                                ) {
+                                    Icon(
+                                        imageVector = if (isCollapsed) Icons.Rounded.ChevronRight else Icons.Rounded.KeyboardArrowDown,
+                                        contentDescription = if (isCollapsed) "Expand ${project.name}" else "Collapse ${project.name}",
+                                        tint = colors.inkMuted,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { onNewConversation(project.id) },
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .testTag("project-add-${project.id}"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Add,
+                                    contentDescription = "New conversation in ${project.name}",
+                                    tint = colors.inkLabel,
+                                    modifier = Modifier.size(19.dp),
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = projectMenuExpanded,
+                            onDismissRequest = { projectMenuExpanded = false },
+                            containerColor = colors.surfacePopover,
+                            modifier = Modifier.testTag("project-context-menu-${project.id}"),
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("New conversation in project", color = colors.inkReading) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Add,
+                                        contentDescription = null,
+                                        tint = colors.inkSecondary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = {
+                                    projectMenuExpanded = false
+                                    onNewConversation(project.id)
+                                },
+                                modifier = Modifier.testTag("project-menu-new-conv-${project.id}"),
+                            )
+                            if (!isNoProjectGroup) {
+                                DropdownMenuItem(
+                                    text = { Text("Project rules & skills", color = colors.inkReading) },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Hub,
+                                            contentDescription = null,
+                                            tint = colors.inkSecondary,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    },
+                                    onClick = {
+                                        projectMenuExpanded = false
+                                        onOpenProjectCustomizations(project.id, project.name)
+                                    },
+                                    modifier = Modifier.testTag("project-menu-rules-skills-${project.id}"),
+                                )
+                                if (isLocalProject) {
+                                    DropdownMenuItem(
+                                        text = { Text("Reveal in Finder on Mac", color = colors.inkReading) },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Computer,
+                                                contentDescription = null,
+                                                tint = colors.inkSecondary,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        },
+                                        onClick = {
+                                            projectMenuExpanded = false
+                                            onRevealProjectInFinder(project.id)
+                                        },
+                                        modifier = Modifier.testTag("project-menu-reveal-finder-${project.id}"),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
