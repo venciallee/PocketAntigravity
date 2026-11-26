@@ -84,6 +84,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AutomationItem
 import dev.antigravity.shared.model.AutomationRunStatus
@@ -167,12 +168,12 @@ fun AutomationsScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Menu,
-                        contentDescription = "Open sidebar",
+                        contentDescription = tr("Open sidebar", "打开侧边栏"),
                         tint = colors.inkReading,
                     )
                 }
                 Text(
-                    text = "Automations",
+                    text = tr("Automations", "自动化"),
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontSize = 23.sp,
                         fontWeight = FontWeight.Normal,
@@ -188,7 +189,7 @@ fun AutomationsScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Search,
-                        contentDescription = "Search automations",
+                        contentDescription = tr("Search automations", "搜索自动化"),
                         tint = colors.inkReading,
                     )
                 }
@@ -202,25 +203,25 @@ fun AutomationsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 AutomationFilterChip(
-                    label = "All",
+                    label = tr("All", "全部"),
                     selected = sectionFilter == null,
                     onClick = { sectionFilter = null },
                     modifier = Modifier.testTag("filter-auto-all"),
                 )
                 AutomationFilterChip(
-                    label = "Scheduled ${scheduledItems.size}",
+                    label = tr("Scheduled ${scheduledItems.size}", "定时 ${scheduledItems.size}"),
                     selected = sectionFilter == AutomationSectionKind.SCHEDULED,
                     onClick = { sectionFilter = AutomationSectionKind.SCHEDULED },
                     modifier = Modifier.testTag("filter-auto-scheduled"),
                 )
                 AutomationFilterChip(
-                    label = "Always on ${alwaysOnItems.size}",
+                    label = tr("Always on ${alwaysOnItems.size}", "持续运行 ${alwaysOnItems.size}"),
                     selected = sectionFilter == AutomationSectionKind.ALWAYS_ON,
                     onClick = { sectionFilter = AutomationSectionKind.ALWAYS_ON },
                     modifier = Modifier.testTag("filter-auto-always-on"),
                 )
                 AutomationFilterChip(
-                    label = "Paused ${pausedItems.size}",
+                    label = tr("Paused ${pausedItems.size}", "已暂停 ${pausedItems.size}"),
                     selected = sectionFilter == AutomationSectionKind.PAUSED,
                     onClick = { sectionFilter = AutomationSectionKind.PAUSED },
                     modifier = Modifier.testTag("filter-auto-paused"),
@@ -243,7 +244,7 @@ fun AutomationsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
-                        text = "Create with Prompt",
+                        text = tr("Create with Prompt", "通过提示词创建"),
                         style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                         color = colors.inkSecondary,
                     )
@@ -273,7 +274,7 @@ fun AutomationsScreen(
                                 decorationBox = { inner ->
                                     if (promptInput.isEmpty()) {
                                         Text(
-                                            text = "Every weekday at 9, summarize...",
+                                            text = tr("Every weekday at 9, summarize...", "每个工作日 9 点总结..."),
                                             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
                                             color = colors.inkMuted,
                                             maxLines = 1,
@@ -298,7 +299,7 @@ fun AutomationsScreen(
                             contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                         ) {
                             Text(
-                                text = "Create",
+                                text = tr("Create", "创建"),
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                             )
                         }
@@ -309,7 +310,7 @@ fun AutomationsScreen(
             // 4. Scheduled Section
             if (sectionFilter == null || sectionFilter == AutomationSectionKind.SCHEDULED) {
                 Text(
-                    text = "Scheduled · ${scheduledItems.size}",
+                    text = tr("Scheduled · ${scheduledItems.size}", "定时运行 · ${scheduledItems.size}"),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
                     color = colors.accentPeriwinkle,
                     modifier = Modifier.padding(top = 4.dp),
@@ -326,7 +327,7 @@ fun AutomationsScreen(
             // 5. Always on Section
             if (sectionFilter == null || sectionFilter == AutomationSectionKind.ALWAYS_ON) {
                 Text(
-                    text = "Always on · ${alwaysOnItems.size}",
+                    text = tr("Always on · ${alwaysOnItems.size}", "持续运行 · ${alwaysOnItems.size}"),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
                     color = colors.accentPeriwinkle,
                     modifier = Modifier.padding(top = 4.dp),
@@ -368,7 +369,7 @@ fun AutomationsScreen(
                                 color = colors.statusDone.copy(alpha = 0.14f),
                             ) {
                                 Text(
-                                    text = "Listening",
+                                    text = tr("Listening", "监听中"),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = colors.statusDone,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -382,7 +383,7 @@ fun AutomationsScreen(
             // 6. Paused Section
             if (sectionFilter == null || sectionFilter == AutomationSectionKind.PAUSED) {
                 Text(
-                    text = "Paused · ${pausedItems.size}",
+                    text = tr("Paused · ${pausedItems.size}", "已暂停 · ${pausedItems.size}"),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
                     color = colors.accentPeriwinkle,
                     modifier = Modifier.padding(top = 4.dp),
@@ -432,7 +433,7 @@ fun AutomationsScreen(
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                             ) {
                                 Text(
-                                    text = "Resume",
+                                    text = tr("Resume", "恢复"),
                                     style = MaterialTheme.typography.labelLarge,
                                     color = colors.accentPeriwinkle,
                                 )
@@ -467,7 +468,7 @@ fun AutomationsScreen(
                 Column(modifier = Modifier.padding(vertical = 8.dp)) {
                     OverflowMenuRow(
                         icon = Icons.Rounded.PlayArrow,
-                        label = "Run Now",
+                        label = tr("Run Now", "立即运行"),
                         onClick = {
                             expandedMenuAutomationId = null
                             scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -479,7 +480,7 @@ fun AutomationsScreen(
                     )
                     OverflowMenuRow(
                         icon = Icons.Rounded.Edit,
-                        label = "Edit Schedule &\nPrompt",
+                        label = tr("Edit Schedule &\nPrompt", "编辑计划与\n提示词"),
                         onClick = {
                             expandedMenuAutomationId = null
                             onEditAutomation(menuTargetId)
@@ -488,7 +489,7 @@ fun AutomationsScreen(
                     )
                     OverflowMenuRow(
                         icon = Icons.Rounded.Pause,
-                        label = "Pause",
+                        label = tr("Pause", "暂停"),
                         onClick = {
                             expandedMenuAutomationId = null
                             scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -500,7 +501,7 @@ fun AutomationsScreen(
                     )
                     OverflowMenuRow(
                         icon = Icons.Rounded.Refresh,
-                        label = "Restart",
+                        label = tr("Restart", "重新运行"),
                         onClick = {
                             expandedMenuAutomationId = null
                             scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -516,7 +517,7 @@ fun AutomationsScreen(
                     )
                     OverflowMenuRow(
                         icon = Icons.Rounded.DeleteOutline,
-                        label = "Delete",
+                        label = tr("Delete", "删除"),
                         tint = colors.statusError,
                         onClick = {
                             expandedMenuAutomationId = null
@@ -629,7 +630,7 @@ private fun ScheduledAutomationCard(
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Rounded.MoreVert,
-                            contentDescription = "Automation actions",
+                            contentDescription = tr("Automation actions", "自动化操作"),
                             tint = colors.inkReading,
                             modifier = Modifier.size(19.dp),
                         )
@@ -643,7 +644,7 @@ private fun ScheduledAutomationCard(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "NEXT RUN",
+                        text = tr("NEXT RUN", "下次运行"),
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, letterSpacing = 0.5.sp),
                         color = colors.inkMuted,
                     )
@@ -656,12 +657,12 @@ private fun ScheduledAutomationCard(
 
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "LAST RUN",
+                        text = tr("LAST RUN", "上次运行"),
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, letterSpacing = 0.5.sp),
                         color = colors.inkMuted,
                     )
                     Text(
-                        text = if (item.isRunningNow) "Running now..." else item.lastRunText,
+                        text = if (item.isRunningNow) tr("Running now...", "正在运行...") else item.lastRunText,
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                         color = when {
                             item.isRunningNow -> colors.statusRunning
@@ -751,7 +752,7 @@ fun AutomationDetailScreen(
                     .size(AntigravityDesignTokens.MinTouchTarget)
                     .testTag("btn-back"),
             ) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = colors.inkReading)
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = tr("Back", "返回"), tint = colors.inkReading)
             }
 
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -775,14 +776,14 @@ fun AutomationDetailScreen(
                     .size(AntigravityDesignTokens.MinTouchTarget)
                     .testTag("btn-edit-automation"),
             ) {
-                Icon(Icons.Rounded.Description, contentDescription = "Edit automation", tint = colors.inkReading, modifier = Modifier.size(21.dp))
+                Icon(Icons.Rounded.Description, contentDescription = tr("Edit automation", "编辑自动化"), tint = colors.inkReading, modifier = Modifier.size(21.dp))
             }
 
             IconButton(
                 onClick = { onEdit(automation.id) },
                 modifier = Modifier.size(AntigravityDesignTokens.MinTouchTarget),
             ) {
-                Icon(Icons.Rounded.MoreVert, contentDescription = "More options", tint = colors.inkReading)
+                Icon(Icons.Rounded.MoreVert, contentDescription = tr("More options", "更多选项"), tint = colors.inkReading)
             }
         }
 
@@ -812,7 +813,7 @@ fun AutomationDetailScreen(
                             glow = false,
                         )
                         Text(
-                            text = if (isPaused) "Paused" else "Scheduled · Active",
+                            text = if (isPaused) tr("Paused", "已暂停") else tr("Scheduled · Active", "定时运行 · 已启用"),
                             style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                             color = if (isPaused) colors.inkSecondary else colors.statusDone,
                         )
@@ -856,7 +857,7 @@ fun AutomationDetailScreen(
                     ),
                 ) {
                     Text(
-                        text = if (automation.isRunningNow) "Running..." else "Run now",
+                        text = if (automation.isRunningNow) tr("Running...", "运行中...") else tr("Run now", "立即运行"),
                         style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
                     )
                 }
@@ -883,7 +884,7 @@ fun AutomationDetailScreen(
                     ),
                 ) {
                     Text(
-                        text = if (isPaused) "Resume" else "Pause",
+                        text = if (isPaused) tr("Resume", "恢复") else tr("Pause", "暂停"),
                         style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
                     )
                 }
@@ -903,7 +904,7 @@ fun AutomationDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = "Prompt",
+                        text = tr("Prompt", "提示词"),
                         style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                         color = colors.accentPeriwinkle,
                     )
@@ -923,9 +924,12 @@ fun AutomationDetailScreen(
                 ) {
                     Icon(Icons.Rounded.Schedule, contentDescription = null, tint = colors.inkLabel, modifier = Modifier.size(21.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Next run", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
+                        Text(tr("Next run", "下次运行"), style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
                         Text(
-                            text = "Tonight, ${automation.timeLabel} (${automation.timezoneLabel})",
+                            text = tr(
+                                "Tonight, ${automation.timeLabel} (${automation.timezoneLabel})",
+                                "今晚 ${automation.timeLabel}（${automation.timezoneLabel}）",
+                            ),
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
                             color = colors.inkSecondary,
                         )
@@ -938,9 +942,9 @@ fun AutomationDetailScreen(
                 ) {
                     Icon(Icons.Rounded.Computer, contentDescription = null, tint = colors.inkLabel, modifier = Modifier.size(21.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Runs on", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
+                        Text(tr("Runs on", "运行主机"), style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
                         Text(
-                            text = "MacBook Pro · new conversation per run",
+                            text = tr("MacBook Pro · new conversation per run", "MacBook Pro · 每次运行新建对话"),
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
                             color = colors.inkSecondary,
                         )
@@ -956,13 +960,13 @@ fun AutomationDetailScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Recent runs",
+                    text = tr("Recent runs", "最近运行"),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
                     color = colors.accentPeriwinkle,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    text = "Each run opens a conversation",
+                    text = tr("Each run opens a conversation", "每次运行都会创建新对话"),
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
                     color = colors.inkSecondary,
                 )
@@ -1035,7 +1039,7 @@ fun AutomationDetailScreen(
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                             ) {
                                 Text(
-                                    text = "Retry",
+                                    text = tr("Retry", "重试"),
                                     style = MaterialTheme.typography.labelLarge,
                                     color = colors.accentPeriwinkle,
                                 )
@@ -1108,11 +1112,11 @@ fun AutomationEditScreen(
                     .size(AntigravityDesignTokens.MinTouchTarget)
                     .testTag("btn-close-edit-automation"),
             ) {
-                Icon(Icons.Rounded.Close, contentDescription = "Close", tint = colors.inkReading)
+                Icon(Icons.Rounded.Close, contentDescription = tr("Close", "关闭"), tint = colors.inkReading)
             }
 
             Text(
-                text = "Edit automation",
+                text = tr("Edit automation", "编辑自动化"),
                 style = MaterialTheme.typography.headlineSmall.copy(fontSize = 21.sp, fontWeight = FontWeight.Normal),
                 color = colors.inkReading,
                 modifier = Modifier.weight(1f),
@@ -1145,7 +1149,7 @@ fun AutomationEditScreen(
                     contentColor = colors.inkOnPrimaryCta,
                 ),
             ) {
-                Text("Save", style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold))
+                Text(tr("Save", "保存"), style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold))
             }
         }
 
@@ -1160,7 +1164,7 @@ fun AutomationEditScreen(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Name") },
+                label = { Text(tr("Name", "名称")) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1177,7 +1181,7 @@ fun AutomationEditScreen(
             OutlinedTextField(
                 value = prompt,
                 onValueChange = { prompt = it },
-                label = { Text("Prompt") },
+                label = { Text(tr("Prompt", "提示词")) },
                 minLines = 3,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1196,7 +1200,7 @@ fun AutomationEditScreen(
                     value = projectSlug,
                     onValueChange = {},
                     readOnly = true,
-                    label = { Text("Project") },
+                    label = { Text(tr("Project", "项目")) },
                     leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null, tint = colors.inkSecondary, modifier = Modifier.size(18.dp)) },
                     trailingIcon = { Icon(Icons.Rounded.ArrowDropDown, contentDescription = null, tint = colors.inkSecondary) },
                     modifier = Modifier.fillMaxWidth(),
@@ -1227,7 +1231,7 @@ fun AutomationEditScreen(
             }
 
             Text(
-                text = "Trigger",
+                text = tr("Trigger", "触发方式"),
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
                 color = colors.accentPeriwinkle,
             )
@@ -1245,7 +1249,7 @@ fun AutomationEditScreen(
                         activeBorderColor = colors.cardBorder,
                         inactiveBorderColor = colors.cardBorder,
                     ),
-                ) { Text("Schedule") }
+                ) { Text(tr("Schedule", "定时")) }
 
                 SegmentedButton(
                     selected = !isScheduleTrigger,
@@ -1259,19 +1263,24 @@ fun AutomationEditScreen(
                         activeBorderColor = colors.cardBorder,
                         inactiveBorderColor = colors.cardBorder,
                     ),
-                ) { Text("Always on") }
+                ) { Text(tr("Always on", "持续运行")) }
             }
 
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                listOf("Every hour", "Every day", "Weekdays", "Every week").forEach { option ->
+                listOf(
+                    "Every hour" to tr("Every hour", "每小时"),
+                    "Every day" to tr("Every day", "每天"),
+                    "Weekdays" to tr("Weekdays", "工作日"),
+                    "Every week" to tr("Every week", "每周"),
+                ).forEach { (option, displayLabel) ->
                     val selected = repeatCadence == option
                     FilterChip(
                         selected = selected,
                         onClick = { repeatCadence = option },
-                        label = { Text(option) },
+                        label = { Text(displayLabel) },
                         leadingIcon = if (selected) {
                             { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                         } else null,
@@ -1305,9 +1314,12 @@ fun AutomationEditScreen(
             ) {
                 Icon(Icons.Rounded.Schedule, contentDescription = null, tint = colors.inkLabel, modifier = Modifier.size(21.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Time", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
+                    Text(tr("Time", "时间"), style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp), color = colors.inkReading)
                     Text(
-                        text = "${automation?.timezoneLabel ?: "GMT+8:00"} · from this phone",
+                        text = tr(
+                            "${automation?.timezoneLabel ?: "GMT+8:00"} · from this phone",
+                            "${automation?.timezoneLabel ?: "GMT+8:00"} · 来自本机时区",
+                        ),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = colors.inkSecondary,
                     )
@@ -1320,7 +1332,7 @@ fun AutomationEditScreen(
             }
 
             Text(
-                text = "Model",
+                text = tr("Model", "模型"),
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
                 color = colors.accentPeriwinkle,
             )
@@ -1345,7 +1357,10 @@ fun AutomationEditScreen(
             }
 
             Text(
-                text = "Runs unattended: anything that needs approval is denied automatically and the run shows up as Needs review.",
+                text = tr(
+                    "Runs unattended: anything that needs approval is denied automatically and the run shows up as Needs review.",
+                    "无人值守运行：需要审批的操作将自动拒绝，本次运行会标记为「待审查」。",
+                ),
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 19.sp),
                 color = colors.inkSecondary,
             )
@@ -1362,7 +1377,7 @@ fun AutomationEditScreen(
                 contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp),
             ) {
                 Text(
-                    text = "Delete automation",
+                    text = tr("Delete automation", "删除自动化"),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium),
                     color = colors.statusError,
                 )

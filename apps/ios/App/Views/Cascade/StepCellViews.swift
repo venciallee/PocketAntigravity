@@ -61,6 +61,7 @@ public struct CollapsibleThoughtRowView: View {
     public let isStreaming: Bool
     public let startedAt: Date?
     public let store: AntigravitySessionStore?
+    @Environment(\.appLanguage) private var lang
     @State private var isExpanded: Bool = false
     @State private var userCollapsedDuringStream: Bool = false
 
@@ -101,7 +102,8 @@ public struct CollapsibleThoughtRowView: View {
                         AntigravityRunningArcIndicatorView(isAnimated: true)
                         TimelineView(.periodic(from: .now, by: 1.0)) { context in
                             let elapsed = Int(max(Double(durationSeconds), context.date.timeIntervalSince(startedAt ?? context.date)))
-                            Text("Thinking · \(max(1, elapsed))s…")
+                            let sec = max(1, elapsed)
+                            Text(lang.t("Thinking · \(sec)s…", "思考中 · \(sec)秒…"))
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         }
@@ -109,7 +111,7 @@ public struct CollapsibleThoughtRowView: View {
                         Image(systemName: "eye")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
-                        Text("Thought for \(durationSeconds)s")
+                        Text(lang.t("Thought for \(durationSeconds)s", "思考了 \(durationSeconds) 秒"))
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                     }
@@ -132,7 +134,7 @@ public struct CollapsibleThoughtRowView: View {
                         .background(AntigravityTheme.surfaceCard)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 } else if isStreaming {
-                    Text("Analyzing workspace context and planning next steps…")
+                    Text(lang.t("Analyzing workspace context and planning next steps…", "正在分析工作区上下文并规划下一步…"))
                         .font(.system(size: 13.5))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                         .padding(10)
@@ -214,6 +216,7 @@ public struct SevenSegmentTaskProgressCardView: View {
     public let taskStatus: String?
     public let taskSummary: String?
     public let checklist: [TaskChecklistItem]?
+    @Environment(\.appLanguage) private var lang
 
     public init(
         completedCount: Int = 4,
@@ -244,7 +247,10 @@ public struct SevenSegmentTaskProgressCardView: View {
             }
             return taskName
         }
-        return "Task · \(completedCount) of \(totalCount) done"
+        return lang.t(
+            "Task · \(completedCount) of \(totalCount) done",
+            "任务 · 已完成 \(completedCount)/\(totalCount)"
+        )
     }
 
     public var body: some View {
@@ -413,11 +419,16 @@ public struct SevenSegmentTaskProgressCardView: View {
 /// Displays monospaced command with left `Deny` (`btn-command-deny`)
 /// and right warm amber `#EBB365` Face ID `Allow` (`btn-command-allow-faceid`).
 public struct InlineCommandApprovalCardView: View {
+    private enum ResolutionOutcome {
+        case denied
+        case approvedFaceID
+    }
+
     @Bindable public var store: AntigravitySessionStore
     public let commandLine: String
     public let stepIndex: Int?
     public let hostName: String?
-    @State private var resolutionState: String? = nil
+    @State private var resolutionState: ResolutionOutcome? = nil
 
     public init(
         store: AntigravitySessionStore,
@@ -431,9 +442,22 @@ public struct InlineCommandApprovalCardView: View {
         self.hostName = hostName
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
+    private var headerTitle: String {
+        switch resolutionState {
+        case .denied:
+            return lang.t("Command denied", "已拒绝执行")
+        case .approvedFaceID:
+            return lang.t("Approved with Face ID", "已通过 Face ID 批准")
+        case nil:
+            return lang.t("Run this command?", "运行此命令？")
+        }
+    }
+
     private var displayCommandLine: String {
         let trimmed = commandLine.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Confirm pending terminal command" : commandLine
+        return trimmed.isEmpty ? lang.t("Confirm pending terminal command", "确认待执行的终端命令") : commandLine
     }
 
     public var body: some View {
@@ -442,7 +466,7 @@ public struct InlineCommandApprovalCardView: View {
                 Image(systemName: "terminal")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.statusWaiting)
-                Text(resolutionState ?? "Run this command?")
+                Text(headerTitle)
                     .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.statusWaiting)
                 Spacer()
@@ -463,12 +487,12 @@ public struct InlineCommandApprovalCardView: View {
 
             HStack(spacing: 10) {
                 Button {
-                    resolutionState = "Command denied"
+                    resolutionState = .denied
                     if let targetIdx = stepIndex ?? store.pendingWaitingStep?.stepIndex {
                         store.resolveWaitingStep(stepIndex: targetIdx, decision: .reject)
                     }
                 } label: {
-                    Text("Deny")
+                    Text(lang.t("Deny", "拒绝"))
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .frame(maxWidth: .infinity, minHeight: 44)
@@ -484,7 +508,7 @@ public struct InlineCommandApprovalCardView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "faceid")
                             .font(.system(size: 15, weight: .semibold))
-                        Text("Allow")
+                        Text(lang.t("Allow", "允许"))
                             .font(.system(size: 14.5, weight: .bold))
                     }
                     .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
@@ -515,13 +539,15 @@ public struct InlineCommandApprovalCardView: View {
     }
 
     private func authenticateWithFaceIDAndApprove() {
+        let targetHost = hostName ?? store.activeHost.hostname
         let promptReason: String = store.isVerificationMode
-            ? "Approve vegeta load-test command on MacBook Pro"
-            : "Approve command on \(hostName ?? store.activeHost.hostname)"
+            ? lang.t("Approve vegeta load-test command on MacBook Pro", "在 MacBook Pro 上批准 vegeta 压测命令")
+            : lang.t("Approve command on \(targetHost)", "在 \(targetHost) 上批准执行命令")
+        let cancelLabel = lang.t("Cancel", "取消")
         Task {
             let outcome = await StepBiometricGate.evaluate(
                 reason: promptReason,
-                cancelTitle: "Cancel"
+                cancelTitle: cancelLabel
             )
             if outcome == .verified || outcome == .unavailable {
                 commitFaceIDApproval()
@@ -530,7 +556,7 @@ public struct InlineCommandApprovalCardView: View {
     }
 
     private func commitFaceIDApproval() {
-        resolutionState = "Approved with Face ID"
+        resolutionState = .approvedFaceID
         store.approveWaitingCommandWithFaceID(stepIndex: stepIndex)
     }
 }
@@ -580,6 +606,8 @@ public struct CascadeEvidenceGroupCardView: View {
         self.steps = steps
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var isExpanded: Bool {
         store.expandedEvidenceGroupIds.contains(groupId)
     }
@@ -593,19 +621,37 @@ public struct CascadeEvidenceGroupCardView: View {
         let editCount = steps.filter { $0.codeAction != nil }.count
         if isActivelyRunning {
             if editCount == steps.count && editCount > 0 {
-                return "Editing \(editCount) workspace file\(editCount == 1 ? "" : "s")…"
+                return lang.t(
+                    "Editing \(editCount) workspace file\(editCount == 1 ? "" : "s")…",
+                    "正在编辑 \(editCount) 个工作区文件…"
+                )
             } else if editCount > 0 {
-                return "Inspecting & editing \(steps.count) workspace items…"
+                return lang.t(
+                    "Inspecting & editing \(steps.count) workspace items…",
+                    "正在查看并编辑 \(steps.count) 个工作区项目…"
+                )
             } else {
-                return "Inspecting \(steps.count) workspace file\(steps.count == 1 ? "" : "s")…"
+                return lang.t(
+                    "Inspecting \(steps.count) workspace file\(steps.count == 1 ? "" : "s")…",
+                    "正在查看 \(steps.count) 个工作区文件…"
+                )
             }
         }
         if editCount == steps.count && editCount > 0 {
-            return "Edited \(editCount) workspace file\(editCount == 1 ? "" : "s")"
+            return lang.t(
+                "Edited \(editCount) workspace file\(editCount == 1 ? "" : "s")",
+                "已编辑 \(editCount) 个工作区文件"
+            )
         } else if editCount > 0 {
-            return "Inspected & edited \(steps.count) workspace items"
+            return lang.t(
+                "Inspected & edited \(steps.count) workspace items",
+                "已查看并编辑 \(steps.count) 个工作区项目"
+            )
         } else {
-            return "Inspected \(steps.count) workspace file\(steps.count == 1 ? "" : "s")"
+            return lang.t(
+                "Inspected \(steps.count) workspace file\(steps.count == 1 ? "" : "s")",
+                "已查看 \(steps.count) 个工作区文件"
+            )
         }
     }
 
@@ -687,7 +733,7 @@ public struct CascadeEvidenceGroupCardView: View {
                                 .lineLimit(1)
                             Spacer()
                             if sc.matchCount > 0 {
-                                Text("\(sc.matchCount) matches")
+                                Text(lang.t("\(sc.matchCount) matches", "\(sc.matchCount) 处匹配"))
                                     .font(.system(size: 11.5))
                                     .foregroundStyle(AntigravityTheme.inkSecondary)
                             }
@@ -712,6 +758,8 @@ public struct CascadeStepCellView: View {
         self.store = store
         self.step = step
     }
+
+    private var lang: AppLanguage { store.appearancePreferences.language }
 
     private var shouldAnimateLive: Bool {
         !store.isVerificationMode || store.isLiveBackendConnected
@@ -787,7 +835,7 @@ public struct CascadeStepCellView: View {
                                     spacing: 3.0,
                                     tint: AntigravityTheme.accentPeriwinkle
                                 )
-                                Text("Generating…")
+                                Text(lang.t("Generating…", "正在生成…"))
                                     .font(.system(size: 12.5, weight: .medium))
                                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             }
@@ -857,7 +905,7 @@ public struct CascadeStepCellView: View {
                                 HStack(spacing: 5) {
                                     AntigravityRunningArcIndicatorView(isAnimated: true)
                                         .scaleEffect(0.82)
-                                    Text("running")
+                                    Text(lang.t("running", "运行中"))
                                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                 }
@@ -997,7 +1045,12 @@ public struct CascadeStepCellView: View {
                     Image(systemName: step.type == .browserSubagent ? "safari" : "globe")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    Text(step.plannerResponse?.response ?? (step.type == .browserSubagent ? "Browser subagent activity" : "Read web page"))
+                    Text(
+                        step.plannerResponse?.response
+                            ?? (step.type == .browserSubagent
+                                ? lang.t("Browser subagent activity", "浏览器子代理活动")
+                                : lang.t("Read web page", "读取网页"))
+                    )
                         .font(.system(size: 13, design: step.type == .readUrlContent ? .monospaced : .default))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                         .lineLimit(2)
@@ -1048,13 +1101,14 @@ private struct UnknownStepFallbackCardView: View {
     let rawTypeName: String?
     let fallbackSummary: String?
     let status: CortexStepStatus
+    @Environment(\.appLanguage) private var lang
 
     private var formattedTypeLabel: String {
         let raw = (rawTypeName ?? "Unknown Step")
             .replacingOccurrences(of: "CORTEX_STEP_TYPE_", with: "")
             .replacingOccurrences(of: "_", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return raw.isEmpty ? "Newer Desktop Step" : raw.capitalized
+        return raw.isEmpty ? lang.t("Newer Desktop Step", "新版桌面端步骤") : raw.capitalized
     }
 
     var body: some View {
@@ -1081,7 +1135,10 @@ private struct UnknownStepFallbackCardView: View {
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .lineLimit(4)
             }
-            Text("Synced from a newer Antigravity Desktop version · Update iOS app for full view")
+            Text(lang.t(
+                "Synced from a newer Antigravity Desktop version · Update iOS app for full view",
+                "来自更新版本 Antigravity 桌面端的步骤 · 请更新 iOS 客户端以查看完整内容"
+            ))
                 .font(.system(size: 11))
                 .foregroundStyle(AntigravityTheme.inkMuted)
         }

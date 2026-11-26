@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AG Pocket</string>
+    <string name="widget_agents_description">实时追踪 Antigravity 代理状态、运行进度与审批门控。</string>
+</resources>

@@ -66,7 +66,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.GitHubRepoItem
 import dev.antigravity.shared.model.NewProjectDraft
@@ -141,13 +143,13 @@ fun CreateProjectScreen(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
-                    contentDescription = "Close",
+                    contentDescription = tr("Close", "关闭"),
                     tint = colors.inkReading,
                 )
             }
 
             Text(
-                text = "New project",
+                text = tr("New project", "新建项目"),
                 style = MaterialTheme.typography.headlineSmall.copy(
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Normal,
@@ -184,7 +186,7 @@ fun CreateProjectScreen(
                 ),
             ) {
                 Text(
-                    text = "Create",
+                    text = tr("Create", "创建"),
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -203,7 +205,7 @@ fun CreateProjectScreen(
         ) {
             // Runs on
             Text(
-                text = "Runs on",
+                text = tr("Runs on", "运行环境"),
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
                 color = colors.accentPeriwinkle,
             )
@@ -256,15 +258,21 @@ fun CreateProjectScreen(
                     ),
                     modifier = Modifier.testTag("runtime-cloud"),
                 ) {
-                    Text("Cloud", maxLines = 1)
+                    Text(tr("Cloud", "云端"), maxLines = 1)
                 }
             }
 
             Text(
                 text = if (runsOn == ProjectRuntimeTarget.CLOUD) {
-                    "Runs in its own cloud VM and keeps working while your computer sleeps."
+                    tr(
+                        "Runs in its own cloud VM and keeps working while your computer sleeps.",
+                        "在独立云端虚拟机中运行，电脑休眠时也可继续执行。",
+                    )
                 } else {
-                    "Runs directly on your paired MacBook Pro with local filesystem access."
+                    tr(
+                        "Runs directly on your paired MacBook Pro with local filesystem access.",
+                        "直接在已配对的 MacBook Pro 本地运行，可直接访问本地文件系统。",
+                    )
                 },
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp, lineHeight = 19.sp),
                 color = colors.inkSecondary,
@@ -274,7 +282,7 @@ fun CreateProjectScreen(
 
             // Source
             Text(
-                text = "Source",
+                text = tr("Source", "代码来源"),
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
                 color = colors.accentPeriwinkle,
             )
@@ -283,7 +291,7 @@ fun CreateProjectScreen(
                 FilterChip(
                     selected = sourceKind == ProjectSourceKind.GITHUB_REPO,
                     onClick = { sourceKind = ProjectSourceKind.GITHUB_REPO },
-                    label = { Text("GitHub repository") },
+                    label = { Text(tr("GitHub repository", "GitHub 仓库")) },
                     leadingIcon = if (sourceKind == ProjectSourceKind.GITHUB_REPO) {
                         { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     } else null,
@@ -306,7 +314,7 @@ fun CreateProjectScreen(
                 FilterChip(
                     selected = sourceKind == ProjectSourceKind.DRIVE_FOLDER,
                     onClick = { sourceKind = ProjectSourceKind.DRIVE_FOLDER },
-                    label = { Text("Drive folder") },
+                    label = { Text(tr("Drive folder", "云端硬盘文件夹")) },
                     leadingIcon = if (sourceKind == ProjectSourceKind.DRIVE_FOLDER) {
                         { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     } else null,
@@ -346,6 +354,7 @@ fun CreateProjectScreen(
                         tint = colors.inkSecondary,
                         modifier = Modifier.size(20.dp),
                     )
+                    val searchReposHint = tr("Search repositories", "搜索仓库")
                     BasicTextField(
                         value = repoSearchQuery,
                         onValueChange = { repoSearchQuery = it },
@@ -358,7 +367,7 @@ fun CreateProjectScreen(
                         decorationBox = { inner ->
                             if (repoSearchQuery.isEmpty()) {
                                 Text(
-                                    text = "Search repositories",
+                                    text = searchReposHint,
                                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp),
                                     color = colors.inkMuted,
                                 )
@@ -415,13 +424,15 @@ fun CreateProjectScreen(
                 }
             }
 
+            val missingRepoPrefix = tr("Missing a repo? ", "没找到目标仓库？")
+            val configureGithubText = tr("Configure on GitHub", "前往 GitHub 配置")
             Text(
                 text = buildAnnotatedString {
                     withStyle(SpanStyle(color = colors.inkSecondary)) {
-                        append("Missing a repo? ")
+                        append(missingRepoPrefix)
                     }
                     withStyle(SpanStyle(color = colors.accentPeriwinkle, fontWeight = FontWeight.Medium)) {
-                        append("Configure on GitHub")
+                        append(configureGithubText)
                     }
                 },
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
@@ -431,7 +442,7 @@ fun CreateProjectScreen(
 
             // Branch & worktree
             Text(
-                text = "Branch & worktree",
+                text = tr("Branch & worktree", "分支与工作树"),
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
                 color = colors.accentPeriwinkle,
             )
@@ -441,11 +452,11 @@ fun CreateProjectScreen(
                     value = selectedBranch,
                     onValueChange = {},
                     readOnly = true,
-                    label = { Text("Branch") },
+                    label = { Text(tr("Branch", "分支")) },
                     trailingIcon = {
                         Icon(
                             imageVector = Icons.Rounded.ArrowDropDown,
-                            contentDescription = "Select branch",
+                            contentDescription = tr("Select branch", "选择分支"),
                             tint = colors.inkSecondary,
                         )
                     },
@@ -499,12 +510,15 @@ fun CreateProjectScreen(
             ) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "New worktree",
+                        text = tr("New worktree", "新建工作树"),
                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                         color = colors.inkReading,
                     )
                     Text(
-                        text = "Keep this project's changes off your checkout",
+                        text = tr(
+                            "Keep this project's changes off your checkout",
+                            "将此项目的修改与当前检出目录隔离",
+                        ),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = colors.inkSecondary,
                     )
@@ -526,7 +540,7 @@ fun CreateProjectScreen(
             OutlinedTextField(
                 value = projectName,
                 onValueChange = { projectName = it },
-                label = { Text("Name") },
+                label = { Text(tr("Name", "项目名称")) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()

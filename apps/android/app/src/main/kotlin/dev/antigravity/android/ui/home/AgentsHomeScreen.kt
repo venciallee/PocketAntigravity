@@ -87,18 +87,22 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.android.ui.chat.ComposerAttachmentsStrip
 import dev.antigravity.android.ui.chat.formatComposerModelPillName
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentsHostFilterScope
 import dev.antigravity.shared.model.AntigravityCloudDetector
+import dev.antigravity.shared.model.AppLocalizationFormatter
 import dev.antigravity.shared.model.CascadeSummary
 import dev.antigravity.shared.model.ConversationSortField
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
 import dev.antigravity.shared.model.UserGreetingFormatter
+import dev.antigravity.shared.model.localizedTitle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -128,6 +132,7 @@ fun AgentsHomeScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val syncState by coordinator.syncState.collectAsStateWithLifecycle()
     val workspaceState by coordinator.workspaceStore.state.collectAsStateWithLifecycle()
@@ -176,8 +181,8 @@ fun AgentsHomeScreen(
             }
     }
     val selectedProjectName = selectedProject?.name ?: when {
-        !coordinator.isVerificationMode && syncState.isRefreshing -> "Loading..."
-        !coordinator.isVerificationMode -> AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME
+        !coordinator.isVerificationMode && syncState.isRefreshing -> tr("Loading...", "加载中…")
+        !coordinator.isVerificationMode -> tr(AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME, "未选项目")
         else -> "ledger-svc"
     }
     var cloudModeEnabled by rememberSaveable {
@@ -198,9 +203,9 @@ fun AgentsHomeScreen(
         }
     }
 
-    val hostDisplayName = remember(hostScope, connectionState.activeHost) {
+    val hostDisplayName = remember(hostScope, connectionState.activeHost, lang) {
         when (hostScope) {
-            AgentsHostFilterScope.AntigravityCloud -> "Cloud"
+            AgentsHostFilterScope.AntigravityCloud -> lang.t("Cloud", "云端")
             is AgentsHostFilterScope.LocalHost -> hostScope.name.ifBlank { "MacBook Pro" }
             AgentsHostFilterScope.AllHosts ->
                 connectionState.activeHost?.hostname?.takeIf { it.isNotBlank() } ?: "MacBook Pro"
@@ -240,10 +245,7 @@ fun AgentsHomeScreen(
     }
 
     val selectedModelName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
-    val permissionLabel = when (settingsState.activePermissionPreset.displayTitle) {
-        "Default" -> "Default"
-        else -> settingsState.activePermissionPreset.displayTitle
-    }
+    val permissionLabel = settingsState.activePermissionPreset.localizedTitle(lang)
 
     fun submitHomePrompt() {
         val text = draftText.trim()
@@ -326,7 +328,7 @@ fun AgentsHomeScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Menu,
-                        contentDescription = "Open sidebar",
+                        contentDescription = tr("Open sidebar", "打开侧边栏"),
                         tint = colors.inkReading,
                         modifier = Modifier.size(24.dp),
                     )
@@ -372,7 +374,7 @@ fun AgentsHomeScreen(
                                 if (showHostChevron) {
                                     Icon(
                                         imageVector = Icons.Rounded.KeyboardArrowDown,
-                                        contentDescription = "Switch host",
+                                        contentDescription = tr("Switch host", "切换主机"),
                                         tint = colors.inkSecondary,
                                         modifier = Modifier.size(18.dp),
                                     )
@@ -386,7 +388,12 @@ fun AgentsHomeScreen(
                             containerColor = colors.surfacePopover,
                         ) {
                             DropdownMenuItem(
-                                text = { Text("All Hosts (Cloud & Local)", color = colors.inkReading) },
+                                text = {
+                                    Text(
+                                        tr("All Hosts (Cloud & Local)", "所有主机（云端与本地）"),
+                                        color = colors.inkReading,
+                                    )
+                                },
                                 leadingIcon = {
                                     Icon(Icons.Rounded.Hub, contentDescription = null, tint = colors.accentPeriwinkle)
                                 },
@@ -402,7 +409,12 @@ fun AgentsHomeScreen(
                                 modifier = Modifier.testTag("host-option-all"),
                             )
                             DropdownMenuItem(
-                                text = { Text("Antigravity (Cloud)", color = colors.inkReading) },
+                                text = {
+                                    Text(
+                                        tr("Antigravity (Cloud)", "Antigravity（云端）"),
+                                        color = colors.inkReading,
+                                    )
+                                },
                                 leadingIcon = {
                                     Icon(Icons.Rounded.Cloud, contentDescription = null, tint = colors.accentPeriwinkle)
                                 },
@@ -429,8 +441,9 @@ fun AgentsHomeScreen(
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                             )
+                                            val stateLabel = if (host.isOnline) tr("Online", "在线") else tr("Offline", "离线")
                                             Text(
-                                                text = if (host.isOnline) "Online · ${host.version}" else "Offline · ${host.version}",
+                                                text = "$stateLabel · ${host.version}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = if (host.isOnline) colors.statusDone else colors.inkMuted,
                                             )
@@ -466,7 +479,7 @@ fun AgentsHomeScreen(
                     ) {
                         Icon(
                             imageVector = if (isSearchOpen) Icons.Rounded.Close else Icons.Rounded.Search,
-                            contentDescription = "Search conversations",
+                            contentDescription = tr("Search conversations", "搜索会话"),
                             tint = colors.inkReading,
                             modifier = Modifier.size(24.dp),
                         )
@@ -505,8 +518,8 @@ fun AgentsHomeScreen(
                         } else {
                             connectionState.userDisplayName
                         }
-                        val heroGreetingText = remember(greetingDisplayName) {
-                            UserGreetingFormatter.homeHeroGreeting(greetingDisplayName)
+                        val heroGreetingText = remember(greetingDisplayName, lang) {
+                            UserGreetingFormatter.homeHeroGreeting(greetingDisplayName, language = lang)
                         }
                         Text(
                             text = heroGreetingText,
@@ -525,6 +538,7 @@ fun AgentsHomeScreen(
 
                 // Needs approval banner directly above composer
                 if (showNeedsApprovalBanner && needsApprovalSummary != null) {
+                    val needsApprovalText = tr("Needs approval", "等待审批")
                     Surface(
                         onClick = { onOpenConversation(needsApprovalSummary.cascadeId) },
                         modifier = Modifier
@@ -557,7 +571,7 @@ fun AgentsHomeScreen(
                                             fontWeight = FontWeight.SemiBold,
                                         ),
                                     ) {
-                                        append("Needs approval")
+                                        append(needsApprovalText)
                                     }
                                     withStyle(SpanStyle(color = colors.inkSecondary)) {
                                         append(" · ")
@@ -573,7 +587,7 @@ fun AgentsHomeScreen(
                             )
                             Icon(
                                 imageVector = Icons.Rounded.ChevronRight,
-                                contentDescription = "Open approval",
+                                contentDescription = tr("Open approval", "打开审批"),
                                 tint = colors.inkLabel,
                                 modifier = Modifier.size(20.dp),
                             )
@@ -650,9 +664,12 @@ fun AgentsHomeScreen(
                                                 text = {
                                                     Text(
                                                         text = if (syncState.isRefreshing) {
-                                                            "Syncing repositories..."
+                                                            tr("Syncing repositories...", "正在同步仓库…")
                                                         } else {
-                                                            "No repositories on $hostDisplayName"
+                                                            tr(
+                                                                "No repositories on $hostDisplayName",
+                                                                "$hostDisplayName 上暂无仓库",
+                                                            )
                                                         },
                                                         color = colors.inkSecondary,
                                                     )
@@ -661,7 +678,7 @@ fun AgentsHomeScreen(
                                                 onClick = {},
                                             )
                                             DropdownMenuItem(
-                                                text = { Text("Sync Repositories", color = colors.inkReading) },
+                                                text = { Text(tr("Sync Repositories", "同步仓库"), color = colors.inkReading) },
                                                 leadingIcon = {
                                                     Icon(Icons.Rounded.Refresh, contentDescription = null, tint = colors.accentPeriwinkle)
                                                 },
@@ -714,6 +731,11 @@ fun AgentsHomeScreen(
                                 }
 
                                 Box {
+                                    val localizedBranchLabel = when (selectedBranchLabel) {
+                                        "Repo default" -> tr("Repo default", "仓库默认")
+                                        "New worktree" -> tr("New worktree", "新建工作树")
+                                        else -> selectedBranchLabel
+                                    }
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(8.dp))
@@ -730,7 +752,7 @@ fun AgentsHomeScreen(
                                             modifier = Modifier.size(15.dp),
                                         )
                                         Text(
-                                            text = selectedBranchLabel,
+                                            text = localizedBranchLabel,
                                             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                                             color = colors.inkLabel,
                                             maxLines = 1,
@@ -748,12 +770,16 @@ fun AgentsHomeScreen(
                                         onDismissRequest = { branchMenuExpanded = false },
                                         containerColor = colors.surfacePopover,
                                     ) {
-                                        listOf("Repo default", "main", "New worktree").forEach { branch ->
+                                        listOf(
+                                            "Repo default" to tr("Repo default", "仓库默认"),
+                                            "main" to "main",
+                                            "New worktree" to tr("New worktree", "新建工作树"),
+                                        ).forEach { (branchKey, branchDisplay) ->
                                             DropdownMenuItem(
-                                                text = { Text(branch, color = colors.inkReading) },
+                                                text = { Text(branchDisplay, color = colors.inkReading) },
                                                 onClick = {
                                                     branchMenuExpanded = false
-                                                    selectedBranchLabel = branch
+                                                    selectedBranchLabel = branchKey
                                                 },
                                             )
                                         }
@@ -763,7 +789,11 @@ fun AgentsHomeScreen(
 
                             Icon(
                                 imageVector = if (cloudModeEnabled) Icons.Rounded.Cloud else Icons.Rounded.Computer,
-                                contentDescription = if (cloudModeEnabled) "Cloud runtime selected" else "Local runtime selected",
+                                contentDescription = if (cloudModeEnabled) {
+                                    tr("Cloud runtime selected", "已选择云端运行环境")
+                                } else {
+                                    tr("Local runtime selected", "已选择本地运行环境")
+                                },
                                 tint = if (cloudModeEnabled) colors.accentPeriwinkle else colors.inkSecondary,
                                 modifier = Modifier
                                     .size(20.dp)
@@ -793,6 +823,10 @@ fun AgentsHomeScreen(
                                     )
                                 }
 
+                                val placeholderCopy = tr(
+                                    "Ask anything, @ to mention, / for actions",
+                                    "随便问点什么，输入 @ 引用，/ 调用指令",
+                                )
                                 BasicTextField(
                                     value = draftText,
                                     onValueChange = { updated ->
@@ -812,7 +846,7 @@ fun AgentsHomeScreen(
                                     decorationBox = { inner ->
                                         if (draftText.isEmpty()) {
                                             Text(
-                                                text = "Ask anything, @ to mention, / for actions",
+                                                text = placeholderCopy,
                                                 style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                                                 color = colors.inkMuted,
                                             )
@@ -838,7 +872,7 @@ fun AgentsHomeScreen(
                                         Box(contentAlignment = Alignment.Center) {
                                             Icon(
                                                 imageVector = Icons.Rounded.Add,
-                                                contentDescription = "Add context",
+                                                contentDescription = tr("Add context", "添加上下文"),
                                                 tint = colors.inkReading,
                                                 modifier = Modifier.size(22.dp),
                                             )
@@ -867,7 +901,7 @@ fun AgentsHomeScreen(
                                         )
                                         Icon(
                                             imageVector = Icons.Rounded.KeyboardArrowDown,
-                                            contentDescription = "Select model",
+                                            contentDescription = tr("Select model", "选择模型"),
                                             tint = colors.inkSecondary,
                                             modifier = Modifier.size(16.dp),
                                         )
@@ -899,7 +933,7 @@ fun AgentsHomeScreen(
                                             )
                                             Icon(
                                                 imageVector = Icons.Rounded.KeyboardArrowDown,
-                                                contentDescription = "Permissions",
+                                                contentDescription = tr("Permissions", "权限"),
                                                 tint = colors.inkSecondary,
                                                 modifier = Modifier.size(16.dp),
                                             )
@@ -916,7 +950,7 @@ fun AgentsHomeScreen(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Rounded.Mic,
-                                            contentDescription = "Voice mode",
+                                            contentDescription = tr("Voice mode", "语音模式"),
                                             tint = colors.inkLabel,
                                             modifier = Modifier.size(20.dp),
                                         )
@@ -934,7 +968,7 @@ fun AgentsHomeScreen(
                                         Box(contentAlignment = Alignment.Center) {
                                             Icon(
                                                 imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                                                contentDescription = "Send",
+                                                contentDescription = tr("Send", "发送"),
                                                 tint = if (canSend) colors.inkOnPrimaryCta else colors.inkSecondary,
                                                 modifier = Modifier.size(18.dp),
                                             )
@@ -960,6 +994,7 @@ private fun GlobalSearchSection(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     val filtered = remember(summaries, query) {
         val q = query.trim().lowercase()
         summaries.filter { !it.isArchived }.filter { s ->
@@ -988,6 +1023,7 @@ private fun GlobalSearchSection(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Icon(Icons.Rounded.Search, contentDescription = null, tint = colors.inkSecondary, modifier = Modifier.size(18.dp))
+                val searchPlaceholder = tr("Search conversations, projects...", "搜索会话、项目…")
                 BasicTextField(
                     value = query,
                     onValueChange = onQueryChange,
@@ -999,7 +1035,7 @@ private fun GlobalSearchSection(
                     cursorBrush = SolidColor(colors.accentPeriwinkle),
                     decorationBox = { inner ->
                         if (query.isEmpty()) {
-                            Text("Search conversations, projects...", color = colors.inkMuted)
+                            Text(searchPlaceholder, color = colors.inkMuted)
                         }
                         inner()
                     },
@@ -1042,7 +1078,7 @@ private fun GlobalSearchSection(
                                         modifier = Modifier.size(13.dp),
                                     )
                                     Text(
-                                        text = "Loading...",
+                                        text = tr("Loading...", "加载中…"),
                                         color = colors.inkMuted,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -1059,7 +1095,11 @@ private fun GlobalSearchSection(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Text(item.relativeTimeLabel, style = MaterialTheme.typography.labelSmall, color = colors.inkMuted)
+                        Text(
+                            AppLocalizationFormatter.localizeRelativeTime(item.relativeTimeLabel, lang),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.inkMuted,
+                        )
                     }
                 }
             }
@@ -1239,7 +1279,7 @@ fun AgentsSidebarDrawerContent(
                     modifier = Modifier.size(22.dp),
                 )
                 Text(
-                    text = "New Conversation",
+                    text = tr("New Conversation", "新建会话"),
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontSize = 15.5.sp,
                         fontWeight = FontWeight.Medium,
@@ -1254,13 +1294,13 @@ fun AgentsSidebarDrawerContent(
         // Top nav shortcuts: Automations & Customizations
         DrawerNavItem(
             icon = Icons.Rounded.Schedule,
-            label = "Automations",
+            label = tr("Automations", "自动化"),
             onClick = onOpenAutomations,
             modifier = Modifier.testTag("drawer-automations"),
         )
         DrawerNavItem(
             icon = Icons.Rounded.WorkOutline,
-            label = "Customizations",
+            label = tr("Customizations", "自定义配置"),
             onClick = onOpenCustomizations,
             modifier = Modifier.testTag("drawer-customizations"),
         )
@@ -1280,7 +1320,7 @@ fun AgentsSidebarDrawerContent(
             if (pinnedItems.isNotEmpty()) {
                 item(key = "section-pinned") {
                     Text(
-                        text = "Pinned",
+                        text = tr("Pinned", "已置顶"),
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontSize = 13.5.sp,
                             fontWeight = FontWeight.Medium,
@@ -1316,7 +1356,7 @@ fun AgentsSidebarDrawerContent(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Projects",
+                        text = tr("Projects", "项目"),
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontSize = 13.5.sp,
                             fontWeight = FontWeight.Medium,
@@ -1332,7 +1372,7 @@ fun AgentsSidebarDrawerContent(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.FilterList,
-                            contentDescription = "Display options",
+                            contentDescription = tr("Display options", "显示选项"),
                             tint = colors.inkLabel,
                             modifier = Modifier.size(20.dp),
                         )
@@ -1345,7 +1385,7 @@ fun AgentsSidebarDrawerContent(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.CreateNewFolder,
-                            contentDescription = "New project",
+                            contentDescription = tr("New project", "新建项目"),
                             tint = colors.inkLabel,
                             modifier = Modifier.size(20.dp),
                         )
@@ -1441,7 +1481,11 @@ fun AgentsSidebarDrawerContent(
                             ) {
                                 Icon(
                                     imageVector = if (isCollapsed) Icons.Rounded.ChevronRight else Icons.Rounded.KeyboardArrowDown,
-                                    contentDescription = if (isCollapsed) "Expand ${project.name}" else "Collapse ${project.name}",
+                                    contentDescription = if (isCollapsed) {
+                                        tr("Expand ${project.name}", "展开 ${project.name}")
+                                    } else {
+                                        tr("Collapse ${project.name}", "收起 ${project.name}")
+                                    },
                                     tint = colors.inkMuted,
                                     modifier = Modifier.size(18.dp),
                                 )
@@ -1455,7 +1499,7 @@ fun AgentsSidebarDrawerContent(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Add,
-                                contentDescription = "New conversation in ${project.name}",
+                                contentDescription = tr("New conversation in ${project.name}", "在 ${project.name} 中新建会话"),
                                 tint = colors.inkLabel,
                                 modifier = Modifier.size(19.dp),
                             )
@@ -1491,7 +1535,7 @@ fun AgentsSidebarDrawerContent(
         )
         DrawerNavItem(
             icon = Icons.Rounded.Settings,
-            label = "Settings",
+            label = tr("Settings", "设置"),
             onClick = onOpenSettings,
             modifier = Modifier
                 .padding(vertical = 8.dp)
@@ -1589,7 +1633,7 @@ private fun DrawerConversationRow(
                     modifier = Modifier.size(13.dp),
                 )
                 Text(
-                    text = "Loading...",
+                    text = tr("Loading...", "加载中…"),
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 14.5.sp,
                         fontWeight = FontWeight.Normal,
@@ -1620,6 +1664,7 @@ private fun DrawerConversationRow(
 @Composable
 internal fun DrawerConversationTrailingIndicator(summary: CascadeSummary) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     when {
         summary.pendingInteractionTitle != null ||
             summary.status == CortexStepStatus.WAITING ||
@@ -1645,7 +1690,7 @@ internal fun DrawerConversationTrailingIndicator(summary: CascadeSummary) {
 
         else -> {
             Text(
-                text = summary.relativeTimeLabel,
+                text = AppLocalizationFormatter.localizeRelativeTime(summary.relativeTimeLabel, lang),
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.5.sp),
                 color = colors.inkMuted,
                 maxLines = 1,

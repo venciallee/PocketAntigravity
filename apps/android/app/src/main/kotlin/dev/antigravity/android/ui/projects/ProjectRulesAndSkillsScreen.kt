@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
@@ -77,10 +78,10 @@ fun ProjectRulesAndSkillsScreen(
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
     val tabs = listOf(
-        "Skills ${catalog.skills.size}",
-        "Rules ${catalog.rules.size}",
-        "Plugins ${catalog.plugins.size}",
-        "Agents ${catalog.customAgents.size}",
+        tr("Skills ${catalog.skills.size}", "技能 ${catalog.skills.size}"),
+        tr("Rules ${catalog.rules.size}", "规则 ${catalog.rules.size}"),
+        tr("Plugins ${catalog.plugins.size}", "插件 ${catalog.plugins.size}"),
+        tr("Agents ${catalog.customAgents.size}", "代理 ${catalog.customAgents.size}"),
     )
 
     Column(
@@ -106,11 +107,11 @@ fun ProjectRulesAndSkillsScreen(
                     .size(AntigravityDesignTokens.MinTouchTarget)
                     .testTag("btn-back"),
             ) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = colors.inkReading)
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = tr("Back", "返回"), tint = colors.inkReading)
             }
             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
-                    text = "Rules & skills",
+                    text = tr("Rules & skills", "规则与技能"),
                     style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp, fontWeight = FontWeight.Normal),
                     color = colors.inkReading,
                 )
@@ -141,7 +142,7 @@ fun ProjectRulesAndSkillsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Loaded every turn",
+                        text = tr("Loaded every turn", "每轮自动加载"),
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
                         color = colors.inkReading,
                         modifier = Modifier.weight(1f),
@@ -172,9 +173,9 @@ fun ProjectRulesAndSkillsScreen(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TokenLegendItem(color = colors.accentPeriwinkle, label = "Rules")
-                    TokenLegendItem(color = colors.statusDone, label = "Skills")
-                    TokenLegendItem(color = colors.statusWaiting, label = "Plugins")
+                    TokenLegendItem(color = colors.accentPeriwinkle, label = tr("Rules", "规则"))
+                    TokenLegendItem(color = colors.statusDone, label = tr("Skills", "技能"))
+                    TokenLegendItem(color = colors.statusWaiting, label = tr("Plugins", "插件"))
                 }
             }
         }
@@ -251,7 +252,7 @@ fun ProjectRulesAndSkillsScreen(
                                     color = colors.inkReading,
                                 )
                                 if (skill.scope.equals("Global", ignoreCase = true)) {
-                                    ScopePill(label = "Global", isAccent = true)
+                                    ScopePill(label = tr("Global", "全局"), isAccent = true)
                                 }
                             }
                             Text(
@@ -293,7 +294,10 @@ fun ProjectRulesAndSkillsScreen(
                                     ),
                                     color = colors.inkReading,
                                 )
-                                ScopePill(label = rule.scope, isAccent = rule.scope.equals("Global", ignoreCase = true))
+                                ScopePill(
+                                    label = if (rule.scope.equals("Global", ignoreCase = true)) tr("Global", "全局") else rule.scope,
+                                    isAccent = rule.scope.equals("Global", ignoreCase = true),
+                                )
                             }
                             Text(
                                 text = rule.preview,
@@ -307,7 +311,7 @@ fun ProjectRulesAndSkillsScreen(
 
             2 -> {
                 Text(
-                    text = "Manage installed plugins below.",
+                    text = tr("Manage installed plugins below.", "在下方管理已安装的插件。"),
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.inkSecondary,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
@@ -337,7 +341,7 @@ fun ProjectRulesAndSkillsScreen(
 
         // Plugins in this project section (always visible beneath Skills matching `and-customizations.png`)
         Text(
-            text = "Plugins in this project",
+            text = tr("Plugins in this project", "此项目中的插件"),
             style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
             color = colors.accentPeriwinkle,
             modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 6.dp),
@@ -370,7 +374,7 @@ fun ProjectRulesAndSkillsScreen(
                             color = colors.inkReading,
                         )
                         ScopePill(
-                            label = plugin.scope,
+                            label = if (plugin.scope.equals("Global", ignoreCase = true)) tr("Global", "全局") else plugin.scope,
                             isAccent = plugin.scope.equals("Global", ignoreCase = true),
                         )
                     }
@@ -404,7 +408,10 @@ fun ProjectRulesAndSkillsScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         Text(
-            text = "Phone can view and switch plugins on or off. Marketplace installs, editing rules / SKILL.md and API keys stay in Antigravity Desktop → Customizations.",
+            text = tr(
+                "Phone can view and switch plugins on or off. Marketplace installs, editing rules / SKILL.md and API keys stay in Antigravity Desktop → Customizations.",
+                "移动端支持查看及开关插件；插件市场安装、编辑规则 / SKILL.md 与 API 密钥请在 Antigravity Desktop → Customizations 中操作。",
+            ),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 19.sp),
             color = colors.inkSecondary,
             modifier = Modifier.padding(horizontal = 18.dp),

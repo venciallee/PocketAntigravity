@@ -14,6 +14,8 @@ public struct SwarmBoardSheetView: View {
         self.stepIndex = stepIndex
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var payload: SwarmBoardPayload? {
         store.activeSteps.first(where: { $0.stepIndex == stepIndex })?.swarmBoard
             ?? store.activeSteps.compactMap(\.swarmBoard).last
@@ -27,7 +29,7 @@ public struct SwarmBoardSheetView: View {
                         rosterSection(board: board)
                         postsSection(board: board)
                     } else {
-                        Text("No active Agent Swarm board found for this conversation.")
+                        Text(lang.t("No active Agent Swarm board found for this conversation.", "此对话暂无活跃的多代理协作看板。"))
                             .font(.system(size: 14))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                             .padding(.top, 24)
@@ -36,11 +38,11 @@ public struct SwarmBoardSheetView: View {
                 .padding(16)
             }
             .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
-            .navigationTitle(payload?.title ?? "Agent Swarm Board")
+            .navigationTitle(payload?.title ?? lang.t("Agent Swarm Board", "多代理协作看板"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button(lang.t("Done", "完成")) {
                         store.presentedSheet = nil
                         dismiss()
                     }
@@ -53,7 +55,7 @@ public struct SwarmBoardSheetView: View {
 
     private func rosterSection(board: SwarmBoardPayload) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("SWARM ROSTER (\(board.members.count))")
+            Text(lang.t("SWARM ROSTER (\(board.members.count))", "协作团队成员 (\(board.members.count))"))
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(AntigravityTheme.inkSecondary)
 
@@ -62,7 +64,7 @@ public struct SwarmBoardSheetView: View {
                     Button {
                         selectedMemberFilter = nil
                     } label: {
-                        Text("All")
+                        Text(lang.t("All", "全部"))
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(selectedMemberFilter == nil ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.inkReading)
                             .padding(.horizontal, 12)
@@ -101,12 +103,12 @@ public struct SwarmBoardSheetView: View {
             return post.authorName == filter || post.mentions.contains(filter)
         }
         return VStack(alignment: .leading, spacing: 10) {
-            Text("DISCUSSION BOARD (\(filtered.count))")
+            Text(lang.t("DISCUSSION BOARD (\(filtered.count))", "共享讨论板 (\(filtered.count))"))
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(AntigravityTheme.inkSecondary)
 
             if filtered.isEmpty {
-                Text("No board posts yet for this filter.")
+                Text(lang.t("No board posts yet for this filter.", "当前筛选条件下暂无讨论帖。"))
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
             } else {

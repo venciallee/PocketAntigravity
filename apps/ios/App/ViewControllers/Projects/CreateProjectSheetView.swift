@@ -12,6 +12,13 @@ public struct CreateProjectSheetView: View {
         case cloud = "Cloud"
 
         public var id: String { rawValue }
+
+        public func localizedTitle(for lang: AppLanguage) -> String {
+            switch self {
+            case .macBookPro: return rawValue
+            case .cloud: return lang.t("Cloud", "云端")
+            }
+        }
     }
 
     public enum SourceKind: String, CaseIterable, Identifiable {
@@ -19,6 +26,22 @@ public struct CreateProjectSheetView: View {
         case drive = "Drive folder"
 
         public var id: String { rawValue }
+
+        public func localizedTitle(for lang: AppLanguage) -> String {
+            switch self {
+            case .github: return lang.t("GitHub repository", "GitHub 仓库")
+            case .drive: return lang.t("Drive folder", "云端硬盘文件夹")
+            }
+        }
+    }
+
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
+    private var localizedBranchWorktreeLabel: String {
+        if branchWorktreeLabel == "main · Existing checkout" {
+            return lang.t("main · Existing checkout", "main · 已有检出目录")
+        }
+        return lang.t("main · New worktree", "main · 新建工作树")
     }
 
     private struct GitHubRepoRowModel: Identifiable {
@@ -156,7 +179,7 @@ public struct CreateProjectSheetView: View {
             Button {
                 onDismiss?()
             } label: {
-                Text("Cancel")
+                Text(lang.t("Cancel", "取消"))
                     .font(.system(size: 16.5, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textSecondary)
                     .frame(minWidth: 64, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .leading)
@@ -166,7 +189,7 @@ public struct CreateProjectSheetView: View {
 
             Spacer()
 
-            Text("New Project")
+            Text(lang.t("New Project", "新建项目"))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.textPrimary)
 
@@ -182,7 +205,7 @@ public struct CreateProjectSheetView: View {
 
     private var runsOnSection: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("RUNS ON")
+            Text(lang.t("RUNS ON", "运行环境"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -207,8 +230,8 @@ public struct CreateProjectSheetView: View {
 
             Text(
                 runsOn == .cloud
-                    ? "Runs in its own cloud VM and keeps working while your computer sleeps."
-                    : "Runs directly in a local workspace or git worktree on MacBook Pro."
+                    ? lang.t("Runs in its own cloud VM and keeps working while your computer sleeps.", "在独立的云端虚拟机中运行，电脑休眠时仍可持续工作。")
+                    : lang.t("Runs directly in a local workspace or git worktree on MacBook Pro.", "直接在 MacBook Pro 的本地工作区或 git worktree 中运行。")
             )
             .font(.system(size: 13, weight: .regular))
             .foregroundStyle(AntigravityTheme.textSecondary)
@@ -231,7 +254,7 @@ public struct CreateProjectSheetView: View {
             HStack(spacing: 7) {
                 Image(systemName: symbol)
                     .font(.system(size: 13.5, weight: .medium))
-                Text(target.rawValue)
+                Text(target.localizedTitle(for: lang))
                     .font(.system(size: 14.5, weight: isSelected ? .semibold : .medium))
             }
             .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
@@ -254,7 +277,7 @@ public struct CreateProjectSheetView: View {
 
     private var sourceSection: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("SOURCE")
+            Text(lang.t("SOURCE", "来源"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -287,7 +310,7 @@ public struct CreateProjectSheetView: View {
                 Image(systemName: symbol)
                     .font(.system(size: 16.5, weight: .semibold))
                     .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.textSecondary)
-                Text(kind.rawValue)
+                Text(kind.localizedTitle(for: lang))
                     .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.textPrimary)
                     .lineLimit(1)
@@ -323,7 +346,7 @@ public struct CreateProjectSheetView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14.5, weight: .medium))
                 .foregroundStyle(AntigravityTheme.textMuted)
-            TextField("Search repositories", text: $repoSearchQuery)
+            TextField(lang.t("Search repositories", "搜索仓库"), text: $repoSearchQuery)
                 .font(.system(size: 15.5, weight: .regular))
                 .foregroundStyle(AntigravityTheme.textPrimary)
                 .tint(AntigravityTheme.accentPeriwinkle)
@@ -351,7 +374,7 @@ public struct CreateProjectSheetView: View {
 
         return VStack(spacing: 0) {
             if visibleRepos.isEmpty {
-                Text("No repositories synced yet — enter a project name below.")
+                Text(lang.t("No repositories synced yet — enter a project name below.", "尚未同步仓库 — 请在下方输入项目名称。"))
                     .font(.system(size: 13.5, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textSecondary)
                     .padding(.horizontal, 14)
@@ -402,12 +425,12 @@ public struct CreateProjectSheetView: View {
     private var githubConfigureButton: some View {
         Group {
             if let url = URL(string: "https://github.com/settings/installations") {
-                Link("Missing a repo? Configure on GitHub", destination: url)
+                Link(lang.t("Missing a repo? Configure on GitHub", "找不到仓库？前往 GitHub 配置"), destination: url)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .padding(.leading, 2)
             } else {
-                Text("Missing a repo? Configure on GitHub")
+                Text(lang.t("Missing a repo? Configure on GitHub", "找不到仓库？前往 GitHub 配置"))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .padding(.leading, 2)
@@ -425,12 +448,12 @@ public struct CreateProjectSheetView: View {
                     : "main · New worktree"
             } label: {
                 HStack {
-                    Text("Branch & worktree")
+                    Text(lang.t("Branch & worktree", "分支与工作树"))
                         .font(.system(size: 15, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 5) {
-                        Text(branchWorktreeLabel)
+                        Text(localizedBranchWorktreeLabel)
                             .font(.system(size: 14.5, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
@@ -448,11 +471,11 @@ public struct CreateProjectSheetView: View {
                 .overlay(AntigravityTheme.subtleDivider)
 
             HStack {
-                Text("Name")
+                Text(lang.t("Name", "名称"))
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textPrimary)
                 Spacer()
-                TextField("Project name", text: $projectName)
+                TextField(lang.t("Project name", "项目名称"), text: $projectName)
                     .font(.system(size: 14.5, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textBody)
                     .multilineTextAlignment(.trailing)
@@ -466,11 +489,11 @@ public struct CreateProjectSheetView: View {
                     .overlay(AntigravityTheme.subtleDivider)
 
                 HStack {
-                    Text("Drive URL")
+                    Text(lang.t("Drive URL", "云端硬盘链接"))
                         .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
-                    TextField("Optional Google Drive folder link", text: Binding(
+                    TextField(lang.t("Optional Google Drive folder link", "可选 Google Drive 文件夹链接"), text: Binding(
                         get: { store.newProjectDraft.driveResourceLinks.first ?? "" },
                         set: { val in
                             let clean = val.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -489,10 +512,10 @@ public struct CreateProjectSheetView: View {
                     .overlay(AntigravityTheme.subtleDivider)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Environment Setup (`env-setup.sh`)")
+                    Text(lang.t("Environment Setup (`env-setup.sh`)", "环境初始化脚本 (`env-setup.sh`)"))
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textSecondary)
-                    TextField("e.g. npm ci && go mod download", text: $store.newProjectDraft.envSetupScript)
+                    TextField(lang.t("e.g. npm ci && go mod download", "例如 npm ci && go mod download"), text: $store.newProjectDraft.envSetupScript)
                         .font(.system(size: 12.5, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.textBody)
                         .tint(AntigravityTheme.accentPeriwinkle)
@@ -525,7 +548,7 @@ public struct CreateProjectSheetView: View {
             }
             onDismiss?()
         } label: {
-            Text("Create Project")
+            Text(lang.t("Create Project", "创建项目"))
                 .font(.system(size: 16.5, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                 .frame(maxWidth: .infinity, minHeight: 52)

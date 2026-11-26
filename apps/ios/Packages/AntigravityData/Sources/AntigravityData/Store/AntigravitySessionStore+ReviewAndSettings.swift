@@ -526,13 +526,18 @@ extension AntigravitySessionStore {
     }
 
     public func setAppLanguage(_ language: AppLanguage) {
+        hasModifiedLanguageInSession = true
         appearancePreferences.language = language
-        saveAppearancePreferences()
+        if !isVerificationMode {
+            preferencesStore.set(language.rawValue, forKey: Self.appLanguageDefaultsKey)
+            saveAppearancePreferences()
+        }
     }
 
     public func saveAppearancePreferences() {
         let snapshot = appearancePreferences
         preferencesStore.set(snapshot.appearanceMode.rawValue, forKey: Self.appearanceModeDefaultsKey)
+        preferencesStore.set(snapshot.language.rawValue, forKey: Self.appLanguageDefaultsKey)
         let storeRef = projectionStore
         Task {
             await storeRef.saveAppearancePreferences(snapshot)
@@ -548,6 +553,13 @@ extension AntigravitySessionStore {
                 prefs.appearanceMode = appearancePreferences.appearanceMode
             } else {
                 preferencesStore.set(prefs.appearanceMode.rawValue, forKey: Self.appearanceModeDefaultsKey)
+            }
+            if hasModifiedLanguageInSession {
+                prefs.language = appearancePreferences.language
+            } else if let savedLangRaw = preferencesStore.string(forKey: Self.appLanguageDefaultsKey) {
+                prefs.language = AppLanguage.fromTag(savedLangRaw)
+            } else {
+                preferencesStore.set(prefs.language.rawValue, forKey: Self.appLanguageDefaultsKey)
             }
             if preferencesStore.string(forKey: Self.localPermissionDefaultsKey) != nil {
                 prefs.globalPermissionPreset = localPermissionPreset

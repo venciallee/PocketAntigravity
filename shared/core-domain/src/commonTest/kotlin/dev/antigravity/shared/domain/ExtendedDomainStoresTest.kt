@@ -2,6 +2,8 @@ package dev.antigravity.shared.domain
 
 import dev.antigravity.shared.model.AgentPermissionPreset
 import dev.antigravity.shared.model.AppAppearanceMode
+import dev.antigravity.shared.model.AppLanguage
+import dev.antigravity.shared.model.AppLocalizationFormatter
 import dev.antigravity.shared.model.AppThemePreset
 import dev.antigravity.shared.model.AutomationSectionKind
 import dev.antigravity.shared.model.CascadeExecutionMode
@@ -9,9 +11,12 @@ import dev.antigravity.shared.model.ConversationSortField
 import dev.antigravity.shared.model.DiffCompareMode
 import dev.antigravity.shared.model.EsddVerifySceneCase
 import dev.antigravity.shared.model.NewProjectDraft
+import dev.antigravity.shared.model.PrimaryTab
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectSourceKind
 import dev.antigravity.shared.model.ThinkingEffortLevel
+import dev.antigravity.shared.model.UserGreetingFormatter
+import dev.antigravity.shared.model.localizedTitle
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -295,5 +300,80 @@ class ExtendedDomainStoresTest {
         settings.selectModel("ORCHESTRATOR_CARBON")
         assertTrue(settings.state.value.isEffortLockedForOrchestrator)
         assertTrue(settings.state.value.resolvedSelectedIsModelAlias)
+    }
+
+    @Test
+    fun bilingualLocalizationHelpersAndPersistenceHydrateSynchronously() {
+        // 1. AppLanguage tag parsing & bilingual text selector
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ENGLISH, dev.antigravity.shared.model.AppLanguage.fromTag(null))
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ENGLISH, dev.antigravity.shared.model.AppLanguage.fromTag("en"))
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ZH_HANS, dev.antigravity.shared.model.AppLanguage.fromTag("zh-Hans"))
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ZH_HANS, dev.antigravity.shared.model.AppLanguage.fromTag("zh_CN"))
+        assertEquals("Settings", dev.antigravity.shared.model.AppLanguage.ENGLISH.t("Settings", "设置"))
+        assertEquals("设置", dev.antigravity.shared.model.AppLanguage.ZH_HANS.t("Settings", "设置"))
+
+        // 2. Shared model localization helpers & dynamic status formatters
+        assertEquals("设置", dev.antigravity.shared.model.PrimaryTab.SETTINGS.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
+        assertEquals("跟随系统", AppAppearanceMode.SYSTEM.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
+        assertEquals("北欧", AppThemePreset.NORD.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
+        assertEquals("工作区", DiffCompareMode.WORKING_TREE.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
+        assertEquals("极速", AgentPermissionPreset.TURBO.localizedTitle(dev.antigravity.shared.model.AppLanguage.ZH_HANS))
+        assertEquals(
+            "离线 · MacBook Pro",
+            dev.antigravity.shared.model.AppLocalizationFormatter.localizeConnectionStatus(
+                "Offline · MacBook Pro",
+                dev.antigravity.shared.model.AppLanguage.ZH_HANS,
+            ),
+        )
+        assertEquals(
+            "3分钟前",
+            dev.antigravity.shared.model.AppLocalizationFormatter.localizeRelativeTime(
+                "3m ago",
+                dev.antigravity.shared.model.AppLanguage.ZH_HANS,
+            ),
+        )
+        assertEquals(
+            "默认",
+            dev.antigravity.shared.model.AppLocalizationFormatter.localizeAgentPersona(
+                "Default",
+                dev.antigravity.shared.model.AppLanguage.ZH_HANS,
+            ),
+        )
+
+        // 3. Bilingual hero & backdrop greetings
+        assertEquals(
+            "欢迎回来，\nVencial。\n今天从哪里开始？",
+            dev.antigravity.shared.model.UserGreetingFormatter.homeHeroGreeting(
+                "Vencial Lee",
+                dev.antigravity.shared.model.AppLanguage.ZH_HANS,
+            ),
+        )
+        assertEquals(
+            "欢迎回来。\n今天从哪里\n开始？",
+            dev.antigravity.shared.model.UserGreetingFormatter.homeHeroGreeting(
+                null,
+                dev.antigravity.shared.model.AppLanguage.ZH_HANS,
+            ),
+        )
+
+        // 4. Synchronous cold-start persistence across SettingsAndCustomizationStore & AntigravityCoreCoordinator
+        val sharedPrefs = dev.antigravity.shared.platform.InMemoryPreferencesStore()
+        val live1 = AntigravityCoreCoordinator(preferencesStore = sharedPrefs)
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ENGLISH, live1.settingsStore.state.value.appearance.language)
+
+        live1.settingsStore.setAppLanguage(dev.antigravity.shared.model.AppLanguage.ZH_HANS)
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ZH_HANS, live1.settingsStore.state.value.appearance.language)
+        assertEquals("zh-Hans", sharedPrefs.getString(SettingsAndCustomizationStore.KEY_APP_LANGUAGE))
+
+        val live2 = AntigravityCoreCoordinator(preferencesStore = sharedPrefs)
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ZH_HANS, live2.settingsStore.state.value.appearance.language)
+
+        // 5. Verification mode (persistPreferences = false) does not overwrite shared preferences
+        val verifyStore = SettingsAndCustomizationStore(preferencesStore = sharedPrefs).apply {
+            persistPreferences = false
+        }
+        verifyStore.setAppLanguage(dev.antigravity.shared.model.AppLanguage.ENGLISH)
+        assertEquals(dev.antigravity.shared.model.AppLanguage.ENGLISH, verifyStore.state.value.appearance.language)
+        assertEquals("zh-Hans", sharedPrefs.getString(SettingsAndCustomizationStore.KEY_APP_LANGUAGE))
     }
 }

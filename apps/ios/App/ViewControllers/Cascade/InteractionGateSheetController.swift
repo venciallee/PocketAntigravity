@@ -23,6 +23,8 @@ public struct InteractionGateSheetController: View {
         self.stepIndex = stepIndex
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     public var body: some View {
         switch mode {
         case .permissionGate:
@@ -30,11 +32,11 @@ public struct InteractionGateSheetController: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Approval Required")
+                        Text(lang.t("Approval Required", "需要审批"))
                             .font(.system(size: 17, weight: .bold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                         if let targetStep {
-                            Text("Step \(targetStep.stepIndex + 1) · \(store.activeSummary?.title ?? "Agent")")
+                            Text(lang.t("Step \(targetStep.stepIndex + 1) · \(store.activeSummary?.title ?? "Agent")", "第 \(targetStep.stepIndex + 1) 步 · \(store.activeSummary?.title ?? "Agent")"))
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(AntigravityTheme.inkSecondary)
                                 .lineLimit(1)

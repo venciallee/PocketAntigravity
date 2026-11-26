@@ -39,6 +39,8 @@ public struct AntigravityApp: App {
     public var body: some Scene {
         WindowGroup {
             AntigravityRootContainerView(store: store, activeVerifyCase: $activeVerifyCase)
+                .environment(\.appLanguage, store.appearancePreferences.language)
+                .environment(\.locale, Locale(identifier: store.appearancePreferences.language.localeIdentifier))
                 .preferredColorScheme(resolvedColorScheme)
                 .onAppear {
                     applyUIKitWindowInterfaceStyle(resolvedColorScheme)

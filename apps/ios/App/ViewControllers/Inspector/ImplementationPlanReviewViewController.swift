@@ -22,6 +22,8 @@ public struct ImplementationPlanReviewViewController: View {
         self.store = store
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var livePlanArtifact: ArtifactSnapshot? {
         guard !store.isVerificationMode else { return nil }
         return store.activeArtifacts.first(where: { $0.artifactPath == store.selectedArtifactPath })
@@ -47,7 +49,7 @@ public struct ImplementationPlanReviewViewController: View {
                         AntigravityMarkdownView(markdown: livePlan.content, variant: .assistant)
 
                         if !store.planComments.isEmpty {
-                            Text("Review Comments (\(store.planComments.count))")
+                            Text(lang.t("Review Comments (\(store.planComments.count))", "审阅评论（\(store.planComments.count)）"))
                                 .font(.system(size: 15, weight: .bold))
                                 .foregroundStyle(AntigravityTheme.inkReading)
                                 .padding(.top, 4)
@@ -88,7 +90,7 @@ public struct ImplementationPlanReviewViewController: View {
                         problemSummaryParagraph
 
                         // 3. Proposed Changes Section
-                        Text("Proposed changes")
+                        Text(lang.t("Proposed changes", "建议更改"))
                             .font(.system(size: 16.5, weight: .bold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .padding(.top, 2)
@@ -107,7 +109,7 @@ public struct ImplementationPlanReviewViewController: View {
                         newClockHelperChange
 
                         // 4. Verification Section
-                        Text("Verification")
+                        Text(lang.t("Verification", "验证方案"))
                             .font(.system(size: 16.5, weight: .bold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .padding(.top, 2)
@@ -152,7 +154,7 @@ public struct ImplementationPlanReviewViewController: View {
             .accessibilityIdentifier("btn-back-from-plan")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Implementation Plan")
+                Text(lang.t("Implementation Plan", "实施计划"))
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .lineLimit(1)
@@ -205,7 +207,10 @@ public struct ImplementationPlanReviewViewController: View {
                 .fill(AntigravityTheme.statusWaiting)
                 .frame(width: 8, height: 8)
 
-            Text("Agent is paused until you review. Long-press any text to comment.")
+            Text(lang.t(
+                "Agent is paused until you review. Long-press any text to comment.",
+                "代理已暂停并等待你审阅。长按任意文本即可添加评论。"
+            ))
                 .font(.system(size: 13.5, weight: .medium))
                 .foregroundStyle(AntigravityTheme.statusWaiting)
                 .fixedSize(horizontal: false, vertical: true)
@@ -284,11 +289,11 @@ public struct ImplementationPlanReviewViewController: View {
                             .foregroundStyle(AntigravityTheme.inkReading)
                     }
 
-                    Text("You")
+                    Text(lang.t("You", "你"))
                         .font(.system(size: 13.5, weight: .bold))
                         .foregroundStyle(AntigravityTheme.inkReading)
 
-                    Text("Pending")
+                    Text(lang.t("Pending", "待发送"))
                         .font(.system(size: 13))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
 
@@ -324,7 +329,7 @@ public struct ImplementationPlanReviewViewController: View {
                         HStack(spacing: 6) {
                             Image(systemName: "bubble.left")
                                 .font(.system(size: 13, weight: .semibold))
-                            Text("Comment")
+                            Text(lang.t("Comment", "评论"))
                                 .font(.system(size: 14, weight: .semibold))
                         }
                         .foregroundStyle(AntigravityTheme.pillActiveForeground)
@@ -341,7 +346,7 @@ public struct ImplementationPlanReviewViewController: View {
                     Button {
                         isAddingSelectionComment = false
                     } label: {
-                        Text("Copy")
+                        Text(lang.t("Copy", "复制"))
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.pillActiveForeground)
                             .padding(.horizontal, 14)
@@ -392,7 +397,7 @@ public struct ImplementationPlanReviewViewController: View {
 
     private var inlineSelectionCommentEditor: some View {
         HStack(spacing: 8) {
-            TextField("Comment on selected span...", text: $newSelectionCommentDraft)
+            TextField(lang.t("Comment on selected span...", "评论所选片段…"), text: $newSelectionCommentDraft)
                 .font(.system(size: 14))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .padding(.horizontal, 12)
@@ -411,7 +416,7 @@ public struct ImplementationPlanReviewViewController: View {
                 }
                 isAddingSelectionComment = false
             } label: {
-                Text("Save")
+                Text(lang.t("Save", "保存"))
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .padding(.horizontal, 14)
@@ -458,7 +463,7 @@ public struct ImplementationPlanReviewViewController: View {
                 }
                 store.currentRoute = .chatAndComposer
             } label: {
-                Text("Proceed")
+                Text(lang.t("Proceed", "继续执行"))
                     .font(.system(size: 15.5, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .frame(maxWidth: .infinity, minHeight: 48)
@@ -477,7 +482,7 @@ public struct ImplementationPlanReviewViewController: View {
                 store.sendCurrentDraft()
                 store.currentRoute = .chatAndComposer
             } label: {
-                Text("Send \(commentCount) comments")
+                Text(lang.t("Send \(commentCount) comments", "发送 \(commentCount) 条评论"))
                     .font(.system(size: 15.5, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .frame(maxWidth: .infinity, minHeight: 48)

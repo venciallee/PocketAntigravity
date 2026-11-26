@@ -43,8 +43,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
+import dev.antigravity.shared.model.AppLocalizationFormatter
 
 /**
  * UE03_CONTEXT_MENU_PIN (`and-context-menu.png`): Material 3 Modal Bottom Sheet over
@@ -58,6 +61,7 @@ fun ConversationContextSheetScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     val syncState by coordinator.syncState.collectAsStateWithLifecycle()
 
     val targetSummary = remember(syncState.summaries, targetCascadeId) {
@@ -65,9 +69,9 @@ fun ConversationContextSheetScreen(
     }
     val title = targetSummary?.title ?: "Fix flaky TestSettlementBatch"
     val metadataLine = if (targetSummary != null) {
-        "${targetSummary.projectSlug} · ${targetSummary.modelLabel} · ${targetSummary.relativeTimeLabel}"
+        "${targetSummary.projectSlug} · ${targetSummary.modelLabel} · ${AppLocalizationFormatter.localizeRelativeTime(targetSummary.relativeTimeLabel, lang)}"
     } else {
-        "ledger-svc · Gemini 4 Neon · 8m"
+        "ledger-svc · Gemini 4 Neon · ${AppLocalizationFormatter.localizeRelativeTime("8m", lang)}"
     }
     val previewExcerpt = targetSummary?.lastMessagePreview?.takeIf { it.isNotBlank() }
         ?: "The flake comes from a shared fake clock across parallel subtests. I wrote a plan to isolate it per test."
@@ -190,7 +194,7 @@ fun ConversationContextSheetScreen(
 
                 ContextSheetActionRow(
                     icon = Icons.Rounded.PushPin,
-                    label = if (isPinned) "Unpin" else "Pin",
+                    label = if (isPinned) tr("Unpin", "取消置顶") else tr("Pin", "置顶"),
                     onClick = {
                         coordinator.toggleConversationPinned(targetCascadeId)
                         onDismiss()
@@ -199,7 +203,7 @@ fun ConversationContextSheetScreen(
                 )
                 ContextSheetActionRow(
                     icon = Icons.Rounded.RadioButtonChecked,
-                    label = if (isUnread) "Mark as unread" else "Mark as unread",
+                    label = if (isUnread) tr("Mark as read", "标为已读") else tr("Mark as unread", "标为未读"),
                     onClick = {
                         coordinator.toggleConversationUnread(targetCascadeId)
                         onDismiss()
@@ -208,25 +212,25 @@ fun ConversationContextSheetScreen(
                 )
                 ContextSheetActionRow(
                     icon = Icons.Rounded.Edit,
-                    label = "Rename",
+                    label = tr("Rename", "重命名"),
                     onClick = { onDismiss() },
                     modifier = Modifier.testTag("action-rename"),
                 )
                 ContextSheetActionRow(
                     icon = Icons.AutoMirrored.Rounded.DriveFileMove,
-                    label = "Move to project",
+                    label = tr("Move to project", "移动到项目"),
                     onClick = { onDismiss() },
                     modifier = Modifier.testTag("action-move"),
                 )
                 ContextSheetActionRow(
                     icon = Icons.Rounded.FileUpload,
-                    label = "Export summary",
+                    label = tr("Export summary", "导出摘要"),
                     onClick = { onDismiss() },
                     modifier = Modifier.testTag("action-export"),
                 )
                 ContextSheetActionRow(
                     icon = Icons.Rounded.Archive,
-                    label = "Archive",
+                    label = tr("Archive", "归档"),
                     onClick = {
                         coordinator.archiveConversation(targetCascadeId)
                         onDismiss()
@@ -235,7 +239,7 @@ fun ConversationContextSheetScreen(
                 )
                 ContextSheetActionRow(
                     icon = Icons.Rounded.DeleteOutline,
-                    label = "Delete",
+                    label = tr("Delete", "删除"),
                     tint = colors.statusError,
                     onClick = {
                         coordinator.deleteConversation(targetCascadeId)

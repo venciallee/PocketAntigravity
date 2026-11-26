@@ -110,6 +110,8 @@ public struct ProjectDetailViewController: View {
         self.onOpenConversation = onOpenConversation
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
@@ -144,7 +146,7 @@ public struct ProjectDetailViewController: View {
                 HStack(spacing: 5) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 16, weight: .semibold))
-                    Text("Projects")
+                    Text(lang.t("Projects", "项目"))
                         .font(.system(size: 17, weight: .regular))
                 }
                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
@@ -162,23 +164,26 @@ public struct ProjectDetailViewController: View {
                         finderFeedbackBanner = true
                         store.revealProjectInFinder(projectSlug)
                     } label: {
-                        Label("Reveal in Finder on Mac", systemImage: "laptopcomputer")
+                        Label(lang.t("Reveal in Finder on Mac", "在 Mac 的访达中显示"), systemImage: "laptopcomputer")
                     }
                     if !effectiveBranchName.isEmpty {
                         Button {} label: {
-                            Label("Switch Git Branch (\(effectiveBranchName))", systemImage: "arrow.triangle.branch")
+                            Label(
+                                lang.t("Switch Git Branch (\(effectiveBranchName))", "切换 Git 分支 (\(effectiveBranchName))"),
+                                systemImage: "arrow.triangle.branch"
+                            )
                         }
                     }
                     Button {
                         store.activeRoute = .rulesAndSkills
                     } label: {
-                        Label("Project Rules & Skills", systemImage: "doc.text")
+                        Label(lang.t("Project Rules & Skills", "项目规则与技能"), systemImage: "doc.text")
                     }
                 } else {
                     Button {
                         triggerOpenConversation("new-\(projectSlug)")
                     } label: {
-                        Label("New Conversation", systemImage: "plus.bubble")
+                        Label(lang.t("New Conversation", "新建对话"), systemImage: "plus.bubble")
                     }
                 }
             } label: {
@@ -233,14 +238,16 @@ public struct ProjectDetailViewController: View {
 
     private var displayTitle: String {
         isNoProject
-            ? AntigravityCloudDetector.noProjectDisplayName
+            ? lang.t(AntigravityCloudDetector.noProjectDisplayName, "无项目")
             : (liveProject?.name ?? AntigravityCloudDetector.stripProjectScopePrefix(projectSlug))
     }
 
     private var effectivePathDisplay: String {
         guard usesPairedStoreData else { return "~/code/\(projectSlug)" }
         if isNoProject {
-            return isCloudSection ? "Antigravity Cloud · Unassigned conversations" : "Unassigned conversations"
+            return isCloudSection
+                ? lang.t("Antigravity Cloud · Unassigned conversations", "Antigravity 云端 · 未归属项目的对话")
+                : lang.t("Unassigned conversations", "未归属项目的对话")
         }
         let raw = liveProject?.pathDisplay ?? "~/workspace/\(AntigravityCloudDetector.stripProjectScopePrefix(projectSlug))"
         if raw.hasPrefix("/Users/") {
@@ -262,19 +269,19 @@ public struct ProjectDetailViewController: View {
     }
 
     private var effectiveHostBadgeText: String {
-        guard usesPairedStoreData else { return "Local · MacBook Pro" }
+        guard usesPairedStoreData else { return lang.t("Local · MacBook Pro", "本地 · MacBook Pro") }
         if isCloudSection {
             if isNoProject {
-                return "Antigravity Cloud"
+                return lang.t("Antigravity Cloud", "Antigravity 云端")
             }
             if let uri = liveProject?.workspaceUri,
                let cloudLabel = AntigravityCloudDetector.extractCloudLocationLabel(uri),
                cloudLabel.caseInsensitiveCompare(liveProject?.name ?? projectSlug) != .orderedSame {
-                return "Cloud · \(cloudLabel)"
+                return lang.t("Cloud · \(cloudLabel)", "云端 · \(cloudLabel)")
             }
-            return "Cloud"
+            return lang.t("Cloud", "云端")
         }
-        let prefix = isPairedHostOnline ? "Local" : "Offline"
+        let prefix = isPairedHostOnline ? lang.t("Local", "本地") : lang.t("Offline", "离线")
         return "\(prefix) · \(resolvedLocalHostName)"
     }
 
@@ -299,8 +306,8 @@ public struct ProjectDetailViewController: View {
         return ProjectConversationRowModel(
             id: s.cascadeId,
             title: store.displayTitle(for: s),
-            subtitle: s.statusSubtitle.isEmpty ? s.status.displayBadgeText : s.statusSubtitle,
-            timestamp: s.relativeTimeLabel,
+            subtitle: s.statusSubtitle.isEmpty ? s.status.localizedTitle(for: lang) : s.statusSubtitle,
+            timestamp: AppLocalizationFormatter.localizeRelativeTime(s.relativeTimeLabel, language: lang),
             indicator: indicator,
             additions: s.totalAdditions > 0 ? s.totalAdditions : nil,
             deletions: s.totalDeletions > 0 ? s.totalDeletions : nil,
@@ -444,7 +451,7 @@ public struct ProjectDetailViewController: View {
             }
 
             if !isNoProject {
-                Text("Working tree clean")
+                Text(lang.t("Working tree clean", "工作区干净"))
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textBody)
                     .padding(.horizontal, 11)
@@ -476,7 +483,7 @@ public struct ProjectDetailViewController: View {
             HStack(spacing: 8) {
                 Image(systemName: "pencil")
                     .font(.system(size: 15.5, weight: .semibold))
-                Text(isNoProject ? "New Conversation" : "New Conversation in Project")
+                Text(isNoProject ? lang.t("New Conversation", "新建对话") : lang.t("New Conversation in Project", "在项目中新建对话"))
                     .font(.system(size: 16, weight: .semibold))
             }
             .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
@@ -500,19 +507,19 @@ public struct ProjectDetailViewController: View {
             HStack(spacing: 18) {
                 underlineTabItem(
                     tab: .active,
-                    title: "Active",
+                    title: lang.t("Active", "活跃"),
                     count: activeCountText,
                     accessibilityId: "project-tab-active"
                 )
                 underlineTabItem(
                     tab: .archived,
-                    title: "Archived",
+                    title: lang.t("Archived", "已归档"),
                     count: archivedCountText,
                     accessibilityId: "project-tab-archived"
                 )
                 underlineTabItem(
                     tab: .automations,
-                    title: "Automations",
+                    title: lang.t("Automations", "自动化"),
                     count: autoCountText,
                     accessibilityId: "project-tab-automations"
                 )
@@ -567,7 +574,7 @@ public struct ProjectDetailViewController: View {
         if selectedTab == .automations {
             VStack(alignment: .leading, spacing: 0) {
                 if effectiveProjectAutomations.isEmpty {
-                    Text("No automations configured for \(projectSlug) yet.")
+                    Text(lang.t("No automations configured for \(projectSlug) yet.", "尚未为 \(projectSlug) 配置自动化任务。"))
                         .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .padding(16)
@@ -604,7 +611,7 @@ public struct ProjectDetailViewController: View {
                                 }
                                 .buttonStyle(.plain)
                             } else if auto.section == .paused {
-                                Button("Resume") {
+                                Button(lang.t("Resume", "恢复")) {
                                     store.resumeAutomation(auto.id)
                                 }
                                 .font(.system(size: 13, weight: .semibold))
@@ -633,7 +640,11 @@ public struct ProjectDetailViewController: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("project-conv-list")
         } else if usesPairedStoreData && rows.isEmpty {
-            Text(selectedTab == .archived ? "No archived conversations in \(projectSlug)." : "No active conversations in \(projectSlug).")
+            Text(
+                selectedTab == .archived
+                    ? lang.t("No archived conversations in \(projectSlug).", "\(projectSlug) 中暂无已归档对话。")
+                    : lang.t("No active conversations in \(projectSlug).", "\(projectSlug) 中暂无活跃对话。")
+            )
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(AntigravityTheme.textSecondary)
                 .padding(16)
@@ -660,7 +671,7 @@ public struct ProjectDetailViewController: View {
                                     ProgressView()
                                         .controlSize(.mini)
                                         .tint(AntigravityTheme.textMuted)
-                                    Text("Loading...")
+                                    Text(lang.t("Loading...", "加载中..."))
                                         .font(.system(size: 14.5, weight: .regular))
                                         .foregroundStyle(AntigravityTheme.textMuted)
                                         .lineLimit(1)
@@ -724,7 +735,7 @@ public struct ProjectDetailViewController: View {
                 .fill(AntigravityTheme.statusRunning)
                 .frame(width: 8.5, height: 8.5)
         case .none:
-            Text(row.timestamp)
+            Text(AppLocalizationFormatter.localizeRelativeTime(row.timestamp, language: lang))
                 .font(.system(size: 13.5, weight: .regular))
                 .foregroundStyle(AntigravityTheme.textMuted)
         }
@@ -735,7 +746,7 @@ public struct ProjectDetailViewController: View {
     private var thisProjectSection: some View {
         let firstAuto = effectiveProjectAutomations.first
         return VStack(alignment: .leading, spacing: 8) {
-            Text("THIS PROJECT")
+            Text(lang.t("THIS PROJECT", "当前项目"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -753,10 +764,10 @@ public struct ProjectDetailViewController: View {
                             .frame(width: 22)
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(usesPairedStoreData ? (firstAuto?.title ?? "Project automations") : "Nightly dependency audit")
+                            Text(usesPairedStoreData ? (firstAuto?.title ?? lang.t("Project automations", "项目自动化")) : "Nightly dependency audit")
                                 .font(.system(size: 15.5, weight: .medium))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
-                            Text(usesPairedStoreData ? (firstAuto?.scheduleSummary ?? "0 active · Tap to inspect") : "Every day · 2:00 AM · next in 6h")
+                            Text(usesPairedStoreData ? (firstAuto?.scheduleSummary ?? lang.t("0 active · Tap to inspect", "0 个运行中 · 点击查看")) : "Every day · 2:00 AM · next in 6h")
                                 .font(.system(size: 13, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textMuted)
                         }
@@ -787,7 +798,7 @@ public struct ProjectDetailViewController: View {
                             .foregroundStyle(AntigravityTheme.textSecondary)
                             .frame(width: 22)
 
-                        Text("Project rules & skills")
+                        Text(lang.t("Project rules & skills", "项目规则与技能"))
                             .font(.system(size: 15.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textPrimary)
 
@@ -822,7 +833,14 @@ public struct ProjectDetailViewController: View {
                             .foregroundStyle(AntigravityTheme.textSecondary)
                             .frame(width: 22)
 
-                        Text(finderFeedbackBanner ? "Opened in Finder on \(usesPairedStoreData ? resolvedLocalHostName : "MacBook Pro")" : "Reveal in Finder on Mac")
+                        Text(
+                            finderFeedbackBanner
+                                ? lang.t(
+                                    "Opened in Finder on \(usesPairedStoreData ? resolvedLocalHostName : "MacBook Pro")",
+                                    "已在 \(usesPairedStoreData ? resolvedLocalHostName : "MacBook Pro") 的访达中打开"
+                                )
+                                : lang.t("Reveal in Finder on Mac", "在 Mac 的访达中显示")
+                        )
                             .font(.system(size: 15.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textPrimary)
 

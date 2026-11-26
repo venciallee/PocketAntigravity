@@ -31,6 +31,10 @@ public struct CustomizationsSettingsView: View {
         self.onBack = onBack
     }
 
+    private var lang: AppLanguage {
+        store.appearancePreferences.language
+    }
+
     private var catalog: CustomizationsCatalog {
         store.customizations
     }
@@ -89,7 +93,7 @@ public struct CustomizationsSettingsView: View {
     }
 
     private var titleHeader: some View {
-        Text("Rules & skills")
+        Text(lang.t("Rules & skills", "规则与技能"))
             .font(.system(size: 32, weight: .bold))
             .tracking(-0.5)
             .foregroundStyle(AntigravityTheme.textPrimary)
@@ -100,7 +104,7 @@ public struct CustomizationsSettingsView: View {
     private var tokenBudgetCard: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack {
-                Text("Loaded every turn")
+                Text(lang.t("Loaded every turn", "每轮自动加载"))
                     .font(.system(size: 14.5, weight: .medium))
                     .foregroundStyle(AntigravityTheme.inkLabel)
                 Spacer()
@@ -129,9 +133,9 @@ public struct CustomizationsSettingsView: View {
             .frame(height: 6)
 
             HStack(spacing: 14) {
-                legendDot(label: "Rules", color: AntigravityTheme.accentPeriwinkle)
-                legendDot(label: "Skills", color: AntigravityTheme.statusDone)
-                legendDot(label: "Plugins", color: AntigravityTheme.statusWaiting)
+                legendDot(label: lang.t("Rules", "规则"), color: AntigravityTheme.accentPeriwinkle)
+                legendDot(label: lang.t("Skills", "技能"), color: AntigravityTheme.statusDone)
+                legendDot(label: lang.t("Plugins", "插件"), color: AntigravityTheme.statusWaiting)
             }
         }
         .padding(14)
@@ -162,10 +166,10 @@ public struct CustomizationsSettingsView: View {
 
     private var segmentedTabsBar: some View {
         let labels: [(CustomizationTab, String)] = [
-            (.skills, "Skills \(catalog.skills.count)"),
-            (.rules, "Rules \(catalog.rules.count)"),
-            (.plugins, "Plugins \(catalog.plugins.count)"),
-            (.agents, "Agents \(catalog.customAgents.count)")
+            (.skills, lang.t("Skills \(catalog.skills.count)", "技能 \(catalog.skills.count)")),
+            (.rules, lang.t("Rules \(catalog.rules.count)", "规则 \(catalog.rules.count)")),
+            (.plugins, lang.t("Plugins \(catalog.plugins.count)", "插件 \(catalog.plugins.count)")),
+            (.agents, lang.t("Agents \(catalog.customAgents.count)", "智能体 \(catalog.customAgents.count)"))
         ]
         return HStack(spacing: 3) {
             ForEach(labels, id: \.0.id) { tab, title in
@@ -314,7 +318,7 @@ public struct CustomizationsSettingsView: View {
                             Text(agent)
                                 .font(.system(size: 15.5, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
-                            Text("Custom persona · .agents/agents/\(agent).md")
+                            Text(lang.t("Custom persona · .agents/agents/\(agent).md", "自定义角色 · .agents/agents/\(agent).md"))
                                 .font(.system(size: 13))
                                 .foregroundStyle(AntigravityTheme.textSecondary)
                         }
@@ -346,7 +350,7 @@ public struct CustomizationsSettingsView: View {
 
     private var pluginsInProjectSection: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("PLUGINS IN THIS PROJECT")
+            Text(lang.t("PLUGINS IN THIS PROJECT", "当前项目中的插件"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -416,7 +420,14 @@ public struct CustomizationsSettingsView: View {
 
     private func scopeBadge(_ scope: String) -> some View {
         let isGlobal = scope.caseInsensitiveCompare("Global") == .orderedSame
-        return Text(scope)
+        let localizedScope: String
+        switch scope.lowercased() {
+        case "global": localizedScope = lang.t("Global", "全局")
+        case "plugin": localizedScope = lang.t("Plugin", "插件")
+        case "workspace", "project": localizedScope = lang.t(scope, "工作区")
+        default: localizedScope = scope
+        }
+        return Text(localizedScope)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(isGlobal ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.textSecondary)
             .padding(.horizontal, 7)
@@ -428,7 +439,10 @@ public struct CustomizationsSettingsView: View {
     }
 
     private var desktopOnlyFootnote: some View {
-        Text("Phone can view and switch plugins on or off. Installing from Marketplace, editing rules or SKILL.md, and entering API keys stay in Antigravity Desktop → Customizations.")
+        Text(lang.t(
+            "Phone can view and switch plugins on or off. Installing from Marketplace, editing rules or SKILL.md, and entering API keys stay in Antigravity Desktop → Customizations.",
+            "手机端可查看并开关插件；从市场安装、编辑规则或 SKILL.md 以及配置 API 密钥，请在 Antigravity 桌面端 → 自定义中操作。"
+        ))
             .font(.system(size: 12.5, weight: .regular))
             .lineSpacing(2.5)
             .foregroundStyle(AntigravityTheme.textSecondary)

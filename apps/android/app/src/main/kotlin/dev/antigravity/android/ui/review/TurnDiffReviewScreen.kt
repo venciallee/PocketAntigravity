@@ -75,7 +75,10 @@ import dev.antigravity.android.core.ui.components.MarkdownContentView
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.AntigravityExtendedColors
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
+import dev.antigravity.shared.model.localizedTitle
 import dev.antigravity.shared.domain.EsddVerificationFixtures
 import dev.antigravity.shared.model.ArtifactKind
 import dev.antigravity.shared.model.ArtifactSnapshot
@@ -99,6 +102,7 @@ fun TurnDiffReviewScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val lang = LocalAppLanguage.current
     val reviewState by coordinator.reviewStore.state.collectAsState()
     val chatState by coordinator.chatState.collectAsState()
     val scope = rememberCoroutineScope()
@@ -138,7 +142,7 @@ fun TurnDiffReviewScreen(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = tr("Back", "返回"),
                         tint = colors.accentPeriwinkle,
                     )
                 }
@@ -148,7 +152,7 @@ fun TurnDiffReviewScreen(
                     verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
                     Text(
-                        text = "Review changes",
+                        text = tr("Review changes", "审查变更"),
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
@@ -168,7 +172,7 @@ fun TurnDiffReviewScreen(
                 Surface(
                     onClick = {
                         coordinator.reviewStore.acceptAllDiffs()
-                        feedbackBanner = "Accepted all ${diffs.size} files"
+                        feedbackBanner = lang.t("Accepted all ${diffs.size} files", "已接受全部 ${diffs.size} 个文件")
                     },
                     modifier = Modifier
                         .defaultMinSize(minWidth = 86.dp, minHeight = 44.dp)
@@ -182,7 +186,7 @@ fun TurnDiffReviewScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "Accept all",
+                            text = tr("Accept all", "全部接受"),
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                             color = colors.inkReading,
                         )
@@ -200,7 +204,7 @@ fun TurnDiffReviewScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Tune,
-                        contentDescription = "Compare mode",
+                        contentDescription = tr("Compare mode", "对比模式"),
                         tint = if (showCompareModeBar) colors.accentPeriwinkle else colors.inkLabel,
                     )
                 }
@@ -244,7 +248,7 @@ fun TurnDiffReviewScreen(
                             ),
                         )
                         Text(
-                            text = "Viewed",
+                            text = tr("Viewed", "已查看"),
                             style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp),
                             color = colors.inkReading,
                         )
@@ -263,7 +267,7 @@ fun TurnDiffReviewScreen(
                                         filePath = diff.filePath,
                                     )
                                 }
-                                feedbackBanner = "Reverted ${diff.filePath}"
+                                feedbackBanner = lang.t("Reverted ${diff.filePath}", "已还原 ${diff.filePath}")
                             }
                         },
                         modifier = Modifier
@@ -277,7 +281,7 @@ fun TurnDiffReviewScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                     ) {
                         Text(
-                            text = "Revert file",
+                            text = tr("Revert file", "还原文件"),
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                         )
                     }
@@ -296,7 +300,7 @@ fun TurnDiffReviewScreen(
                                         filePath = diff.filePath,
                                     )
                                 }
-                                feedbackBanner = "Accepted ${diff.filePath}"
+                                feedbackBanner = lang.t("Accepted ${diff.filePath}", "已接受 ${diff.filePath}")
                             }
                         },
                         modifier = Modifier
@@ -310,7 +314,7 @@ fun TurnDiffReviewScreen(
                         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                     ) {
                         Text(
-                            text = "Accept file",
+                            text = tr("Accept file", "接受文件"),
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                         )
                     }
@@ -332,25 +336,25 @@ fun TurnDiffReviewScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 TurnChip(
-                    label = "Turn 1",
+                    label = tr("Turn 1", "第 1 轮"),
                     selected = reviewState.selectedDiffTurn == 1,
                     onClick = { coordinator.reviewStore.selectDiffTurn(1) },
                     modifier = Modifier.testTag("turn-pill-1"),
                 )
                 TurnChip(
-                    label = "Turn 2",
+                    label = tr("Turn 2", "第 2 轮"),
                     selected = reviewState.selectedDiffTurn == 2,
                     onClick = { coordinator.reviewStore.selectDiffTurn(2) },
                     modifier = Modifier.testTag("turn-pill-2"),
                 )
                 TurnChip(
-                    label = "Turn 3 · latest",
+                    label = tr("Turn 3 · latest", "第 3 轮 · 最新"),
                     selected = reviewState.selectedDiffTurn == 3,
                     onClick = { coordinator.reviewStore.selectDiffTurn(3) },
                     modifier = Modifier.testTag("turn-pill-3-latest"),
                 )
                 TurnChip(
-                    label = "All",
+                    label = tr("All", "全部"),
                     selected = reviewState.selectedDiffTurn == 0,
                     onClick = { coordinator.reviewStore.selectDiffTurn(0) },
                     modifier = Modifier.testTag("turn-pill-all"),
@@ -367,7 +371,7 @@ fun TurnDiffReviewScreen(
                 ) {
                     DiffCompareMode.entries.forEach { mode ->
                         AntigravityChip(
-                            label = mode.displayTitle,
+                            label = mode.localizedTitle(lang),
                             selected = reviewState.compareMode == mode,
                             onClick = { coordinator.reviewStore.selectDiffMode(mode) },
                         )
@@ -403,7 +407,7 @@ fun TurnDiffReviewScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.ChevronLeft,
-                                contentDescription = "Previous file",
+                                contentDescription = tr("Previous file", "上一个文件"),
                                 tint = colors.inkSecondary,
                             )
                         }
@@ -428,7 +432,7 @@ fun TurnDiffReviewScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    text = "File ${fileIndex + 1} of ${diffs.size}",
+                                    text = tr("File ${fileIndex + 1} of ${diffs.size}", "第 ${fileIndex + 1}/${diffs.size} 个文件"),
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontFamily = FontFamily.SansSerif,
                                     ),
@@ -458,7 +462,7 @@ fun TurnDiffReviewScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.ChevronRight,
-                                contentDescription = "Next file",
+                                contentDescription = tr("Next file", "下一个文件"),
                                 tint = colors.inkSecondary,
                             )
                         }
@@ -486,7 +490,7 @@ fun TurnDiffReviewScreen(
                         modifier = Modifier.weight(1f),
                     )
                     Text(
-                        text = "Revert hunk",
+                        text = tr("Revert hunk", "还原代码块"),
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = colors.inkReading,
                         modifier = Modifier
@@ -500,7 +504,10 @@ fun TurnDiffReviewScreen(
                                         hunkHeader = activeDiff.hunkHeader,
                                     )
                                 }
-                                feedbackBanner = "Reverted hunk in ${activeDiff.filePath}"
+                                feedbackBanner = lang.t(
+                                    "Reverted hunk in ${activeDiff.filePath}",
+                                    "已还原 ${activeDiff.filePath} 中的代码块",
+                                )
                             }
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                             .testTag("btn-revert-hunk"),
@@ -543,7 +550,10 @@ fun TurnDiffReviewScreen(
                                             lineNumber = lineNum ?: 29,
                                             body = lineCommentDraft,
                                         )
-                                        feedbackBanner = "Added comment on line ${lineNum ?: 29}"
+                                        feedbackBanner = lang.t(
+                                            "Added comment on line ${lineNum ?: 29}",
+                                            "已在第 ${lineNum ?: 29} 行添加评论",
+                                        )
                                     },
                                     onSendToAgent = {
                                         coordinator.reviewStore.addDiffLineComment(
@@ -558,7 +568,10 @@ fun TurnDiffReviewScreen(
                                                 cascadeId = activeCascadeId,
                                             )
                                         }
-                                        feedbackBanner = "Sent line ${lineNum ?: 29} comment to agent"
+                                        feedbackBanner = lang.t(
+                                            "Sent line ${lineNum ?: 29} comment to agent",
+                                            "已将第 ${lineNum ?: 29} 行的评论发送给智能体",
+                                        )
                                     },
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                                 )
@@ -591,7 +604,7 @@ fun TurnDiffReviewScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "No file changes in this diff scope.",
+                        text = tr("No file changes in this diff scope.", "当前差异范围内没有文件变更。"),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkSecondary,
                     )
@@ -742,7 +755,7 @@ private fun InlineLineCommentComposerCard(
         contentPadding = PaddingValues(13.dp),
     ) {
         Text(
-            text = "Comment on line $lineNumber",
+            text = tr("Comment on line $lineNumber", "评论第 $lineNumber 行"),
             style = MaterialTheme.typography.labelMedium,
             color = colors.inkSecondary,
         )
@@ -779,7 +792,7 @@ private fun InlineLineCommentComposerCard(
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Text(
-                    text = "Add to review",
+                    text = tr("Add to review", "加入审查"),
                     style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
                 )
             }
@@ -797,7 +810,7 @@ private fun InlineLineCommentComposerCard(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Text(
-                    text = "Send to agent",
+                    text = tr("Send to agent", "发送给智能体"),
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -904,7 +917,7 @@ fun RichArtifactViewerSheet(
                     )
                 }
                 TextButton(onClick = onDismiss) {
-                    Text("Done", color = colors.accentPeriwinkle)
+                    Text(tr("Done", "完成"), color = colors.accentPeriwinkle)
                 }
             }
 
@@ -921,12 +934,12 @@ fun RichArtifactViewerSheet(
                     ArtifactKind.JUPYTER_NOTEBOOK -> {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             AntigravityChip(
-                                label = "Preview",
+                                label = tr("Preview", "预览"),
                                 selected = !showRawNotebook,
                                 onClick = { showRawNotebook = false },
                             )
                             AntigravityChip(
-                                label = "Raw JSON",
+                                label = tr("Raw JSON", "原始 JSON"),
                                 selected = showRawNotebook,
                                 onClick = { showRawNotebook = true },
                             )
@@ -950,7 +963,10 @@ fun RichArtifactViewerSheet(
                             }
                             if (doc != null) {
                                 Text(
-                                    text = "Kernel: ${doc.kernelName} · ${doc.cells.size} cells",
+                                    text = tr(
+                                        "Kernel: ${doc.kernelName} · ${doc.cells.size} cells",
+                                        "内核：${doc.kernelName} · ${doc.cells.size} 个单元格",
+                                    ),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = colors.accentPeriwinkle,
                                 )
@@ -1013,7 +1029,7 @@ fun RichArtifactViewerSheet(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.PictureAsPdf,
-                                    contentDescription = "PDF Document",
+                                    contentDescription = tr("PDF Document", "PDF 文档"),
                                     tint = colors.statusError,
                                     modifier = Modifier.size(24.dp),
                                 )
@@ -1024,7 +1040,7 @@ fun RichArtifactViewerSheet(
                                         color = colors.inkReading,
                                     )
                                     Text(
-                                        text = artifact.summary.ifBlank { "PDF Document Preview" },
+                                        text = artifact.summary.ifBlank { tr("PDF Document Preview", "PDF 文档预览") },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = colors.inkSecondary,
                                     )
@@ -1044,7 +1060,7 @@ fun RichArtifactViewerSheet(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Image,
-                                    contentDescription = "Media Asset",
+                                    contentDescription = tr("Media Asset", "媒体资源"),
                                     tint = colors.accentPeriwinkle,
                                     modifier = Modifier.size(24.dp),
                                 )
@@ -1075,12 +1091,12 @@ fun RichArtifactViewerSheet(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Public,
-                                    contentDescription = "Interactive HTML",
+                                    contentDescription = tr("Interactive HTML", "交互式 HTML"),
                                     tint = colors.accentPeriwinkle,
                                     modifier = Modifier.size(20.dp),
                                 )
                                 Text(
-                                    text = "Interactive HTML / Bookmark Artifact",
+                                    text = tr("Interactive HTML / Bookmark Artifact", "交互式 HTML / 书签产物"),
                                     style = MaterialTheme.typography.titleSmall,
                                     color = colors.inkReading,
                                 )
@@ -1105,12 +1121,12 @@ fun RichArtifactViewerSheet(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Code,
-                                    contentDescription = "Forward-compatible artifact",
+                                    contentDescription = tr("Forward-compatible artifact", "前向兼容产物"),
                                     tint = colors.accentPeriwinkle,
                                     modifier = Modifier.size(20.dp),
                                 )
                                 Text(
-                                    text = "Artifact Preview (${artifact.rawKindName ?: "Raw"})",
+                                    text = tr("Artifact Preview (${artifact.rawKindName ?: "Raw"})", "产物预览（${artifact.rawKindName ?: "原始"}）"),
                                     style = MaterialTheme.typography.titleSmall,
                                     color = colors.inkReading,
                                 )

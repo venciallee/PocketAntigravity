@@ -14,6 +14,8 @@ public struct VoiceModeSheetView: View {
         self.store = store
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     public var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
@@ -26,11 +28,11 @@ public struct VoiceModeSheetView: View {
             }
             .padding(16)
             .background(AntigravityTheme.canvasObsidian.ignoresSafeArea())
-            .navigationTitle("Gemini Live Voice Mode")
+            .navigationTitle(lang.t("Gemini Live Voice Mode", "Gemini 实时语音模式"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("End Call") {
+                    Button(lang.t("End Call", "结束通话")) {
                         voiceManager.stopRecording()
                         store.endVoiceMode()
                         dismiss()
@@ -56,7 +58,13 @@ public struct VoiceModeSheetView: View {
                     .font(.system(size: 32, weight: .semibold))
                     .foregroundStyle(store.voiceModeState.isMuted ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle)
             }
-            Text(voiceManager.isRecording ? "Listening..." : (store.voiceModeState.isMuted ? "Microphone Muted" : "Connected · \(store.voiceModeState.selectedVoiceId.capitalized)"))
+            Text(
+                voiceManager.isRecording
+                    ? lang.t("Listening...", "正在聆听...")
+                    : (store.voiceModeState.isMuted
+                        ? lang.t("Microphone Muted", "麦克风已静音")
+                        : lang.t("Connected · \(store.voiceModeState.selectedVoiceId.capitalized)", "已连接 · \(store.voiceModeState.selectedVoiceId.capitalized)"))
+            )
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
 
@@ -104,22 +112,22 @@ public struct VoiceModeSheetView: View {
 
     private func voiceApprovalBanner(step: CascadeStep) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Pending Approval · Voice Confirmation", systemImage: "faceid")
+            Label(lang.t("Pending Approval · Voice Confirmation", "待审批 · 语音确认"), systemImage: "faceid")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(AntigravityTheme.statusWaiting)
-            Text(step.runCommand?.proposedCommandLine ?? step.requestedInteraction?.permission?.target ?? "Pending action")
+            Text(step.runCommand?.proposedCommandLine ?? step.requestedInteraction?.permission?.target ?? lang.t("Pending action", "待确认操作"))
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .lineLimit(2)
             HStack(spacing: 10) {
-                Button("Approve") {
+                Button(lang.t("Approve", "批准")) {
                     store.approveWaitingCommandWithFaceID(stepIndex: step.stepIndex)
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                 .frame(maxWidth: .infinity, minHeight: 38)
                 .background(AntigravityTheme.statusWaiting, in: RoundedRectangle(cornerRadius: 10))
-                Button("Deny") {
+                Button(lang.t("Deny", "拒绝")) {
                     store.denyWaitingCommand(stepIndex: step.stepIndex)
                 }
                 .font(.system(size: 13, weight: .semibold))
@@ -163,14 +171,14 @@ public struct VoiceModeSheetView: View {
                     .foregroundStyle(AntigravityTheme.statusWaiting)
             }
             HStack(spacing: 10) {
-                TextField("Or type a live voice turn...", text: $manualPromptText)
+                TextField(lang.t("Or type a live voice turn...", "或输入实时语音消息..."), text: $manualPromptText)
                     .font(.system(size: 14))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(AntigravityTheme.surfaceInput, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(AntigravityTheme.cardBorder, lineWidth: 1))
-                Button("Send") {
+                Button(lang.t("Send", "发送")) {
                     let text = manualPromptText
                     manualPromptText = ""
                     store.appendVoiceTranscriptTurn(isUser: true, text: text)
@@ -190,7 +198,7 @@ public struct VoiceModeSheetView: View {
                         voiceManager.stopRecording()
                     }
                 } label: {
-                    Label(store.voiceModeState.isMuted ? "Unmute" : "Mute", systemImage: store.voiceModeState.isMuted ? "mic.slash" : "mic")
+                    Label(store.voiceModeState.isMuted ? lang.t("Unmute", "取消静音") : lang.t("Mute", "静音"), systemImage: store.voiceModeState.isMuted ? "mic.slash" : "mic")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .frame(maxWidth: .infinity, minHeight: 44)
@@ -202,7 +210,7 @@ public struct VoiceModeSheetView: View {
                         manualPromptText = spoken
                     }
                 } label: {
-                    Label(voiceManager.isRecording ? "Stop Mic" : "Speak", systemImage: voiceManager.isRecording ? "stop.circle.fill" : "waveform.circle.fill")
+                    Label(voiceManager.isRecording ? lang.t("Stop Mic", "停止收音") : lang.t("Speak", "说话"), systemImage: voiceManager.isRecording ? "stop.circle.fill" : "waveform.circle.fill")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(maxWidth: .infinity, minHeight: 44)

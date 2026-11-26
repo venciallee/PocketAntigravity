@@ -79,6 +79,8 @@ public struct StructuredQuestionCardView: View {
         self.store = store
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var displayedSteps: [QuestionStepModel] {
         if !store.isVerificationMode && !store.questionSteps.isEmpty {
             return store.questionSteps.enumerated().map { idx, item in
@@ -117,8 +119,8 @@ public struct StructuredQuestionCardView: View {
 
                         Text(
                             (!store.isVerificationMode && !store.questionSteps.isEmpty)
-                                ? "Agent needs your clarification before continuing. Tap options below or reply in your own words."
-                                : "Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words."
+                                ? lang.t("Agent needs your clarification before continuing. Tap options below or reply in your own words.", "Agent 需要你的确认才能继续。点击下方选项，或直接输入你的回复。")
+                                : lang.t("Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words.", "在起草方案前需要你确认三项决策。可点击选项作答，或直接输入说明。")
                         )
                             .font(.system(size: 15))
                             .foregroundStyle(AntigravityTheme.inkReading)
@@ -154,7 +156,7 @@ public struct StructuredQuestionCardView: View {
     private var topNavigationBar: some View {
         let navTitle = (!store.isVerificationMode ? store.activeSummary?.title : nil) ?? "Audit log for admin actions"
         let navSub = !store.isVerificationMode
-            ? "\(store.activeSummary?.projectSlug ?? "workspace") · /plan interview · \(store.selectedModelConfig.displayName)"
+            ? "\(store.activeSummary?.projectSlug ?? "workspace") · \(lang.t("/plan interview", "/plan 需求确认")) · \(store.selectedModelConfig.displayName)"
             : "ledger-svc · /plan interview · Gemini 4 Neon"
 
         return HStack(spacing: 8) {
@@ -237,7 +239,12 @@ public struct StructuredQuestionCardView: View {
 
             // Question Metadata & Heading
             VStack(alignment: .leading, spacing: 4) {
-                Text("Question \(currentStepIndex + 1) of \(max(1, activeList.count)) · Select all that apply")
+                Text(
+                    lang.t(
+                        "Question \(currentStepIndex + 1) of \(max(1, activeList.count)) · Select all that apply",
+                        "第 \(currentStepIndex + 1) / \(max(1, activeList.count)) 题 · 可多选"
+                    )
+                )
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
 
@@ -260,7 +267,7 @@ public struct StructuredQuestionCardView: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
 
-                TextField("Something else...", text: $somethingElseText)
+                TextField(lang.t("Something else...", "其他补充..."), text: $somethingElseText)
                     .font(.system(size: 15))
                     .foregroundStyle(AntigravityTheme.inkReading)
             }
@@ -282,7 +289,7 @@ public struct StructuredQuestionCardView: View {
                         currentStepIndex -= 1
                     }
                 } label: {
-                    Text("Back")
+                    Text(lang.t("Back", "上一步"))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 22)
@@ -301,7 +308,7 @@ public struct StructuredQuestionCardView: View {
                         submitStructuredAnswers()
                     }
                 } label: {
-                    Text(currentStepIndex < activeList.count - 1 ? "Next" : "Submit")
+                    Text(currentStepIndex < activeList.count - 1 ? lang.t("Next", "下一步") : lang.t("Submit", "提交"))
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(maxWidth: .infinity, minHeight: 48)
@@ -378,7 +385,7 @@ public struct StructuredQuestionCardView: View {
 
     private var freeformComposerBar: some View {
         HStack(spacing: 10) {
-            TextField("Reply in your own words", text: $freeformReplyText)
+            TextField(lang.t("Reply in your own words", "直接输入你的回复"), text: $freeformReplyText)
                 .font(.system(size: 15))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .onSubmit {

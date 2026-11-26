@@ -65,13 +65,14 @@ public struct CloudRelaySignInSheet: View {
     ) -> Void
     public var onDismiss: () -> Void
 
+    @Environment(\.appLanguage) private var lang
     @State private var currentURLDisplay: String = "antigravity.google.com"
     @State private var latestFullURLString: String? = nil
     @State private var isLoadingPage: Bool = true
     @State private var detectedCookiesReady: Bool = false
     @State private var detectedRelayApiKey: String? = nil
     @State private var loadErrorText: String? = nil
-    @State private var statusHintText: String = "Sign in with your Google account to pair Remote Control."
+    @State private var statusHintText: String? = nil
     @State private var reloadTrigger: Int = 0
     @State private var resetCookiesTrigger: Int = 0
 
@@ -116,7 +117,7 @@ public struct CloudRelaySignInSheet: View {
                 Button {
                     onDismiss()
                 } label: {
-                    Text("Cancel")
+                    Text(lang.t("Cancel", "取消"))
                         .font(.system(size: 15.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .frame(minHeight: AntigravityTheme.minTouchTargetPt)
@@ -130,7 +131,7 @@ public struct CloudRelaySignInSheet: View {
                         Image(systemName: "lock.fill")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.statusDone)
-                        Text("Google Remote Control Sign-In")
+                        Text(lang.t("Google Remote Control Sign-In", "Google 远程控制登录"))
                             .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                     }
@@ -154,7 +155,7 @@ public struct CloudRelaySignInSheet: View {
                         }
                     }
                 } label: {
-                    Text("Connect")
+                    Text(lang.t("Connect", "连接"))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(
                             detectedCookiesReady
@@ -191,7 +192,7 @@ public struct CloudRelaySignInSheet: View {
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
-                    Button("Retry") {
+                    Button(lang.t("Retry", "重试")) {
                         self.loadErrorText = nil
                         self.isLoadingPage = true
                         self.reloadTrigger &+= 1
@@ -200,7 +201,7 @@ public struct CloudRelaySignInSheet: View {
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .buttonStyle(.plain)
 
-                    Button("Reset Cookies") {
+                    Button(lang.t("Reset Cookies", "重置 Cookie")) {
                         self.loadErrorText = nil
                         self.isLoadingPage = true
                         self.resetCookiesTrigger &+= 1
@@ -249,7 +250,7 @@ public struct CloudRelaySignInSheet: View {
             #else
             VStack(spacing: 12) {
                 Spacer()
-                Text("WebKit Sign-In is available on iOS.")
+                Text(lang.t("WebKit Sign-In is available on iOS.", "WebKit 登录仅在 iOS 上可用。"))
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textSecondary)
                 Spacer()
@@ -258,7 +259,10 @@ public struct CloudRelaySignInSheet: View {
 
             // Bottom subtle status hint bar (matches Android parity)
             HStack(spacing: 8) {
-                Text(statusHintText)
+                Text(statusHintText ?? lang.t(
+                    "Sign in with your Google account to pair Remote Control.",
+                    "请登录您的 Google 账号以配对远程控制。"
+                ))
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textSecondary)
                     .lineLimit(2)
@@ -268,7 +272,7 @@ public struct CloudRelaySignInSheet: View {
                     self.isLoadingPage = true
                     self.resetCookiesTrigger &+= 1
                 } label: {
-                    Text("Reset Cookies")
+                    Text(lang.t("Reset Cookies", "重置 Cookie"))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textMuted)
                 }

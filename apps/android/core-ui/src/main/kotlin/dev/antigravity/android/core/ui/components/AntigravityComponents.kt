@@ -77,6 +77,7 @@ import dev.antigravity.android.core.ui.icons.toMaterialIcon
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.AntigravityExtendedColors
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.markdown.AntigravityMarkdownParser
 import dev.antigravity.shared.markdown.MarkdownAlertKind
 import dev.antigravity.shared.markdown.MarkdownBlock
@@ -499,7 +500,7 @@ fun HostSwitcherPill(
             }
             Icon(
                 imageVector = Icons.Rounded.KeyboardArrowDown,
-                contentDescription = "Switch host",
+                contentDescription = tr("Switch host", "切换主机"),
                 tint = colors.inkSecondary,
                 modifier = Modifier.size(18.dp),
             )
@@ -828,7 +829,7 @@ private fun MarkdownBlockItem(
                         )
                         Text(
                             text = if (block.isStreamingIncomplete) {
-                                "${block.kind.displayBadge} · Streaming…"
+                                tr("${block.kind.displayBadge} · Streaming…", "${block.kind.displayBadge} · 流式传输中…")
                             } else {
                                 block.kind.displayBadge
                             },
@@ -839,7 +840,7 @@ private fun MarkdownBlockItem(
                     }
                     Icon(
                         imageVector = Icons.Rounded.Link,
-                        contentDescription = "Open embed",
+                        contentDescription = tr("Open embed", "打开嵌入内容"),
                         tint = colors.inkSecondary,
                         modifier = Modifier.size(16.dp),
                     )
@@ -860,7 +861,7 @@ private fun MarkdownBlockItem(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Extension,
-                        contentDescription = "Plugin",
+                        contentDescription = tr("Plugin", "插件"),
                         tint = colors.accentPeriwinkle,
                         modifier = Modifier.size(20.dp),
                     )
@@ -871,7 +872,7 @@ private fun MarkdownBlockItem(
                             color = colors.inkReading,
                         )
                         Text(
-                            text = "Plugin · ${block.catalogId}",
+                            text = tr("Plugin · ${block.catalogId}", "插件 · ${block.catalogId}"),
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.inkMuted,
                         )
@@ -897,7 +898,7 @@ private fun MarkdownBlockItem(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Image,
-                        contentDescription = "Image",
+                        contentDescription = tr("Image", "图片"),
                         tint = colors.accentPeriwinkle,
                         modifier = Modifier.size(20.dp),
                     )
@@ -942,7 +943,7 @@ private fun MarkdownBlockItem(
                     ) {
                         Icon(
                             imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                            contentDescription = if (expanded) "Collapse" else "Expand",
+                            contentDescription = if (expanded) tr("Collapse", "收起") else tr("Expand", "展开"),
                             tint = colors.inkSecondary,
                             modifier = Modifier.size(18.dp),
                         )
@@ -1096,12 +1097,12 @@ private fun MermaidPreviewCard(source: String) {
             ) {
                 Icon(
                     imageVector = Icons.Rounded.AccountTree,
-                    contentDescription = "Mermaid Diagram",
+                    contentDescription = tr("Mermaid Diagram", "Mermaid 图表"),
                     tint = colors.accentPeriwinkle,
                     modifier = Modifier.size(15.dp),
                 )
                 Text(
-                    text = "Mermaid Diagram",
+                    text = tr("Mermaid Diagram", "Mermaid 图表"),
                     style = MaterialTheme.typography.labelLarge,
                     color = colors.inkLabel,
                 )

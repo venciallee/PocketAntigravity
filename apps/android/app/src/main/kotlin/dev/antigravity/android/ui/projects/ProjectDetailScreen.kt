@@ -60,9 +60,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.android.ui.home.DrawerConversationTrailingIndicator
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
+import dev.antigravity.shared.model.AppLocalizationFormatter
 import dev.antigravity.shared.model.ProjectDetailTab
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 
@@ -144,7 +147,7 @@ fun ProjectDetailScreen(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = tr("Back", "返回"),
                         tint = colors.inkReading,
                     )
                 }
@@ -160,7 +163,7 @@ fun ProjectDetailScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.MoreVert,
-                            contentDescription = "More options",
+                            contentDescription = tr("More options", "更多选项"),
                             tint = colors.inkReading,
                         )
                     }
@@ -171,14 +174,14 @@ fun ProjectDetailScreen(
                         containerColor = colors.surfacePopover,
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Rules & skills ($rulesCount)", color = colors.inkReading) },
+                            text = { Text(tr("Rules & skills ($rulesCount)", "规则与技能（$rulesCount）"), color = colors.inkReading) },
                             onClick = {
                                 overflowExpanded = false
                                 onOpenRulesAndSkills()
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("New conversation", color = colors.inkReading) },
+                            text = { Text(tr("New conversation", "新建会话"), color = colors.inkReading) },
                             onClick = {
                                 overflowExpanded = false
                                 onNewConversation(projectId)
@@ -241,7 +244,7 @@ fun ProjectDetailScreen(
                     ) {
                         StatusDot(color = colors.statusDone, size = 7.dp, glow = false)
                         Text(
-                            text = if (isCloud) "Cloud · VM" else "Local · $hostName",
+                            text = if (isCloud) tr("Cloud · VM", "云端 · 虚拟机") else tr("Local · $hostName", "本地 · $hostName"),
                             style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                             color = colors.inkReading,
                         )
@@ -284,7 +287,7 @@ fun ProjectDetailScreen(
                     border = BorderStroke(1.dp, colors.cardBorder),
                 ) {
                     Text(
-                        text = "Clean",
+                        text = tr("Clean", "干净"),
                         style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                         color = colors.inkReading,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -295,10 +298,12 @@ fun ProjectDetailScreen(
             Spacer(modifier = Modifier.height(14.dp))
 
             // 3-Tab Underline Bar: Active · 4 | Archived · 2 | Automations · 1
+            val lang = LocalAppLanguage.current
+            val autoTabCount = projectAutomations.size.coerceAtMost(1).coerceAtLeast(if (projectAutomations.isEmpty()) 0 else 1)
             val tabs = listOf(
-                ProjectDetailTab.ACTIVE to "Active · ${activeSummaries.size}",
-                ProjectDetailTab.ARCHIVED to "Archived · ${archivedSummaries.size}",
-                ProjectDetailTab.AUTOMATIONS to "Automations · ${projectAutomations.size.coerceAtMost(1).coerceAtLeast(if (projectAutomations.isEmpty()) 0 else 1)}",
+                ProjectDetailTab.ACTIVE to tr("Active · ${activeSummaries.size}", "进行中 · ${activeSummaries.size}"),
+                ProjectDetailTab.ARCHIVED to tr("Archived · ${archivedSummaries.size}", "已归档 · ${archivedSummaries.size}"),
+                ProjectDetailTab.AUTOMATIONS to tr("Automations · $autoTabCount", "自动化 · $autoTabCount"),
             )
             val selectedTabIndex = tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0)
 
@@ -373,7 +378,7 @@ fun ProjectDetailScreen(
                                         modifier = Modifier.size(13.dp),
                                     )
                                     Text(
-                                        text = "Loading...",
+                                        text = tr("Loading...", "加载中…"),
                                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
                                         color = colors.inkMuted,
                                         maxLines = 1,
@@ -427,7 +432,7 @@ fun ProjectDetailScreen(
                                         modifier = Modifier.size(13.dp),
                                     )
                                     Text(
-                                        text = "Loading...",
+                                        text = tr("Loading...", "加载中…"),
                                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
                                         color = colors.inkMuted,
                                         maxLines = 1,
@@ -445,7 +450,7 @@ fun ProjectDetailScreen(
                                 )
                             }
                             Text(
-                                text = summary.relativeTimeLabel,
+                                text = AppLocalizationFormatter.localizeRelativeTime(summary.relativeTimeLabel, lang),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = colors.inkMuted,
                             )
@@ -491,7 +496,7 @@ fun ProjectDetailScreen(
 
             // Blue `This project` section
             Text(
-                text = "This project",
+                text = tr("This project", "当前项目"),
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
@@ -525,7 +530,7 @@ fun ProjectDetailScreen(
                         color = colors.inkReading,
                     )
                     Text(
-                        text = "Every day · 2:00 AM · next in 6h",
+                        text = tr("Every day · 2:00 AM · next in 6h", "每天 · 凌晨 2:00 · 6 小时后执行"),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp),
                         color = colors.inkSecondary,
                     )
@@ -549,7 +554,7 @@ fun ProjectDetailScreen(
                     modifier = Modifier.size(21.dp),
                 )
                 Text(
-                    text = "Project rules & skills",
+                    text = tr("Project rules & skills", "项目规则与技能"),
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                     color = colors.inkReading,
                     modifier = Modifier.weight(1f),
@@ -582,7 +587,7 @@ fun ProjectDetailScreen(
             },
             text = {
                 Text(
-                    text = "New conversation in project",
+                    text = tr("New conversation in project", "在项目中新建会话"),
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontSize = 14.5.sp,
                         fontWeight = FontWeight.Medium,

@@ -444,9 +444,27 @@ public object AppAppearanceModeSerializer : ResilientEnumSerializer<AppAppearanc
 )
 
 @Serializable(with = AppLanguageSerializer::class)
-public enum class AppLanguage(public val displayTitle: String) {
-    ENGLISH("English"),
-    ZH_HANS("简体中文"),
+public enum class AppLanguage(
+    public val displayTitle: String,
+    public val languageTag: String,
+) {
+    ENGLISH("English", "en"),
+    ZH_HANS("简体中文", "zh-Hans");
+
+    public val isChinese: Boolean
+        get() = this == ZH_HANS
+
+    public fun t(en: String, zh: String): String = if (isChinese) zh else en
+
+    public companion object {
+        public fun fromTag(raw: String?): AppLanguage {
+            val norm = normalizeResilientEnumToken(raw.orEmpty())
+            return when (norm) {
+                "zh", "zhcn", "zhhans", "chinese", "简体中文" -> ZH_HANS
+                else -> ENGLISH
+            }
+        }
+    }
 }
 
 public object AppLanguageSerializer : ResilientEnumSerializer<AppLanguage>(

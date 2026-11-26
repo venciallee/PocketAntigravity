@@ -80,9 +80,11 @@ public struct CascadeChatViewController: View {
         )
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var effectiveHeaderHostLabel: String {
         if isActiveSessionCloud {
-            return (store.hasPairedBackend || store.isLiveBackendConnected) ? "Antigravity" : "Cloud"
+            return (store.hasPairedBackend || store.isLiveBackendConnected) ? "Antigravity" : lang.t("Cloud", "云端")
         }
         let originUuid = store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid
         let hostTitle = store.resolvedHostName(
@@ -91,9 +93,9 @@ public struct CascadeChatViewController: View {
         )
         if store.hasPairedBackend && !isActiveSessionHostOnline {
             if !store.isLiveBackendConnected && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting) {
-                return "Connecting · \(hostTitle)"
+                return lang.t("Connecting · \(hostTitle)", "连接中 · \(hostTitle)")
             }
-            return "Offline · \(hostTitle)"
+            return lang.t("Offline · \(hostTitle)", "离线 · \(hostTitle)")
         }
         return hostTitle
     }
@@ -143,13 +145,13 @@ public struct CascadeChatViewController: View {
                                                     Button {
                                                         store.composerDraftText += (store.composerDraftText.isEmpty ? "" : "\n") + "> \(String(text.prefix(240)))\n"
                                                     } label: {
-                                                        Label("Quote in Reply", systemImage: "text.quote")
+                                                        Label(lang.t("Quote in Reply", "引用回复"), systemImage: "text.quote")
                                                     }
                                                 }
                                                 Button(role: .destructive) {
                                                     store.revertConversationToStep(step.stepIndex)
                                                 } label: {
-                                                    Label("Revert to This Step", systemImage: "arrow.uturn.backward")
+                                                    Label(lang.t("Revert to This Step", "回退到此步骤"), systemImage: "arrow.uturn.backward")
                                                 }
                                             }
                                     case .evidenceGroup(let groupId, let groupedSteps):
@@ -169,7 +171,7 @@ public struct CascadeChatViewController: View {
                                             spacing: 3.5,
                                             tint: AntigravityTheme.accentPeriwinkle
                                         )
-                                        Text("Agent is thinking and executing steps...")
+                                        Text(lang.t("Agent is thinking and executing steps...", "Agent 正在思考并执行步骤..."))
                                             .font(.system(size: 13.5, weight: .medium))
                                             .foregroundStyle(AntigravityTheme.inkSecondary)
                                         Spacer()
@@ -232,7 +234,7 @@ public struct CascadeChatViewController: View {
                             .foregroundStyle(AntigravityTheme.statusError)
                             .lineLimit(2)
                         Spacer(minLength: 4)
-                        Button("Dismiss") {
+                        Button(lang.t("Dismiss", "关闭")) {
                             store.stepLoadErrorText = nil
                         }
                         .font(.system(size: 12, weight: .semibold))
@@ -328,14 +330,20 @@ public struct CascadeChatViewController: View {
                     Image(systemName: isAutomationDraft ? "sparkles" : "bubble.left.and.bubble.right")
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                    Text(isAutomationDraft ? "Create Automation with Prompt" : "New Conversation")
+                    Text(isAutomationDraft ? lang.t("Create Automation with Prompt", "用提示词创建自动化") : lang.t("New Conversation", "新建对话"))
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                 }
                 Text(
                     isAutomationDraft
-                        ? "Review or edit the prompt below, then tap Send. Antigravity on \(effectiveHeaderHostLabel) will guide you through setting up the schedule and instructions."
-                        : "Draft ready on \(effectiveHeaderHostLabel). Edit your message below and tap Send to start."
+                        ? lang.t(
+                            "Review or edit the prompt below, then tap Send. Antigravity on \(effectiveHeaderHostLabel) will guide you through setting up the schedule and instructions.",
+                            "检查或编辑下方提示词后点击发送。\(effectiveHeaderHostLabel) 上的 Antigravity 将引导你完成计划与指令配置。"
+                        )
+                        : lang.t(
+                            "Draft ready on \(effectiveHeaderHostLabel). Edit your message below and tap Send to start.",
+                            "草稿已在 \(effectiveHeaderHostLabel) 就绪。编辑下方消息并点击发送即可开始。"
+                        )
                 )
                     .font(.system(size: 13.5))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -355,6 +363,9 @@ public struct CascadeChatViewController: View {
         } else if (store.hasPairedBackend || store.isLiveBackendConnected)
             && (store.isLoadingSteps
                 || (!store.isLiveBackendConnected && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting))) {
+            let cleanHost = effectiveHeaderHostLabel
+                .replacingOccurrences(of: "Connecting · ", with: "")
+                .replacingOccurrences(of: "连接中 · ", with: "")
             HStack(spacing: 12) {
                 AntigravityFourDotLoadingView(
                     isAnimated: shouldAnimateLive,
@@ -363,13 +374,13 @@ public struct CascadeChatViewController: View {
                     tint: AntigravityTheme.accentPeriwinkle
                 )
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Loading conversation history...")
+                    Text(lang.t("Loading conversation history...", "正在加载对话记录..."))
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                     Text(
                         (!store.isLiveBackendConnected && store.isConnectingToBackend)
-                            ? "Connecting to \(effectiveHeaderHostLabel.replacingOccurrences(of: "Connecting · ", with: ""))..."
-                            : "Syncing trajectory steps from \(effectiveHeaderHostLabel)"
+                            ? lang.t("Connecting to \(cleanHost)...", "正在连接 \(cleanHost)...")
+                            : lang.t("Syncing trajectory steps from \(effectiveHeaderHostLabel)", "正在从 \(effectiveHeaderHostLabel) 同步执行轨迹")
                     )
                         .font(.system(size: 13))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -392,7 +403,7 @@ public struct CascadeChatViewController: View {
                     Circle()
                         .fill(AntigravityTheme.statusError)
                         .frame(width: 8, height: 8)
-                    Text("Could not load trajectory steps")
+                    Text(lang.t("Could not load trajectory steps", "无法加载对话轨迹步骤"))
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                 }
@@ -424,7 +435,7 @@ public struct CascadeChatViewController: View {
                         store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
                     }
                 } label: {
-                    Text("Retry")
+                    Text(lang.t("Retry", "重试"))
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .padding(.horizontal, 14)
@@ -450,6 +461,7 @@ public struct CascadeChatViewController: View {
                 activeProjectWorkspace?.name ?? store.activeSummary?.projectSlug ?? AntigravityCloudDetector.noProjectDisplayName
             )
             let isNoProjSession = (activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(rawSlug)
+            let runtimeTargetName = isActiveSessionCloud ? lang.t("Antigravity Cloud", "Antigravity 云端") : lang.t("Antigravity Desktop", "Antigravity 桌面端")
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Circle()
@@ -457,18 +469,26 @@ public struct CascadeChatViewController: View {
                         .frame(width: 8, height: 8)
                     Text(
                         isNoInternet
-                            ? "No Internet · Queued Outbox Ready"
+                            ? lang.t("No Internet · Queued Outbox Ready", "无网络连接 · 离线发件箱已就绪")
                             : (isOfflinePaired
-                                ? (store.pendingOutboxCount > 0 ? "Host Offline · \(store.pendingOutboxCount) Queued" : "Host Offline · Queued Outbox Ready")
-                                : (store.isLiveBackendConnected ? "Ready for Prompt" : "New Session Ready"))
+                                ? (store.pendingOutboxCount > 0
+                                    ? lang.t("Host Offline · \(store.pendingOutboxCount) Queued", "主机离线 · \(store.pendingOutboxCount) 条排队中")
+                                    : lang.t("Host Offline · Queued Outbox Ready", "主机离线 · 离线发件箱已就绪"))
+                                : (store.isLiveBackendConnected ? lang.t("Ready for Prompt", "准备就绪") : lang.t("New Session Ready", "新会话已就绪")))
                     )
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                 }
                 Text(
                     isNoProjSession
-                        ? "Unassigned conversation on `\(effectiveHeaderHostLabel)`. Send a message below to run on \(isActiveSessionCloud ? "Antigravity Cloud" : "Antigravity Desktop")."
-                        : "Bound to `\(rawSlug)` on `\(effectiveHeaderHostLabel)`. Send a message below to run on \(isActiveSessionCloud ? "Antigravity Cloud" : "Antigravity Desktop")."
+                        ? lang.t(
+                            "Unassigned conversation on `\(effectiveHeaderHostLabel)`. Send a message below to run on \(runtimeTargetName).",
+                            "位于 `\(effectiveHeaderHostLabel)` 的未归属对话。在下方发送消息即可在\(runtimeTargetName)上运行。"
+                        )
+                        : lang.t(
+                            "Bound to `\(rawSlug)` on `\(effectiveHeaderHostLabel)`. Send a message below to run on \(runtimeTargetName).",
+                            "已绑定 `\(effectiveHeaderHostLabel)` 上的项目 `\(rawSlug)`。在下方发送消息即可在\(runtimeTargetName)上运行。"
+                        )
                 )
                     .font(.system(size: 13.5))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -488,8 +508,9 @@ public struct CascadeChatViewController: View {
 
     private func draftTargetSelectorBar(draft: PendingDraftConversation) -> some View {
         let isNoProj = AntigravityCloudDetector.isNoProjectSlug(draft.projectSlug)
+        let localizedNoProject = lang.t(AntigravityCloudDetector.noProjectDisplayName, "无项目")
         let currentLabel = isNoProj
-            ? AntigravityCloudDetector.noProjectDisplayName
+            ? localizedNoProject
             : (activeProjectWorkspace?.name ?? AntigravityCloudDetector.stripProjectScopePrefix(draft.projectSlug))
 
         return HStack(spacing: 8) {
@@ -498,9 +519,9 @@ public struct CascadeChatViewController: View {
                     store.updatePendingDraftProject(AntigravityCloudDetector.noProjectDisplayName)
                 } label: {
                     if isNoProj {
-                        Label(AntigravityCloudDetector.noProjectDisplayName, systemImage: "checkmark")
+                        Label(localizedNoProject, systemImage: "checkmark")
                     } else {
-                        Text(AntigravityCloudDetector.noProjectDisplayName)
+                        Text(localizedNoProject)
                     }
                 }
                 if !localSelectableProjects.isEmpty {
@@ -563,7 +584,7 @@ public struct CascadeChatViewController: View {
         }()
         let navTitle = activePendingDraft?.title
             ?? store.activeSummary.map { store.displayTitle(for: $0) }
-            ?? (isLiveOrPaired ? "Conversation" : "Add rate limiter to /transfers")
+            ?? (isLiveOrPaired ? lang.t("Conversation", "对话") : "Add rate limiter to /transfers")
         let rawProjectLabel = activeProjectWorkspace?.name
             ?? activePendingDraft?.projectSlug
             ?? store.activeSummary?.projectSlug
@@ -571,7 +592,7 @@ public struct CascadeChatViewController: View {
         let strippedProjectLabel = AntigravityCloudDetector.stripProjectScopePrefix(rawProjectLabel)
         let isNoProjChat = (activePendingDraft != nil || isLiveOrPaired)
             && ((activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(strippedProjectLabel))
-        let projectLabel = isNoProjChat ? AntigravityCloudDetector.noProjectDisplayName : strippedProjectLabel
+        let projectLabel = isNoProjChat ? lang.t(AntigravityCloudDetector.noProjectDisplayName, "无项目") : strippedProjectLabel
         let branchLabel: String = {
             if isNoProjChat { return "" }
             return store.activeSummary?.branchName ?? activeProjectWorkspace?.activeBranch ?? "main"
@@ -597,7 +618,7 @@ public struct CascadeChatViewController: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Back")
+            .accessibilityLabel(lang.t("Back", "返回"))
             .accessibilityIdentifier("btn-back-sessions")
 
             VStack(alignment: .leading, spacing: 2) {
@@ -606,7 +627,7 @@ public struct CascadeChatViewController: View {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(AntigravityTheme.inkSecondary)
-                        Text("Loading...")
+                        Text(lang.t("Loading...", "加载中..."))
                             .font(.system(size: 15.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                             .lineLimit(1)
@@ -661,31 +682,31 @@ public struct CascadeChatViewController: View {
                 Button {
                     store.presentedSheet = .conversationOverview
                 } label: {
-                    Label("Conversation Overview", systemImage: "sidebar.right")
+                    Label(lang.t("Conversation Overview", "对话概览"), systemImage: "sidebar.right")
                 }
                 Button {
                     store.startVoiceMode()
                 } label: {
-                    Label("Start Voice Mode", systemImage: "waveform")
+                    Label(lang.t("Start Voice Mode", "启动语音模式"), systemImage: "waveform")
                 }
                 Divider()
-                Button("Open Implementation Plan") {
+                Button(lang.t("Open Implementation Plan", "打开实施方案")) {
                     store.currentRoute = .planReview
                 }
-                Button("Review Turn Changes") {
+                Button(lang.t("Review Turn Changes", "审查本轮变更")) {
                     store.currentRoute = .turnDiffReview
                 }
                 Button {
                     store.activeRoute = .rulesAndSkills
                 } label: {
-                    Label("Rules & Skills", systemImage: "doc.text")
+                    Label(lang.t("Rules & Skills", "规则与技能"), systemImage: "doc.text")
                 }
                 Button {
                     store.presentedSheet = .permissionsPreset
                 } label: {
-                    Label("Permissions", systemImage: "shield.lefthalf.filled")
+                    Label(lang.t("Permissions", "权限设置"), systemImage: "shield.lefthalf.filled")
                 }
-                Button("Refresh Trajectory Steps") {
+                Button(lang.t("Refresh Trajectory Steps", "刷新执行轨迹")) {
                     store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
                 }
             } label: {
@@ -733,24 +754,24 @@ public struct CascadeChatViewController: View {
         let waitingStep = isTurnStopped ? nil : store.pendingWaitingStep
         let statusLabel: String = {
             if isTurnStopped {
-                return "Turn stopped"
+                return lang.t("Turn stopped", "已停止本轮执行")
             }
             if isStaticESDDFixtureView {
-                return "Waiting for your approval · Step 5 of 7"
+                return lang.t("Waiting for your approval · Step 5 of 7", "等待你的审批 · 第 5/7 步")
             }
             if let waitingStep {
-                return "Approval needed · Step \(waitingStep.stepIndex + 1)"
+                return lang.t("Approval needed · Step \(waitingStep.stepIndex + 1)", "需要审批 · 第 \(waitingStep.stepIndex + 1) 步")
             }
             if store.isCascadeStreaming {
                 let sourceTitle = isActiveSessionCloud
-                    ? "Antigravity Cloud"
+                    ? lang.t("Antigravity Cloud", "Antigravity 云端")
                     : store.resolvedHostName(
                         forInstanceUuid: store.activeSummary?.originInstanceUuid,
                         fallback: store.activeSummary?.originHostName
                     )
-                return "Streaming from \(sourceTitle) · \(store.activeSteps.count) steps"
+                return lang.t("Streaming from \(sourceTitle) · \(store.activeSteps.count) steps", "正从 \(sourceTitle) 接收 · \(store.activeSteps.count) 步")
             }
-            return "Waiting for your approval · Step 5 of 7"
+            return lang.t("Waiting for your approval · Step 5 of 7", "等待你的审批 · 第 5/7 步")
         }()
 
         let isQuestionGate = (waitingStep?.effectiveRequestedInteraction?.kind == .askQuestion
@@ -801,7 +822,7 @@ public struct CascadeChatViewController: View {
                     HStack(spacing: 5) {
                         Image(systemName: isQuestionGate ? "list.bullet.rectangle.portrait.fill" : "checkmark.shield.fill")
                             .font(.system(size: 12, weight: .bold))
-                        Text(isQuestionGate ? "Answer" : "Approve")
+                        Text(isQuestionGate ? lang.t("Answer", "回答") : lang.t("Approve", "批准"))
                             .font(.system(size: 13, weight: .bold))
                     }
                     .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
@@ -822,7 +843,7 @@ public struct CascadeChatViewController: View {
                     RoundedRectangle(cornerRadius: 2.5, style: .continuous)
                         .fill(AntigravityTheme.inkReading)
                         .frame(width: 9, height: 9)
-                    Text("Stop")
+                    Text(lang.t("Stop", "停止"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                 }

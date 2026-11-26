@@ -160,7 +160,9 @@ public final class AntigravitySessionStore {
     internal static let localPermissionDefaultsKey = "antigravity.ios.permissionPreset.local"
     internal static let remotePermissionDefaultsKey = "antigravity.ios.permissionPreset.remote"
     public static let appearanceModeDefaultsKey = "antigravity.ios.appearanceMode"
+    public static let appLanguageDefaultsKey = "antigravity.ios.appLanguage"
     internal var hasModifiedAppearanceModeInSession: Bool = false
+    internal var hasModifiedLanguageInSession: Bool = false
     internal var hasModifiedDisplayOptionsInSession: Bool = false
 
     /// `true` when the active conversation or selected project targets Antigravity Cloud / Remote Agents.
@@ -284,15 +286,24 @@ public final class AntigravitySessionStore {
     }
 
     public var homeHeroGreetingText: String {
-        UserGreetingFormatter.homeHeroGreeting(displayName: homeGreetingDisplayName)
+        UserGreetingFormatter.homeHeroGreeting(
+            displayName: homeGreetingDisplayName,
+            language: appearancePreferences.language
+        )
     }
 
     public var homeAddContextBackdropGreetingText: String {
-        UserGreetingFormatter.addContextBackdropGreeting(displayName: homeGreetingDisplayName)
+        UserGreetingFormatter.addContextBackdropGreeting(
+            displayName: homeGreetingDisplayName,
+            language: appearancePreferences.language
+        )
     }
 
     public var homeCompactBackdropGreetingText: String {
-        UserGreetingFormatter.compactBackdropGreeting(displayName: homeGreetingDisplayName)
+        UserGreetingFormatter.compactBackdropGreeting(
+            displayName: homeGreetingDisplayName,
+            language: appearancePreferences.language
+        )
     }
     public var isLoadingSteps: Bool = false
     public var stepLoadErrorText: String? = nil
@@ -791,6 +802,9 @@ public final class AntigravitySessionStore {
         if let rawAppearance = store.preferencesStore.string(forKey: Self.appearanceModeDefaultsKey),
            let savedAppearance = AppAppearanceMode(rawValue: rawAppearance) {
             store.appearancePreferences.appearanceMode = savedAppearance
+        }
+        if let rawLanguage = store.preferencesStore.string(forKey: Self.appLanguageDefaultsKey) {
+            store.appearancePreferences.language = AppLanguage.fromTag(rawLanguage)
         }
         if let rawUserName = store.preferencesStore.string(forKey: Self.userDisplayNameDefaultsKey),
            let savedUserName = UserGreetingFormatter.formatGreetingName(rawUserName) {

@@ -54,7 +54,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.antigravity.android.core.ui.components.AntigravitySurfaceCard
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
+import dev.antigravity.shared.model.AppLocalizationFormatter
 
 /**
  * Material 3 Onboarding & Pairing Screen supporting Remote Control QR/link pairing,
@@ -75,6 +78,7 @@ fun WelcomeAndPairingScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     var directLanExpanded by rememberSaveable { mutableStateOf(false) }
     var endpointUrl by rememberSaveable { mutableStateOf("https://192.168.1.42:42100") }
     var csrfToken by rememberSaveable { mutableStateOf("") }
@@ -119,12 +123,15 @@ fun WelcomeAndPairingScreen(
                 color = colors.inkReading,
             )
             Text(
-                text = "Companion for Antigravity",
+                text = tr("Companion for Antigravity", "Antigravity 移动伴侣客户端"),
                 style = MaterialTheme.typography.labelLarge,
                 color = colors.accentPeriwinkle,
             )
             Text(
-                text = "Scan the Remote Control QR code in Antigravity Desktop or sign in with Google Cloud Relay to steer your agents over Wi-Fi or 5G.",
+                text = tr(
+                    "Scan the Remote Control QR code in Antigravity Desktop or sign in with Google Cloud Relay to steer your agents over Wi-Fi or 5G.",
+                    "扫描 Antigravity Desktop 中的远程控制二维码，或通过 Google 云中继登录，随时随地用 Wi-Fi / 5G 指挥你的代理。",
+                ),
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 14.5.sp,
                     lineHeight = 21.sp,
@@ -154,7 +161,9 @@ fun WelcomeAndPairingScreen(
                         color = colors.accentPeriwinkle,
                     )
                     Text(
-                        text = statusText?.takeIf { it.isNotBlank() } ?: "Connecting to Antigravity host...",
+                        text = statusText?.takeIf { it.isNotBlank() }
+                            ?.let { AppLocalizationFormatter.localizeConnectionStatus(it, lang) }
+                            ?: tr("Connecting to Antigravity host...", "正在连接 Antigravity 主机…"),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkReading,
                         modifier = Modifier.weight(1f),
@@ -163,7 +172,7 @@ fun WelcomeAndPairingScreen(
                         onClick = onCancelConnecting,
                         modifier = Modifier.testTag("btn-welcome-cancel-connecting"),
                     ) {
-                        Text("Cancel", color = colors.accentPeriwinkle)
+                        Text(tr("Cancel", "取消"), color = colors.accentPeriwinkle)
                     }
                 }
             }
@@ -211,7 +220,7 @@ fun WelcomeAndPairingScreen(
                                 onClick = onCloudRelaySignIn,
                                 contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
                             ) {
-                                Text("Sign in with Google again", color = colors.statusWaiting)
+                                Text(tr("Sign in with Google again", "重新使用 Google 登录"), color = colors.statusWaiting)
                             }
                         }
                     }
@@ -242,7 +251,7 @@ fun WelcomeAndPairingScreen(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Text(
-                text = "Scan Remote Control QR",
+                text = tr("Scan Remote Control QR", "扫描远程控制二维码"),
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -272,7 +281,7 @@ fun WelcomeAndPairingScreen(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Text(
-                text = "Sign in with Google Cloud Relay",
+                text = tr("Sign in with Google Cloud Relay", "使用 Google 云中继登录"),
                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp),
             )
         }
@@ -300,12 +309,12 @@ fun WelcomeAndPairingScreen(
                 )
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Direct LAN / Tailscale",
+                        text = tr("Direct LAN / Tailscale", "局域网 / Tailscale 直连"),
                         style = MaterialTheme.typography.titleSmall,
                         color = colors.inkReading,
                     )
                     Text(
-                        text = "Manual endpoint URL & CSRF token",
+                        text = tr("Manual endpoint URL & CSRF token", "手动填写端点地址与 CSRF 令牌"),
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.inkSecondary,
                     )
@@ -329,7 +338,7 @@ fun WelcomeAndPairingScreen(
                     OutlinedTextField(
                         value = endpointUrl,
                         onValueChange = { endpointUrl = it },
-                        label = { Text("Host Endpoint URL") },
+                        label = { Text(tr("Host Endpoint URL", "主机端点 URL")) },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -349,7 +358,7 @@ fun WelcomeAndPairingScreen(
                     OutlinedTextField(
                         value = csrfToken,
                         onValueChange = { csrfToken = it },
-                        label = { Text("CSRF Token (x-codeium-csrf-token)") },
+                        label = { Text(tr("CSRF Token (x-codeium-csrf-token)", "CSRF 令牌（x-codeium-csrf-token）")) },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -379,7 +388,7 @@ fun WelcomeAndPairingScreen(
                         ),
                     ) {
                         Text(
-                            text = "Connect Host",
+                            text = tr("Connect Host", "连接主机"),
                             style = MaterialTheme.typography.labelLarge,
                         )
                     }
@@ -394,7 +403,7 @@ fun WelcomeAndPairingScreen(
                 .testTag("btn-welcome-demo"),
         ) {
             Text(
-                text = "Continue in Offline Demo Mode",
+                text = tr("Continue in Offline Demo Mode", "以离线演示模式继续"),
                 style = MaterialTheme.typography.labelLarge,
                 color = colors.accentPeriwinkle,
             )
@@ -405,12 +414,18 @@ fun WelcomeAndPairingScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
-                text = "Open Antigravity on Mac / PC → Remote Control",
+                text = tr(
+                    "Open Antigravity on Mac / PC → Remote Control",
+                    "在 Mac / PC 打开 Antigravity → 远程控制",
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.inkMuted,
             )
             Text(
-                text = "Independent third-party companion · Not affiliated with Google LLC",
+                text = tr(
+                    "Independent third-party companion · Not affiliated with Google LLC",
+                    "独立第三方伴侣客户端 · 与 Google LLC 无隶属关系",
+                ),
                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.SansSerif),
                 color = colors.inkMuted.copy(alpha = 0.8f),
                 textAlign = TextAlign.Center,

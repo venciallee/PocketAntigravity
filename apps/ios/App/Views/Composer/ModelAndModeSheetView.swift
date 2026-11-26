@@ -29,6 +29,8 @@ public struct ModelAndModeSheetView: View {
         self.onDismiss = onDismiss
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var catalogModels: [CascadeModelConfig] {
         store.availableModels.isEmpty ? CascadeModelConfig.liveDefaultCatalog : store.availableModels
     }
@@ -121,7 +123,7 @@ public struct ModelAndModeSheetView: View {
 
             // Header: centered `Model`, trailing blue `Done`
             ZStack {
-                Text("Model")
+                Text(lang.t("Model", "模型"))
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
 
@@ -130,7 +132,7 @@ public struct ModelAndModeSheetView: View {
                     Button {
                         applyAndDismiss()
                     } label: {
-                        Text("Done")
+                        Text(lang.t("Done", "完成"))
                             .font(.system(size: 16.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             .frame(minWidth: 52, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
@@ -175,7 +177,7 @@ public struct ModelAndModeSheetView: View {
                     } label: {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Orchestrator")
+                                Text(lang.t("Orchestrator", "编排器"))
                                     .font(.system(size: 16.5, weight: isOrchSelected ? .semibold : .medium))
                                     .foregroundStyle(AntigravityTheme.inkReading)
                                 Text(orch.orchestratorSubtitle)
@@ -270,7 +272,7 @@ public struct ModelAndModeSheetView: View {
                     }
                 } label: {
                     HStack {
-                        Text(showMoreModels ? "Fewer models" : "More models")
+                        Text(showMoreModels ? lang.t("Fewer models", "收起更多模型") : lang.t("More models", "更多模型"))
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                         Spacer()
@@ -323,7 +325,7 @@ public struct ModelAndModeSheetView: View {
                         .lineLimit(1)
 
                     if model.isNewBadge && isFlagshipNeon {
-                        Text("New")
+                        Text(lang.t("New", "新"))
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             .padding(.horizontal, 8)
@@ -403,10 +405,10 @@ public struct ModelAndModeSheetView: View {
 
     private func effortDisplayLabel(_ level: ThinkingEffortLevel) -> String {
         switch level {
-        case .low: return "Low"
-        case .medium: return "Medium"
-        case .high: return "High"
-        case .extra: return "Extra High"
+        case .low: return lang.t("Low", "低")
+        case .medium: return lang.t("Medium", "中")
+        case .high: return lang.t("High", "高")
+        case .extra: return lang.t("Extra High", "极高")
         }
     }
 
@@ -419,14 +421,14 @@ public struct ModelAndModeSheetView: View {
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("Five Hour Limit Remaining")
+                    Text(lang.t("Five Hour Limit Remaining", "5 小时剩余额度"))
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Spacer()
                     Button {
                         showUsageExpanded.toggle()
                     } label: {
-                        Text("View Usage")
+                        Text(lang.t("View Usage", "查看用量"))
                             .font(.system(size: 13.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     }
@@ -439,12 +441,12 @@ public struct ModelAndModeSheetView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("Weekly Limit Remaining")
+                    Text(lang.t("Weekly Limit Remaining", "每周剩余额度"))
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Spacer()
                     if showUsageExpanded {
-                        Text("\(weeklyPct)% · resets Mon")
+                        Text(lang.t("\(weeklyPct)% · resets Mon", "\(weeklyPct)% · 周一重置"))
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(AntigravityTheme.inkSecondary)
                     }
@@ -455,9 +457,9 @@ public struct ModelAndModeSheetView: View {
 
             if showUsageExpanded {
                 HStack {
-                    Text("Plan: \(store.usageQuota.planDisplayName)")
+                    Text(lang.t("Plan: \(store.usageQuota.planDisplayName)", "套餐：\(store.usageQuota.planDisplayName)"))
                     Spacer()
-                    Text("5h: \(fiveHourPct)% · Partner: \(store.usageQuota.partnerFiveHourPercent)%")
+                    Text(lang.t("5h: \(fiveHourPct)% · Partner: \(store.usageQuota.partnerFiveHourPercent)%", "5 小时：\(fiveHourPct)% · 合作方：\(store.usageQuota.partnerFiveHourPercent)%"))
                 }
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(AntigravityTheme.inkMuted)

@@ -75,6 +75,7 @@ import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.components.statusColorFor
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.CortexStepStatus
 import kotlinx.coroutines.launch
@@ -119,7 +120,7 @@ fun ConversationOverviewSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "Conversation Overview",
+                    text = tr("Conversation Overview", "对话概览"),
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
@@ -137,7 +138,7 @@ fun ConversationOverviewSheet(
                         .testTag("btn-close-overview"),
                 ) {
                     Text(
-                        text = "Done",
+                        text = tr("Done", "完成"),
                         style = MaterialTheme.typography.labelLarge,
                         color = colors.accentPeriwinkle,
                     )
@@ -174,7 +175,10 @@ fun ConversationOverviewSheet(
                                 modifier = Modifier.size(18.dp),
                             )
                             Text(
-                                text = "Review & Diffs (${overview.changedFilesCount} files)",
+                                text = tr(
+                                    "Review & Diffs (${overview.changedFilesCount} files)",
+                                    "审查与差异（${overview.changedFilesCount} 个文件）",
+                                ),
                                 style = MaterialTheme.typography.titleSmall,
                                 color = colors.inkReading,
                             )
@@ -205,7 +209,7 @@ fun ConversationOverviewSheet(
                                 contentColor = colors.inkOnPrimaryCta,
                             ),
                         ) {
-                            Text("Diff Review", style = MaterialTheme.typography.labelLarge)
+                            Text(tr("Diff Review", "代码审查"), style = MaterialTheme.typography.labelLarge)
                         }
                         FilledTonalButton(
                             onClick = {
@@ -221,7 +225,7 @@ fun ConversationOverviewSheet(
                                 contentColor = colors.inkReading,
                             ),
                         ) {
-                            Text("Plan Review", style = MaterialTheme.typography.labelLarge)
+                            Text(tr("Plan Review", "计划审查"), style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
@@ -232,7 +236,7 @@ fun ConversationOverviewSheet(
                         modifier = Modifier.fillMaxWidth(),
                         contentPadding = PaddingValues(14.dp),
                     ) {
-                        SectionHeaderLabel(title = "GOALS", count = overview.goals.size)
+                        SectionHeaderLabel(title = tr("GOALS", "目标"), count = overview.goals.size)
                         Spacer(modifier = Modifier.height(10.dp))
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             overview.goals.forEach { goal ->
@@ -268,11 +272,11 @@ fun ConversationOverviewSheet(
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(14.dp),
                 ) {
-                    SectionHeaderLabel(title = "SUBAGENTS", count = overview.activeSubagents.size)
+                    SectionHeaderLabel(title = tr("SUBAGENTS", "子智能体"), count = overview.activeSubagents.size)
                     Spacer(modifier = Modifier.height(10.dp))
                     if (overview.activeSubagents.isEmpty()) {
                         Text(
-                            text = "No active subagents spawned in this conversation.",
+                            text = tr("No active subagents spawned in this conversation.", "此对话中暂无活跃的子智能体。"),
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.inkSecondary,
                         )
@@ -336,7 +340,7 @@ fun ConversationOverviewSheet(
                                                 },
                                                 modifier = Modifier.testTag("btn-stop-subagent-${sub.subagentId}"),
                                             ) {
-                                                Text("Stop", color = colors.statusError)
+                                                Text(tr("Stop", "停止"), color = colors.statusError)
                                             }
                                         }
                                     }
@@ -351,11 +355,11 @@ fun ConversationOverviewSheet(
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(14.dp),
                 ) {
-                    SectionHeaderLabel(title = "BACKGROUND TASKS", count = overview.backgroundTasks.size)
+                    SectionHeaderLabel(title = tr("BACKGROUND TASKS", "后台任务"), count = overview.backgroundTasks.size)
                     Spacer(modifier = Modifier.height(10.dp))
                     if (overview.backgroundTasks.isEmpty()) {
                         Text(
-                            text = "No background shell or daemon tasks running.",
+                            text = tr("No background shell or daemon tasks running.", "当前没有运行中的后台终端或守护任务。"),
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.inkSecondary,
                         )
@@ -407,7 +411,7 @@ fun ConversationOverviewSheet(
                                                 },
                                                 modifier = Modifier.testTag("btn-cancel-bg-task-${task.id}"),
                                             ) {
-                                                Text("Cancel", color = colors.statusError)
+                                                Text(tr("Cancel", "取消"), color = colors.statusError)
                                             }
                                         } else {
                                             Text(
@@ -429,7 +433,7 @@ fun ConversationOverviewSheet(
                         modifier = Modifier.fillMaxWidth(),
                         contentPadding = PaddingValues(14.dp),
                     ) {
-                        SectionHeaderLabel(title = "CHANGED FILES", count = overview.modifiedFiles.size)
+                        SectionHeaderLabel(title = tr("CHANGED FILES", "已变更文件"), count = overview.modifiedFiles.size)
                         Spacer(modifier = Modifier.height(8.dp))
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             overview.modifiedFiles.forEach { filePath ->
@@ -464,7 +468,7 @@ fun ConversationOverviewSheet(
                         modifier = Modifier.fillMaxWidth(),
                         contentPadding = PaddingValues(14.dp),
                     ) {
-                        SectionHeaderLabel(title = "PULL REQUESTS", count = overview.linkedPullRequests.size)
+                        SectionHeaderLabel(title = tr("PULL REQUESTS", "拉取请求"), count = overview.linkedPullRequests.size)
                         Spacer(modifier = Modifier.height(8.dp))
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             overview.linkedPullRequests.forEach { pr ->
@@ -496,7 +500,7 @@ fun ConversationOverviewSheet(
                                                 overflow = TextOverflow.Ellipsis,
                                             )
                                             Text(
-                                                text = "${pr.state} · Checks: ${pr.checksStatus}",
+                                                text = tr("${pr.state} · Checks: ${pr.checksStatus}", "${pr.state} · 检查：${pr.checksStatus}"),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = colors.inkSecondary,
                                             )
@@ -565,13 +569,13 @@ fun SideQuestionSheet(
                         tint = colors.accentPeriwinkle,
                     )
                     Text(
-                        text = "/btw Side Question",
+                        text = tr("/btw Side Question", "/btw 旁路提问"),
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = colors.inkReading,
                     )
                 }
                 TextButton(onClick = onDismiss) {
-                    Text("Done", color = colors.accentPeriwinkle)
+                    Text(tr("Done", "完成"), color = colors.accentPeriwinkle)
                 }
             }
 
@@ -580,7 +584,10 @@ fun SideQuestionSheet(
                 color = colors.surfaceObsidian,
             ) {
                 Text(
-                    text = "Read-only side thread · Keeps main conversation context clean",
+                    text = tr(
+                        "Read-only side thread · Keeps main conversation context clean",
+                        "只读旁路对话 · 保持主对话上下文整洁",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.inkSecondary,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -596,7 +603,10 @@ fun SideQuestionSheet(
             ) {
                 if (thread.messages.isEmpty()) {
                     Text(
-                        text = "Ask a quick /btw question to inspect code or clarify edge cases without interrupting the active agent turn.",
+                        text = tr(
+                            "Ask a quick /btw question to inspect code or clarify edge cases without interrupting the active agent turn.",
+                            "快速发起 /btw 旁路提问，在不中断当前智能体执行的情况下查看代码或确认细节。",
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkSecondary,
                     )
@@ -650,7 +660,7 @@ fun SideQuestionSheet(
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.size(8.dp))
-                    Text("Insert into main conversation", style = MaterialTheme.typography.labelLarge)
+                    Text(tr("Insert into main conversation", "插入主对话"), style = MaterialTheme.typography.labelLarge)
                 }
             }
 
@@ -671,7 +681,7 @@ fun SideQuestionSheet(
                     Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp)) {
                         if (draft.isEmpty()) {
                             Text(
-                                text = "Ask a side question...",
+                                text = tr("Ask a side question...", "输入旁路问题..."),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = colors.inkMuted,
                             )
@@ -714,7 +724,7 @@ fun SideQuestionSheet(
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Rounded.ArrowUpward,
-                            contentDescription = "Send side question",
+                            contentDescription = tr("Send side question", "发送旁路问题"),
                             tint = if (draft.isNotBlank()) colors.inkOnPrimaryCta else colors.inkMuted,
                             modifier = Modifier.size(20.dp),
                         )
@@ -769,7 +779,7 @@ fun SwarmBoardSheet(
                         tint = colors.accentPeriwinkle,
                     )
                     Text(
-                        text = board?.title ?: "Agent Swarm Board",
+                        text = board?.title ?: tr("Agent Swarm Board", "智能体协作群看板"),
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = colors.inkReading,
                         maxLines = 1,
@@ -777,7 +787,7 @@ fun SwarmBoardSheet(
                     )
                 }
                 TextButton(onClick = onDismiss) {
-                    Text("Done", color = colors.accentPeriwinkle)
+                    Text(tr("Done", "完成"), color = colors.accentPeriwinkle)
                 }
             }
 
@@ -792,12 +802,12 @@ fun SwarmBoardSheet(
             ) {
                 if (board == null) {
                     Text(
-                        text = "No active Agent Swarm board in this conversation.",
+                        text = tr("No active Agent Swarm board in this conversation.", "此对话中暂无活跃的智能体协作群看板。"),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkSecondary,
                     )
                 } else {
-                    SectionHeaderLabel(title = "SWARM ROSTER", count = board.members.size)
+                    SectionHeaderLabel(title = tr("SWARM ROSTER", "协作群成员"), count = board.members.size)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -805,7 +815,7 @@ fun SwarmBoardSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         AntigravityChip(
-                            label = "All",
+                            label = tr("All", "全部"),
                             selected = memberFilter == null,
                             onClick = { coordinator.orchestrationStore.setSwarmMemberFilter(null) },
                         )
@@ -831,10 +841,10 @@ fun SwarmBoardSheet(
                             post.body.contains("@$memberFilter", ignoreCase = true)
                     }
 
-                    SectionHeaderLabel(title = "DISCUSSION BOARD", count = filteredPosts.size)
+                    SectionHeaderLabel(title = tr("DISCUSSION BOARD", "讨论区"), count = filteredPosts.size)
                     if (filteredPosts.isEmpty()) {
                         Text(
-                            text = "No swarm posts matching @$memberFilter.",
+                            text = tr("No swarm posts matching @$memberFilter.", "没有匹配 @$memberFilter 的讨论记录。"),
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.inkSecondary,
                         )
@@ -921,7 +931,7 @@ fun VoiceModeSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "Gemini Live Voice Mode",
+                    text = tr("Gemini Live Voice Mode", "Gemini Live 语音模式"),
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                     color = colors.inkReading,
                 )
@@ -932,7 +942,7 @@ fun VoiceModeSheet(
                     },
                     modifier = Modifier.testTag("btn-end-voice-mode"),
                 ) {
-                    Text("End Call", color = colors.statusError, fontWeight = FontWeight.SemiBold)
+                    Text(tr("End Call", "结束通话"), color = colors.statusError, fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -993,7 +1003,10 @@ fun VoiceModeSheet(
             ) {
                 if (orchState.voiceTranscriptTurns.isEmpty()) {
                     Text(
-                        text = "Speak or type a live turn below. Ending the call saves a collapsible Call Summary card to the conversation.",
+                        text = tr(
+                            "Speak or type a live turn below. Ending the call saves a collapsible Call Summary card to the conversation.",
+                            "在下方说话或输入实时对话。结束通话后会在对话中保存一张可折叠的通话摘要卡片。",
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.inkSecondary,
                     )
@@ -1033,7 +1046,7 @@ fun VoiceModeSheet(
                     Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp)) {
                         if (turnDraft.isEmpty()) {
                             Text(
-                                text = "Type a live voice turn...",
+                                text = tr("Type a live voice turn...", "输入实时语音对话..."),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = colors.inkMuted,
                             )
@@ -1061,7 +1074,7 @@ fun VoiceModeSheet(
                         contentColor = colors.inkOnPrimaryCta,
                     ),
                 ) {
-                    Text("Send")
+                    Text(tr("Send", "发送"))
                 }
             }
 
@@ -1086,7 +1099,7 @@ fun VoiceModeSheet(
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.size(6.dp))
-                    Text(if (voiceState.isMuted) "Unmute" else "Mute")
+                    Text(if (voiceState.isMuted) tr("Unmute", "取消静音") else tr("Mute", "静音"))
                 }
                 Button(
                     onClick = {
@@ -1108,7 +1121,7 @@ fun VoiceModeSheet(
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.size(6.dp))
-                    Text("End & Summarize")
+                    Text(tr("End & Summarize", "结束并生成摘要"))
                 }
             }
         }

@@ -22,6 +22,14 @@ public enum ShellTab: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
+    public func localizedTitle(for language: AppLanguage) -> String {
+        switch self {
+        case .agents:      return language.t("Agents", "代理")
+        case .automations: return language.t("Automations", "自动化")
+        case .settings:    return language.t("Settings", "设置")
+        }
+    }
+
     public var symbolName: String {
         switch self {
         case .agents:      return "bubble.left"
@@ -60,6 +68,7 @@ public enum ShellTab: String, CaseIterable, Sendable, Identifiable {
 /// + Detached Right `56×56pt` Periwinkle (`AntigravityTheme.accentPeriwinkle`) Circular FAB.
 public struct AntigravityFloatingTabBar: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var lang
 
     public let selectedTab: ShellTab
     public let tabBarAccessibilityId: String
@@ -97,7 +106,7 @@ public struct AntigravityFloatingTabBar: View {
                         VStack(spacing: 3) {
                             Image(systemName: tab.symbolName)
                                 .font(.system(size: 17, weight: .semibold))
-                            Text(tab.title)
+                            Text(tab.localizedTitle(for: lang))
                                 .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
                                 .lineLimit(1)
                         }

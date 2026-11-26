@@ -78,6 +78,8 @@ public struct ChatComposerView: View {
         }
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var activeMentionQuery: String? {
         guard let lastToken = draftMessageText.split(whereSeparator: \.isWhitespace).last,
               lastToken.hasPrefix("@"),
@@ -158,11 +160,11 @@ public struct ChatComposerView: View {
 
     private var permissionShortLabel: String {
         switch store.activePermissionPreset {
-        case .requestReview: return "Ask"
-        case .defaultPolicy: return "Default"
-        case .auto: return "Auto"
-        case .turbo: return "Turbo"
-        case .inheritGlobal: return "Default"
+        case .requestReview: return lang.t("Ask", "询问")
+        case .defaultPolicy: return lang.t("Default", "默认")
+        case .auto: return lang.t("Auto", "自动")
+        case .turbo: return lang.t("Turbo", "极速")
+        case .inheritGlobal: return lang.t("Default", "默认")
         }
     }
 
@@ -218,9 +220,9 @@ public struct ChatComposerView: View {
     private var primaryActionAccessibilityLabel: String {
         switch primaryActionMode {
         case .disabledSend, .send:
-            return "Send message"
+            return lang.t("Send message", "发送消息")
         case .stop:
-            return "Stop response"
+            return lang.t("Stop response", "停止回复")
         }
     }
 
@@ -228,7 +230,9 @@ public struct ChatComposerView: View {
         if let placeholderOverride {
             return placeholderOverride
         }
-        return store.isCascadeStreaming ? "Ask a follow-up..." : "Ask anything, @ to mention, / for actions"
+        return store.isCascadeStreaming
+            ? lang.t("Ask a follow-up...", "继续追问...")
+            : lang.t("Ask anything, @ to mention, / for actions", "输入任何问题，@ 引用上下文，/ 使用快捷指令")
     }
 
     public var body: some View {
@@ -324,7 +328,7 @@ public struct ChatComposerView: View {
                             Image(systemName: "clock.arrow.circlepath")
                                 .font(.system(size: 11))
                                 .foregroundStyle(AntigravityTheme.statusWaiting)
-                            Text("Queued: \(queued.text)")
+                            Text(lang.t("Queued: \(queued.text)", "排队中：\(queued.text)"))
                                 .font(.system(size: 12))
                                 .foregroundStyle(AntigravityTheme.inkLabel)
                                 .lineLimit(1)
@@ -362,7 +366,7 @@ public struct ChatComposerView: View {
                                 HStack(spacing: 6) {
                                     ProgressView()
                                         .controlSize(.mini)
-                                    Text("Adding photo…")
+                                    Text(lang.t("Adding photo…", "正在添加图片…"))
                                         .font(.system(size: 12.5, weight: .medium))
                                         .foregroundStyle(AntigravityTheme.inkSecondary)
                                 }
@@ -407,7 +411,7 @@ public struct ChatComposerView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Workflow \(workflowName). Tap to remove.")
+                        .accessibilityLabel(lang.t("Workflow \(workflowName). Tap to remove.", "工作流 \(workflowName)，点击移除"))
                         .accessibilityIdentifier("composer-workflow-chip")
 
                         Spacer(minLength: 0)
@@ -629,7 +633,7 @@ public struct ChatComposerView: View {
                 }
                 .buttonStyle(.plain)
                 .offset(x: 4, y: -4)
-                .accessibilityLabel("Remove image \(label)")
+                .accessibilityLabel(lang.t("Remove image \(label)", "移除图片 \(label)"))
             }
             .padding(.top, 4)
             .padding(.trailing, 4)
@@ -696,7 +700,7 @@ public struct ChatComposerView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Add context")
+            .accessibilityLabel(lang.t("Add context", "添加上下文"))
             .accessibilityIdentifier("composer-btn-add-context")
 
             // 2. Single-line `[Gemini 4 Neon ⌄]` Model Picker (Thinking Effort shown inside sheet when opened)
@@ -749,7 +753,7 @@ public struct ChatComposerView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Permissions \(store.activePermissionPreset.displayTitle)")
+            .accessibilityLabel(lang.t("Permissions \(store.activePermissionPreset.localizedTitle(for: lang))", "权限 \(store.activePermissionPreset.localizedTitle(for: lang))"))
             .accessibilityIdentifier("composer-pill-permissions")
 
             // 4. Speech-to-Text Dictation Button (`mic`)
@@ -766,7 +770,7 @@ public struct ChatComposerView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(voiceManager.isRecording ? "Stop dictation" : "Dictate message")
+            .accessibilityLabel(voiceManager.isRecording ? lang.t("Stop dictation", "停止语音输入") : lang.t("Dictate message", "语音输入"))
             .accessibilityIdentifier("composer-btn-mic")
 
             // 5. Adaptive Primary Action Circle (`→` Send / `■` Stop / Dimmed `→` when empty)
@@ -846,8 +850,8 @@ public struct ChatComposerView: View {
         }
         if failedCount > 0 {
             mediaErrorMessage = failedCount == 1
-                ? "Could not load 1 selected photo."
-                : "Could not load \(failedCount) selected photos."
+                ? lang.t("Could not load 1 selected photo.", "无法加载 1 张所选照片。")
+                : lang.t("Could not load \(failedCount) selected photos.", "无法加载 \(failedCount) 张所选照片。")
         }
     }
 
@@ -922,7 +926,7 @@ public struct ChatComposerView: View {
             }
         }
         if failedCount > 0 {
-            mediaErrorMessage = "Some files could not be attached (exceeds 8 MB or unreadable)."
+            mediaErrorMessage = lang.t("Some files could not be attached (exceeds 8 MB or unreadable).", "部分文件无法附加（超过 8 MB 或不可读）。")
         }
     }
 

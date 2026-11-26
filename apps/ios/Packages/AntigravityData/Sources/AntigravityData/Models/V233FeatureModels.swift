@@ -1057,6 +1057,35 @@ public enum AppLanguage: String, ResilientStringEnum, CaseIterable, Identifiable
         case .zhHans: return "简体中文"
         }
     }
+
+    public var isChinese: Bool {
+        self == .zhHans
+    }
+
+    public var localeIdentifier: String {
+        switch self {
+        case .english: return "en"
+        case .zhHans: return "zh-Hans"
+        }
+    }
+
+    public func t(_ english: String, _ chinese: String) -> String {
+        isChinese ? chinese : english
+    }
+
+    public static func fromTag(_ raw: String?) -> AppLanguage {
+        let normalized = (raw ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+        switch normalized {
+        case "zh", "zhcn", "zhhans", "chinese", "简体中文":
+            return .zhHans
+        default:
+            return .english
+        }
+    }
 }
 
 public struct AppAppearancePreferences: Codable, Sendable, Equatable {

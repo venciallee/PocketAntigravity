@@ -58,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.StructuredQuestionStepItem
 import kotlinx.coroutines.launch
@@ -74,6 +76,7 @@ fun StructuredQuestionScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val lang = LocalAppLanguage.current
     val chatState by coordinator.chatState.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -107,7 +110,7 @@ fun StructuredQuestionScreen(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = tr("Back", "返回"),
                         tint = colors.inkReading,
                     )
                 }
@@ -121,7 +124,7 @@ fun StructuredQuestionScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = "ledger-svc · /plan interview",
+                        text = tr("ledger-svc · /plan interview", "ledger-svc · /plan 需求访谈"),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                         color = colors.inkSecondary,
                         maxLines = 1,
@@ -132,7 +135,7 @@ fun StructuredQuestionScreen(
                     onClick = {},
                     modifier = Modifier.size(AntigravityDesignTokens.MinTouchTarget),
                 ) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = "More", tint = colors.inkReading)
+                    Icon(Icons.Rounded.MoreVert, contentDescription = tr("More", "更多"), tint = colors.inkReading)
                 }
             }
         },
@@ -154,6 +157,7 @@ fun StructuredQuestionScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    val freeformHint = tr("Or reply in your own words", "或直接用自己的话回复")
                     BasicTextField(
                         value = freeformReply,
                         onValueChange = { freeformReply = it },
@@ -166,7 +170,7 @@ fun StructuredQuestionScreen(
                         decorationBox = { inner ->
                             if (freeformReply.isEmpty()) {
                                 Text(
-                                    text = "Or reply in your own words",
+                                    text = freeformHint,
                                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp),
                                     color = colors.inkMuted,
                                 )
@@ -176,13 +180,16 @@ fun StructuredQuestionScreen(
                     )
                     Icon(
                         imageVector = Icons.Rounded.Mic,
-                        contentDescription = "Voice reply",
+                        contentDescription = tr("Voice reply", "语音回复"),
                         tint = colors.inkLabel,
                         modifier = Modifier
                             .size(21.dp)
                             .clickable {
                                 if (freeformReply.isNotBlank()) {
-                                    submittedBanner = "Sent reply: $freeformReply"
+                                    submittedBanner = lang.t(
+                                        "Sent reply: $freeformReply",
+                                        "已发送回复：$freeformReply",
+                                    )
                                     freeformReply = ""
                                 }
                             },
@@ -222,7 +229,10 @@ fun StructuredQuestionScreen(
                     color = colors.inkSecondary,
                 )
                 Text(
-                    text = "Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words.",
+                    text = tr(
+                        "Before I draft the plan I need three decisions. Tap to answer — you can also reply in your own words.",
+                        "在起草计划前需要你确认三个问题。点选即可作答，也可以直接输入自定义回复。",
+                    ),
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp, lineHeight = 23.sp),
                     color = colors.inkReading,
                 )
@@ -280,13 +290,20 @@ fun StructuredQuestionScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "Question ${activeIdx + 1} of ${questions.size}",
+                            text = tr(
+                                "Question ${activeIdx + 1} of ${questions.size}",
+                                "第 ${activeIdx + 1} / ${questions.size} 题",
+                            ),
                             style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                             color = colors.inkSecondary,
                             modifier = Modifier.weight(1f),
                         )
                         Text(
-                            text = if (activeQuestion.isMultiSelect) "Select all that apply" else "Select one",
+                            text = if (activeQuestion.isMultiSelect) {
+                                tr("Select all that apply", "可多选")
+                            } else {
+                                tr("Select one", "单选")
+                            },
                             style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                             color = colors.inkSecondary,
                         )
@@ -388,7 +405,7 @@ fun StructuredQuestionScreen(
                             modifier = Modifier.testTag("btn-question-prev"),
                         ) {
                             Text(
-                                text = "Back",
+                                text = tr("Back", "上一步"),
                                 style = MaterialTheme.typography.labelLarge.copy(
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Medium,
@@ -406,7 +423,10 @@ fun StructuredQuestionScreen(
                                     coordinator.chatStore.setActiveQuestionStepIndex(activeIdx + 1)
                                 } else {
                                     scope.launch {
-                                        submittedBanner = "Decisions submitted to Gemini 4 Neon"
+                                        submittedBanner = lang.t(
+                                            "Decisions submitted to Gemini 4 Neon",
+                                            "已将选择提交给 Gemini 4 Neon",
+                                        )
                                     }
                                     onBack()
                                 }
@@ -423,11 +443,11 @@ fun StructuredQuestionScreen(
                         ) {
                             Text(
                                 text = if (isLastStep) {
-                                    "Submit"
+                                    tr("Submit", "提交")
                                 } else if (activeQuestion.isMultiSelect && count > 0) {
-                                    "Next · $count selected"
+                                    tr("Next · $count selected", "下一步 · 已选 $count 项")
                                 } else {
-                                    "Next"
+                                    tr("Next", "下一步")
                                 },
                                 style = MaterialTheme.typography.labelLarge.copy(
                                     fontSize = 15.sp,

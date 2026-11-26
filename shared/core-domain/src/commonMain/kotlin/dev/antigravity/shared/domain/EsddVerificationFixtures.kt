@@ -1,5 +1,6 @@
 package dev.antigravity.shared.domain
 
+import dev.antigravity.shared.model.AppLanguage
 import dev.antigravity.shared.model.ArtifactKind
 import dev.antigravity.shared.model.ArtifactSnapshot
 import dev.antigravity.shared.model.AskQuestionInteractionSpec
@@ -1054,6 +1055,7 @@ public object EsddVerificationFixtures {
 
     public fun seedCoordinator(coordinator: AntigravityCoreCoordinator) {
         coordinator.isVerificationMode = true
+        coordinator.settingsStore.setAppLanguage(AppLanguage.ENGLISH)
         coordinator.connectionStore.seedVerificationConnection(
             activeHost = macHost,
             knownHosts = hosts,
