@@ -99,10 +99,11 @@ public class SettingsAndCustomizationStore(
     }
 
     public fun applyModelCatalog(result: LiveModelCatalogResult) {
+        val defaultId = result.defaultModelId
         _state.update { prev ->
             val nextModels = result.models.ifEmpty { prev.models }
             val matchedByPrevId = nextModels.firstOrNull { it.containsModelId(prev.selectedModelId) }
-            val matchedByDefault = result.defaultModelId?.let { defId ->
+            val matchedByDefault = defaultId?.let { defId ->
                 nextModels.firstOrNull { it.containsModelId(defId) }
             }
             val prevDisplayName = prev.selectedModel?.canonicalDisplayName
@@ -119,8 +120,8 @@ public class SettingsAndCustomizationStore(
                         ?: prev.selectedEffort.takeIf { it in matched.supportedEfforts }
                         ?: matched.clampedEffort(matched.thinkingEffort)
                 }
-                matchedByDefault != null && result.defaultModelId != null -> {
-                    matched.effortForVariantModelId(result.defaultModelId)
+                matchedByDefault != null && defaultId != null -> {
+                    matched.effortForVariantModelId(defaultId)
                         ?: matched.clampedEffort(matched.thinkingEffort)
                 }
                 matchedByName != null && prev.selectedEffort in matched.supportedEfforts -> prev.selectedEffort
@@ -128,7 +129,7 @@ public class SettingsAndCustomizationStore(
             }
 
             val nextSelectedModelId = matched?.resolvedModelId(nextEffort)
-                ?: result.defaultModelId
+                ?: defaultId
                 ?: prev.selectedModelId
 
             prev.copy(
