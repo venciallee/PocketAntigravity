@@ -6,6 +6,7 @@ import AntigravityData
 internal struct SubagentStepCardView: View {
     let subagent: SubagentPayload
     let onStop: () -> Void
+    @Environment(\.appLanguage) private var lang
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -21,7 +22,7 @@ internal struct SubagentStepCardView: View {
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
                 Spacer()
-                Text(subagent.status.displayBadgeText)
+                Text(subagent.status.localizedTitle(for: lang))
                     .font(.system(size: 10, weight: .bold))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
@@ -35,7 +36,7 @@ internal struct SubagentStepCardView: View {
                     .lineLimit(3)
             }
             if subagent.status == .inProgress || subagent.status == .waiting {
-                Button("Stop Subagent", action: onStop)
+                Button(lang.t("Stop Subagent", "停止子代理"), action: onStop)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.statusError)
             }
@@ -48,12 +49,13 @@ internal struct SubagentStepCardView: View {
 
 internal struct DynamicWorkflowStepCardView: View {
     let workflow: DynamicWorkflowPayload
+    @Environment(\.appLanguage) private var lang
     @State private var showScript: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("Dynamic Workflow · \(workflow.currentPhase)", systemImage: "point.3.connected.trianglepath.dotted")
+                Label(lang.t("Dynamic Workflow · \(workflow.currentPhase)", "动态工作流 · \(workflow.currentPhase)"), systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 Spacer()
@@ -75,7 +77,7 @@ internal struct DynamicWorkflowStepCardView: View {
                 }
             }
             if !workflow.pythonScript.isEmpty {
-                Button(showScript ? "Hide Python Orchestrator" : "Inspect Python Orchestrator") {
+                Button(showScript ? lang.t("Hide Python Orchestrator", "隐藏 Python 编排脚本") : lang.t("Inspect Python Orchestrator", "查看 Python 编排脚本")) {
                     showScript.toggle()
                 }
                 .font(.system(size: 11.5, weight: .semibold))
@@ -99,16 +101,17 @@ internal struct DynamicWorkflowStepCardView: View {
 internal struct SwarmStepCardView: View {
     let board: SwarmBoardPayload
     let onOpenBoard: () -> Void
+    @Environment(\.appLanguage) private var lang
 
     var body: some View {
         Button(action: onOpenBoard) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label("Agent Swarm · \(board.title)", systemImage: "hexagon.fill")
+                    Label(lang.t("Agent Swarm · \(board.title)", "多代理协作 · \(board.title)"), systemImage: "hexagon.fill")
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     Spacer()
-                    Text("\(board.members.count) specialists")
+                    Text(lang.t("\(board.members.count) specialists", "\(board.members.count) 位专家"))
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
@@ -179,6 +182,7 @@ internal struct McpToolStepCardView: View {
 
 internal struct VoiceCallSummaryCardView: View {
     let summary: VoiceCallTranscriptSummary
+    @Environment(\.appLanguage) private var lang
     @State private var isExpanded: Bool = false
 
     var body: some View {
@@ -202,7 +206,7 @@ internal struct VoiceCallSummaryCardView: View {
             .buttonStyle(.plain)
             if isExpanded {
                 ForEach(summary.turns) { turn in
-                    Text("\(turn.isUser ? "You" : "Gemini"): \(turn.transcript)")
+                    Text("\(turn.isUser ? lang.t("You", "我") : "Gemini"): \(turn.transcript)")
                         .font(.system(size: 12))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
@@ -262,6 +266,8 @@ public struct StepInlineApprovalCardView: View {
         self.requested = requested
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private struct CardDescriptor {
         let icon: String
         let title: String
@@ -280,10 +286,10 @@ public struct StepInlineApprovalCardView: View {
             let allowScopes = (requested.permission?.persistSuggestionType != .blocked)
             return CardDescriptor(
                 icon: "exclamationmark.shield.fill",
-                title: "Permission Request\(plugin)",
+                title: lang.t("Permission Request\(plugin)", "权限请求\(plugin)"),
                 detail: "\(action)(\(target))",
                 secondaryNote: requested.permission?.reason,
-                primaryLabel: "Allow Once",
+                primaryLabel: lang.t("Allow Once", "仅允许一次"),
                 supportsScopedAllow: allowScopes
             )
         case .filePermission:
@@ -295,24 +301,24 @@ public struct StepInlineApprovalCardView: View {
             let isDir = requested.filePermission?.isDirectory ?? (step.type == .listDirectory)
             return CardDescriptor(
                 icon: isDir ? "folder.badge.questionmark" : "doc.badge.gearshape",
-                title: isDir ? "Folder Access Approval" : "File Access Approval",
-                detail: cleanedPath.isEmpty ? "Confirm access to workspace or external file" : cleanedPath,
+                title: isDir ? lang.t("Folder Access Approval", "文件夹访问审批") : lang.t("File Access Approval", "文件访问审批"),
+                detail: cleanedPath.isEmpty ? lang.t("Confirm access to workspace or external file", "确认访问工作区或外部文件") : cleanedPath,
                 secondaryNote: requested.filePermission?.blockReason,
-                primaryLabel: "Allow Once",
+                primaryLabel: lang.t("Allow Once", "仅允许一次"),
                 supportsScopedAllow: true
             )
         case .executeUrl, .openBrowserUrl, .browserAction, .executeBrowserJavascript,
              .captureBrowserScreenshot, .clickBrowserPixel, .openBrowserSetup, .confirmBrowserSetup:
-            let domain = requested.executeUrl?.domain ?? "Browser"
+            let domain = requested.executeUrl?.domain ?? lang.t("Browser", "浏览器")
             let detail = requested.executeUrl?.url
                 ?? requested.rawSummary
-                ?? "Allow agent to continue browser action"
+                ?? lang.t("Allow agent to continue browser action", "允许 Agent 继续执行浏览器操作")
             return CardDescriptor(
                 icon: "safari.fill",
-                title: "Browser Action · \(domain)",
-                detail: detail.isEmpty ? "Allow agent to continue browser action" : detail,
+                title: lang.t("Browser Action · \(domain)", "浏览器操作 · \(domain)"),
+                detail: detail.isEmpty ? lang.t("Allow agent to continue browser action", "允许 Agent 继续执行浏览器操作") : detail,
                 secondaryNote: nil,
-                primaryLabel: "Allow Once",
+                primaryLabel: lang.t("Allow Once", "仅允许一次"),
                 supportsScopedAllow: true
             )
         case .downloadUrl:
@@ -320,29 +326,29 @@ public struct StepInlineApprovalCardView: View {
             let origin = requested.downloadUrl?.origin ?? ""
             return CardDescriptor(
                 icon: "arrow.down.circle.fill",
-                title: "Browser Download · \(file)",
-                detail: "From \(origin) → \(requested.downloadUrl?.destinationFolder ?? "~/Downloads")",
+                title: lang.t("Browser Download · \(file)", "浏览器下载 · \(file)"),
+                detail: lang.t("From \(origin) → \(requested.downloadUrl?.destinationFolder ?? "~/Downloads")", "从 \(origin) → \(requested.downloadUrl?.destinationFolder ?? "~/Downloads")"),
                 secondaryNote: nil,
-                primaryLabel: "Allow Once",
+                primaryLabel: lang.t("Allow Once", "仅允许一次"),
                 supportsScopedAllow: true
             )
         case .browserUpload:
             let files = requested.browserUpload?.fileNames.joined(separator: ", ") ?? "files"
             return CardDescriptor(
                 icon: "arrow.up.doc.fill",
-                title: "One-Time Upload Confirmation",
-                detail: "Upload \(files) to \(requested.browserUpload?.origin ?? "site")",
+                title: lang.t("One-Time Upload Confirmation", "单次文件上传确认"),
+                detail: lang.t("Upload \(files) to \(requested.browserUpload?.origin ?? "site")", "上传 \(files) 至 \(requested.browserUpload?.origin ?? "站点")"),
                 secondaryNote: nil,
-                primaryLabel: "Allow Once",
+                primaryLabel: lang.t("Allow Once", "仅允许一次"),
                 supportsScopedAllow: false
             )
         case .workflowScript:
             return CardDescriptor(
                 icon: "flowchart.fill",
-                title: "Approve Dynamic Workflow Script",
-                detail: requested.workflowScript?.title ?? "Python orchestrator script",
+                title: lang.t("Approve Dynamic Workflow Script", "批准动态工作流脚本"),
+                detail: requested.workflowScript?.title ?? lang.t("Python orchestrator script", "Python 编排脚本"),
                 secondaryNote: nil,
-                primaryLabel: "Approve",
+                primaryLabel: lang.t("Approve", "批准"),
                 supportsScopedAllow: false
             )
         case .mcp:
@@ -350,47 +356,47 @@ public struct StepInlineApprovalCardView: View {
             let tool = requested.mcpToolName ?? step.mcpToolCall?.toolName ?? "tool"
             return CardDescriptor(
                 icon: "wrench.and.screwdriver.fill",
-                title: "MCP Tool Approval · \(server)",
-                detail: "Invoke \(tool)",
+                title: lang.t("MCP Tool Approval · \(server)", "MCP 工具审批 · \(server)"),
+                detail: lang.t("Invoke \(tool)", "调用 \(tool)"),
                 secondaryNote: requested.rawSummary,
-                primaryLabel: "Allow Once",
+                primaryLabel: lang.t("Allow Once", "仅允许一次"),
                 supportsScopedAllow: true
             )
         case .sendCommandInput:
-            let stdinText = requested.rawSummary ?? step.runCommand?.commandLine ?? "Send input to running terminal process"
+            let stdinText = requested.rawSummary ?? step.runCommand?.commandLine ?? lang.t("Send input to running terminal process", "向运行中的终端进程发送输入")
             return CardDescriptor(
                 icon: "terminal.fill",
-                title: "Send Terminal Input?",
+                title: lang.t("Send Terminal Input?", "发送终端输入？"),
                 detail: stdinText,
                 secondaryNote: nil,
-                primaryLabel: "Approve",
+                primaryLabel: lang.t("Approve", "批准"),
                 supportsScopedAllow: false
             )
         case .readUrlContent:
             return CardDescriptor(
                 icon: "globe",
-                title: "Fetch External URL?",
-                detail: requested.rawSummary ?? "Allow agent to fetch external web content",
+                title: lang.t("Fetch External URL?", "读取外部网页？"),
+                detail: requested.rawSummary ?? lang.t("Allow agent to fetch external web content", "允许 Agent 读取外部网页内容"),
                 secondaryNote: nil,
-                primaryLabel: "Allow Once",
+                primaryLabel: lang.t("Allow Once", "仅允许一次"),
                 supportsScopedAllow: true
             )
         case .deploy:
             return CardDescriptor(
                 icon: "paperplane.fill",
-                title: "Confirm Deployment?",
-                detail: requested.rawSummary ?? "Allow agent to proceed with deployment",
+                title: lang.t("Confirm Deployment?", "确认部署？"),
+                detail: requested.rawSummary ?? lang.t("Allow agent to proceed with deployment", "允许 Agent 执行部署"),
                 secondaryNote: nil,
-                primaryLabel: "Approve",
+                primaryLabel: lang.t("Approve", "批准"),
                 supportsScopedAllow: false
             )
         case .runExtensionCode:
             return CardDescriptor(
                 icon: "puzzlepiece.extension.fill",
-                title: "Run Extension Action?",
-                detail: requested.rawSummary ?? "Allow agent to execute IDE extension action",
+                title: lang.t("Run Extension Action?", "运行扩展操作？"),
+                detail: requested.rawSummary ?? lang.t("Allow agent to execute IDE extension action", "允许 Agent 执行 IDE 扩展操作"),
                 secondaryNote: nil,
-                primaryLabel: "Allow Once",
+                primaryLabel: lang.t("Allow Once", "仅允许一次"),
                 supportsScopedAllow: false
             )
         default:
@@ -405,22 +411,22 @@ public struct StepInlineApprovalCardView: View {
             let fallbackDetail = fallbackCandidates
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .first(where: { !$0.isEmpty })
-                ?? "Step \(step.stepIndex + 1) is waiting for your approval to continue."
+                ?? lang.t("Step \(step.stepIndex + 1) is waiting for your approval to continue.", "第 \(step.stepIndex + 1) 步正等待你的审批以继续。")
             let title: String = {
                 if step.type == .notifyUser {
-                    return "Waiting for Your Review"
+                    return lang.t("Waiting for Your Review", "等待你的审查")
                 }
                 if let key = requested.rawMemberKey, !key.isEmpty, key != "approvalInteraction" {
-                    return "Approval Required · \(key)"
+                    return lang.t("Approval Required · \(key)", "需要审批 · \(key)")
                 }
-                return "Approval Required · Step \(step.stepIndex + 1)"
+                return lang.t("Approval Required · Step \(step.stepIndex + 1)", "需要审批 · 第 \(step.stepIndex + 1) 步")
             }()
             return CardDescriptor(
                 icon: "exclamationmark.shield.fill",
                 title: title,
                 detail: fallbackDetail,
                 secondaryNote: nil,
-                primaryLabel: "Approve",
+                primaryLabel: lang.t("Approve", "批准"),
                 supportsScopedAllow: false
             )
         }
@@ -448,16 +454,16 @@ public struct StepInlineApprovalCardView: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.statusWaiting)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Structured Question Pending")
+                        Text(lang.t("Structured Question Pending", "待回答结构化问题"))
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(AntigravityTheme.statusWaiting)
-                        Text(requested.askQuestion?.question ?? requested.rawSummary ?? "Tap to answer agent question")
+                        Text(requested.askQuestion?.question ?? requested.rawSummary ?? lang.t("Tap to answer agent question", "点击回答 Agent 的问题"))
                             .font(.system(size: 13))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .lineLimit(3)
                     }
                     Spacer(minLength: 6)
-                    Text("Answer")
+                    Text(lang.t("Answer", "回答"))
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                         .padding(.horizontal, 12)
@@ -486,7 +492,7 @@ public struct StepInlineApprovalCardView: View {
                     Image(systemName: "desktopcomputer.and.arrow.down")
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.statusWaiting)
-                    Text("New Approval Type · Approve on Desktop")
+                    Text(lang.t("New Approval Type · Approve on Desktop", "新审批类型 · 请在桌面端处理"))
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(AntigravityTheme.statusWaiting)
                         .lineLimit(2)
@@ -509,14 +515,19 @@ public struct StepInlineApprovalCardView: View {
                         .background(AntigravityTheme.surfaceCodeBlock, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
-                Text("This Antigravity Desktop host requested an interaction schema newer than this iOS build. Approve or deny it directly in Antigravity Desktop, then refresh.")
+                Text(
+                    lang.t(
+                        "This Antigravity Desktop host requested an interaction schema newer than this iOS build. Approve or deny it directly in Antigravity Desktop, then refresh.",
+                        "此 Antigravity 桌面端请求了较新版协议的审批类型。请直接在桌面端批准或拒绝后点击刷新。"
+                    )
+                )
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
 
                 Button {
                     store.syncStepsForCascade(step.cascadeId, pollUntilIdle: false)
                 } label: {
-                    Label("Refresh Status", systemImage: "arrow.clockwise")
+                    Label(lang.t("Refresh Status", "刷新状态"), systemImage: "arrow.clockwise")
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
@@ -579,7 +590,7 @@ public struct StepInlineApprovalCardView: View {
                     Button {
                         store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .reject)
                     } label: {
-                        Text("Deny")
+                        Text(lang.t("Deny", "拒绝"))
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .padding(.horizontal, 16)
@@ -607,7 +618,7 @@ public struct StepInlineApprovalCardView: View {
                         Button {
                             store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .allowInConversation)
                         } label: {
-                            Text("Allow in Chat")
+                            Text(lang.t("Allow in Chat", "本对话允许"))
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.inkReading)
                                 .frame(maxWidth: .infinity, minHeight: 38)
@@ -618,7 +629,7 @@ public struct StepInlineApprovalCardView: View {
                         Button {
                             store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .alwaysAllow)
                         } label: {
-                            Text("Always Allow")
+                            Text(lang.t("Always Allow", "始终允许"))
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                 .frame(maxWidth: .infinity, minHeight: 38)
@@ -633,7 +644,7 @@ public struct StepInlineApprovalCardView: View {
                         HStack(spacing: 6) {
                             Image(systemName: "doc.text.magnifyingglass")
                                 .font(.system(size: 12.5, weight: .semibold))
-                            Text("Review Plan & Comment")
+                            Text(lang.t("Review Plan & Comment", "审查方案并批注"))
                                 .font(.system(size: 13, weight: .semibold))
                         }
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
@@ -667,13 +678,15 @@ internal struct InlineGenericInteractionCardView: View {
     let step: CascadeStep
     let interaction: RequestedInteraction
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: interaction.kind == .askQuestion ? "questionmark.bubble.fill" : "hand.raised.fill")
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.statusWaiting)
-                Text(interaction.kind == .askQuestion ? "Agent needs your input" : "Permission required")
+                Text(interaction.kind == .askQuestion ? lang.t("Agent needs your input", "Agent 需要你的输入") : lang.t("Permission required", "需要权限审批"))
                     .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.statusWaiting)
                 Spacer()
@@ -686,7 +699,7 @@ internal struct InlineGenericInteractionCardView: View {
                 Button {
                     store.presentedSheet = .askQuestion(stepIndex: step.stepIndex)
                 } label: {
-                    Text("Review & Answer")
+                    Text(lang.t("Review & Answer", "查看并回答"))
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                         .frame(maxWidth: .infinity, minHeight: 44)
@@ -697,7 +710,7 @@ internal struct InlineGenericInteractionCardView: View {
             } else {
                 let targetText = interaction.filePermission?.absolutePathUri
                     ?? interaction.permission?.target
-                    ?? "Workspace action"
+                    ?? lang.t("Workspace action", "工作区操作")
                 Text(targetText)
                     .font(.system(size: 12.5, design: .monospaced))
                     .foregroundStyle(AntigravityTheme.inkLabel)
@@ -706,7 +719,7 @@ internal struct InlineGenericInteractionCardView: View {
                     Button {
                         store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .reject)
                     } label: {
-                        Text("Deny")
+                        Text(lang.t("Deny", "拒绝"))
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .frame(maxWidth: .infinity, minHeight: 44)
@@ -718,7 +731,7 @@ internal struct InlineGenericInteractionCardView: View {
                     Button {
                         store.resolveWaitingStep(stepIndex: step.stepIndex, decision: .allowOnce)
                     } label: {
-                        Text("Allow Once")
+                        Text(lang.t("Allow Once", "仅允许一次"))
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(AntigravityTheme.inkOnAmberCTA)
                             .frame(maxWidth: .infinity, minHeight: 44)

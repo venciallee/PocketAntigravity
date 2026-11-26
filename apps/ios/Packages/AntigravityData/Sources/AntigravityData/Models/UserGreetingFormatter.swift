@@ -51,24 +51,54 @@ public enum UserGreetingFormatter: Sendable {
     }
 
     /// Builds the centered Home (`UE01`) hero greeting copy.
-    public static func homeHeroGreeting(displayName: String?) -> String {
-        if let clean = formatGreetingName(displayName) {
+    public static func homeHeroGreeting(
+        displayName: String?,
+        language: AppLanguage = .english
+    ) -> String {
+        let clean = formatGreetingName(displayName)
+        if language.isChinese {
+            if let clean {
+                return "欢迎回来，\n\(clean)。\n今天从哪里开始？"
+            }
+            return "欢迎回来。\n今天从哪里\n开始？"
+        }
+        if let clean {
             return "Welcome back,\n\(clean). Where\nshould we pick up?"
         }
         return "Welcome back.\nWhere should\nwe pick up?"
     }
 
     /// Builds the dimmed Add Context popover backdrop greeting copy.
-    public static func addContextBackdropGreeting(displayName: String?) -> String {
-        if let clean = formatGreetingName(displayName) {
+    public static func addContextBackdropGreeting(
+        displayName: String?,
+        language: AppLanguage = .english
+    ) -> String {
+        let clean = formatGreetingName(displayName)
+        if language.isChinese {
+            if let clean {
+                return "欢迎回来，\(clean)。\n今天从哪里开始？"
+            }
+            return "欢迎回来。\n今天从哪里开始？"
+        }
+        if let clean {
             return "Welcome back, \(clean).\nWhere should we pick\nup?"
         }
         return "Welcome back.\nWhere should we pick\nup?"
     }
 
     /// Builds the compact dimmed Permissions Preset popover backdrop greeting copy.
-    public static func compactBackdropGreeting(displayName: String?) -> String {
-        if let clean = formatGreetingName(displayName) {
+    public static func compactBackdropGreeting(
+        displayName: String?,
+        language: AppLanguage = .english
+    ) -> String {
+        let clean = formatGreetingName(displayName)
+        if language.isChinese {
+            if let clean {
+                return "欢迎回来，\(clean)。"
+            }
+            return "欢迎回来。"
+        }
+        if let clean {
             return "Welcome back, \(clean)."
         }
         return "Welcome back."

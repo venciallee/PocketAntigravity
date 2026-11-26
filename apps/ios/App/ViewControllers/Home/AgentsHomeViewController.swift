@@ -60,6 +60,10 @@ public struct AgentsHomeViewController: View {
         self.onOpenSettings = onOpenSettings
     }
 
+    private var lang: AppLanguage {
+        store.appearancePreferences.language
+    }
+
     private var selectedHost: AgentsHostFilterScope {
         store.selectedHostScope
     }
@@ -109,7 +113,7 @@ public struct AgentsHomeViewController: View {
             return selectedLocalHostResolvedName(id: id, fallback: name)
         case .allHosts:
             if store.hasPairedBackend {
-                return pairedLocalHosts.count > 1 ? "All Hosts" : store.activeHost.hostname
+                return pairedLocalHosts.count > 1 ? lang.t("All Hosts", "全部主机") : store.activeHost.hostname
             }
             return "MacBook Pro"
         }
@@ -137,7 +141,7 @@ public struct AgentsHomeViewController: View {
 
     private var hostSwitcherLabelText: String {
         if store.hasPairedBackend && !store.isDeviceNetworkReachable {
-            return "No Network"
+            return lang.t("No Network", "无网络")
         }
         switch selectedHost {
         case .antigravityCloud:
@@ -145,21 +149,29 @@ public struct AgentsHomeViewController: View {
         case .localHost(let id, let fallbackName):
             let resolved = selectedLocalHostResolvedName(id: id, fallback: fallbackName)
             if store.hasPairedBackend && !isConnectingToHost {
-                return isSelectedHostOnline ? resolved : "\(resolved) · Offline"
+                return isSelectedHostOnline ? resolved : lang.t("\(resolved) · Offline", "\(resolved) · 离线")
             }
             return resolved
         case .allHosts:
             if store.hasPairedBackend {
                 if pairedLocalHosts.count > 1 {
-                    if isConnectingToHost { return "All Hosts" }
-                    return isSelectedHostOnline ? "All Hosts" : "All Hosts · Offline"
+                    if isConnectingToHost { return lang.t("All Hosts", "全部主机") }
+                    return isSelectedHostOnline ? lang.t("All Hosts", "全部主机") : lang.t("All Hosts · Offline", "全部主机 · 离线")
                 }
                 if isConnectingToHost { return store.activeHost.hostname }
                 return isSelectedHostOnline
                     ? store.activeHost.hostname
-                    : "\(store.activeHost.hostname) · Offline"
+                    : lang.t("\(store.activeHost.hostname) · Offline", "\(store.activeHost.hostname) · 离线")
             }
             return "MacBook Pro"
+        }
+    }
+
+    private func localizedBranchOptionLabel(_ raw: String) -> String {
+        switch raw {
+        case "Repo default": return lang.t("Repo default", "仓库默认")
+        case "New worktree": return lang.t("New worktree", "新建 Worktree")
+        default: return raw
         }
     }
 
@@ -252,9 +264,9 @@ public struct AgentsHomeViewController: View {
         }
         if usesLiveStoreData {
             if store.isSwitchingHost || store.isRefreshingSelectedHost {
-                return "Loading..."
+                return lang.t("Loading...", "加载中...")
             }
-            return AntigravityCloudDetector.noProjectDisplayName
+            return lang.t(AntigravityCloudDetector.noProjectDisplayName, "无项目")
         }
         return "ledger-svc"
     }
@@ -301,7 +313,7 @@ public struct AgentsHomeViewController: View {
                     ProgressView()
                         .controlSize(.mini)
                         .tint(AntigravityTheme.accentPeriwinkle)
-                    Text("Connecting to \(selectedHostDisplayName)...")
+                    Text(lang.t("Connecting to \(selectedHostDisplayName)...", "正在连接 \(selectedHostDisplayName)..."))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .lineLimit(1)
@@ -460,7 +472,7 @@ public struct AgentsHomeViewController: View {
             .buttonStyle(.plain)
             .fixedSize()
             .layoutPriority(1)
-            .accessibilityLabel("Open sidebar")
+            .accessibilityLabel(lang.t("Open sidebar", "打开侧边栏"))
             .accessibilityIdentifier("btn-sidebar")
 
             // Centered Host Switcher Capsule (strictly bounded between sidebar & search buttons)
@@ -478,8 +490,10 @@ public struct AgentsHomeViewController: View {
                         } label: {
                             Label(
                                 isSelectedHostOnline
-                                    ? (selectedHost == .allHosts ? "Sync Desktop & Cloud Now" : "Sync \(selectedHostDisplayName) Now")
-                                    : "Reconnect \(selectedHostDisplayName)",
+                                    ? (selectedHost == .allHosts
+                                        ? lang.t("Sync Desktop & Cloud Now", "立即同步桌面端与云端")
+                                        : lang.t("Sync \(selectedHostDisplayName) Now", "立即同步 \(selectedHostDisplayName)"))
+                                    : lang.t("Reconnect \(selectedHostDisplayName)", "重新连接 \(selectedHostDisplayName)"),
                                 systemImage: isSelectedHostOnline ? "arrow.clockwise" : "bolt.horizontal.circle"
                             )
                         }
@@ -491,18 +505,18 @@ public struct AgentsHomeViewController: View {
                                 store.activeRoute = .pairingSettings
                             }
                         } label: {
-                            Label("Pair Mac / Cloud Host...", systemImage: "qrcode.viewfinder")
+                            Label(lang.t("Pair Mac / Cloud Host...", "配对 Mac / 云端主机..."), systemImage: "qrcode.viewfinder")
                         }
                     }
                 }
 
                 Section {
                     Toggle(isOn: hostSelectionBinding(for: .allHosts)) {
-                        Label("All Hosts (Cloud & Local)", systemImage: "square.stack.3d.up")
+                        Label(lang.t("All Hosts (Cloud & Local)", "全部主机（云端与本地）"), systemImage: "square.stack.3d.up")
                     }
 
                     Toggle(isOn: hostSelectionBinding(for: .antigravityCloud)) {
-                        Label("Antigravity (Cloud)", systemImage: "cloud")
+                        Label(lang.t("Antigravity (Cloud)", "Antigravity（云端）"), systemImage: "cloud")
                     }
 
                     if store.hasPairedBackend {
@@ -516,7 +530,7 @@ public struct AgentsHomeViewController: View {
                                     deviceStatusMenuIcon(isOnline: online)
                                 }
                             }
-                            .accessibilityLabel("\(host.hostname), \(online ? "Online" : "Offline")")
+                            .accessibilityLabel("\(host.hostname), \(online ? lang.t("Online", "在线") : lang.t("Offline", "离线"))")
                         }
                     } else {
                         let mbpTarget = HostFilterTarget.localHost(id: "host-mbp-m4", name: "MacBook Pro")
@@ -527,7 +541,7 @@ public struct AgentsHomeViewController: View {
                                 deviceStatusMenuIcon(isOnline: true)
                             }
                         }
-                        .accessibilityLabel("MacBook Pro, Online")
+                        .accessibilityLabel(lang.t("MacBook Pro, Online", "MacBook Pro，在线"))
                     }
                 }
             } label: {
@@ -578,7 +592,7 @@ public struct AgentsHomeViewController: View {
             .buttonStyle(.plain)
             .fixedSize()
             .layoutPriority(1)
-            .accessibilityLabel("Search conversations")
+            .accessibilityLabel(lang.t("Search conversations", "搜索对话"))
             .accessibilityIdentifier("btn-global-search")
         }
     }
@@ -595,7 +609,7 @@ public struct AgentsHomeViewController: View {
                     .frame(width: 8, height: 8)
 
                 HStack(spacing: 0) {
-                    Text("Needs approval")
+                    Text(lang.t("Needs approval", "需要审批"))
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.statusWaiting)
                     Text(" · \(store.displayTitle(for: summary))")
@@ -636,8 +650,8 @@ public struct AgentsHomeViewController: View {
                         Button {} label: {
                             Text(
                                 (store.isSwitchingHost || store.isRefreshingSelectedHost)
-                                    ? "Syncing repositories..."
-                                    : "No repositories on \(selectedHostDisplayName)"
+                                    ? lang.t("Syncing repositories...", "正在同步仓库...")
+                                    : lang.t("No repositories on \(selectedHostDisplayName)", "\(selectedHostDisplayName) 上暂无仓库")
                             )
                         }
                         .disabled(true)
@@ -647,7 +661,7 @@ public struct AgentsHomeViewController: View {
                                 _ = await store.refreshConversationsForHostScope(selectedHost, forceFullSync: true)
                             }
                         } label: {
-                            Label("Sync Repositories", systemImage: "arrow.clockwise")
+                            Label(lang.t("Sync Repositories", "同步仓库"), systemImage: "arrow.clockwise")
                         }
                     } else {
                         ForEach(selectableProjects) { proj in
@@ -672,7 +686,7 @@ public struct AgentsHomeViewController: View {
                             activeHomeSheet = .newProject
                         }
                     } label: {
-                        Label("New Project...", systemImage: "folder.badge.plus")
+                        Label(lang.t("New Project...", "新建项目..."), systemImage: "folder.badge.plus")
                     }
                 } label: {
                     HStack(spacing: 6) {
@@ -702,9 +716,9 @@ public struct AgentsHomeViewController: View {
                             selectedBranchOption = opt
                         } label: {
                             if opt == selectedBranchOption {
-                                Label(opt, systemImage: "checkmark")
+                                Label(localizedBranchOptionLabel(opt), systemImage: "checkmark")
                             } else {
-                                Text(opt)
+                                Text(localizedBranchOptionLabel(opt))
                             }
                         }
                     }
@@ -713,7 +727,7 @@ public struct AgentsHomeViewController: View {
                         Image(systemName: "arrow.triangle.branch")
                             .font(.system(size: 13.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textSecondary)
-                        Text(selectedBranchOption)
+                        Text(localizedBranchOptionLabel(selectedBranchOption))
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textBody)
                             .lineLimit(1)
@@ -742,7 +756,7 @@ public struct AgentsHomeViewController: View {
                 .buttonStyle(.plain)
                 .fixedSize()
                 .layoutPriority(1)
-                .accessibilityLabel(isCloudTargetSelected ? "Cloud runtime selected" : "Local runtime selected")
+                .accessibilityLabel(isCloudTargetSelected ? lang.t("Cloud runtime selected", "已选择云端运行环境") : lang.t("Local runtime selected", "已选择本地运行环境"))
                 .accessibilityValue(isCloudTargetSelected ? "cloud" : "computer")
                 .accessibilityIdentifier("home-runtime-toggle")
             }
@@ -751,14 +765,14 @@ public struct AgentsHomeViewController: View {
 
             ChatComposerView(
                 store: store,
-                placeholderOverride: "Ask anything, @ to mention, / for actions",
+                placeholderOverride: lang.t("Ask anything, @ to mention, / for actions", "输入任何内容，@ 引用上下文，/ 快捷操作"),
                 isHomeComposer: true,
                 onSubmitDraft: { promptText in
                     let slug = resolvedSelectedProject?.id
                         ?? (usesLiveStoreData ? AntigravityCloudDetector.noProjectDisplayName : "ledger-svc")
                     let attachments = store.composerAttachments
                     let cleanTitle = String(promptText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(48))
-                    let fallbackTitle = attachments.first?.label ?? "New Conversation"
+                    let fallbackTitle = attachments.first?.label ?? lang.t("New Conversation", "新建对话")
                     _ = store.createConversationInProject(
                         slug,
                         title: cleanTitle.isEmpty ? fallbackTitle : cleanTitle,
@@ -786,7 +800,7 @@ public struct AgentsHomeViewController: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.statusWaiting)
-                Text("Google 登录会话已过期，请点击下方重新登录。")
+                Text(lang.t("Google sign-in session expired. Tap below to sign in again.", "Google 登录会话已过期，请点击下方重新登录。"))
                     .font(.system(size: 13.5, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -797,7 +811,7 @@ public struct AgentsHomeViewController: View {
                 HStack(spacing: 6) {
                     Image(systemName: "person.crop.circle.badge.checkmark")
                         .font(.system(size: 13.5, weight: .semibold))
-                    Text("重新登录 Google")
+                    Text(lang.t("Sign in with Google Again", "重新登录 Google"))
                         .font(.system(size: 13.5, weight: .semibold))
                 }
                 .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
@@ -995,6 +1009,10 @@ public struct AgentsSidebarDrawerPanelView: View {
         self.onOpenContextMenuPreview = onOpenContextMenuPreview
     }
 
+    private var lang: AppLanguage {
+        store.appearancePreferences.language
+    }
+
     private var usesLiveData: Bool {
         !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected
     }
@@ -1028,7 +1046,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                     status: .done,
                     isUnread: false,
                     isPinned: true,
-                    timestampLabel: "1h",
+                    timestampLabel: AppLocalizationFormatter.localizeRelativeTime("1h", language: lang),
                     isSelected: false
                 )
             ].filter(matchesSearch)
@@ -1069,7 +1087,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                     status: .done,
                     isUnread: false,
                     isPinned: false,
-                    timestampLabel: "4h",
+                    timestampLabel: AppLocalizationFormatter.localizeRelativeTime("4h", language: lang),
                     isSelected: false
                 ),
                 DrawerConversationRow(
@@ -1079,7 +1097,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                     status: .done,
                     isUnread: false,
                     isPinned: false,
-                    timestampLabel: "1d",
+                    timestampLabel: AppLocalizationFormatter.localizeRelativeTime("1d", language: lang),
                     isSelected: false
                 )
             ].filter(matchesSearch)
@@ -1102,7 +1120,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                     status: .done,
                     isUnread: false,
                     isPinned: false,
-                    timestampLabel: "2d",
+                    timestampLabel: AppLocalizationFormatter.localizeRelativeTime("2d", language: lang),
                     isSelected: false
                 )
             ].filter(matchesSearch)
@@ -1144,7 +1162,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                 groups.append(
                     DrawerProjectGroup(
                         id: proj.id,
-                        displayName: proj.name,
+                        displayName: proj.isNoProject ? lang.t(proj.name, "无项目") : proj.name,
                         isCloud: projIsCloud,
                         conversations: rows
                     )
@@ -1162,7 +1180,7 @@ public struct AgentsSidebarDrawerPanelView: View {
             groups.append(
                 DrawerProjectGroup(
                     id: AntigravityCloudDetector.noProjectDisplayName,
-                    displayName: AntigravityCloudDetector.noProjectDisplayName,
+                    displayName: lang.t(AntigravityCloudDetector.noProjectDisplayName, "无项目"),
                     isCloud: false,
                     conversations: ungrouped
                 )
@@ -1179,7 +1197,7 @@ public struct AgentsSidebarDrawerPanelView: View {
             status: summary.status,
             isUnread: summary.isUnread,
             isPinned: summary.isPinned,
-            timestampLabel: summary.relativeTimeLabel,
+            timestampLabel: AppLocalizationFormatter.localizeRelativeTime(summary.relativeTimeLabel, language: lang),
             isSelected: summary.cascadeId == store.activeCascadeId && {
                 if case .cascadeChat = store.activeRoute { return true }
                 return false
@@ -1208,7 +1226,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Close sidebar")
+                .accessibilityLabel(lang.t("Close sidebar", "关闭侧边栏"))
                 .accessibilityIdentifier("btn-close-sidebar")
 
                 Spacer()
@@ -1226,7 +1244,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Search sidebar")
+                .accessibilityLabel(lang.t("Search sidebar", "搜索侧边栏"))
                 .accessibilityIdentifier("btn-drawer-search")
             }
             .padding(.horizontal, 16)
@@ -1237,7 +1255,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 14))
                         .foregroundStyle(AntigravityTheme.textMuted)
-                    TextField("Search conversations", text: $searchQuery)
+                    TextField(lang.t("Search conversations", "搜索对话"), text: $searchQuery)
                         .font(.system(size: 15))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                         .accessibilityIdentifier("drawer-search-input")
@@ -1276,7 +1294,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "plus")
                                 .font(.system(size: 16, weight: .medium))
-                            Text("New Conversation")
+                            Text(lang.t("New Conversation", "新建对话"))
                                 .font(.system(size: 16, weight: .medium))
                             Spacer()
                         }
@@ -1297,7 +1315,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                     // Primary Navigation Rows (`Automations`, `Customizations`)
                     drawerPrimaryNavRow(
                         icon: "clock",
-                        title: "Automations",
+                        title: lang.t("Automations", "自动化"),
                         testId: "drawer-nav-automations"
                     ) {
                         if let onOpenAutomations {
@@ -1311,7 +1329,7 @@ public struct AgentsSidebarDrawerPanelView: View {
 
                     drawerPrimaryNavRow(
                         icon: "briefcase",
-                        title: "Customizations",
+                        title: lang.t("Customizations", "自定义"),
                         testId: "drawer-nav-customizations"
                     ) {
                         if let onOpenCustomizations {
@@ -1324,7 +1342,7 @@ public struct AgentsSidebarDrawerPanelView: View {
 
                     // Pinned Section
                     if !pinnedConversations.isEmpty {
-                        Text("Pinned")
+                        Text(lang.t("Pinned", "已置顶"))
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                             .padding(.horizontal, 18)
@@ -1341,7 +1359,7 @@ public struct AgentsSidebarDrawerPanelView: View {
 
                     // Projects Section Header + Filter / New Project Actions
                     HStack(spacing: 8) {
-                        Text("Projects")
+                        Text(lang.t("Projects", "项目"))
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
 
@@ -1361,7 +1379,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Display options")
+                        .accessibilityLabel(lang.t("Display options", "显示选项"))
                         .accessibilityIdentifier("btn-display-options")
 
                         Button {
@@ -1378,7 +1396,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("New project")
+                        .accessibilityLabel(lang.t("New project", "新建项目"))
                         .accessibilityIdentifier("btn-new-project")
                     }
                     .padding(.leading, 18)
@@ -1440,7 +1458,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                                             _ = store.createConversationInProject(group.id)
                                         }
                                     } label: {
-                                        Label("New Conversation in Project", systemImage: "plus.bubble")
+                                        Label(lang.t("New Conversation in Project", "在项目中新建会话"), systemImage: "plus.bubble")
                                     }
 
                                     if !isNoProjectGroup {
@@ -1453,14 +1471,14 @@ public struct AgentsSidebarDrawerPanelView: View {
                                                 store.activeRoute = .rulesAndSkills
                                             }
                                         } label: {
-                                            Label("Project Rules & Skills", systemImage: "doc.text")
+                                            Label(lang.t("Project Rules & Skills", "项目规则与技能"), systemImage: "doc.text")
                                         }
 
                                         if !group.isCloud {
                                             Button {
                                                 store.revealProjectInFinder(group.id)
                                             } label: {
-                                                Label("Reveal in Finder on Mac", systemImage: "laptopcomputer")
+                                                Label(lang.t("Reveal in Finder on Mac", "在 Mac 访达中显示"), systemImage: "laptopcomputer")
                                             }
                                         }
                                     }
@@ -1479,7 +1497,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                                             .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
-                                    .accessibilityLabel(isCollapsed ? "Expand \(group.displayName)" : "Collapse \(group.displayName)")
+                                    .accessibilityLabel(isCollapsed ? lang.t("Expand \(group.displayName)", "展开 \(group.displayName)") : lang.t("Collapse \(group.displayName)", "收起 \(group.displayName)"))
                                     .accessibilityIdentifier("btn-toggle-project-\(group.id)")
                                 }
 
@@ -1536,7 +1554,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                     Image(systemName: "sun.max")
                         .font(.system(size: 17, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
-                    Text("Settings")
+                    Text(lang.t("Settings", "设置"))
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
@@ -1606,7 +1624,7 @@ public struct AgentsSidebarDrawerPanelView: View {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(AntigravityTheme.textMuted)
-                        Text("Loading...")
+                        Text(lang.t("Loading...", "加载中..."))
                             .font(.system(size: 14.5, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textMuted)
                             .lineLimit(1)
@@ -1639,23 +1657,23 @@ public struct AgentsSidebarDrawerPanelView: View {
             Button {
                 store.togglePinCascade(row.id)
             } label: {
-                Label(row.isPinned ? "Unpin" : "Pin", systemImage: row.isPinned ? "pin.slash" : "pin")
+                Label(row.isPinned ? lang.t("Unpin", "取消置顶") : lang.t("Pin", "置顶"), systemImage: row.isPinned ? "pin.slash" : "pin")
             }
             Button {
                 store.toggleUnreadCascade(row.id)
             } label: {
-                Label(row.isUnread ? "Mark as read" : "Mark as unread", systemImage: "envelope.badge")
+                Label(row.isUnread ? lang.t("Mark as read", "标为已读") : lang.t("Mark as unread", "标为未读"), systemImage: "envelope.badge")
             }
             Button {
                 store.archiveCascade(row.id)
             } label: {
-                Label("Archive", systemImage: "archivebox")
+                Label(lang.t("Archive", "归档"), systemImage: "archivebox")
             }
             Divider()
             Button(role: .destructive) {
                 store.deleteCascade(row.id)
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label(lang.t("Delete", "删除"), systemImage: "trash")
             }
         }
         .accessibilityIdentifier("drawer-conv-\(row.id)")
@@ -1704,6 +1722,10 @@ private struct GlobalConversationSearchSheet: View {
 
     @State private var query: String = ""
 
+    private var lang: AppLanguage {
+        store.appearancePreferences.language
+    }
+
     private var matchingConversations: [CascadeSummary] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let isLive = !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected
@@ -1721,7 +1743,7 @@ private struct GlobalConversationSearchSheet: View {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(AntigravityTheme.textSecondary)
-                TextField("Search conversations & projects", text: $query)
+                TextField(lang.t("Search conversations & projects", "搜索对话与项目"), text: $query)
                     .font(.system(size: 16))
                     .foregroundStyle(AntigravityTheme.textPrimary)
                     .onChange(of: query) { _, newValue in
@@ -1731,7 +1753,7 @@ private struct GlobalConversationSearchSheet: View {
                     }
                     .accessibilityIdentifier("global-search-input")
 
-                Button("Cancel") {
+                Button(lang.t("Cancel", "取消")) {
                     onDismiss()
                 }
                 .font(.system(size: 15, weight: .medium))
@@ -1761,7 +1783,7 @@ private struct GlobalConversationSearchSheet: View {
                                             ProgressView()
                                                 .controlSize(.mini)
                                                 .tint(AntigravityTheme.textMuted)
-                                            Text("Loading...")
+                                            Text(lang.t("Loading...", "加载中..."))
                                                 .font(.system(size: 14.5, weight: .medium))
                                                 .foregroundStyle(AntigravityTheme.textMuted)
                                                 .lineLimit(1)
@@ -1778,7 +1800,7 @@ private struct GlobalConversationSearchSheet: View {
                                         .lineLimit(1)
                                 }
                                 Spacer()
-                                Text(summary.relativeTimeLabel)
+                                Text(AppLocalizationFormatter.localizeRelativeTime(summary.relativeTimeLabel, language: lang))
                                     .font(.system(size: 12.5))
                                     .foregroundStyle(AntigravityTheme.textMuted)
                             }

@@ -65,9 +65,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.android.ui.home.AgentsHomeScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.ContextCandidateCategory
+import dev.antigravity.shared.model.localizedTitle
 import kotlinx.coroutines.launch
 
 /**
@@ -84,6 +87,7 @@ fun AddContextSheetScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val lang = LocalAppLanguage.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val workspaceState by coordinator.workspaceStore.state.collectAsState()
@@ -189,7 +193,7 @@ fun AddContextSheetScreen(
                         .padding(vertical = 10.dp),
                 ) {
                     Text(
-                        text = "Add Context",
+                        text = tr("Add Context", "添加上下文"),
                         style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                         color = colors.inkSecondary,
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
@@ -198,7 +202,7 @@ fun AddContextSheetScreen(
                     if (!coordinator.isVerificationMode) {
                         AddContextMenuRow(
                             icon = Icons.Rounded.PhotoLibrary,
-                            label = "Photos",
+                            label = tr("Photos", "相册照片"),
                             onClick = {
                                 photoPickerLauncher.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -208,7 +212,7 @@ fun AddContextSheetScreen(
                         )
                         AddContextMenuRow(
                             icon = Icons.Rounded.AttachFile,
-                            label = "Device Files",
+                            label = tr("Device Files", "本地文件"),
                             onClick = {
                                 deviceFilePickerLauncher.launch(arrayOf("image/*", "application/pdf", "*/*"))
                             },
@@ -222,25 +226,25 @@ fun AddContextSheetScreen(
 
                     AddContextMenuRow(
                         icon = Icons.Rounded.Description,
-                        label = "Files",
+                        label = tr("Files", "文件"),
                         onClick = { drilldownCategory = ContextCandidateCategory.FILES },
                         modifier = Modifier.testTag("ctx-menu-files"),
                     )
                     AddContextMenuRow(
                         icon = Icons.Rounded.Folder,
-                        label = "Folder",
+                        label = tr("Folder", "文件夹"),
                         onClick = { drilldownCategory = ContextCandidateCategory.FOLDER },
                         modifier = Modifier.testTag("ctx-menu-folder"),
                     )
                     AddContextMenuRow(
                         icon = Icons.Rounded.AlternateEmail,
-                        label = "Mentions",
+                        label = tr("Mentions", "引用"),
                         onClick = { drilldownCategory = ContextCandidateCategory.MENTIONS },
                         modifier = Modifier.testTag("ctx-menu-mentions"),
                     )
                     AddContextMenuRow(
                         icon = Icons.Rounded.Terminal,
-                        label = "Actions",
+                        label = tr("Actions", "操作"),
                         onClick = { drilldownCategory = ContextCandidateCategory.ACTIONS },
                         modifier = Modifier.testTag("ctx-menu-actions"),
                     )
@@ -267,13 +271,13 @@ fun AddContextSheetScreen(
                             modifier = Modifier.size(20.dp),
                         )
                         Text(
-                            text = "Drive",
+                            text = tr("Drive", "云端硬盘"),
                             style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                             color = colors.inkReading,
                             modifier = Modifier.weight(1f),
                         )
                         Text(
-                            text = "Set up",
+                            text = tr("Set up", "去配置"),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontSize = 13.5.sp,
                                 fontWeight = FontWeight.Medium,
@@ -283,7 +287,10 @@ fun AddContextSheetScreen(
                     }
 
                     Text(
-                        text = "Files and folders come from $hostName",
+                        text = tr(
+                            "Files and folders come from $hostName",
+                            "文件和文件夹来自 $hostName",
+                        ),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 16.sp),
                         color = colors.inkMuted,
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
@@ -328,13 +335,17 @@ fun AddContextSheetScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = drilldownCategory?.displayTitle ?: "Add Context",
+                            text = drilldownCategory?.localizedTitle(lang) ?: tr("Add Context", "添加上下文"),
                             style = MaterialTheme.typography.titleLarge,
                             color = colors.inkReading,
                             modifier = Modifier.weight(1f),
                         )
                         IconButton(onClick = { drilldownCategory = null }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "Back to categories", tint = colors.inkSecondary)
+                            Icon(
+                                Icons.Rounded.Close,
+                                contentDescription = tr("Back to categories", "返回分类"),
+                                tint = colors.inkSecondary,
+                            )
                         }
                     }
 
@@ -349,6 +360,7 @@ fun AddContextSheetScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Icon(Icons.Rounded.Search, contentDescription = null, tint = colors.inkSecondary, modifier = Modifier.size(18.dp))
+                            val searchHint = tr("Search...", "搜索…")
                             BasicTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
@@ -357,7 +369,7 @@ fun AddContextSheetScreen(
                                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.inkReading),
                                 cursorBrush = SolidColor(colors.accentPeriwinkle),
                                 decorationBox = { inner ->
-                                    if (searchQuery.isEmpty()) Text("Search...", color = colors.inkMuted)
+                                    if (searchQuery.isEmpty()) Text(searchHint, color = colors.inkMuted)
                                     inner()
                                 },
                             )
@@ -425,7 +437,11 @@ fun AddContextSheetScreen(
                         ),
                     ) {
                         Text(
-                            text = if (selectedCount > 0) "Add to message ($selectedCount)" else "Done",
+                            text = if (selectedCount > 0) {
+                                tr("Add to message ($selectedCount)", "添加到消息（$selectedCount）")
+                            } else {
+                                tr("Done", "完成")
+                            },
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                         )
                     }

@@ -15,6 +15,13 @@ public struct DisplayOptionsSheetView: View {
         case oldestFirst = "Oldest First"
 
         public var id: String { rawValue }
+
+        public func localizedTitle(for language: AppLanguage) -> String {
+            switch self {
+            case .newestFirst: return language.t("Newest First", "最新优先")
+            case .oldestFirst: return language.t("Oldest First", "最早优先")
+            }
+        }
     }
 
     @State private var isSortPopoverPresented: Bool
@@ -29,6 +36,10 @@ public struct DisplayOptionsSheetView: View {
         _isSortPopoverPresented = State(
             initialValue: initialSortPopoverPresented ?? (store.isVerificationMode && store.isSortPopoverPresented)
         )
+    }
+
+    private var lang: AppLanguage {
+        store.appearancePreferences.language
     }
 
     private var currentSortDirection: SortOrderDirection {
@@ -53,6 +64,32 @@ public struct DisplayOptionsSheetView: View {
         )
     }
 
+    private func localizedSortProjectsOrder(_ raw: String) -> String {
+        switch raw {
+        case "Custom Order": return lang.t("Custom Order", "自定义顺序")
+        case "Alphabetical": return lang.t("Alphabetical", "按字母排序")
+        default: return raw
+        }
+    }
+
+    private func localizedFilterScope(_ raw: String) -> String {
+        switch raw {
+        case "All conversations": return lang.t("All conversations", "全部对话")
+        case "Active only": return lang.t("Active only", "仅进行中")
+        default: return raw
+        }
+    }
+
+    private func localizedDensity(_ raw: String) -> String {
+        if raw.hasPrefix("Comfortable") {
+            return lang.t("Comfortable · Previews", "舒适 · 显示预览")
+        }
+        if raw.hasPrefix("Compact") {
+            return lang.t("Compact · Titles only", "紧凑 · 仅标题")
+        }
+        return raw
+    }
+
     private func setSortPopoverPresented(_ presented: Bool) {
         if store.isVerificationMode {
             isSortPopoverPresented = presented
@@ -68,7 +105,7 @@ public struct DisplayOptionsSheetView: View {
         ZStack(alignment: .bottom) {
             // Dimmed Sidebar Projects backdrop matching UE02 reference composition (`ios-display-options.png`)
             VStack(alignment: .leading, spacing: 0) {
-                Text("Projects")
+                Text(lang.t("Projects", "项目"))
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textSecondary.opacity(0.45))
                     .padding(.leading, 18)
@@ -169,7 +206,7 @@ public struct DisplayOptionsSheetView: View {
                 setSortPopoverPresented(false)
                 store.resetDisplayOptions()
             } label: {
-                Text("Reset")
+                Text(lang.t("Reset", "重置"))
                     .font(.system(size: 16.5, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textSecondary)
                     .frame(minWidth: 56, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .leading)
@@ -179,7 +216,7 @@ public struct DisplayOptionsSheetView: View {
 
             Spacer()
 
-            Text("Display Options")
+            Text(lang.t("Display Options", "显示选项"))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.textPrimary)
 
@@ -189,7 +226,7 @@ public struct DisplayOptionsSheetView: View {
                 setSortPopoverPresented(false)
                 onDismiss?()
             } label: {
-                Text("Done")
+                Text(lang.t("Done", "完成"))
                     .font(.system(size: 16.5, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .frame(minWidth: 56, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
@@ -212,12 +249,12 @@ public struct DisplayOptionsSheetView: View {
                 }
             } label: {
                 HStack {
-                    Text("Group By")
+                    Text(lang.t("Group By", "分组方式"))
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        Text(store.displayOptions.groupBy.rawValue)
+                        Text(store.displayOptions.groupBy.localizedTitle(for: lang))
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
@@ -239,12 +276,12 @@ public struct DisplayOptionsSheetView: View {
                 setSortPopoverPresented(!isSortPopoverPresented)
             } label: {
                 HStack {
-                    Text("Sort Conversations")
+                    Text(lang.t("Sort Conversations", "对话排序"))
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        Text(store.displayOptions.sortBy.rawValue)
+                        Text(store.displayOptions.sortBy.localizedTitle(for: lang))
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
@@ -268,12 +305,12 @@ public struct DisplayOptionsSheetView: View {
                 store.updateDisplayOptions { $0.sortProjectsOrder = nextOrder }
             } label: {
                 HStack {
-                    Text("Sort Projects")
+                    Text(lang.t("Sort Projects", "项目排序"))
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        Text(store.displayOptions.sortProjectsOrder)
+                        Text(localizedSortProjectsOrder(store.displayOptions.sortProjectsOrder))
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.up.chevron.down")
@@ -305,12 +342,12 @@ public struct DisplayOptionsSheetView: View {
                 store.updateDisplayOptions { $0.filterScopeLabel = nextFilter }
             } label: {
                 HStack {
-                    Text("Filter")
+                    Text(lang.t("Filter", "筛选"))
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        Text(store.displayOptions.filterScopeLabel)
+                        Text(localizedFilterScope(store.displayOptions.filterScopeLabel))
                             .font(.system(size: 15.5, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.right")
@@ -335,12 +372,12 @@ public struct DisplayOptionsSheetView: View {
                 store.updateDisplayOptions { $0.densityLabel = nextDensity }
             } label: {
                 HStack {
-                    Text("Display")
+                    Text(lang.t("Display", "视图密度"))
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                     Spacer()
                     HStack(spacing: 6) {
-                        Text(store.displayOptions.densityLabel)
+                        Text(localizedDensity(store.displayOptions.densityLabel))
                             .font(.system(size: 15.5, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                         Image(systemName: "chevron.right")
@@ -370,10 +407,10 @@ public struct DisplayOptionsSheetView: View {
                     store.updateDisplayOptions { $0.autoPinOnMessage.toggle() }
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Auto Pin")
+                        Text(lang.t("Auto Pin", "自动置顶"))
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textPrimary)
-                        Text("Pin a conversation when you message it")
+                        Text(lang.t("Pin a conversation when you message it", "发送消息后自动置顶该对话"))
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                             .lineLimit(1)
@@ -401,10 +438,10 @@ public struct DisplayOptionsSheetView: View {
                     store.updateDisplayOptions { $0.archivedOnly.toggle() }
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Archived Only")
+                        Text(lang.t("Archived Only", "仅显示已归档"))
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textPrimary)
-                        Text("Show only archived conversations")
+                        Text(lang.t("Show only archived conversations", "只展示已归档的对话"))
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                     }
@@ -436,11 +473,11 @@ public struct DisplayOptionsSheetView: View {
             store.markAllConversationsAsRead()
         } label: {
             HStack {
-                Text("Mark All as Read")
+                Text(lang.t("Mark All as Read", "全部标为已读"))
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                 Spacer()
-                Text("\(store.unreadCount) unread")
+                Text(lang.t("\(store.unreadCount) unread", "\(store.unreadCount) 条未读"))
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textSecondary)
             }
@@ -470,7 +507,7 @@ public struct DisplayOptionsSheetView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(store.displayOptions.sortBy == field ? AntigravityTheme.textPrimary : Color.clear)
                             .frame(width: 16)
-                        Text(field.rawValue)
+                        Text(field.localizedTitle(for: lang))
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textPrimary)
                         Spacer()
@@ -502,7 +539,7 @@ public struct DisplayOptionsSheetView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(currentSortDirection == direction ? AntigravityTheme.textPrimary : Color.clear)
                             .frame(width: 16)
-                        Text(direction.rawValue)
+                        Text(direction.localizedTitle(for: lang))
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textPrimary)
                         Spacer()

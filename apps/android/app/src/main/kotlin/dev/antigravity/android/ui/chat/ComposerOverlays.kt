@@ -34,9 +34,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.android.ui.home.AgentsHomeScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentPermissionPreset
+import dev.antigravity.shared.model.localizedTitle
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
@@ -53,16 +56,33 @@ fun PermissionsPresetOverlayScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val lang = LocalAppLanguage.current
     val settingsState by coordinator.settingsStore.state.collectAsState()
     val chatState by coordinator.chatState.collectAsState()
     val scope = rememberCoroutineScope()
     val activePreset = settingsState.activePermissionPreset
 
     val presets = listOf(
-        Triple(AgentPermissionPreset.REQUEST_REVIEW, "Request Review", "Every command requires approval."),
-        Triple(AgentPermissionPreset.DEFAULT_POLICY, "Default", "Ask before sensitive operations."),
-        Triple(AgentPermissionPreset.AUTO, "Auto", "Automatically decide if commands run."),
-        Triple(AgentPermissionPreset.TURBO, "Turbo", "Run all commands without restrictions."),
+        Triple(
+            AgentPermissionPreset.REQUEST_REVIEW,
+            AgentPermissionPreset.REQUEST_REVIEW.localizedTitle(lang),
+            tr("Every command requires approval.", "每条命令都需要审批。"),
+        ),
+        Triple(
+            AgentPermissionPreset.DEFAULT_POLICY,
+            AgentPermissionPreset.DEFAULT_POLICY.localizedTitle(lang),
+            tr("Ask before sensitive operations.", "敏感操作前先征求确认。"),
+        ),
+        Triple(
+            AgentPermissionPreset.AUTO,
+            AgentPermissionPreset.AUTO.localizedTitle(lang),
+            tr("Automatically decide if commands run.", "自动判断是否直接执行命令。"),
+        ),
+        Triple(
+            AgentPermissionPreset.TURBO,
+            AgentPermissionPreset.TURBO.localizedTitle(lang),
+            tr("Run all commands without restrictions.", "无限制自动执行所有命令。"),
+        ),
     )
 
     Box(
@@ -108,7 +128,7 @@ fun PermissionsPresetOverlayScreen(
                     .padding(vertical = 10.dp),
             ) {
                 Text(
-                    text = "Permissions for this conversation",
+                    text = tr("Permissions for this conversation", "当前会话权限"),
                     style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                     color = colors.inkSecondary,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
@@ -151,7 +171,7 @@ fun PermissionsPresetOverlayScreen(
                         if (selected) {
                             Icon(
                                 imageVector = Icons.Rounded.Check,
-                                contentDescription = "Selected",
+                                contentDescription = tr("Selected", "已选"),
                                 tint = colors.accentPeriwinkle,
                                 modifier = Modifier.size(19.dp),
                             )
@@ -168,7 +188,7 @@ fun PermissionsPresetOverlayScreen(
                 )
 
                 Text(
-                    text = "Default for new turns: Settings > Permissions",
+                    text = tr("Default for new turns: Settings > Permissions", "新轮次默认策略：设置 > 权限"),
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, lineHeight = 17.sp),
                     color = colors.inkSecondary,
                     modifier = Modifier
@@ -202,17 +222,17 @@ fun SlashMenuOverlayScreen(
 
     // Feature-flag gated preview entry for UE08B visual parity while keeping `/btw` deferred in live mode.
     val actionItems = buildList {
-        add("/plan" to "Explore first, then draft a reviewable plan")
-        add("/goal" to "Keep working until the goal is verified")
-        add("/schedule" to "Wake this conversation later")
-        add("/automation" to "Set up a recurring automation")
+        add("/plan" to tr("Explore first, then draft a reviewable plan", "先探索代码，再起草可审核的实施计划"))
+        add("/goal" to tr("Keep working until the goal is verified", "持续推进直到验证达成目标"))
+        add("/schedule" to tr("Wake this conversation later", "稍后定时唤醒此会话"))
+        add("/automation" to tr("Set up a recurring automation", "设置周期性自动化任务"))
         if (includeSideQuestionPreview) {
-            add("/btw" to "Side question in a read-only fork")
+            add("/btw" to tr("Side question in a read-only fork", "在只读分支中顺便提问"))
         }
     }
     val skillItems = listOf(
-        "/go-testing" to "Table-driven tests with -race",
-        "/api-review" to "Check handlers against API rules",
+        "/go-testing" to tr("Table-driven tests with -race", "使用 -race 运行表驱动测试"),
+        "/api-review" to tr("Check handlers against API rules", "按 API 规范检查接口处理器"),
     )
 
     Box(
@@ -258,7 +278,7 @@ fun SlashMenuOverlayScreen(
                     .padding(vertical = 12.dp),
             ) {
                 Text(
-                    text = "Actions",
+                    text = tr("Actions", "操作"),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Medium),
                     color = colors.accentPeriwinkle,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
@@ -297,7 +317,7 @@ fun SlashMenuOverlayScreen(
                 )
 
                 Text(
-                    text = "Skills",
+                    text = tr("Skills", "技能"),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Medium),
                     color = colors.accentPeriwinkle,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),

@@ -533,6 +533,7 @@ fun AntigravityTheme(
     preset: AppThemePreset = AppThemePreset.OBSIDIAN,
     darkTheme: Boolean = isSystemInDarkTheme(),
     useDynamicColor: Boolean = false,
+    language: dev.antigravity.shared.model.AppLanguage = dev.antigravity.shared.model.AppLanguage.ENGLISH,
     content: @Composable () -> Unit,
 ) {
     val resolvedDark = when (preset) {
@@ -564,6 +565,7 @@ fun AntigravityTheme(
 
     CompositionLocalProvider(
         LocalAntigravityColors provides extendedColors,
+        LocalAppLanguage provides language,
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

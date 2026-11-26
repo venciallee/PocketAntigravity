@@ -44,8 +44,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.android.ui.home.AgentsHomeScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
+import dev.antigravity.shared.model.AppLanguage
 import dev.antigravity.shared.model.CascadeModelConfig
 import dev.antigravity.shared.model.ThinkingEffortLevel
 import kotlinx.coroutines.CancellationException
@@ -65,6 +68,7 @@ fun ModelAndModeSheetScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val lang = LocalAppLanguage.current
     val settingsState by coordinator.settingsStore.state.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
     var showMoreModels by remember { mutableStateOf(false) }
@@ -171,7 +175,7 @@ fun ModelAndModeSheetScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Model",
+                        text = tr("Model", "模型"),
                         style = MaterialTheme.typography.headlineSmall.copy(
                             fontSize = 23.sp,
                             fontWeight = FontWeight.Normal,
@@ -184,7 +188,7 @@ fun ModelAndModeSheetScreen(
                         modifier = Modifier.testTag("btn-model-done"),
                     ) {
                         Text(
-                            text = "Done",
+                            text = tr("Done", "完成"),
                             style = MaterialTheme.typography.titleSmall.copy(
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Medium,
@@ -212,14 +216,14 @@ fun ModelAndModeSheetScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 Text(
-                                    text = "Orchestrator",
+                                    text = tr("Orchestrator", "编排器"),
                                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.5.sp),
                                     color = colors.inkReading,
                                 )
                                 if (orchestratorSelected) {
                                     Icon(
                                         imageVector = Icons.Rounded.Check,
-                                        contentDescription = "Selected",
+                                        contentDescription = tr("Selected", "已选"),
                                         tint = colors.accentPeriwinkle,
                                         modifier = Modifier.size(18.dp),
                                     )
@@ -304,7 +308,7 @@ fun ModelAndModeSheetScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Text(
-                            text = if (showMoreModels) "Fewer models" else "More models",
+                            text = if (showMoreModels) tr("Fewer models", "收起更多模型") else tr("More models", "更多模型"),
                             style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
                             color = colors.accentPeriwinkle,
                         )
@@ -342,18 +346,28 @@ fun ModelAndModeSheetScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     QuotaProgressBarRow(
-                        label = "Five Hour Limit Remaining",
+                        label = tr("Five Hour Limit Remaining", "5 小时剩余额度"),
                         trailing = "${quota.geminiFiveHourPercent}% · ${quota.refreshCountdownLabel}",
                         fraction = quota.geminiFiveHourRemaining.toFloat(),
                     )
                     QuotaProgressBarRow(
-                        label = "Weekly Limit Remaining",
-                        trailing = "${quota.geminiWeeklyPercent}% · resets Mon",
+                        label = tr("Weekly Limit Remaining", "本周剩余额度"),
+                        trailing = tr(
+                            "${quota.geminiWeeklyPercent}% · resets Mon",
+                            "${quota.geminiWeeklyPercent}% · 周一重置",
+                        ),
                         fraction = quota.geminiWeeklyRemaining.toFloat(),
                     )
 
                     Text(
-                        text = if (showUsageDetails) "Hide Usage (${quota.planTierLabel} · Partner ${quota.partnerWeeklyPercent}%)" else "View Usage",
+                        text = if (showUsageDetails) {
+                            tr(
+                                "Hide Usage (${quota.planTierLabel} · Partner ${quota.partnerWeeklyPercent}%)",
+                                "收起用量（${quota.planTierLabel} · 合作模型 ${quota.partnerWeeklyPercent}%）",
+                            )
+                        } else {
+                            tr("View Usage", "查看用量")
+                        },
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontSize = 14.5.sp,
                             fontWeight = FontWeight.Medium,
@@ -379,6 +393,7 @@ private fun ModelPickerRow(
     onSelectEffort: (ThinkingEffortLevel) -> Unit,
 ) {
     val colors = LocalAntigravityColors.current
+    val lang = LocalAppLanguage.current
     val cleanName = model.canonicalDisplayName
     val supportsEffort = model.supportsEffortAdjustment
     val isFlagshipNeon = model.modelId == "MODEL_GOOGLE_GEMINI_4_NEON" ||
@@ -409,7 +424,7 @@ private fun ModelPickerRow(
                     color = colors.surfaceActiveTab,
                 ) {
                     Text(
-                        text = "New",
+                        text = tr("New", "新"),
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Medium,
@@ -437,7 +452,7 @@ private fun ModelPickerRow(
             if (isSelected) {
                 Icon(
                     imageVector = Icons.Rounded.Check,
-                    contentDescription = "Selected",
+                    contentDescription = tr("Selected", "已选"),
                     tint = colors.accentPeriwinkle,
                     modifier = Modifier.size(19.dp),
                 )
@@ -451,7 +466,7 @@ private fun ModelPickerRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 model.supportedEfforts.forEach { level ->
-                    val label = effortDisplayLabel(level)
+                    val label = effortDisplayLabel(level, lang)
                     val chipSelected = selectedEffort == level
                     Surface(
                         onClick = { onSelectEffort(level) },
@@ -493,11 +508,11 @@ private fun ModelPickerRow(
     }
 }
 
-private fun effortDisplayLabel(level: ThinkingEffortLevel): String = when (level) {
-    ThinkingEffortLevel.LOW -> "Low"
-    ThinkingEffortLevel.MEDIUM -> "Medium"
-    ThinkingEffortLevel.HIGH -> "High"
-    ThinkingEffortLevel.EXTRA -> "Extra High"
+private fun effortDisplayLabel(level: ThinkingEffortLevel, lang: AppLanguage): String = when (level) {
+    ThinkingEffortLevel.LOW -> lang.t("Low", "低")
+    ThinkingEffortLevel.MEDIUM -> lang.t("Medium", "中")
+    ThinkingEffortLevel.HIGH -> lang.t("High", "高")
+    ThinkingEffortLevel.EXTRA -> lang.t("Extra High", "极高")
 }
 
 @Composable

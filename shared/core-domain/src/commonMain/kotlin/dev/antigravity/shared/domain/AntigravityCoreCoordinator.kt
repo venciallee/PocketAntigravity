@@ -146,6 +146,7 @@ public class AntigravityCoreCoordinator(
     )
 
     public val settingsStore: SettingsAndCustomizationStore = SettingsAndCustomizationStore(
+        preferencesStore = preferencesStore,
         onCapabilityError = ::reportCapabilityError,
     )
 
@@ -153,6 +154,7 @@ public class AntigravityCoreCoordinator(
         set(value) {
             field = value
             chatStore.isVerificationMode = value
+            settingsStore.persistPreferences = !value
         }
 
     public val connectionState: StateFlow<ConnectionState>

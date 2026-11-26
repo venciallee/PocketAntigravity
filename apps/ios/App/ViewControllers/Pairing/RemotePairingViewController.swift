@@ -55,6 +55,10 @@ public struct RemotePairingViewController: View {
         return []
     }
 
+    private var lang: AppLanguage {
+        store.appearancePreferences.language
+    }
+
     public var body: some View {
         let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
         let isOnlineConnected = store.isVerificationMode
@@ -68,7 +72,7 @@ public struct RemotePairingViewController: View {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .center) {
-                        Text("Settings")
+                        Text(lang.t("Settings", "设置"))
                             .font(.system(size: 32, weight: .bold))
                             .tracking(-0.5)
                             .foregroundStyle(AntigravityTheme.textPrimary)
@@ -90,7 +94,10 @@ public struct RemotePairingViewController: View {
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("btn-settings-close")
                     }
-                    Text("Scan Antigravity Desktop's Remote Control QR code — works over Wi-Fi & 5G")
+                    Text(lang.t(
+                        "Scan Antigravity Desktop's Remote Control QR code — works over Wi-Fi & 5G",
+                        "扫描 Antigravity 桌面端的远程控制二维码 — 支持 Wi-Fi 与 5G"
+                    ))
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
@@ -118,11 +125,13 @@ public struct RemotePairingViewController: View {
                                     .tint(AntigravityTheme.accentPeriwinkle)
                                     .padding(.bottom, 4)
 
-                                Text(store.isSwitchingHost ? "Switching Host..." : "Connecting to Antigravity...")
+                                Text(store.isSwitchingHost
+                                    ? lang.t("Switching Host...", "正在切换主机...")
+                                    : lang.t("Connecting to Antigravity...", "正在连接 Antigravity..."))
                                     .font(.system(size: 16.5, weight: .semibold))
                                     .foregroundStyle(AntigravityTheme.textPrimary)
 
-                                Text(store.connectionStatusText)
+                                Text(AppLocalizationFormatter.localizeConnectionStatus(store.connectionStatusText, language: lang))
                                     .font(.system(size: 12.5, weight: .regular))
                                     .foregroundStyle(AntigravityTheme.textSecondary)
                                     .multilineTextAlignment(.center)
@@ -131,7 +140,7 @@ public struct RemotePairingViewController: View {
                                 Button {
                                     store.cancelPendingConnectionAttempt()
                                 } label: {
-                                    Text("Cancel")
+                                    Text(lang.t("Cancel", "取消"))
                                         .font(.system(size: 13, weight: .semibold))
                                         .foregroundStyle(AntigravityTheme.textSecondary)
                                         .padding(.horizontal, 16)
@@ -161,12 +170,14 @@ public struct RemotePairingViewController: View {
 
                                 Text(
                                     isOnlineConnected
-                                        ? "Connected: \(store.activeHost.hostname)"
+                                        ? lang.t("Connected: \(store.activeHost.hostname)", "已连接：\(store.activeHost.hostname)")
                                         : (isNoInternet
-                                            ? "No Internet Connection"
+                                            ? lang.t("No Internet Connection", "无网络连接")
                                             : (isOfflinePaired
-                                                ? (isGoogleAuthExpired ? "Google Sign-In Expired" : "Host Offline: \(store.activeHost.hostname)")
-                                                : "Tap to Scan Remote Control QR"))
+                                                ? (isGoogleAuthExpired
+                                                    ? lang.t("Google Sign-In Expired", "Google 登录已过期")
+                                                    : lang.t("Host Offline: \(store.activeHost.hostname)", "主机离线：\(store.activeHost.hostname)"))
+                                                : lang.t("Tap to Scan Remote Control QR", "轻点扫描远程控制二维码")))
                                 )
                                 .font(.system(size: 17.5, weight: .bold))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
@@ -175,18 +186,35 @@ public struct RemotePairingViewController: View {
                                 let visibleSessionCount = store.isVerificationMode
                                     ? 12
                                     : store.summaries.filter { store.summaryMatchesHostScope($0) }.count
-                                let channelLabel = store.activeHost.channel == .directHost ? "Direct LAN" : "Cloud Relay"
+                                let channelLabel = store.activeHost.channel == .directHost
+                                    ? lang.t("Direct LAN", "局域网直连")
+                                    : lang.t("Cloud Relay", "云端中继")
                                 let latencyMs = store.isVerificationMode ? 42 : (store.lastPingLatencyMs ?? store.activeHost.latencyMs)
                                 Text(
                                     isOnlineConnected
-                                        ? "\(channelLabel) · \(latencyMs)ms · \(visibleSessionCount) sessions"
+                                        ? lang.t(
+                                            "\(channelLabel) · \(latencyMs)ms · \(visibleSessionCount) sessions",
+                                            "\(channelLabel) · \(latencyMs)ms · \(visibleSessionCount) 个会话"
+                                        )
                                         : (isNoInternet
-                                            ? "Paused while iPhone is offline · Auto-resumes when network returns"
+                                            ? lang.t(
+                                                "Paused while iPhone is offline · Auto-resumes when network returns",
+                                                "iPhone 离线时已暂停 · 网络恢复后自动继续"
+                                            )
                                             : (isOfflinePaired
                                                 ? (isGoogleAuthExpired
-                                                    ? "Sign in with Google again to restore Cloud Relay sync"
-                                                    : "Power-saving backoff reconnect · Tap below to retry or scan QR")
-                                                : "Open Antigravity on Mac/PC → Remote Control"))
+                                                    ? lang.t(
+                                                        "Sign in with Google again to restore Cloud Relay sync",
+                                                        "请重新登录 Google 以恢复云端中继同步"
+                                                    )
+                                                    : lang.t(
+                                                        "Power-saving backoff reconnect · Tap below to retry or scan QR",
+                                                        "节能退避重连中 · 点击下方重试或重新扫码"
+                                                    ))
+                                                : lang.t(
+                                                    "Open Antigravity on Mac/PC → Remote Control",
+                                                    "在 Mac/PC 上打开 Antigravity → 远程控制"
+                                                )))
                                 )
                                 .font(.system(size: 13.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textSecondary)
@@ -206,7 +234,7 @@ public struct RemotePairingViewController: View {
                                                 HStack(spacing: 6) {
                                                     Image(systemName: "person.crop.circle.badge.checkmark")
                                                         .font(.system(size: 12.5, weight: .semibold))
-                                                    Text("Sign in with Google")
+                                                    Text(lang.t("Sign in with Google", "使用 Google 登录"))
                                                         .font(.system(size: 13, weight: .semibold))
                                                 }
                                                 .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
@@ -225,7 +253,7 @@ public struct RemotePairingViewController: View {
                                                 HStack(spacing: 6) {
                                                     Image(systemName: "arrow.clockwise")
                                                         .font(.system(size: 12.5, weight: .semibold))
-                                                    Text("Reconnect Now")
+                                                    Text(lang.t("Reconnect Now", "立即重连"))
                                                         .font(.system(size: 13, weight: .semibold))
                                                 }
                                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
@@ -244,7 +272,7 @@ public struct RemotePairingViewController: View {
                                             HStack(spacing: 6) {
                                                 Image(systemName: "qrcode.viewfinder")
                                                     .font(.system(size: 12.5, weight: .semibold))
-                                                Text("Scan QR")
+                                                Text(lang.t("Scan QR", "扫描二维码"))
                                                     .font(.system(size: 13, weight: .semibold))
                                             }
                                             .foregroundStyle(AntigravityTheme.textPrimary)
@@ -263,7 +291,7 @@ public struct RemotePairingViewController: View {
                                         HStack(spacing: 7) {
                                             Image(systemName: "qrcode.viewfinder")
                                                 .font(.system(size: 13.5, weight: .semibold))
-                                            Text("Scan New QR")
+                                            Text(lang.t("Scan New QR", "扫描新二维码"))
                                                 .font(.system(size: 14, weight: .semibold))
                                         }
                                         .foregroundStyle(AntigravityTheme.textPrimary)
@@ -306,7 +334,7 @@ public struct RemotePairingViewController: View {
                 if !displayedHosts.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("AVAILABLE HOSTS")
+                            Text(lang.t("AVAILABLE HOSTS", "可用主机"))
                                 .font(.system(size: 11.5, weight: .semibold))
                                 .tracking(0.8)
                                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -321,11 +349,11 @@ public struct RemotePairingViewController: View {
                                         ProgressView()
                                             .controlSize(.mini)
                                             .tint(AntigravityTheme.accentPeriwinkle)
-                                        Text("Probing...")
+                                        Text(lang.t("Probing...", "探测中..."))
                                     } else {
                                         Image(systemName: "arrow.clockwise")
                                             .font(.system(size: 11.5, weight: .semibold))
-                                        Text("Refresh")
+                                        Text(lang.t("Refresh", "刷新"))
                                     }
                                 }
                                 .font(.system(size: 13, weight: .semibold))
@@ -383,7 +411,7 @@ public struct RemotePairingViewController: View {
                                         Text(inst.name)
                                             .font(.system(size: 15.5, weight: .semibold))
                                             .foregroundStyle(isInstOnline ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
-                                        let statusBadge = isInstOnline ? "Online" : "Offline"
+                                        let statusBadge = isInstOnline ? lang.t("Online", "在线") : lang.t("Offline", "离线")
                                         let versionPart = inst.version.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "v", with: "")
                                         let subtitleLine = versionPart.isEmpty ? statusBadge : "\(statusBadge) · \(versionPart)"
                                         Text(subtitleLine)
@@ -421,7 +449,7 @@ public struct RemotePairingViewController: View {
 
                 // 3. GENERAL (`Appearance` + `Theme` + `Language`, `ios-settings.png`)
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("GENERAL")
+                    Text(lang.t("GENERAL", "通用"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .tracking(0.8)
                         .foregroundStyle(AntigravityTheme.textMuted)
@@ -441,7 +469,7 @@ public struct RemotePairingViewController: View {
                             await store.disconnectBackendAndClearKeychain()
                         }
                     } label: {
-                        Text("Sign Out & Disconnect Host")
+                        Text(lang.t("Sign Out & Disconnect Host", "退出登录并断开主机"))
                             .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.statusError)
                             .frame(maxWidth: .infinity, minHeight: 48)
@@ -539,10 +567,10 @@ public struct RemotePairingViewController: View {
                     .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Appearance")
+                    Text(lang.t("Appearance", "外观"))
                         .font(.system(size: 15.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
-                    Text("Follow iOS or lock Dark / Light mode")
+                    Text(lang.t("Follow iOS or lock Dark / Light mode", "跟随系统或锁定深色 / 浅色模式"))
                         .font(.system(size: 12.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
@@ -558,7 +586,7 @@ public struct RemotePairingViewController: View {
                     } label: {
                         VStack(spacing: 8) {
                             appearancePreviewThumbnail(for: mode)
-                            Text(mode.displayLabel)
+                            Text(mode.localizedTitle(for: lang))
                                 .font(.system(size: 13.5, weight: isSelected ? .semibold : .medium))
                                 .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
                                 .lineLimit(1)
@@ -590,7 +618,7 @@ public struct RemotePairingViewController: View {
 
             // Theme Swatch Row (`Obsidian`, `Nord`, `Everforest`)
             HStack(spacing: 10) {
-                Text("Theme")
+                Text(lang.t("Theme", "主题"))
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(AntigravityTheme.textPrimary)
                     .lineLimit(1)
@@ -599,21 +627,24 @@ public struct RemotePairingViewController: View {
                 HStack(spacing: 12) {
                     themeSwatchButton(
                         preset: .obsidian,
-                        label: "Obsidian",
+                        idKey: "obsidian",
+                        label: AppThemePreset.obsidian.localizedTitle(for: lang),
                         darkHalf: Color(red: 0.08, green: 0.08, blue: 0.10),
                         accentHalf: Color(red: 0.55, green: 0.72, blue: 1.0),
                         isSelected: currentTheme == .obsidian
                     )
                     themeSwatchButton(
                         preset: .nord,
-                        label: "Nord",
+                        idKey: "nord",
+                        label: AppThemePreset.nord.localizedTitle(for: lang),
                         darkHalf: Color(red: 0.18, green: 0.20, blue: 0.25),
                         accentHalf: Color(red: 0.53, green: 0.75, blue: 0.82),
                         isSelected: currentTheme == .nord
                     )
                     themeSwatchButton(
                         preset: .everforestDark,
-                        label: "Everforest",
+                        idKey: "everforest",
+                        label: AppThemePreset.everforestDark.localizedTitle(for: lang),
                         darkHalf: Color(red: 0.18, green: 0.21, blue: 0.23),
                         accentHalf: Color(red: 0.65, green: 0.75, blue: 0.50),
                         isSelected: currentTheme == .everforestDark || currentTheme == .everforestLight
@@ -673,6 +704,7 @@ public struct RemotePairingViewController: View {
 
     private func themeSwatchButton(
         preset: AppThemePreset,
+        idKey: String,
         label: String,
         darkHalf: Color,
         accentHalf: Color,
@@ -715,7 +747,7 @@ public struct RemotePairingViewController: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("theme-preset-\(label.lowercased())")
+        .accessibilityIdentifier("theme-preset-\(idKey)")
     }
 
     private var languageCard: some View {
@@ -726,19 +758,19 @@ public struct RemotePairingViewController: View {
                 .foregroundStyle(AntigravityTheme.textPrimary)
                 .frame(width: 24)
 
-            Text("Language")
+            Text(lang.t("Language", "语言"))
                 .font(.system(size: 15.5, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.textPrimary)
 
             Spacer(minLength: 8)
 
             HStack(spacing: 2) {
-                ForEach(AppLanguage.allCases) { lang in
-                    let isSelected = (currentLang == lang)
+                ForEach(AppLanguage.allCases) { option in
+                    let isSelected = (currentLang == option)
                     Button {
-                        store.setAppLanguage(lang)
+                        store.setAppLanguage(option)
                     } label: {
-                        Text(lang.displayLabel)
+                        Text(option.displayLabel)
                             .font(.system(size: 13.5, weight: isSelected ? .semibold : .medium))
                             .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
                             .padding(.horizontal, 14)
@@ -753,7 +785,7 @@ public struct RemotePairingViewController: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .accessibilityIdentifier("btn-lang-\(lang.rawValue)")
+                    .accessibilityIdentifier("btn-lang-\(option.rawValue)")
                 }
             }
             .padding(3)
@@ -803,17 +835,17 @@ public struct RemotePairingViewController: View {
                     )
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Permissions")
+                    Text(lang.t("Permissions", "权限"))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
-                    Text("Default policy for commands & tools")
+                    Text(lang.t("Default policy for commands & tools", "命令与工具的默认审批策略"))
                         .font(.system(size: 12, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
 
                 Spacer(minLength: 8)
 
-                Text(selected.displayTitle)
+                Text(selected.localizedTitle(for: lang))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(badgeAccent)
                     .padding(.horizontal, 10)
@@ -832,7 +864,10 @@ public struct RemotePairingViewController: View {
                 store: store,
                 isRemoteOverride: false,
                 accessibilityIdPrefix: "settings-permission",
-                footerTextOverride: "Applies to new turns on your paired Mac/PC. Fine-grained rules are managed in Antigravity Desktop."
+                footerTextOverride: lang.t(
+                    "Applies to new turns on your paired Mac/PC. Fine-grained rules are managed in Antigravity Desktop.",
+                    "适用于已配对 Mac/PC 上的新轮次。更细粒度的规则请在 Antigravity 桌面端中管理。"
+                )
             )
         }
         .padding(14)
@@ -863,10 +898,10 @@ public struct RemotePairingViewController: View {
                     )
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Notifications")
+                    Text(lang.t("Notifications", "通知"))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
-                    Text("Local alerts while agents run in background")
+                    Text(lang.t("Local alerts while agents run in background", "代理在后台运行时的本地提醒"))
                         .font(.system(size: 12, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                 }
@@ -877,10 +912,10 @@ public struct RemotePairingViewController: View {
             VStack(spacing: 0) {
                 Toggle(isOn: $store.appearancePreferences.notificationsEnabled) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Approval & Completion Alerts")
+                        Text(lang.t("Approval & Completion Alerts", "审批与完成提醒"))
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textPrimary)
-                        Text("Notify on waiting approval, run complete, or error")
+                        Text(lang.t("Notify on waiting approval, run complete, or error", "在等待审批、运行完成或发生错误时提醒"))
                             .font(.system(size: 12, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -901,10 +936,10 @@ public struct RemotePairingViewController: View {
 
                 Toggle(isOn: $store.appearancePreferences.suppressManualStopNotification) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Quiet on Manual Stop")
+                        Text(lang.t("Quiet on Manual Stop", "手动停止时静默"))
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(AntigravityTheme.textPrimary)
-                        Text("Skip alert when you stop a run yourself")
+                        Text(lang.t("Skip alert when you stop a run yourself", "当你主动停止运行时跳过通知"))
                             .font(.system(size: 12, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -952,7 +987,7 @@ public struct RemotePairingViewController: View {
 
     private var aboutAndCopyrightCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("ABOUT & COPYRIGHT · 版权与商标声明")
+            Text(lang.t("ABOUT & COPYRIGHT · 版权与商标声明", "关于与版权 · 版权与商标声明"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -976,7 +1011,7 @@ public struct RemotePairingViewController: View {
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         }
-                        Text("Companion for Antigravity")
+                        Text(lang.t("Companion for Antigravity", "Antigravity 移动伴侣"))
                             .font(.system(size: 12.5, weight: .regular))
                             .foregroundStyle(AntigravityTheme.textSecondary)
                     }
@@ -987,7 +1022,10 @@ public struct RemotePairingViewController: View {
                     .frame(height: 1)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Original App Icon & Client Code © 2026 PocketAntigravity Contributors.")
+                    Text(lang.t(
+                        "Original App Icon & Client Code © 2026 PocketAntigravity Contributors.",
+                        "原创应用图标与客户端代码 © 2026 PocketAntigravity Contributors。"
+                    ))
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
 

@@ -24,6 +24,8 @@ public struct PermissionsPresetListCard: View {
         self.onSelectPreset = onSelectPreset
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var isRemote: Bool {
         isRemoteOverride ?? store.isActiveSessionCloud
     }
@@ -66,8 +68,8 @@ public struct PermissionsPresetListCard: View {
                 Text(
                     footerTextOverride ?? (
                         isRemote
-                            ? "Remote sessions default to Turbo inside an isolated Cloud VM."
-                            : "Controls terminal commands and tool approvals on the next turn."
+                            ? lang.t("Remote sessions default to Turbo inside an isolated Cloud VM.", "远程会话在隔离的云端虚拟机中默认使用极速模式。")
+                            : lang.t("Controls terminal commands and tool approvals on the next turn.", "控制下一轮对话的终端命令与工具审批策略。")
                     )
                 )
                 .font(.system(size: 12))
@@ -102,14 +104,14 @@ public struct PermissionsPresetListCard: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(preset.displayTitle)
+                        Text(preset.localizedTitle(for: lang))
                             .font(.system(size: 15.5, weight: isSelected ? .semibold : .medium))
                             .foregroundStyle(AntigravityTheme.inkReading)
                             .lineLimit(1)
 
                         if isDefault && preset != .defaultPolicy {
                             HStack(spacing: 3) {
-                                Text("Default")
+                                Text(lang.t("Default", "默认"))
                                 Image(systemName: "info.circle")
                                     .font(.system(size: 9.5, weight: .medium))
                             }
@@ -124,7 +126,7 @@ public struct PermissionsPresetListCard: View {
                         }
                     }
 
-                    Text(preset.summaryDescription)
+                    Text(preset.localizedSummaryDescription(for: lang))
                         .font(.system(size: 12.5))
                         .foregroundStyle(isSelected ? AntigravityTheme.inkLabel : AntigravityTheme.inkSecondary)
                         .multilineTextAlignment(.leading)
@@ -167,8 +169,12 @@ public struct PermissionsSheetView: View {
         self.onDismiss = onDismiss
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var headerTitle: String {
-        store.isActiveSessionCloud ? "Remote Permissions" : "Permissions"
+        store.isActiveSessionCloud
+            ? lang.t("Remote Permissions", "远程权限")
+            : lang.t("Permissions", "权限设置")
     }
 
     public var body: some View {
@@ -183,7 +189,7 @@ public struct PermissionsSheetView: View {
                     Button {
                         onDismiss?()
                     } label: {
-                        Text("Done")
+                        Text(lang.t("Done", "完成"))
                             .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                             .padding(.horizontal, 14)
@@ -246,6 +252,8 @@ public struct PermissionsPresetPopoverView: View {
         self.onOpenSettings = onOpenSettings
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var presets: [AgentPermissionPreset] {
         [.requestReview, .defaultPolicy, .auto, .turbo]
     }
@@ -277,7 +285,7 @@ public struct PermissionsPresetPopoverView: View {
             VStack(spacing: 12) {
                 // Anchored Popover Card aligned above `🛡 Default ⌄` pill
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Permissions for this conversation")
+                    Text(lang.t("Permissions for this conversation", "当前对话权限"))
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .padding(.horizontal, 16)
@@ -302,10 +310,10 @@ public struct PermissionsPresetPopoverView: View {
                                     .padding(.top, 2)
 
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(preset.displayTitle)
+                                    Text(preset.localizedTitle(for: lang))
                                         .font(.system(size: 16, weight: .semibold))
                                         .foregroundStyle(AntigravityTheme.textPrimary)
-                                    Text(preset.summaryDescription)
+                                    Text(preset.localizedSummaryDescription(for: lang))
                                         .font(.system(size: 13.5, weight: .regular))
                                         .foregroundStyle(AntigravityTheme.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)
@@ -345,7 +353,7 @@ public struct PermissionsPresetPopoverView: View {
                         onDismiss?()
                     } label: {
                         HStack {
-                            Text("Default for new turns: Settings › Permissions")
+                            Text(lang.t("Default for new turns: Settings › Permissions", "新对话默认权限：设置 › 权限"))
                                 .font(.system(size: 13.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textSecondary)
                                 .multilineTextAlignment(.leading)
@@ -380,7 +388,8 @@ public struct PermissionsPresetPopoverView: View {
                     dockedBackdropComposerBar(
                         highlightPermissions: true,
                         highlightAdd: false,
-                        draftText: nil
+                        draftText: nil,
+                        language: lang
                     )
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
@@ -410,23 +419,25 @@ public struct SlashCommandMenuOverlayView: View {
         self.onDismiss = onDismiss
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var actionItems: [(cmd: String, desc: String)] {
         var items: [(String, String)] = [
-            ("/plan", "Explore first, then draft a reviewable plan"),
-            ("/goal", "Keep working until the goal is verified"),
-            ("/schedule", "Wake this conversation later"),
-            ("/automation", "Set up a recurring automation")
+            ("/plan", lang.t("Explore first, then draft a reviewable plan", "先探索代码库，再起草可审查的方案")),
+            ("/goal", lang.t("Keep working until the goal is verified", "持续执行直至目标验证通过")),
+            ("/schedule", lang.t("Wake this conversation later", "稍后自动唤醒此对话")),
+            ("/automation", lang.t("Set up a recurring automation", "配置定时循环自动化任务"))
         ]
         if store.includeSideQuestionInSlashMenu {
-            items.append(("/btw", "Side question in a read-only fork"))
+            items.append(("/btw", lang.t("Side question in a read-only fork", "在只读分支中提出临时旁路问题")))
         }
         return items
     }
 
     private var skillItems: [(cmd: String, desc: String)] {
         [
-            ("/go-testing", "Table-driven tests with -race"),
-            ("/api-review", "Check handlers against API rules")
+            ("/go-testing", lang.t("Table-driven tests with -race", "带 -race 检测的表驱动测试")),
+            ("/api-review", lang.t("Check handlers against API rules", "按 API 规范检查接口处理器"))
         ]
     }
 
@@ -446,7 +457,7 @@ public struct SlashCommandMenuOverlayView: View {
 
             VStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Actions")
+                    Text(lang.t("Actions", "快捷指令"))
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .padding(.horizontal, 16)
@@ -495,7 +506,7 @@ public struct SlashCommandMenuOverlayView: View {
                         .accessibilityIdentifier("slash-item-\(item.cmd.dropFirst())")
                     }
 
-                    Text("Skills")
+                    Text(lang.t("Skills", "技能"))
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .padding(.horizontal, 16)
@@ -556,7 +567,8 @@ public struct SlashCommandMenuOverlayView: View {
                     dockedBackdropComposerBar(
                         highlightPermissions: false,
                         highlightAdd: false,
-                        draftText: "/"
+                        draftText: "/",
+                        language: lang
                     )
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
@@ -572,14 +584,15 @@ public struct SlashCommandMenuOverlayView: View {
 func dockedBackdropComposerBar(
     highlightPermissions: Bool,
     highlightAdd: Bool,
-    draftText: String?
+    draftText: String?,
+    language: AppLanguage = .english
 ) -> some View {
     VStack(alignment: .leading, spacing: 10) {
         HStack(spacing: 14) {
             Text("ledger-svc")
                 .font(.system(size: 13.5, weight: .medium))
                 .foregroundStyle(AntigravityTheme.textSecondary)
-            Text("Repo default")
+            Text(language.t("Repo default", "仓库默认"))
                 .font(.system(size: 13.5, weight: .medium))
                 .foregroundStyle(AntigravityTheme.textSecondary)
             Spacer()
@@ -587,7 +600,7 @@ func dockedBackdropComposerBar(
         .padding(.horizontal, 6)
 
         VStack(alignment: .leading, spacing: 12) {
-            Text(draftText ?? "Ask anything, @ to mention, / for actions")
+            Text(draftText ?? language.t("Ask anything, @ to mention, / for actions", "输入任何问题，@ 引用上下文，/ 使用快捷指令"))
                 .font(.system(size: 16, weight: draftText != nil ? .medium : .regular))
                 .foregroundStyle(draftText != nil ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary.opacity(0.65))
                 .padding(.horizontal, 4)
@@ -616,7 +629,7 @@ func dockedBackdropComposerBar(
                         Image(systemName: "shield")
                             .font(.system(size: 12.5, weight: .medium))
                     }
-                    Text("Default")
+                    Text(language.t("Default", "默认"))
                         .font(.system(size: 13.5, weight: .medium))
                     if highlightPermissions {
                         Image(systemName: "chevron.down")

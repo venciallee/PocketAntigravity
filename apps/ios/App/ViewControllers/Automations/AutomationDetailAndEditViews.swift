@@ -71,23 +71,30 @@ public struct AutomationDetailView: View {
         )
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
     private var isPaused: Bool {
         item.section == .paused || !item.isEnabled
     }
 
     private var triggerLabel: String {
-        item.section == .alwaysOn ? "Always on" : "Schedule"
+        item.section == .alwaysOn ? lang.t("Always on", "常驻运行") : lang.t("Schedule", "定时触发")
     }
 
     private var statusBadgeTitle: String {
         if isPaused {
-            return "Paused"
+            return lang.t("Paused", "已暂停")
         }
-        return item.section == .alwaysOn ? "Always on · Active" : "Scheduled · Active"
+        return item.section == .alwaysOn
+            ? lang.t("Always on · Active", "常驻 · 运行中")
+            : lang.t("Scheduled · Active", "定时 · 运行中")
     }
 
     private var displayNextRun: String {
-        if item.nextRunText.contains("GMT") || item.nextRunText.contains("PDT") || item.nextRunText == "Paused" {
+        if item.nextRunText == "Paused" {
+            return lang.t("Paused", "已暂停")
+        }
+        if item.nextRunText.contains("GMT") || item.nextRunText.contains("PDT") {
             return item.nextRunText
         }
         if item.nextRunText == "Tonight, 02:00" {
@@ -186,7 +193,7 @@ public struct AutomationDetailView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 16, weight: .semibold))
-                    Text("Automations")
+                    Text(lang.t("Automations", "自动化"))
                         .font(.system(size: 17, weight: .regular))
                 }
                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
@@ -205,7 +212,7 @@ public struct AutomationDetailView: View {
                     isPresentingEditSheet = true
                 }
             } label: {
-                Text("Edit")
+                Text(lang.t("Edit", "编辑"))
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                     .frame(minWidth: 44, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
@@ -257,7 +264,7 @@ public struct AutomationDetailView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "play.fill")
                         .font(.system(size: 12, weight: .bold))
-                    Text(item.isRunningNow ? "Running..." : "Run Now")
+                    Text(item.isRunningNow ? lang.t("Running...", "运行中...") : lang.t("Run Now", "立即运行"))
                         .font(.system(size: 16, weight: .semibold))
                 }
                 .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
@@ -277,7 +284,7 @@ public struct AutomationDetailView: View {
                 HStack(spacing: 8) {
                     Image(systemName: isPaused ? "play.fill" : "pause")
                         .font(.system(size: 12, weight: .bold))
-                    Text(isPaused ? "Resume" : "Pause")
+                    Text(isPaused ? lang.t("Resume", "恢复") : lang.t("Pause", "暂停"))
                         .font(.system(size: 16, weight: .semibold))
                 }
                 .foregroundStyle(AntigravityTheme.textPrimary)
@@ -296,7 +303,7 @@ public struct AutomationDetailView: View {
 
     private var promptCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("PROMPT")
+            Text(lang.t("PROMPT", "提示词"))
                 .font(.system(size: 11.5, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(AntigravityTheme.textMuted)
@@ -322,15 +329,15 @@ public struct AutomationDetailView: View {
 
     private var scheduleMetadataCard: some View {
         VStack(spacing: 0) {
-            metadataRow(label: "Trigger", value: triggerLabel)
+            metadataRow(label: lang.t("Trigger", "触发方式"), value: triggerLabel)
             Divider()
                 .overlay(AntigravityTheme.subtleDivider)
                 .padding(.horizontal, 16)
-            metadataRow(label: "Repeats", value: displayRepeats)
+            metadataRow(label: lang.t("Repeats", "重复频率"), value: displayRepeats)
             Divider()
                 .overlay(AntigravityTheme.subtleDivider)
                 .padding(.horizontal, 16)
-            metadataRow(label: "Next run", value: displayNextRun)
+            metadataRow(label: lang.t("Next run", "下次运行"), value: displayNextRun)
         }
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -362,12 +369,12 @@ public struct AutomationDetailView: View {
     private var recentRunsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("RECENT RUNS")
+                Text(lang.t("RECENT RUNS", "近期运行"))
                     .font(.system(size: 11.5, weight: .semibold))
                     .tracking(0.8)
                     .foregroundStyle(AntigravityTheme.textMuted)
                 Spacer()
-                Text("Each run opens a new conversation")
+                Text(lang.t("Each run opens a new conversation", "每次运行都会开启新对话"))
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(AntigravityTheme.textMuted)
             }
@@ -430,7 +437,7 @@ public struct AutomationDetailView: View {
             .frame(width: 22)
 
             VStack(alignment: .leading, spacing: 2.5) {
-                Text("\(run.status.rawValue) · \(run.relativeTimeLabel)")
+                Text("\(run.status.localizedTitle(for: lang)) · \(AppLocalizationFormatter.localizeRelativeTime(run.relativeTimeLabel, language: lang))")
                     .font(.system(size: 15.5, weight: .medium))
                     .foregroundStyle(titleColor)
                 Text(run.summaryText)
@@ -451,7 +458,7 @@ public struct AutomationDetailView: View {
                 Button {
                     store.retryAutomationRun(automationId: item.id, runId: run.id)
                 } label: {
-                    Text("Retry")
+                    Text(lang.t("Retry", "重试"))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.textPrimary)
                         .padding(.horizontal, 16)
@@ -535,6 +542,18 @@ public struct AutomationEditSheetView: View {
         self._selectedModel = State(initialValue: ["Flash Lite", "Flash", "Pro"].contains(initialModel) ? initialModel : "Flash")
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
+    private func localizedRepeatLabel(_ opt: String) -> String {
+        switch opt {
+        case "Every hour": return lang.t("Every hour", "每小时")
+        case "Every day": return lang.t("Every day", "每天")
+        case "Weekdays": return lang.t("Weekdays", "工作日")
+        case "Every week": return lang.t("Every week", "每周")
+        default: return opt
+        }
+    }
+
     private var targetAutomationId: String {
         automationId ?? store.selectedAutomationId
     }
@@ -570,7 +589,7 @@ public struct AutomationEditSheetView: View {
                 Button {
                     closeSheet()
                 } label: {
-                    Text("Cancel")
+                    Text(lang.t("Cancel", "取消"))
                         .font(.system(size: 16.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textBody)
                         .frame(minWidth: 64, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .leading)
@@ -580,7 +599,7 @@ public struct AutomationEditSheetView: View {
 
                 Spacer()
 
-                Text("Edit Schedule & Prompt")
+                Text(lang.t("Edit Schedule & Prompt", "编辑计划与提示词"))
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.textPrimary)
 
@@ -589,7 +608,7 @@ public struct AutomationEditSheetView: View {
                 Button {
                     saveChanges()
                 } label: {
-                    Text("Save")
+                    Text(lang.t("Save", "保存"))
                         .font(.system(size: 16.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                         .frame(minWidth: 64, minHeight: AntigravityTheme.minTouchTargetPt, alignment: .trailing)
@@ -605,11 +624,11 @@ public struct AutomationEditSheetView: View {
                     // Name & Prompt Card
                     VStack(spacing: 0) {
                         HStack(alignment: .center, spacing: 14) {
-                            Text("Name")
+                            Text(lang.t("Name", "名称"))
                                 .font(.system(size: 14.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textSecondary)
                                 .frame(width: 60, alignment: .leading)
-                            TextField("Automation name", text: $nameText)
+                            TextField(lang.t("Automation name", "自动化名称"), text: $nameText)
                                 .font(.system(size: 15.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
                                 .accessibilityIdentifier("field-automation-name")
@@ -622,12 +641,12 @@ public struct AutomationEditSheetView: View {
                             .padding(.horizontal, 14)
 
                         HStack(alignment: .top, spacing: 14) {
-                            Text("Prompt")
+                            Text(lang.t("Prompt", "提示词"))
                                 .font(.system(size: 14.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textSecondary)
                                 .frame(width: 60, alignment: .leading)
                                 .padding(.top, 2)
-                            TextField("What should this automation do?", text: $promptText, axis: .vertical)
+                            TextField(lang.t("What should this automation do?", "此自动化任务需要做什么？"), text: $promptText, axis: .vertical)
                                 .lineLimit(3...6)
                                 .font(.system(size: 15.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
@@ -649,7 +668,7 @@ public struct AutomationEditSheetView: View {
                     // Project & Trigger Card
                     VStack(spacing: 0) {
                         HStack {
-                            Text("Project")
+                            Text(lang.t("Project", "项目"))
                                 .font(.system(size: 15.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
                             Spacer()
@@ -685,15 +704,15 @@ public struct AutomationEditSheetView: View {
                             .padding(.horizontal, 14)
 
                         HStack {
-                            Text("Trigger")
+                            Text(lang.t("Trigger", "触发方式"))
                                 .font(.system(size: 15.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
                             Spacer()
                             HStack(spacing: 2) {
-                                triggerSegmentButton(title: "Schedule", selected: !isAlwaysOn, testId: "segment-trigger-schedule") {
+                                triggerSegmentButton(title: lang.t("Schedule", "定时"), selected: !isAlwaysOn, testId: "segment-trigger-schedule") {
                                     isAlwaysOn = false
                                 }
-                                triggerSegmentButton(title: "Always on", selected: isAlwaysOn, testId: "segment-trigger-always-on") {
+                                triggerSegmentButton(title: lang.t("Always on", "常驻"), selected: isAlwaysOn, testId: "segment-trigger-always-on") {
                                     isAlwaysOn = true
                                 }
                             }
@@ -717,7 +736,7 @@ public struct AutomationEditSheetView: View {
 
                     // REPEATS Pills
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("REPEATS")
+                        Text(lang.t("REPEATS", "重复频率"))
                             .font(.system(size: 11.5, weight: .semibold))
                             .tracking(0.8)
                             .foregroundStyle(AntigravityTheme.textMuted)
@@ -729,7 +748,7 @@ public struct AutomationEditSheetView: View {
                                 Button {
                                     selectedRepeat = opt
                                 } label: {
-                                    Text(opt)
+                                    Text(localizedRepeatLabel(opt))
                                         .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                                         .foregroundStyle(isSelected ? AntigravityTheme.textPrimary : AntigravityTheme.textSecondary)
                                         .lineLimit(1)
@@ -754,7 +773,7 @@ public struct AutomationEditSheetView: View {
 
                         // Time Row
                         HStack {
-                            Text("Time")
+                            Text(lang.t("Time", "时间"))
                                 .font(.system(size: 15.5, weight: .regular))
                                 .foregroundStyle(AntigravityTheme.textPrimary)
                             Spacer()
@@ -793,7 +812,7 @@ public struct AutomationEditSheetView: View {
 
                     // MODEL 3-Segment Picker
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("MODEL")
+                        Text(lang.t("MODEL", "模型"))
                             .font(.system(size: 11.5, weight: .semibold))
                             .tracking(0.8)
                             .foregroundStyle(AntigravityTheme.textMuted)
@@ -834,7 +853,12 @@ public struct AutomationEditSheetView: View {
                     }
 
                     // Unattended Policy Footnote
-                    Text("Runs unattended: anything that needs approval is denied automatically and the run shows up as Needs review.")
+                    Text(
+                        lang.t(
+                            "Runs unattended: anything that needs approval is denied automatically and the run shows up as Needs review.",
+                            "无人值守运行：需要审批的操作将自动拒绝，运行结果会标记为“待审查”。"
+                        )
+                    )
                         .font(.system(size: 13.5, weight: .regular))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .lineSpacing(3)
@@ -844,7 +868,7 @@ public struct AutomationEditSheetView: View {
                     Button {
                         isShowingDeleteConfirm = true
                     } label: {
-                        Text("Delete Automation")
+                        Text(lang.t("Delete Automation", "删除自动化任务"))
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(AntigravityTheme.statusError)
                             .frame(maxWidth: .infinity, minHeight: AntigravityTheme.minTouchTargetPt)
@@ -860,8 +884,8 @@ public struct AutomationEditSheetView: View {
         .background(AntigravityTheme.surfaceSheet.ignoresSafeArea())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("automation-edit-sheet")
-        .alert("Delete Automation?", isPresented: $isShowingDeleteConfirm) {
-            Button("Delete", role: .destructive) {
+        .alert(lang.t("Delete Automation?", "删除自动化任务？"), isPresented: $isShowingDeleteConfirm) {
+            Button(lang.t("Delete", "删除"), role: .destructive) {
                 store.deleteAutomation(targetAutomationId)
                 if let onDeleted {
                     onDeleted()
@@ -869,9 +893,14 @@ public struct AutomationEditSheetView: View {
                     closeSheet()
                 }
             }
-            Button("Cancel", role: .cancel) {}
+            Button(lang.t("Cancel", "取消"), role: .cancel) {}
         } message: {
-            Text("This removes \"\(nameText)\". Existing run conversations remain intact.")
+            Text(
+                lang.t(
+                    "This removes \"\(nameText)\". Existing run conversations remain intact.",
+                    "这将移除“\(nameText)”。已有运行记录对应的对话仍将保留。"
+                )
+            )
         }
     }
 

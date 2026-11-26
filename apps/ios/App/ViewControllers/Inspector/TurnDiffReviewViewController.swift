@@ -73,6 +73,18 @@ public struct TurnDiffReviewViewController: View {
         self.store = store
     }
 
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
+    private func localizedTurnPillLabel(_ canonical: String) -> String {
+        switch canonical {
+        case "Turn 1": return lang.t("Turn 1", "第 1 轮")
+        case "Turn 2": return lang.t("Turn 2", "第 2 轮")
+        case "Turn 3 · latest": return lang.t("Turn 3 · latest", "第 3 轮 · 最新")
+        case "All": return lang.t("All", "全部")
+        default: return canonical
+        }
+    }
+
     private var usesLiveDiffs: Bool {
         !store.isVerificationMode && !store.activeTurnDiffs.isEmpty
     }
@@ -196,7 +208,7 @@ public struct TurnDiffReviewViewController: View {
                     Button {
                         store.setDiffCompareMode(mode)
                     } label: {
-                        Text(mode.rawValue)
+                        Text(mode.localizedTitle(for: lang))
                             .font(.system(size: 11.5, weight: isSelected ? .bold : .medium))
                             .foregroundStyle(isSelected ? AntigravityTheme.inkOnPrimaryCTA : AntigravityTheme.inkSecondary)
                             .padding(.horizontal, 10)
@@ -212,7 +224,10 @@ public struct TurnDiffReviewViewController: View {
                     Button {
                         store.toggleStageDiffFile(at: currentFileIndex)
                     } label: {
-                        Label(live.isStaged ? "Unstage" : "Stage", systemImage: live.isStaged ? "minus.circle" : "plus.circle")
+                        Label(
+                            live.isStaged ? lang.t("Unstage", "取消暂存") : lang.t("Stage", "暂存"),
+                            systemImage: live.isStaged ? "minus.circle" : "plus.circle"
+                        )
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(gitSupported ? (live.isStaged ? AntigravityTheme.statusDone : AntigravityTheme.inkReading) : AntigravityTheme.inkMuted)
                             .padding(.horizontal, 10)
@@ -226,7 +241,7 @@ public struct TurnDiffReviewViewController: View {
                     Button {
                         store.discardDiffFile(at: currentFileIndex)
                     } label: {
-                        Label("Discard", systemImage: "arrow.uturn.backward")
+                        Label(lang.t("Discard", "放弃更改"), systemImage: "arrow.uturn.backward")
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(gitSupported ? AntigravityTheme.statusError : AntigravityTheme.inkMuted)
                             .padding(.horizontal, 10)
@@ -279,12 +294,12 @@ public struct TurnDiffReviewViewController: View {
         let gitSupported = store.isCapabilitySupportedOnActiveHost(.gitVcs)
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Git Commit & Push", systemImage: "checkmark.seal")
+                Label(lang.t("Git Commit & Push", "Git 提交与推送"), systemImage: "checkmark.seal")
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                 Spacer()
                 if let last = store.lastCommitResult {
-                    Text("\(last.commitSha) · \(last.pushed ? "Pushed" : "Local")")
+                    Text("\(last.commitSha) · \(last.pushed ? lang.t("Pushed", "已推送") : lang.t("Local", "本地"))")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(AntigravityTheme.statusDone)
                 }
@@ -294,7 +309,7 @@ public struct TurnDiffReviewViewController: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(AntigravityTheme.statusWaiting)
             }
-            TextField("Commit message...", text: $store.gitCommitDraft.message)
+            TextField(lang.t("Commit message...", "输入提交说明…"), text: $store.gitCommitDraft.message)
                 .font(.system(size: 14))
                 .foregroundStyle(AntigravityTheme.inkReading)
                 .padding(10)
@@ -303,12 +318,12 @@ public struct TurnDiffReviewViewController: View {
                 .accessibilityIdentifier("input-git-commit-message")
 
             HStack(spacing: 12) {
-                Toggle("Include Unstaged", isOn: $store.gitCommitDraft.includeUnstaged)
+                Toggle(lang.t("Include Unstaged", "包含未暂存"), isOn: $store.gitCommitDraft.includeUnstaged)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .tint(AntigravityTheme.accentPeriwinkle)
                     .disabled(!gitSupported)
-                Toggle("Amend", isOn: $store.gitCommitDraft.amend)
+                Toggle(lang.t("Amend", "修订上次提交"), isOn: $store.gitCommitDraft.amend)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                     .tint(AntigravityTheme.accentPeriwinkle)
@@ -316,7 +331,7 @@ public struct TurnDiffReviewViewController: View {
             }
 
             HStack(spacing: 10) {
-                Button("Commit") {
+                Button(lang.t("Commit", "提交")) {
                     Task { _ = await store.commitDiffChanges() }
                 }
                 .font(.system(size: 13.5, weight: .bold))
@@ -326,7 +341,7 @@ public struct TurnDiffReviewViewController: View {
                 .disabled(!gitSupported || store.gitCommitDraft.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("btn-git-commit")
 
-                Button("Push") {
+                Button(lang.t("Push", "推送")) {
                     Task { _ = await store.pushCurrentDiffBranch() }
                 }
                 .font(.system(size: 13.5, weight: .semibold))
@@ -358,7 +373,7 @@ public struct TurnDiffReviewViewController: View {
             .accessibilityIdentifier("btn-back-from-diff")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Review changes")
+                Text(lang.t("Review changes", "审查更改"))
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .lineLimit(1)
@@ -376,7 +391,7 @@ public struct TurnDiffReviewViewController: View {
                 }
                 store.currentRoute = .chatAndComposer
             } label: {
-                Text("Accept all")
+                Text(lang.t("Accept all", "全部接受"))
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(.horizontal, 14)
@@ -421,7 +436,7 @@ public struct TurnDiffReviewViewController: View {
                 Button {
                     selectedTurnPill = item.label
                 } label: {
-                    Text(item.label)
+                    Text(localizedTurnPillLabel(item.label))
                         .font(.system(size: 13, weight: isSelected ? .bold : .medium))
                         .foregroundStyle(
                             isSelected
@@ -444,6 +459,7 @@ public struct TurnDiffReviewViewController: View {
 
     private var filePagerCard: some View {
         let totalCount = max(1, usesLiveDiffs ? store.activeTurnDiffs.count : files.count)
+        let displayIndex = min(currentFileIndex + 1, totalCount)
         return HStack {
             Button {
                 currentFileIndex = (currentFileIndex - 1 + totalCount) % totalCount
@@ -474,7 +490,7 @@ public struct TurnDiffReviewViewController: View {
                 }
 
                 HStack(spacing: 4) {
-                    Text("File \(min(currentFileIndex + 1, totalCount)) of \(totalCount) ·")
+                    Text(lang.t("File \(displayIndex) of \(totalCount) ·", "第 \(displayIndex)/\(totalCount) 个文件 ·"))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Text("+\(activeFile.additions)")
                         .foregroundStyle(AntigravityTheme.statusDone)
@@ -527,7 +543,7 @@ public struct TurnDiffReviewViewController: View {
                     store.composerDraftText = "Revert hunk \(headerText) in \(activeFile.filePath)"
                 }
             } label: {
-                Text("Revert hunk")
+                Text(lang.t("Revert hunk", "还原此块"))
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(.horizontal, 10)
@@ -610,12 +626,12 @@ public struct TurnDiffReviewViewController: View {
 
     private var inlineLine29ComposerCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Comment on line 29")
+            Text(lang.t("Comment on line 29", "评论第 29 行"))
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(AntigravityTheme.inkSecondary)
 
             TextField(
-                "Write line review comment...",
+                lang.t("Write line review comment...", "输入行级审查评论…"),
                 text: $line29CommentText,
                 axis: .vertical
             )
@@ -634,7 +650,7 @@ public struct TurnDiffReviewViewController: View {
                     )
                     isLine29CommentOpen = false
                 } label: {
-                    Text("Add to review")
+                    Text(lang.t("Add to review", "加入审查"))
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 16)
@@ -655,7 +671,7 @@ public struct TurnDiffReviewViewController: View {
                     store.sendCurrentDraft()
                     store.currentRoute = .chatAndComposer
                 } label: {
-                    Text("Send to agent")
+                    Text(lang.t("Send to agent", "发送给代理"))
                         .font(.system(size: 13.5, weight: .bold))
                         .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .padding(.horizontal, 16)
@@ -706,7 +722,7 @@ public struct TurnDiffReviewViewController: View {
                         }
                     }
 
-                    Text("Viewed")
+                    Text(lang.t("Viewed", "已查看"))
                         .font(.system(size: 14.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkLabel)
                 }
@@ -722,7 +738,7 @@ public struct TurnDiffReviewViewController: View {
                 store.sendCurrentDraft()
                 store.currentRoute = .chatAndComposer
             } label: {
-                Text("Revert file")
+                Text(lang.t("Revert file", "还原文件"))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkReading)
                     .padding(.horizontal, 18)
@@ -741,7 +757,7 @@ public struct TurnDiffReviewViewController: View {
                 store.acceptPatchFile(activeFile.filePath)
                 isFileViewed = true
             } label: {
-                Text("Accept file")
+                Text(lang.t("Accept file", "接受文件"))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                     .padding(.horizontal, 20)

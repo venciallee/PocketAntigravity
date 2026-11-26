@@ -69,7 +69,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.antigravity.android.core.platform.CloudRelayCookieBridge
 import dev.antigravity.android.core.ui.components.AntigravitySurfaceCard
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
+import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.protocol.SapisidHashGenerator
 
@@ -102,6 +104,7 @@ fun CloudRelaySignInScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
+    val lang = LocalAppLanguage.current
     val normalizedUrl = remember(targetRelayUrl) { normalizeRelayStartUrl(targetRelayUrl) }
     val targetHost = remember(normalizedUrl) {
         runCatching { Uri.parse(normalizedUrl).host }.getOrNull()?.takeIf { it.isNotBlank() }
@@ -111,7 +114,11 @@ fun CloudRelaySignInScreen(
     var currentUrl by remember { mutableStateOf(normalizedUrl) }
     var isLoading by remember { mutableStateOf(true) }
     var loadErrorText by remember { mutableStateOf<String?>(null) }
-    var statusHint by remember { mutableStateOf("Sign in with your Google account to pair Antigravity Cloud Relay.") }
+    val defaultStatusHint = tr(
+        "Sign in with your Google account to pair Antigravity Cloud Relay.",
+        "登录你的 Google 账号以配对 Antigravity 云中继。",
+    )
+    var statusHint by remember(defaultStatusHint) { mutableStateOf(defaultStatusHint) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
@@ -162,7 +169,7 @@ fun CloudRelaySignInScreen(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
-                    contentDescription = "Cancel sign in",
+                    contentDescription = tr("Cancel sign in", "取消登录"),
                     tint = colors.inkReading,
                 )
             }
@@ -179,7 +186,7 @@ fun CloudRelaySignInScreen(
                         modifier = Modifier.size(14.dp),
                     )
                     Text(
-                        text = "Google Cloud Relay Sign-In",
+                        text = tr("Google Cloud Relay Sign-In", "Google 云中继登录"),
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                         color = colors.inkReading,
                         maxLines = 1,
@@ -205,19 +212,19 @@ fun CloudRelaySignInScreen(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Refresh,
-                    contentDescription = "Reload page",
+                    contentDescription = tr("Reload page", "重新加载页面"),
                     tint = colors.inkLabel,
                 )
             }
 
             IconButton(
                 onClick = {
-                    statusHint = "Clearing Google cookies..."
+                    statusHint = lang.t("Clearing Google cookies...", "正在清除 Google Cookie…")
                     loadErrorText = null
                     CloudRelayCookieBridge.clearGoogleCookies {
                         mainHandler.post {
                             stateHolder.resetForRetry()
-                            statusHint = "Cookies cleared. Sign in again."
+                            statusHint = lang.t("Cookies cleared. Sign in again.", "Cookie 已清除，请重新登录。")
                             webViewRef?.loadUrl(normalizedUrl)
                         }
                     }
@@ -226,7 +233,7 @@ fun CloudRelaySignInScreen(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.DeleteOutline,
-                    contentDescription = "Clear Google cookies",
+                    contentDescription = tr("Clear Google cookies", "清除 Google Cookie"),
                     tint = colors.inkSecondary,
                 )
             }
@@ -275,7 +282,7 @@ fun CloudRelaySignInScreen(
                             webViewRef?.loadUrl(normalizedUrl)
                         },
                     ) {
-                        Text("Retry", color = colors.statusWaiting)
+                        Text(tr("Retry", "重试"), color = colors.statusWaiting)
                     }
                 }
             }
@@ -385,7 +392,10 @@ fun CloudRelaySignInScreen(
                                 super.onReceivedError(view, request, error)
                                 if (request?.isForMainFrame == true) {
                                     isLoading = false
-                                    loadErrorText = "Failed to load sign-in page: ${error?.description ?: "Network error"}"
+                                    loadErrorText = lang.t(
+                                        "Failed to load sign-in page: ${error?.description ?: "Network error"}",
+                                        "登录页面加载失败：${error?.description ?: "网络错误"}",
+                                    )
                                     Log.w(
                                         CLOUD_RELAY_SIGNIN_LOG_TAG,
                                         "WebView onReceivedError code=${error?.errorCode} desc=${error?.description}",
@@ -432,7 +442,10 @@ fun CloudRelaySignInScreen(
                         handler = mainHandler,
                     )
                     if (!captured) {
-                        statusHint = "Complete Google Sign-In first (waiting for SAPISID auth cookies)."
+                        statusHint = lang.t(
+                            "Complete Google Sign-In first (waiting for SAPISID auth cookies).",
+                            "请先完成 Google 登录（正在等待 SAPISID 认证 Cookie）。",
+                        )
                     }
                 },
                 modifier = Modifier
@@ -445,7 +458,7 @@ fun CloudRelaySignInScreen(
                 ),
             ) {
                 Text(
-                    text = "Use Session",
+                    text = tr("Use Session", "使用当前会话"),
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
@@ -503,14 +516,17 @@ fun RemoteControlLinkDialog(
                         tint = colors.accentPeriwinkle,
                     )
                     Text(
-                        text = "Pair via Remote Control Link",
+                        text = tr("Pair via Remote Control Link", "通过远程控制链接配对"),
                         style = MaterialTheme.typography.titleMedium,
                         color = colors.inkReading,
                     )
                 }
 
                 Text(
-                    text = "Paste the link from Antigravity Desktop → Remote Control (or scan its QR code with your Android Camera app to open AG Pocket directly).",
+                    text = tr(
+                        "Paste the link from Antigravity Desktop → Remote Control (or scan its QR code with your Android Camera app to open AG Pocket directly).",
+                        "粘贴来自 Antigravity Desktop → 远程控制 的链接（或使用系统相机扫描二维码直接打开 AG Pocket）。",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.inkSecondary,
                 )
@@ -518,7 +534,7 @@ fun RemoteControlLinkDialog(
                 OutlinedTextField(
                     value = linkText,
                     onValueChange = { linkText = it },
-                    label = { Text("Remote Control URL or Pairing URI") },
+                    label = { Text(tr("Remote Control URL or Pairing URI", "远程控制 URL 或配对链接")) },
                     placeholder = { Text("https://antigravity.google.com/r/...") },
                     singleLine = true,
                     modifier = Modifier
@@ -554,7 +570,7 @@ fun RemoteControlLinkDialog(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Paste from Clipboard", color = colors.accentPeriwinkle)
+                    Text(tr("Paste from Clipboard", "从剪贴板粘贴"), color = colors.accentPeriwinkle)
                 }
 
                 Row(
@@ -563,7 +579,7 @@ fun RemoteControlLinkDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextButton(onClick = onDismiss) {
-                        Text("Cancel", color = colors.inkSecondary)
+                        Text(tr("Cancel", "取消"), color = colors.inkSecondary)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
@@ -575,7 +591,7 @@ fun RemoteControlLinkDialog(
                             contentColor = colors.inkOnPrimaryCta,
                         ),
                     ) {
-                        Text("Continue")
+                        Text(tr("Continue", "继续"))
                     }
                 }
             }

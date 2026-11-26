@@ -28,6 +28,16 @@ public struct AddContextSheetView: View {
             }
         }
 
+        public func localizedTitle(for lang: AppLanguage) -> String {
+            switch self {
+            case .files: return lang.t("Files", "文件")
+            case .folder: return lang.t("Folder", "文件夹")
+            case .mentions: return lang.t("Mentions", "引用")
+            case .actions: return lang.t("Actions", "快捷指令")
+            case .skills: return lang.t("Skills", "技能")
+            }
+        }
+
         public var testId: String {
             switch self {
             case .files: return "tile-files"
@@ -64,6 +74,17 @@ public struct AddContextSheetView: View {
 
     public var showHomeBackdrop: Bool
     public var isPresentedAsNativeSheet: Bool
+
+    private var lang: AppLanguage { store.appearancePreferences.language }
+
+    private func localizedSectionTitle(_ section: String) -> String {
+        switch section {
+        case "FILES & FOLDERS": return lang.t("FILES & FOLDERS", "文件与文件夹")
+        case "MENTIONS": return lang.t("MENTIONS", "引用")
+        case "ACTIONS & SKILLS": return lang.t("ACTIONS & SKILLS", "指令与技能")
+        default: return section
+        }
+    }
 
     private let verificationRows: [ContextRowSpec] = [
         ContextRowSpec(
@@ -167,7 +188,7 @@ public struct AddContextSheetView: View {
                     category: .mentions,
                     iconName: "bubble.left",
                     title: summary.title,
-                    subtitle: "Conversation · \(summary.projectSlug)",
+                    subtitle: lang.t("Conversation · \(summary.projectSlug)", "对话 · \(summary.projectSlug)"),
                     isMonospacedTitle: false,
                     usesPlusAffordance: false,
                     testId: "ctx-row-\(summary.cascadeId)"
@@ -182,7 +203,7 @@ public struct AddContextSheetView: View {
                     category: .actions,
                     iconName: "slash.circle",
                     title: "/plan",
-                    subtitle: "Action · step-by-step implementation plan",
+                    subtitle: lang.t("Action · step-by-step implementation plan", "指令 · 制定分步实施方案"),
                     isMonospacedTitle: true,
                     usesPlusAffordance: true,
                     testId: "ctx-row-plan"
@@ -197,7 +218,7 @@ public struct AddContextSheetView: View {
                     category: .actions,
                     iconName: "slash.circle",
                     title: "/goal",
-                    subtitle: "Action · thorough autonomous execution",
+                    subtitle: lang.t("Action · thorough autonomous execution", "指令 · 持续自主执行直至达成目标"),
                     isMonospacedTitle: true,
                     usesPlusAffordance: true,
                     testId: "ctx-row-goal"
@@ -279,7 +300,7 @@ public struct AddContextSheetView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Add Context")
+                    Text(lang.t("Add Context", "添加上下文"))
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .padding(.horizontal, 18)
@@ -287,27 +308,27 @@ public struct AddContextSheetView: View {
                         .padding(.bottom, 8)
 
                     if let onPickPhotos {
-                        popoverCategoryRow(icon: "photo.on.rectangle.angled", title: "Photos", trailingLabel: nil, testId: "ctx-menu-photos") {
+                        popoverCategoryRow(icon: "photo.on.rectangle.angled", title: lang.t("Photos", "相册"), trailingLabel: nil, testId: "ctx-menu-photos") {
                             onPickPhotos()
                         }
                     }
-                    popoverCategoryRow(icon: "paperclip", title: "Files", trailingLabel: nil, testId: "ctx-menu-files") {
+                    popoverCategoryRow(icon: "paperclip", title: lang.t("Files", "文件"), trailingLabel: nil, testId: "ctx-menu-files") {
                         activeCategoryFilter = .files
                         isExpandedToPicker = true
                     }
-                    popoverCategoryRow(icon: "folder", title: "Folder", trailingLabel: nil, testId: "ctx-menu-folder") {
+                    popoverCategoryRow(icon: "folder", title: lang.t("Folder", "文件夹"), trailingLabel: nil, testId: "ctx-menu-folder") {
                         activeCategoryFilter = .folder
                         isExpandedToPicker = true
                     }
-                    popoverCategoryRow(icon: "at", title: "Mentions", trailingLabel: nil, testId: "ctx-menu-mentions") {
+                    popoverCategoryRow(icon: "at", title: lang.t("Mentions", "引用"), trailingLabel: nil, testId: "ctx-menu-mentions") {
                         activeCategoryFilter = .mentions
                         isExpandedToPicker = true
                     }
-                    popoverCategoryRow(icon: "slash.circle", title: "Actions", trailingLabel: nil, testId: "ctx-menu-actions") {
+                    popoverCategoryRow(icon: "slash.circle", title: lang.t("Actions", "快捷指令"), trailingLabel: nil, testId: "ctx-menu-actions") {
                         activeCategoryFilter = .actions
                         isExpandedToPicker = true
                     }
-                    popoverCategoryRow(icon: "externaldrive", title: "Drive", trailingLabel: "Set up", testId: "ctx-menu-drive") {
+                    popoverCategoryRow(icon: "externaldrive", title: lang.t("Drive", "云端硬盘"), trailingLabel: lang.t("Set up", "去配置"), testId: "ctx-menu-drive") {
                         activeCategoryFilter = nil
                         isExpandedToPicker = true
                     }
@@ -331,7 +352,8 @@ public struct AddContextSheetView: View {
                     dockedBackdropComposerBar(
                         highlightPermissions: false,
                         highlightAdd: true,
-                        draftText: nil
+                        draftText: nil,
+                        language: lang
                     )
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
@@ -391,7 +413,7 @@ public struct AddContextSheetView: View {
 
                 // Header Bar
                 ZStack {
-                    Text("Add Context")
+                    Text(lang.t("Add Context", "添加上下文"))
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(AntigravityTheme.inkReading)
 
@@ -422,7 +444,7 @@ public struct AddContextSheetView: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
-                    TextField("Search files, folders, skills...", text: $searchQuery)
+                    TextField(lang.t("Search files, folders, skills...", "搜索文件、文件夹、技能..."), text: $searchQuery)
                         .font(.system(size: 15))
                         .foregroundStyle(AntigravityTheme.inkReading)
                 }
@@ -445,7 +467,7 @@ public struct AddContextSheetView: View {
                                 Image(systemName: tile.iconName)
                                     .font(.system(size: 18, weight: .medium))
                                     .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkReading)
-                                Text(tile.rawValue)
+                                Text(tile.localizedTitle(for: lang))
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundStyle(isSelected ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkLabel)
                                     .lineLimit(1)
@@ -483,11 +505,11 @@ public struct AddContextSheetView: View {
                                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                                 .frame(width: 22)
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text("Photos")
+                                                Text(lang.t("Photos", "相册"))
                                                     .font(.system(size: 14.5, weight: .semibold))
                                                     .foregroundStyle(AntigravityTheme.inkReading)
                                                     .lineLimit(1)
-                                                Text("Photo Library")
+                                                Text(lang.t("Photo Library", "照片图库"))
                                                     .font(.system(size: 12))
                                                     .foregroundStyle(AntigravityTheme.inkSecondary)
                                                     .lineLimit(1)
@@ -504,7 +526,7 @@ public struct AddContextSheetView: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                     }
                                     .buttonStyle(.plain)
-                                    .accessibilityLabel("Choose images from Photos")
+                                    .accessibilityLabel(lang.t("Choose images from Photos", "从相册选择图片"))
                                     .accessibilityIdentifier("ctx-row-pick-photos")
                                 }
 
@@ -518,11 +540,11 @@ public struct AddContextSheetView: View {
                                                 .foregroundStyle(AntigravityTheme.accentPeriwinkle)
                                                 .frame(width: 22)
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text("Files")
+                                                Text(lang.t("Files", "文件"))
                                                     .font(.system(size: 14.5, weight: .semibold))
                                                     .foregroundStyle(AntigravityTheme.inkReading)
                                                     .lineLimit(1)
-                                                Text("PDF, doc, media")
+                                                Text(lang.t("PDF, doc, media", "PDF、文档、媒体"))
                                                     .font(.system(size: 12))
                                                     .foregroundStyle(AntigravityTheme.inkSecondary)
                                                     .lineLimit(1)
@@ -539,7 +561,7 @@ public struct AddContextSheetView: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                     }
                                     .buttonStyle(.plain)
-                                    .accessibilityLabel("Attach file or media from Files")
+                                    .accessibilityLabel(lang.t("Attach file or media from Files", "从“文件”附加文档或媒体"))
                                     .accessibilityIdentifier("ctx-row-attach-device-file")
                                 }
                             }
@@ -549,7 +571,7 @@ public struct AddContextSheetView: View {
                             let rows = filteredRows(in: sectionTitle, from: allRows)
                             if !rows.isEmpty {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text(sectionTitle)
+                                    Text(localizedSectionTitle(sectionTitle))
                                         .font(.system(size: 11.5, weight: .semibold))
                                         .tracking(0.6)
                                         .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -584,7 +606,7 @@ public struct AddContextSheetView: View {
                     .overlay(AntigravityTheme.subtleDivider)
 
                 HStack {
-                    Text("\(selectedItemIds.count) selected")
+                    Text(lang.t("\(selectedItemIds.count) selected", "已选 \(selectedItemIds.count) 项"))
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
 
@@ -593,7 +615,7 @@ public struct AddContextSheetView: View {
                     Button {
                         commitSelection()
                     } label: {
-                        Text("Add to message")
+                        Text(lang.t("Add to message", "添加到消息"))
                             .font(.system(size: 15.5, weight: .bold))
                             .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                             .padding(.horizontal, 24)
