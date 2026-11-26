@@ -8,17 +8,14 @@ import AntigravityData
 public struct CascadeChatViewController: View {
     @Bindable public var store: AntigravitySessionStore
     public var onBack: (() -> Void)?
-    public var onOpenSidebar: (() -> Void)?
     @State private var isTurnStopped: Bool = false
 
     public init(
         store: AntigravitySessionStore,
-        onBack: (() -> Void)? = nil,
-        onOpenSidebar: (() -> Void)? = nil
+        onBack: (() -> Void)? = nil
     ) {
         self.store = store
         self.onBack = onBack
-        self.onOpenSidebar = onOpenSidebar
     }
 
     private var isStaticESDDFixtureView: Bool {
@@ -585,48 +582,23 @@ public struct CascadeChatViewController: View {
         let showDiffPill = activePendingDraft == nil && (!isLiveOrPaired || store.totalDiffAdditions > 0 || store.totalDiffDeletions > 0)
 
         return HStack(spacing: 8) {
-            if let onOpenSidebar, onBack == nil {
-                Button {
-                    store.discardPendingDraftConversation()
-                    onOpenSidebar()
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.inkReading)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open sidebar")
-                .accessibilityIdentifier("btn-sidebar")
-            } else if let onBack {
-                Button {
-                    store.discardPendingDraftConversation()
+            Button {
+                store.discardPendingDraftConversation()
+                if let onBack {
                     onBack()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
-                        .contentShape(Rectangle())
+                } else {
+                    store.activeRoute = .tabRoot
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("btn-back-sessions")
-            } else {
-                Button {
-                    store.discardPendingDraftConversation()
-                    store.isSidebarPresented = true
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(AntigravityTheme.inkReading)
-                        .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open sidebar")
-                .accessibilityIdentifier("btn-sidebar")
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                    .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+            .accessibilityIdentifier("btn-back-sessions")
 
             VStack(alignment: .leading, spacing: 2) {
                 if isNavTitleLoading {

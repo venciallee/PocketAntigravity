@@ -75,7 +75,7 @@ class AndroidSidebarDrawerGestureTest {
     }
 
     @Test
-    fun sidebarDrawerSwipeInChatPreservesActiveConversationOnDismiss() {
+    fun cascadeChatShowsBackButtonWithoutSidebarDrawerAndReturnsToHome() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -85,21 +85,22 @@ class AndroidSidebarDrawerGestureTest {
         }
 
         composeRule.onNodeWithTag("chat-diff-pill").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-chat-back").assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithTag("btn-sidebar").fetchSemanticsNodes().size)
 
-        // Swipe left-to-right inside CascadeChat -> opens Sidebar Drawer over active conversation
+        // Swiping left-to-right inside CascadeChat must NOT pull open the Sidebar Drawer
         composeRule.onRoot().performTouchInput {
             swipeRight(startX = width * 0.03f, endX = width * 0.85f, durationMillis = 220)
         }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
-
-        // Swipe right-to-left -> closes drawer without losing the active conversation
-        composeRule.onRoot().performTouchInput {
-            swipeLeft(startX = width * 0.72f, endX = width * 0.08f, durationMillis = 220)
-        }
-        composeRule.waitForIdle()
         assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
         composeRule.onNodeWithTag("chat-diff-pill").assertIsDisplayed()
+
+        // Tapping top-left Back button returns cleanly to New Conversation Home
+        composeRule.onNodeWithTag("btn-chat-back").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("home-greeting").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-sidebar").assertIsDisplayed()
     }
 
     @Test

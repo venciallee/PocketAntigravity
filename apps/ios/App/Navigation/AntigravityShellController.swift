@@ -210,7 +210,7 @@ public struct AntigravityRootContainerView: View {
 
     private enum ShellPushDestination: Hashable {
         case projectDetail(String)
-        case cascadeChat(fromProject: Bool)
+        case cascadeChat
         case automationDetail(String)
         case rulesAndSkills
         case planReview
@@ -549,11 +549,7 @@ public struct AntigravityRootContainerView: View {
     }
 
     private var canPopNavigation: Bool {
-        guard let top = navigationPath.last else { return false }
-        if navigationPath.count == 1, case .cascadeChat(let fromProject) = top {
-            return fromProject
-        }
-        return true
+        !navigationPath.isEmpty
     }
 
     private var canOpenSidebarBySwipe: Bool {
@@ -740,14 +736,11 @@ public struct AntigravityRootContainerView: View {
                     openOrCreateConversation(convId, defaultProjectSlug: projectSlug)
                 }
             )
-        case .cascadeChat(let fromProject):
+        case .cascadeChat:
             CascadeChatViewController(
                 store: store,
-                onBack: fromProject ? {
+                onBack: {
                     popTopDestination()
-                } : nil,
-                onOpenSidebar: {
-                    openSidebarDrawer()
                 }
             )
         case .automationDetail(let automationId):
@@ -824,20 +817,17 @@ public struct AntigravityRootContainerView: View {
                 navigationPath = [target]
             }
         case .cascadeChat:
-            if case .cascadeChat = navigationPath.last {
+            if navigationPath.last == .cascadeChat {
                 return
             }
-            if let existingIndex = navigationPath.lastIndex(where: {
-                if case .cascadeChat = $0 { return true }
-                return false
-            }) {
+            if let existingIndex = navigationPath.lastIndex(of: .cascadeChat) {
                 navigationPath.removeSubrange((existingIndex + 1)...)
             } else if case .projectDetail = navigationPath.last {
-                navigationPath.append(.cascadeChat(fromProject: true))
-            } else if selectedTab == .automations {
-                navigationPath = [.cascadeChat(fromProject: true)]
+                navigationPath.append(.cascadeChat)
+            } else if case .automationDetail = navigationPath.last {
+                navigationPath.append(.cascadeChat)
             } else {
-                navigationPath = [.cascadeChat(fromProject: false)]
+                navigationPath = [.cascadeChat]
             }
         case .automationDetail(let aid):
             let target = ShellPushDestination.automationDetail(aid)
@@ -858,34 +848,31 @@ public struct AntigravityRootContainerView: View {
             if navigationPath.last == .planReview {
                 return
             }
-            if let chatIdx = navigationPath.lastIndex(where: {
-                if case .cascadeChat = $0 { return true }
-                return false
-            }) {
+            if let chatIdx = navigationPath.lastIndex(of: .cascadeChat) {
                 var updated = Array(navigationPath.prefix(through: chatIdx))
                 updated.append(.planReview)
                 navigationPath = updated
             } else {
-                navigationPath = [.cascadeChat(fromProject: false), .planReview]
+                navigationPath = [.cascadeChat, .planReview]
             }
         case .turnDiffReview:
             if navigationPath.last == .turnDiffReview {
                 return
             }
-            if let chatIdx = navigationPath.lastIndex(where: {
-                if case .cascadeChat = $0 { return true }
-                return false
-            }) {
+            if let chatIdx = navigationPath.lastIndex(of: .cascadeChat) {
                 var updated = Array(navigationPath.prefix(through: chatIdx))
                 updated.append(.turnDiffReview)
                 navigationPath = updated
             } else {
-                navigationPath = [.cascadeChat(fromProject: false), .turnDiffReview]
+                navigationPath = [.cascadeChat, .turnDiffReview]
             }
         }
     }
 
     private func syncActiveRoute(from path: [ShellPushDestination]) {
+        if !path.contains(.cascadeChat), store.activeCascadeId.isEmpty {
+            store.discardPendingDraftConversation()
+        }
         switch path.last {
         case .none:
             if store.activeRoute != .tabRoot && store.activeRoute != .pairingSettings {

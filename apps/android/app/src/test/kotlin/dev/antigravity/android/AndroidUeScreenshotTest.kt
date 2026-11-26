@@ -172,7 +172,7 @@ class AndroidUeScreenshotTest {
         capturePortraitScreen(
             scene = EsddVerifySceneCase.CHAT_AND_COMPOSER,
             fileName = "UE07_CHAT_AND_COMPOSER",
-            touchTargetTags = listOf("btn-command-deny", "btn-command-allow-biometric", "composer-btn-send"),
+            touchTargetTags = listOf("btn-chat-back", "btn-command-deny", "btn-command-allow-biometric", "composer-btn-send"),
         )
     }
 

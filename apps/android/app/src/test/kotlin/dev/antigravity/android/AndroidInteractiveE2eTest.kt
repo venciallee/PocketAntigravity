@@ -818,8 +818,11 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("btn-add-context-apply").performClick()
         composeRule.onNodeWithTag("chat-steps-list").assertIsDisplayed()
 
-        // 2. Opening sidebar and tapping '+' on a project transitions cleanly without duplicate-key crashes
+        // 2. Tapping Back in chat returns to Home; opening sidebar and tapping '+' on a project transitions cleanly
+        assertEquals(0, composeRule.onAllNodesWithTag("btn-sidebar").fetchSemanticsNodes().size)
         composeRule.onNodeWithTag("btn-chat-back").performClick()
+        composeRule.onNodeWithTag("home-greeting").assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-sidebar").performClick()
         composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
         composeRule.onNodeWithTag("project-add-ledger-svc").performClick()
         composeRule.onNodeWithTag("home-composer-card").assertIsDisplayed()
