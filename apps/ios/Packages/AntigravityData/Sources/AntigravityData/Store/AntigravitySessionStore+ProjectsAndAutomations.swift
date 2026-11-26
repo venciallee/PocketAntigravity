@@ -2,7 +2,7 @@ import Foundation
 
 /// Project workspace creation, scoped conversations, and Antigravity 2.0 native Automations sidecars.
 extension AntigravitySessionStore {
-    // MARK: - Project Creation & Scoped Conversation Actions (`UE04`, `UE05`)
+    // MARK: - Project Creation & Scoped Conversation Actions (`UE05`)
 
     @discardableResult
     public func createNewProject(
@@ -47,7 +47,8 @@ extension AntigravitySessionStore {
         selectedProjectId = created.id
         selectedWorkspaceUri = created.workspaceUri
         presentedSheet = nil
-        activeRoute = .projectDetail(created.id)
+        selectedTab = .agents
+        activeRoute = .tabRoot
 
         let projectsSnapshot = projects
         let storeRef = projectionStore
@@ -344,7 +345,9 @@ extension AntigravitySessionStore {
     }
 
     public func revealProjectInFinder(_ projectSlug: String) {
-        guard let project = projects.first(where: { $0.id == projectSlug }),
+        guard let project = projects.first(where: { $0.id == projectSlug || $0.name == projectSlug }),
+              project.runtime != .cloud,
+              !project.isNoProject,
               !project.workspaceUri.isEmpty else { return }
         let uri = project.workspaceUri
         let clientRef = rpcClient

@@ -83,7 +83,6 @@ fun DisplayOptionsOverlayScreen(
             onOpenCustomizations = {},
             onOpenDisplayOptions = {},
             onOpenNewProject = {},
-            onOpenProjectDetail = {},
             onOpenConversation = {},
             onLongPressConversation = {},
             onOpenSettings = {},

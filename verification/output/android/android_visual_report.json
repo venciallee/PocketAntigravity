@@ -1,9 +1,9 @@
 {
-  "totalScreens": 20,
-  "canonicalScreens": 13,
+  "totalScreens": 19,
+  "canonicalScreens": 12,
   "extendedScreens": 7,
-  "overviewPng": "verification/output/android/ANDROID_13_SCREENS_OVERVIEW.png",
-  "overview20Png": "verification/output/android/ANDROID_20_SCREENS_OVERVIEW.png",
+  "overviewPng": "verification/output/android/ANDROID_12_SCREENS_OVERVIEW.png",
+  "overviewAllPng": "verification/output/android/ANDROID_19_SCREENS_OVERVIEW.png",
   "comparisons": [
     {
       "stateId": "UE01_AGENTS_HOME",
@@ -43,19 +43,6 @@
         2745
       ],
       "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE03.png"
-    },
-    {
-      "stateId": "UE04_PROJECT_DETAIL",
-      "referenceUePng": "docs/ue/android/and-project.png",
-      "referenceSizePx": [
-        824,
-        1830
-      ],
-      "androidSizePx": [
-        1236,
-        2745
-      ],
-      "comparisonPng": "verification/output/android/comparisons/ANDROID_CMP_UE04.png"
     },
     {
       "stateId": "UE05_CREATE_PROJECT",

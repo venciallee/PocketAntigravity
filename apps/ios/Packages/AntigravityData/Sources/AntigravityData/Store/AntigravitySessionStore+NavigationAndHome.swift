@@ -1216,10 +1216,12 @@ extension AntigravitySessionStore {
 
     public func selectProject(_ projectSlug: String) {
         selectedProjectId = projectSlug
-        if let project = projects.first(where: { $0.id == projectSlug }) {
+        if let project = projects.first(where: { $0.id == projectSlug || $0.name == projectSlug }) {
+            selectedProjectId = project.id
             selectedWorkspaceUri = project.workspaceUri
         }
-        activeRoute = .projectDetail(projectSlug)
+        selectedTab = .agents
+        activeRoute = .tabRoot
     }
 
     public func toggleProjectExpandedInHome(_ projectSlug: String) {

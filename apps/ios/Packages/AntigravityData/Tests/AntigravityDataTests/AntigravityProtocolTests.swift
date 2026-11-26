@@ -235,9 +235,10 @@ final class AntigravityProtocolTests: XCTestCase {
         let createdProject = store.createNewProject()
         XCTAssertEqual(createdProject.id, "ledger-svc-cloud")
         XCTAssertEqual(createdProject.runtime, .cloud)
-        XCTAssertEqual(store.activeRoute, .projectDetail("ledger-svc-cloud"))
+        XCTAssertEqual(store.selectedProjectId, "ledger-svc-cloud")
+        XCTAssertEqual(store.activeRoute, .tabRoot)
 
-        // UE04 New Conversation in Project
+        // New Conversation in Project (direct from sidebar '+' or context menu)
         let convId = store.createConversationInProject("ledger-svc", title: "Verify settlement metrics")
         XCTAssertEqual(store.activeCascadeId, convId)
         XCTAssertEqual(store.activeRoute, .cascadeChat(convId))

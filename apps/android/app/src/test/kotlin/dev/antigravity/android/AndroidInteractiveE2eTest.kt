@@ -3,12 +3,14 @@ package dev.antigravity.android
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import dev.antigravity.android.ui.AntigravityAppRoot
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentPermissionPreset
@@ -33,8 +35,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Complete Android Interactive Compose E2E suite (`ATC-01` .. `ATC-22`),
- * verifying every user journey across all 20 aligned UE boards (`UE01`..`UE15`),
+ * Complete Android Interactive Compose E2E suite (`ATC-01` .. `ATC-28`),
+ * verifying every user journey across all 19 aligned UE boards (`UE01`..`UE15`),
  * v2.33 sheets, and forward-compatible unknown steps/gates.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -120,22 +122,30 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc04_projectDetailNavigatesToAutomationDetailAndRulesSkills() {
+    fun atc04_sidebarProjectHeaderCollapsesAndLongPressOpensProjectActions() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
                 coordinator = coordinator,
-                initialVerifyScene = EsddVerifySceneCase.PROJECT_DETAIL,
+                initialVerifyScene = EsddVerifySceneCase.SIDEBAR_DRAWER,
             )
         }
 
-        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
-        composeRule.onNodeWithTag("btn-new-conv-in-project").assertIsDisplayed()
-        composeRule.onNodeWithTag("project-row-automation").assertIsDisplayed()
-        composeRule.onNodeWithTag("project-row-rules-skills").assertIsDisplayed()
+        // Tapping project header directly collapses & expands conversations (no intermediate Project Detail screen)
+        composeRule.onNodeWithTag("project-header-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
+        assertTrue(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        assertEquals(0, composeRule.onAllNodesWithTag("conversation-row-cas-rate-limiter").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
+        assertFalse(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
 
-        // Tap Project rules & skills -> UE14
-        composeRule.onNodeWithTag("project-row-rules-skills").performClick()
+        // Long-pressing local project exposes New conversation, Project rules & skills, and Reveal in Finder
+        composeRule.onNodeWithTag("project-header-ledger-svc").performTouchInput { longClick() }
+        composeRule.onNodeWithTag("project-menu-new-conv-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-menu-reveal-finder-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-menu-rules-skills-ledger-svc").performClick()
         composeRule.onNodeWithTag("rules-token-budget-card").assertIsDisplayed()
     }
 
@@ -779,7 +789,7 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc27_sidebarProjectCollapseToggleHidesAndRestoresConversationsWhileHeaderStillOpensProjectDetail() {
+    fun atc27_sidebarProjectHeaderAndToggleBothCollapseAndRestoreConversations() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -804,9 +814,15 @@ class AndroidInteractiveE2eTest {
         assertFalse(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
         composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
 
-        // Tapping project header still navigates cleanly to Project Detail (UE04)
+        // Tapping project header directly also collapses & expands cleanly without navigating away
         composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
-        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
+        assertTrue(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        assertEquals(0, composeRule.onAllNodesWithTag("conversation-row-cas-rate-limiter").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("project-collapsed-count-ledger-svc", useUnmergedTree = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
+        assertFalse(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
     }
 
     @Test
@@ -857,7 +873,6 @@ class AndroidInteractiveE2eTest {
                     onOpenCustomizations = {},
                     onOpenDisplayOptions = {},
                     onOpenNewProject = {},
-                    onOpenProjectDetail = {},
                     onOpenConversation = {},
                     onLongPressConversation = {},
                     onOpenSettings = {},

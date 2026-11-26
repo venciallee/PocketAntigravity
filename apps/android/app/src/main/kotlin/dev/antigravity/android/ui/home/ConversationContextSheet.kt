@@ -88,7 +88,6 @@ fun ConversationContextSheetScreen(
             onOpenCustomizations = {},
             onOpenDisplayOptions = {},
             onOpenNewProject = {},
-            onOpenProjectDetail = {},
             onOpenConversation = {},
             onLongPressConversation = {},
             onOpenSettings = {},

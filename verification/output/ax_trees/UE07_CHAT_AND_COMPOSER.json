@@ -90,9 +90,9 @@
       "exists": true,
       "x": 72,
       "y": 775,
-      "width": 105.7,
+      "width": 109.1,
       "height": 36,
-      "text": "Gemini 4 Neon\nExtra High"
+      "text": "Gemini 4 Neon"
     },
     "[data-testid='composer-pill-preset']": {
       "exists": true,

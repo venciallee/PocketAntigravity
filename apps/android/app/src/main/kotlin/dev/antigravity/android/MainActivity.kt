@@ -180,7 +180,6 @@ class MainActivity : FragmentActivity() {
                 "ue01b", "sidebar-drawer", "sidebar" -> EsddVerifySceneCase.SIDEBAR_DRAWER
                 "ue02", "display-options" -> EsddVerifySceneCase.DISPLAY_OPTIONS
                 "ue03", "context-menu-pin", "context-menu" -> EsddVerifySceneCase.CONTEXT_MENU_PIN
-                "ue04", "project-detail" -> EsddVerifySceneCase.PROJECT_DETAIL
                 "ue05", "create-project", "new-project" -> EsddVerifySceneCase.CREATE_PROJECT
                 "ue06", "automations" -> EsddVerifySceneCase.AUTOMATIONS
                 "ue06b", "automation-detail" -> EsddVerifySceneCase.AUTOMATION_DETAIL

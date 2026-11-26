@@ -82,7 +82,7 @@ apps/android/
 │                    # AndroidSharePayloadParser, CloudRelayCookieBridge
 └── app/             # Application, AppGraph (pure Kotlin DI), MainActivity (edge-to-edge + deep links),
                      # Adaptive NavigationSuiteScaffold, Feature packages:
-                     #   ui/home (UE01-UE03), ui/projects (UE04-UE05), ui/automations (UE06),
+                     #   ui/home (UE01-UE03), ui/projects (UE05, UE14), ui/automations (UE06),
                      #   ui/chat (UE07-UE10 + v2.33 Overview/SideQuestion/Swarm/VoiceMode),
                      #   ui/review (UE11-UE12 + RichArtifactViewer), ui/pairing (Welcome/QR/CloudRelay/Settings),
                      #   ui/liveprogress (UE13 Live Updates Service, Receiver, BiometricTrampoline, Glance Widget, UE13 Spec Gallery)
