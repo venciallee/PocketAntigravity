@@ -1304,7 +1304,7 @@ public class AntigravityCoreCoordinator(
                 conversationSyncStore.startSummarySubscriptionStream(client, host)
             }
             if (host.channel == RemoteConnectionChannel.CLOUD_RELAY &&
-                (!handshake.initialSyncCompleted || handshake.summaries.isEmpty() || handshake.workspaces.isEmpty())
+                (!handshake.initialSyncCompleted || (handshake.summaries.isEmpty() && handshake.workspaces.isEmpty()))
             ) {
                 val activeScope = connectionStore.state.value.selectedHostScope
                 scope.launch {

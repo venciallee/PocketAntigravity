@@ -667,9 +667,10 @@ public class ConversationSyncStore(
         }
         val incomingIds = reconciledIncomingSummaries.map { it.cascadeId }.toSet()
 
-        // Preserve summaries belonging to offline/unrefreshed host shards
+        // Preserve local optimistic drafts (not yet upgraded to a server UUID) and summaries belonging to offline/unrefreshed host shards
         val preservedSummaries = prev.summaries.filter { existing ->
             if (existing.cascadeId in incomingIds) return@filter false
+            if (existing.cascadeId.startsWith("cas-")) return@filter true
             val key = HostProjectionKey.compute(
                 isCloud = existing.isCloud,
                 instanceId = existing.originInstanceUuid,

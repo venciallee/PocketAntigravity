@@ -199,6 +199,7 @@ public actor AntigravityRPCClient {
         let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(baseURL.absoluteString)
         let isRelay = parsedTarget != nil && (csrfToken == nil || csrfToken?.isEmpty == true) && (sessionCookie?.isEmpty == false)
         self.channel = isRelay ? .cloudRelay : .directHost
+        self.initialHostName = parsedTarget?.instanceId ?? baseURL.host ?? ""
         self.endpointURL = baseURL
         let originURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin) ?? baseURL
         self.relayOriginURL = originURL
