@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.Throws
 import kotlin.random.Random
 
@@ -57,6 +59,7 @@ public data class SendMessageOutcome(
     public val dispatchedLive: Boolean,
     public val queuedInOutbox: Boolean,
     public val errorMessage: String? = null,
+    public val hostOfflineDetected: Boolean = false,
 )
 
 public data class OutboxReplayResult(
@@ -84,6 +87,8 @@ public class CascadeChatDomainStore(
     public var isVerificationMode: Boolean = false
 
     private val markdownCache = linkedMapOf<String, List<MarkdownBlock>>()
+    private val outboxMutex = Mutex()
+    private val inFlightOutboxIds = mutableSetOf<String>()
 
     public fun setActiveCascade(cascadeId: String) {
         _state.update { it.copy(activeCascadeId = cascadeId, stepLoadErrorText = null) }
@@ -528,12 +533,15 @@ public class CascadeChatDomainStore(
             messageText = effectiveMessage,
             stepIndex = nextStepIndex,
         )
-        projectionStorage.enqueueOutbox(outboxEntry)
-        refreshOutboxCount()
-
         if (client == null || !isDeviceNetworkReachable) {
+            projectionStorage.enqueueOutbox(outboxEntry)
+            refreshOutboxCount()
             return SendMessageOutcome(targetCascadeId, dispatchedLive = false, queuedInOutbox = true)
         }
+
+        outboxMutex.withLock { inFlightOutboxIds.add(outboxEntry.id) }
+        projectionStorage.enqueueOutbox(outboxEntry)
+        refreshOutboxCount()
 
         return try {
             if (targetCascadeId.isEmpty() || isOptimisticDraft) {
@@ -570,7 +578,9 @@ public class CascadeChatDomainStore(
             refreshOutboxCount()
             SendMessageOutcome(targetCascadeId, dispatchedLive = true, queuedInOutbox = false)
         } catch (e: Throwable) {
+            val isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)
             val isOffline = isTransportOfflineError(e)
+            val formattedError = ProtocolCompatibilityEngine.formatUserFacingRpcError(e)
             if (isOffline) {
                 markStepQueued(targetCascadeId, nextStepIndex, queued = true)
                 refreshOutboxCount()
@@ -578,19 +588,24 @@ public class CascadeChatDomainStore(
                     resolvedCascadeId = targetCascadeId,
                     dispatchedLive = false,
                     queuedInOutbox = true,
-                    errorMessage = e.message,
+                    errorMessage = formattedError,
+                    hostOfflineDetected = isInstanceUnregistered ||
+                        (e is AntigravityRpcError.HttpError && e.statusCode in setOf(502, 503, 504)),
                 )
             } else {
                 projectionStorage.removeOutbox(outboxEntry.id)
                 refreshOutboxCount()
-                _state.update { it.copy(stepLoadErrorText = "Failed to send message: ${e.message}") }
+                _state.update { it.copy(stepLoadErrorText = "Failed to send message: $formattedError") }
                 SendMessageOutcome(
                     resolvedCascadeId = targetCascadeId,
                     dispatchedLive = false,
                     queuedInOutbox = false,
-                    errorMessage = e.message,
+                    errorMessage = formattedError,
+                    hostOfflineDetected = false,
                 )
             }
+        } finally {
+            outboxMutex.withLock { inFlightOutboxIds.remove(outboxEntry.id) }
         }
     }
 
@@ -686,6 +701,8 @@ public class CascadeChatDomainStore(
         }
         var replayed = 0
         for (entry in pending) {
+            val isInFlight = outboxMutex.withLock { entry.id in inFlightOutboxIds }
+            if (isInFlight) continue
             if (entry.kind != OutboxPayloadKind.USER_MESSAGE || entry.messageText.isNullOrBlank()) {
                 projectionStorage.removeOutbox(entry.id)
                 continue
@@ -778,7 +795,8 @@ public class CascadeChatDomainStore(
     }
 
     private fun isTransportOfflineError(e: Throwable): Boolean = when (e) {
-        is AntigravityRpcError.HttpError -> e.statusCode in setOf(502, 503, 504)
+        is AntigravityRpcError.HttpError -> e.statusCode in setOf(502, 503, 504) ||
+            ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)
         is AntigravityRpcError.Unauthorized,
         is AntigravityRpcError.DecodingError,
         is AntigravityRpcError.InteractionRejected,

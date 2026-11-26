@@ -10,6 +10,7 @@ public actor AntigravityRPCClient {
     public static let clientAppVersion = "2.33.0"
 
     internal let channel: RemoteConnectionChannel
+    internal let initialHostName: String
     internal let endpointURL: URL
     internal let relayOriginURL: URL
     internal let csrfToken: String?
@@ -141,6 +142,7 @@ public actor AntigravityRPCClient {
         urlSession: URLSession? = nil
     ) {
         self.channel = host.channel
+        self.initialHostName = host.hostname
         self.endpointURL = host.endpointURL
         let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(host.endpointURL.absoluteString)
         let originURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin)
@@ -197,6 +199,7 @@ public actor AntigravityRPCClient {
         let parsedTarget = RemoteHostInstance.parseRemoteControlTarget(baseURL.absoluteString)
         let isRelay = parsedTarget != nil && (csrfToken == nil || csrfToken?.isEmpty == true) && (sessionCookie?.isEmpty == false)
         self.channel = isRelay ? .cloudRelay : .directHost
+        self.initialHostName = parsedTarget?.instanceId ?? baseURL.host ?? ""
         self.endpointURL = baseURL
         let originURL = URL(string: parsedTarget?.relayOrigin ?? SAPISIDHashGenerator.defaultOrigin) ?? baseURL
         self.relayOriginURL = originURL
@@ -973,25 +976,32 @@ public actor AntigravityRPCClient {
         contentType: String,
         instanceUuidOverride: String? = nil,
         allowCrossHostFailover: Bool = false,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        ignoreCachedOfflineStatus: Bool = false
     ) async throws -> (payload: Data, headers: [String: String]) {
-        if instanceUuidOverride == nil && resolvedInstanceUuid == nil {
+        if !ignoreCachedOfflineStatus && instanceUuidOverride == nil && resolvedInstanceUuid == nil {
             _ = try await resolveCloudRelayInstance(
                 preferredIdentifier: targetInstanceIdentifier,
                 allowCrossHostFallback: allowCrossHostFailover,
                 timeoutInterval: timeoutInterval
             )
-        } else if cachedRelayInstances.isEmpty {
+        } else if !ignoreCachedOfflineStatus && cachedRelayInstances.isEmpty {
             if let refreshed = try? await listRelayInstances(timeoutInterval: min(timeoutInterval ?? 6.0, 6.0)),
                !refreshed.isEmpty {
                 self.cachedRelayInstances = refreshed
             }
         }
 
-        guard let initialTargetUuid = selectReachableRelayUuid(
-            preferred: instanceUuidOverride,
-            allowCrossHostFailover: allowCrossHostFailover
-        ), !initialTargetUuid.isEmpty else {
+        let resolvedTargetUuid: String? = {
+            if ignoreCachedOfflineStatus, let explicit = instanceUuidOverride, !explicit.isEmpty {
+                return explicit
+            }
+            return selectReachableRelayUuid(
+                preferred: instanceUuidOverride,
+                allowCrossHostFailover: allowCrossHostFailover
+            )
+        }()
+        guard let initialTargetUuid = resolvedTargetUuid, !initialTargetUuid.isEmpty else {
             throw AntigravityRPCError.httpError(
                 statusCode: 503,
                 body: "Selected Antigravity Desktop host is offline"
@@ -1075,6 +1085,9 @@ public actor AntigravityRPCClient {
         do {
             return try await sendOnce(to: initialTargetUuid)
         } catch let AntigravityRPCError.unauthorized(msg) {
+            if ignoreCachedOfflineStatus {
+                throw AntigravityRPCError.unauthorized(msg)
+            }
             if let resolved = try? await resolveCloudRelayInstance(
                 preferredIdentifier: instanceUuidOverride ?? targetInstanceIdentifier,
                 allowCrossHostFallback: allowCrossHostFailover,
@@ -1085,6 +1098,18 @@ public actor AntigravityRPCClient {
             }
             throw AntigravityRPCError.unauthorized(msg)
         } catch {
+            if error is CancellationError {
+                throw error
+            }
+            let isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error)
+            if isInstanceUnregistered {
+                self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
+                    inst.uuid == initialTargetUuid ? inst.withStatus(.disconnected) : inst
+                }
+            }
+            if ignoreCachedOfflineStatus {
+                throw error
+            }
             let isHttp404: Bool = {
                 if case let AntigravityRPCError.httpError(code, _) = error {
                     return code == 404
@@ -1094,36 +1119,53 @@ public actor AntigravityRPCClient {
             let isTrajectoryNotFound = ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error)
             let shouldFailover: Bool = {
                 if isTrajectoryNotFound { return false }
+                if isInstanceUnregistered { return true }
                 if error is URLError { return true }
                 if case let AntigravityRPCError.httpError(code, _) = error {
                     return code == 404 || code == 502 || code == 503 || code == 504
                 }
                 return false
             }()
-            if shouldFailover,
-               let refreshed = try? await listRelayInstances(timeoutInterval: 6.0),
-               !refreshed.isEmpty {
-                self.cachedRelayInstances = refreshed
-                // An HTTP 404 from a still-online instance means the RPC method itself is unimplemented
-                // (e.g. GetWorkspaceInfos) — NEVER fail over to another host on an application-level 404!
-                if isHttp404 && refreshed.contains(where: { $0.uuid == initialTargetUuid && $0.status.isReachable }) {
-                    throw error
-                }
-                let familySeed = refreshed.first(where: { $0.uuid == initialTargetUuid })?.name
-                    ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : "")
-                let sameFamilyAlt: RelayInstanceInfo? = !familySeed.isEmpty
-                    ? refreshed.first(where: {
-                        $0.uuid != initialTargetUuid && $0.status.isReachable && $0.sameHostFamily(as: familySeed)
-                    })
-                    : nil
-                let crossHostAlt: RelayInstanceInfo? = allowCrossHostFailover
-                    ? refreshed.first(where: { $0.uuid != initialTargetUuid && $0.status.isReachable })
-                    : nil
-                if let altInst = sameFamilyAlt ?? crossHostAlt {
-                    if instanceUuidOverride == nil {
-                        self.resolvedInstanceUuid = altInst.uuid
+            if shouldFailover {
+                let prevNameForTarget = self.cachedRelayInstances.first(where: { $0.uuid == initialTargetUuid })?.name
+                if let refreshedRaw = try? await listRelayInstances(timeoutInterval: min(timeoutInterval ?? 6.0, 6.0)),
+                   !refreshedRaw.isEmpty {
+                    let refreshed = isInstanceUnregistered
+                        ? refreshedRaw.map { $0.uuid == initialTargetUuid ? $0.withStatus(.disconnected) : $0 }
+                        : refreshedRaw
+                    self.cachedRelayInstances = refreshed
+                    // An HTTP 404 from a still-online instance means the RPC method itself is unimplemented
+                    // (e.g. GetWorkspaceInfos) — NEVER fail over to another host on an application-level 404!
+                    if isHttp404 && !isInstanceUnregistered && refreshed.contains(where: { $0.uuid == initialTargetUuid && $0.status.isReachable }) {
+                        throw error
                     }
-                    return try await sendOnce(to: altInst.uuid)
+                    let fallbackHostSeed: String = {
+                        let trimmed = initialHostName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty,
+                              trimmed.caseInsensitiveCompare("Antigravity Desktop") != .orderedSame,
+                              trimmed.caseInsensitiveCompare("MacBook Pro") != .orderedSame,
+                              !Self.isWildcardRelayIdentifier(trimmed) else {
+                            return ""
+                        }
+                        return trimmed
+                    }()
+                    let familySeed = refreshed.first(where: { $0.uuid == initialTargetUuid })?.name
+                        ?? prevNameForTarget
+                        ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : fallbackHostSeed)
+                    let sameFamilyAlt: RelayInstanceInfo? = !familySeed.isEmpty
+                        ? refreshed.first(where: {
+                            $0.uuid != initialTargetUuid && $0.status.isReachable && $0.sameHostFamily(as: familySeed)
+                        })
+                        : nil
+                    let crossHostAlt: RelayInstanceInfo? = allowCrossHostFailover
+                        ? refreshed.first(where: { $0.uuid != initialTargetUuid && $0.status.isReachable })
+                        : nil
+                    if let altInst = sameFamilyAlt ?? crossHostAlt {
+                        if instanceUuidOverride == nil || self.resolvedInstanceUuid == initialTargetUuid {
+                            self.resolvedInstanceUuid = altInst.uuid
+                        }
+                        return try await sendOnce(to: altInst.uuid)
+                    }
                 }
             }
             throw error

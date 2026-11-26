@@ -46,6 +46,8 @@ public struct BackendHandshakeResult: Sendable, Equatable {
     public let availableRelayInstances: [RelayInstanceInfo]
     public let isSelectedHostOnline: Bool
     public let hostCapabilities: HostCapabilityProfile
+    public let succeededInstanceUuids: [String]
+    public let initialSyncCompleted: Bool
 
     public init(
         latencyMs: Int,
@@ -59,7 +61,9 @@ public struct BackendHandshakeResult: Sendable, Equatable {
         resolvedRelayApiKey: String? = nil,
         availableRelayInstances: [RelayInstanceInfo] = [],
         isSelectedHostOnline: Bool = true,
-        hostCapabilities: HostCapabilityProfile = HostCapabilityProfile()
+        hostCapabilities: HostCapabilityProfile = HostCapabilityProfile(),
+        succeededInstanceUuids: [String] = [],
+        initialSyncCompleted: Bool = true
     ) {
         self.latencyMs = latencyMs
         self.workspaces = workspaces
@@ -73,6 +77,8 @@ public struct BackendHandshakeResult: Sendable, Equatable {
         self.availableRelayInstances = availableRelayInstances
         self.isSelectedHostOnline = isSelectedHostOnline
         self.hostCapabilities = hostCapabilities
+        self.succeededInstanceUuids = succeededInstanceUuids
+        self.initialSyncCompleted = initialSyncCompleted
     }
 }
 

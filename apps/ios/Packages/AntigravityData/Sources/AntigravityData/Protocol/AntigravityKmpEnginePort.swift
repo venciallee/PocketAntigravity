@@ -6,17 +6,20 @@ public struct KmpSendMessageResult: Sendable, Equatable {
     public let dispatchedLive: Bool
     public let queuedInOutbox: Bool
     public let errorMessage: String?
+    public let hostOfflineDetected: Bool
 
     public init(
         resolvedCascadeId: String,
         dispatchedLive: Bool,
         queuedInOutbox: Bool,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        hostOfflineDetected: Bool = false
     ) {
         self.resolvedCascadeId = resolvedCascadeId
         self.dispatchedLive = dispatchedLive
         self.queuedInOutbox = queuedInOutbox
         self.errorMessage = errorMessage
+        self.hostOfflineDetected = hostOfflineDetected
     }
 }
 
@@ -83,6 +86,7 @@ public protocol AntigravityKmpEnginePort: Sendable {
     ) async throws -> BackendHandshakeResult
 
     func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult
+    func probeHostReachability(allowCrossHostFallback: Bool, verifyEndToEnd: Bool) async throws -> HostReachabilityProbeResult
 
     func refreshWorkspacesAndSummaries(
         hostScope: AgentsHostFilterScope,
@@ -165,6 +169,13 @@ public protocol AntigravityKmpEnginePort: Sendable {
 public extension AntigravityKmpEnginePort {
     var lastHandshakeDiagnostic: String { "" }
     func fetchUserDisplayName() async -> String? { nil }
+
+    func probeHostReachability(
+        allowCrossHostFallback: Bool,
+        verifyEndToEnd: Bool
+    ) async throws -> HostReachabilityProbeResult {
+        try await probeHostReachability(allowCrossHostFallback: allowCrossHostFallback)
+    }
 
     func preloadSteps(
         cascadeId: String,

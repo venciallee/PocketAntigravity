@@ -594,17 +594,27 @@ extension AntigravitySessionStore {
     }
 
     internal func performLightweightHeartbeatTick(allowFullReconciliation: Bool) async {
-        guard !isNetworkingSuspended, isDeviceNetworkReachable, let client = rpcClient else { return }
+        guard !isNetworkingSuspended, isDeviceNetworkReachable, (kmpEngine != nil || rpcClient != nil) else { return }
         let generation = hostSwitchGeneration
         let isRelay = (activeHost.channel == .cloudRelay)
         let probeTimeout: TimeInterval = isRelay ? 8.0 : 3.0
         let allowCrossHost = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
 
         do {
-            let probe = try await client.probeHostReachability(
-                timeoutInterval: probeTimeout,
-                allowCrossHostFallback: allowCrossHost
-            )
+            let probe: HostReachabilityProbeResult
+            if let kmpEngine {
+                probe = try await kmpEngine.probeHostReachability(
+                    allowCrossHostFallback: allowCrossHost,
+                    verifyEndToEnd: false
+                )
+            } else if let client = rpcClient {
+                probe = try await client.probeHostReachability(
+                    timeoutInterval: probeTimeout,
+                    allowCrossHostFallback: allowCrossHost
+                )
+            } else {
+                return
+            }
             guard self.hostSwitchGeneration == generation else { return }
             applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHost)
 
@@ -676,17 +686,28 @@ extension AntigravitySessionStore {
     }
 
     internal func performOfflineRecoveryProbe() async -> Bool {
-        guard !isNetworkingSuspended, isDeviceNetworkReachable, let client = rpcClient else { return false }
+        guard !isNetworkingSuspended, isDeviceNetworkReachable, (kmpEngine != nil || rpcClient != nil) else { return false }
         let generation = hostSwitchGeneration
         let isRelay = (activeHost.channel == .cloudRelay)
         let probeTimeout: TimeInterval = isRelay ? 8.0 : 3.0
         let allowCrossHost = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
 
         do {
-            let probe = try await client.probeHostReachability(
-                timeoutInterval: probeTimeout,
-                allowCrossHostFallback: allowCrossHost
-            )
+            let probe: HostReachabilityProbeResult
+            if let kmpEngine {
+                probe = try await kmpEngine.probeHostReachability(
+                    allowCrossHostFallback: allowCrossHost,
+                    verifyEndToEnd: true
+                )
+            } else if let client = rpcClient {
+                probe = try await client.probeHostReachability(
+                    timeoutInterval: probeTimeout,
+                    allowCrossHostFallback: allowCrossHost,
+                    verifyEndToEnd: true
+                )
+            } else {
+                return false
+            }
             guard self.hostSwitchGeneration == generation else { return false }
             applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHost)
             guard probe.isSelectedHostOnline else {
@@ -704,7 +725,7 @@ extension AntigravitySessionStore {
         } catch {
             guard self.hostSwitchGeneration == generation else { return false }
             if Self.isBackendOfflineError(error) {
-                connectionErrorText = error.localizedDescription
+                connectionErrorText = ProtocolCompatibilityEngine.formatUserFacingRpcError(error)
                 if case AntigravityRPCError.unauthorized = error {
                     // Auth expired requires user re-sign-in; immediately cap backoff to avoid noisy 401 retries
                     reconnectAttemptCount = ConnectionPowerPolicy.offlineBackoffScheduleSeconds.count

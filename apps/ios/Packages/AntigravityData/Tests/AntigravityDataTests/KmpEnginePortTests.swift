@@ -599,6 +599,256 @@ final class KmpEnginePortTests: XCTestCase {
         let draftSummary = try XCTUnwrap(coldStore.summaries.first(where: { $0.cascadeId == draftId }))
         XCTAssertFalse(coldStore.isSummaryTitleLoading(draftSummary))
     }
+
+    @MainActor
+    func testUnregisteredRelayErrorClassificationPreservesCachedProjectsAndQueuesCleanlyOnSend() async throws {
+        let boqBody = """
+        [9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]
+        """
+        XCTAssertTrue(ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: 400, body: boqBody))
+        XCTAssertFalse(ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: boqBody))
+        let err400 = AntigravityRPCError.httpError(statusCode: 400, body: boqBody)
+        XCTAssertTrue(AntigravitySessionStore.isBackendOfflineError(err400))
+        let formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(err400)
+        XCTAssertTrue(formatted.lowercased().contains("offline"))
+        XCTAssertFalse(formatted.contains("type.googleapis.com"))
+        XCTAssertFalse(formatted.contains("[9,"))
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ag-unregistered-relay-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        let projectionStore = LocalProjectionStore(storageDirectory: tempRoot)
+
+        let hostUuid = "huangjiafandemac-mini-local-swift-vapor"
+        await projectionStore.saveHostProjections([
+            HostProjectionSnapshot(
+                hostKey: "host:\(hostUuid)",
+                instanceId: hostUuid,
+                hostname: hostUuid,
+                isCloud: false,
+                summaries: [
+                    CascadeSummary(
+                        cascadeId: "cas-cached-mini",
+                        title: "Cached Mini Thread",
+                        projectSlug: "PocketAntigravity",
+                        workspaceUri: "file:///Users/mini/PocketAntigravity",
+                        status: .done,
+                        stepCount: 2,
+                        originInstanceUuid: hostUuid,
+                        originHostName: hostUuid
+                    )
+                ],
+                projects: [
+                    ProjectWorkspace(
+                        id: "PocketAntigravity",
+                        name: "PocketAntigravity",
+                        pathDisplay: "Local · \(hostUuid)",
+                        workspaceUri: "file:///Users/mini/PocketAntigravity",
+                        runtime: .macBookPro,
+                        hostName: hostUuid,
+                        activeBranch: "main",
+                        originInstanceUuid: hostUuid
+                    )
+                ]
+            )
+        ])
+
+        let engine = UnregisteredRelayKmpEngineDouble(hostUuid: hostUuid)
+        let store = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projectionStore,
+            secretStore: InMemorySecretStore(),
+            preferencesStore: InMemoryPreferencesStore(),
+            kmpEngine: engine
+        )
+        await store.hydratePersistedHostProjectionsIfNeeded()
+
+        // 1. Handshake with initialSyncCompleted=false & offline host MUST NOT wipe cached projects/summaries
+        let connected = await store.connectCloudRelay(
+            relayURLString: "https://antigravity.google.com/r/\(hostUuid)",
+            sessionCookie: "SAPISID=test; SID=test",
+            hostName: hostUuid,
+            strictTargetMatch: true
+        )
+        XCTAssertTrue(connected)
+        XCTAssertFalse(store.activeHost.isOnline)
+        XCTAssertTrue(store.projects.contains(where: { $0.name == "PocketAntigravity" }))
+        XCTAssertTrue(store.summaries.contains(where: { $0.cascadeId == "cas-cached-mini" }))
+
+        // 2. Sending prompt + photo from Home must materialize user bubble synchronously, never call
+        //    startConversation twice, queue into outbox without raw HTTP 400 toast, and stop streaming.
+        let photoChip = ComposerAttachmentChip(
+            id: "photo-chip-offline",
+            kind: .imageScreenshot,
+            label: "photo-1.jpg",
+            targetUri: "attachment://photo/photo-chip-offline/photo-1.jpg",
+            mimeType: "image/jpeg",
+            byteSize: 16,
+            inlineBase64Data: "iVBORw0KGgo="
+        )
+        let newId = store.createConversationInProject(
+            AntigravityCloudDetector.noProjectDisplayName,
+            title: "没拉到任何 project 啊",
+            initialPrompt: "没拉到任何 project 啊",
+            initialAttachments: [photoChip]
+        )
+        let immediateSteps = store.stepsByCascadeId[newId] ?? []
+        XCTAssertEqual(immediateSteps.count, 1, "User bubble must appear immediately without flashing an empty card")
+        XCTAssertEqual(immediateSteps.first?.type, .userInput)
+        XCTAssertTrue(immediateSteps.first?.attachedMentions.contains("photo-1.jpg") == true)
+
+        for _ in 0..<40 {
+            if store.summaries.first(where: { $0.cascadeId == newId })?.status == .pending {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        let startCalls = await engine.startConversationCalls
+        let sendCalls = await engine.sendMessageCalls
+        XCTAssertEqual(startCalls, 0, "Home send must route solely through sendMessage without duplicate startConversation")
+        XCTAssertEqual(sendCalls, 1)
+        XCTAssertFalse(store.activeHost.isOnline)
+        XCTAssertFalse(store.isCascadeStreaming, "Offline queued turn must never show Stop button or thinking bar")
+        XCTAssertEqual(store.summaries.first(where: { $0.cascadeId == newId })?.status, .pending)
+        for text in [store.compatibilityNoticeText, store.stepLoadErrorText, store.connectionErrorText].compactMap({ $0 }) {
+            XCTAssertFalse(text.contains("type.googleapis.com"), "Raw protobuf @type leaked into UI error: \(text)")
+            XCTAssertFalse(text.contains("HTTP 400"), "Raw HTTP 400 leaked into UI error: \(text)")
+        }
+    }
+}
+
+private actor UnregisteredRelayKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "UnregisteredRelayKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=UnregisteredRelayKmpEngineDouble" }
+
+    let hostUuid: String
+    var startConversationCalls = 0
+    var sendMessageCalls = 0
+
+    init(hostUuid: String) {
+        self.hostUuid = hostUuid
+    }
+
+    func connectDirectLan(
+        endpointURLString: String,
+        csrfToken: String,
+        certSHA256: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool
+    ) async throws -> BackendHandshakeResult {
+        throw AntigravityRPCError.invalidEndpoint
+    }
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(
+            latencyMs: 120,
+            workspaces: [],
+            summaries: [],
+            resolvedHostname: hostUuid,
+            resolvedInstanceUuid: hostUuid,
+            availableRelayInstances: [
+                RelayInstanceInfo(uuid: hostUuid, name: hostUuid, status: .disconnected)
+            ],
+            isSelectedHostOnline: false,
+            succeededInstanceUuids: [],
+            initialSyncCompleted: false
+        )
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        try await probeHostReachability(allowCrossHostFallback: allowCrossHostFallback, verifyEndToEnd: false)
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool, verifyEndToEnd: Bool) async throws -> HostReachabilityProbeResult {
+        let offlineInst = RelayInstanceInfo(uuid: hostUuid, name: hostUuid, status: .disconnected)
+        return HostReachabilityProbeResult(
+            latencyMs: 90,
+            availableRelayInstances: [offlineInst],
+            activeRelayInstance: offlineInst,
+            isSelectedHostOnline: false
+        )
+    }
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult {
+        throw AntigravityRPCError.httpError(
+            statusCode: 400,
+            body: """
+            [9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED"]]]
+            """
+        )
+    }
+
+    func syncSteps(cascadeId: String, knownStepCount: Int, isCloud: Bool, instanceUuidOverride: String?) async throws -> [CascadeStep] {
+        []
+    }
+
+    func startConversation(
+        workspaceUri: String,
+        initialPrompt: String,
+        modelId: String,
+        cloudProjectId: String?,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> String {
+        startConversationCalls += 1
+        throw AntigravityRPCError.httpError(statusCode: 400, body: """
+        [9,"instance not registered"]
+        """)
+    }
+
+    func sendMessage(
+        cascadeId: String,
+        message: String,
+        workspaceUri: String,
+        attachments: [ComposerAttachmentChip],
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode,
+        agentPersona: String,
+        isCloud: Bool,
+        cloudProjectId: String?,
+        permissionPreset: AgentPermissionPreset?,
+        instanceUuidOverride: String?,
+        isOptimisticDraft: Bool
+    ) async throws -> KmpSendMessageResult {
+        sendMessageCalls += 1
+        return KmpSendMessageResult(
+            resolvedCascadeId: cascadeId,
+            dispatchedLive: false,
+            queuedInOutbox: true,
+            errorMessage: "Desktop instance is offline or no longer registered with Cloud Relay.",
+            hostOfflineDetected: true
+        )
+    }
+
+    func resolveWaitingInteraction(
+        step: CascadeStep,
+        decision: InteractionDecision,
+        workspaceUri: String?,
+        instanceUuidOverride: String?
+    ) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { AsyncStream { $0.finish() } }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
 }
 
 private actor MultiHostKmpEngineDouble: AntigravityKmpEnginePort {

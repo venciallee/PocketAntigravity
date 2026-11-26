@@ -82,6 +82,9 @@ public class ConversationSyncStore(
             availableInstances = handshake.availableRelayInstances.map { it.uuid to it.status.isReachable },
             hasCloudData = handshake.cloudProjects.isNotEmpty() || handshake.summaries.any { it.isCloud },
             hostOnline = handshake.isSelectedHostOnline,
+            succeededInstanceUuids = handshake.succeededInstanceUuids.toSet(),
+            initialSyncCompleted = handshake.initialSyncCompleted,
+            hasLocalIncomingData = handshake.workspaces.any { !it.isCloud } || handshake.summaries.any { !it.isCloud },
         )
         mergeAndPersist(
             host = host,
@@ -664,9 +667,10 @@ public class ConversationSyncStore(
         }
         val incomingIds = reconciledIncomingSummaries.map { it.cascadeId }.toSet()
 
-        // Preserve summaries belonging to offline/unrefreshed host shards
+        // Preserve local optimistic drafts (not yet upgraded to a server UUID) and summaries belonging to offline/unrefreshed host shards
         val preservedSummaries = prev.summaries.filter { existing ->
             if (existing.cascadeId in incomingIds) return@filter false
+            if (existing.cascadeId.startsWith("cas-") || existing.cascadeId.startsWith("cascade-new-")) return@filter true
             val key = HostProjectionKey.compute(
                 isCloud = existing.isCloud,
                 instanceId = existing.originInstanceUuid,
@@ -757,8 +761,11 @@ public class ConversationSyncStore(
             )
         }
 
-        // Persist ONLY refreshed host shards so offline host shards on disk stay intact
-        persistShards(host, normalizedSummaries, mergedProjects, refreshedHostKeys)
+        // Persist ONLY refreshed host shards so offline host shards on disk stay intact.
+        // Never rewrite shards when a failed/deferred handshake returned empty data.
+        if (refreshedHostKeys.isNotEmpty() || incomingWorkspaces.isNotEmpty() || incomingSummaries.isNotEmpty() || incomingCloudProjects.isNotEmpty()) {
+            persistShards(host, normalizedSummaries, mergedProjects, refreshedHostKeys)
+        }
     }
 
     private suspend fun persistShards(
@@ -807,16 +814,28 @@ public class ConversationSyncStore(
         availableInstances: List<Pair<String, Boolean>>,
         hasCloudData: Boolean,
         hostOnline: Boolean,
+        succeededInstanceUuids: Set<String> = emptySet(),
+        initialSyncCompleted: Boolean = true,
+        hasLocalIncomingData: Boolean = true,
     ): Set<String> {
+        if (!initialSyncCompleted) return emptySet()
         val keys = mutableSetOf<String>()
         if (host.channel == RemoteConnectionChannel.CLOUD_RELAY) {
-            for ((uuid, reachable) in availableInstances) {
-                if (reachable) keys.add("host:$uuid")
+            if (succeededInstanceUuids.isNotEmpty()) {
+                for (uuid in succeededInstanceUuids) {
+                    if (uuid.isNotEmpty() && uuid != "unpaired") {
+                        keys.add("host:$uuid")
+                    }
+                }
+            } else if (hasLocalIncomingData) {
+                for ((uuid, reachable) in availableInstances) {
+                    if (reachable) keys.add("host:$uuid")
+                }
+                if (hostOnline && host.instanceId.isNotEmpty() && host.instanceId != "unpaired") {
+                    keys.add("host:${host.instanceId}")
+                }
             }
-            if (hostOnline && host.instanceId.isNotEmpty() && host.instanceId != "unpaired") {
-                keys.add("host:${host.instanceId}")
-            }
-        } else {
+        } else if (hostOnline || succeededInstanceUuids.isNotEmpty() || hasLocalIncomingData) {
             keys.add(HostProjectionKey.compute(false, host.instanceId, host.hostname, host.instanceId, host.hostname))
         }
         if (hasCloudData) keys.add("cloud")

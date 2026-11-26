@@ -180,13 +180,13 @@ extension AntigravitySessionStore {
             projectSlug: effectiveSlug,
             workspaceUri: workspaceUri,
             branchName: branch,
-            status: hasInitialPayload ? .inProgress : .done,
-            stepCount: hasInitialPayload ? 1 : 0,
+            status: .done,
+            stepCount: 0,
             currentStepIndex: 1,
             totalSteps: 1,
             updatedAt: Date(),
             relativeTimeLabel: "now",
-            statusSubtitle: hasInitialPayload ? "Running · Step 1 of 1" : "Ready for instructions",
+            statusSubtitle: hasInitialPayload ? "Sending..." : "Ready for instructions",
             isPinned: displayOptions.autoPinOnMessage,
             isArchived: false,
             isUnread: false,
@@ -220,6 +220,17 @@ extension AntigravitySessionStore {
         selectedWorkspaceUri = workspaceUri
         activeRoute = .cascadeChat(optimisticId)
 
+        // When launched with an initial prompt or attachment (e.g. Home composer send), dispatch
+        // synchronously through a single `sendCurrentDraft` transaction so the user message bubble
+        // appears immediately (never flashing an empty `Ready for Prompt` / `Host Offline` card with
+        // a Stop button) and `StartCascade` + `SendUserCascadeMessage` execute exactly once.
+        if hasInitialPayload {
+            composerDraftText = initialPrompt ?? ""
+            composerAttachments = initialAttachments
+            sendCurrentDraft(bypassStreamingQueue: true, skipUpgradeWait: true)
+            return optimisticId
+        }
+
         let clientRef = rpcClient
         let engineRef = kmpEngine
         let modelId = selectedModelConfig.modelId
@@ -233,7 +244,7 @@ extension AntigravitySessionStore {
                     if let engineRef {
                         createdCascadeId = try await engineRef.startConversation(
                             workspaceUri: workspaceUri,
-                            initialPrompt: initialPrompt ?? "",
+                            initialPrompt: "",
                             modelId: modelId,
                             cloudProjectId: cloudProjId,
                             isCloud: isCloudProj,
@@ -242,7 +253,7 @@ extension AntigravitySessionStore {
                     } else if let clientRef {
                         createdCascadeId = try await clientRef.startCascade(
                             workspaceUri: workspaceUri,
-                            initialPrompt: initialPrompt ?? "",
+                            initialPrompt: "",
                             modelId: modelId,
                             cloudProjectId: cloudProjId,
                             isCloud: isCloudProj,
@@ -251,11 +262,21 @@ extension AntigravitySessionStore {
                     }
                 } catch {
                     if let self, isLive {
-                        await self.handleLiveCapabilityWriteError(
-                            error,
-                            capability: .conversationAnnotations,
-                            fallbackActionLabel: "Starting conversation"
-                        )
+                        if Self.isBackendOfflineError(error) {
+                            if !isCloudProj {
+                                self.markLocalHostOffline(
+                                    instanceUuid: originUuid,
+                                    hostname: resolvedOriginHostName,
+                                    error: error
+                                )
+                            }
+                        } else {
+                            await self.handleLiveCapabilityWriteError(
+                                error,
+                                capability: .conversationAnnotations,
+                                fallbackActionLabel: "Starting conversation"
+                            )
+                        }
                     }
                 }
             }
@@ -271,7 +292,7 @@ extension AntigravitySessionStore {
                 }
                 let wasEmptyNew = self.locallyCreatedEmptyCascadeIds.remove(optimisticId) != nil
                 let existingSteps = self.stepsByCascadeId.removeValue(forKey: optimisticId) ?? []
-                if wasEmptyNew && existingSteps.isEmpty && !hasInitialPayload {
+                if wasEmptyNew && existingSteps.isEmpty {
                     self.locallyCreatedEmptyCascadeIds.insert(realCascadeId)
                 }
                 self.stepsByCascadeId[realCascadeId] = existingSteps.map { step in
@@ -288,21 +309,9 @@ extension AntigravitySessionStore {
                         self.activeRoute = .cascadeChat(realCascadeId)
                     }
                 }
-                if hasInitialPayload {
-                    self.locallyCreatedEmptyCascadeIds.remove(realCascadeId)
-                    self.composerDraftText = initialPrompt ?? ""
-                    self.composerAttachments = initialAttachments
-                    self.sendCurrentDraft(bypassStreamingQueue: true)
-                } else if !self.locallyCreatedEmptyCascadeIds.contains(realCascadeId) {
+                if !self.locallyCreatedEmptyCascadeIds.contains(realCascadeId) {
                     self.syncStepsForCascade(realCascadeId, pollUntilIdle: false)
                 }
-                return
-            }
-
-            if hasInitialPayload {
-                self?.composerDraftText = initialPrompt ?? ""
-                self?.composerAttachments = initialAttachments
-                self?.sendCurrentDraft(bypassStreamingQueue: true)
             }
         }
         return optimisticId
@@ -798,7 +807,13 @@ extension AntigravitySessionStore {
             scheduleConversationPreload()
         } catch {
             guard self.hostSwitchGeneration == generation else { return }
-            if Self.isBackendOfflineError(error) {
+            if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+                if case .localHost(let targetId, let targetName) = effectiveScope {
+                    markLocalHostOffline(instanceUuid: targetId, hostname: targetName, error: error)
+                } else {
+                    markLocalHostOffline(instanceUuid: activeHost.instanceId, hostname: activeHost.hostname, error: error)
+                }
+            } else if Self.isBackendOfflineError(error) {
                 consecutiveSyncFailures += 1
                 let failureThreshold = ConnectionPowerPolicy.offlineFailureThreshold(
                     channel: activeHost.channel,

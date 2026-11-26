@@ -59,7 +59,7 @@ extension AntigravitySessionStore {
         composerAttachments.removeAll { $0.id == chipId }
     }
 
-    public func sendCurrentDraft(bypassStreamingQueue: Bool = false) {
+    public func sendCurrentDraft(bypassStreamingQueue: Bool = false, skipUpgradeWait: Bool = false) {
         let trimmed = composerDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
         let workflowPrefix = composerWorkflowCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty || !composerAttachments.isEmpty || !workflowPrefix.isEmpty else { return }
@@ -197,7 +197,7 @@ extension AntigravitySessionStore {
             selectedWorkspaceUri = draftWorkspaceUri
             activeRoute = .cascadeChat(optimisticId)
         }
-        let skipUpgradeWait = materializedDirectly
+        let skipUpgradeWait = materializedDirectly || skipUpgradeWait
 
         var currentSteps = stepsByCascadeId[activeCascadeId] ?? []
         let nextIndex = (currentSteps.map(\.stepIndex).max() ?? -1) + 1
@@ -381,15 +381,37 @@ extension AntigravitySessionStore {
                         }
                         targetCascadeId = resolvedId
                     }
+                    if !outcome.dispatchedLive {
+                        if outcome.queuedInOutbox {
+                            if let self {
+                                self.optimisticActiveUntilByCascadeId.removeValue(forKey: targetCascadeId)
+                                self.markStepQueuedInOutbox(cascadeId: targetCascadeId, stepIndex: nextIndex)
+                                if let updated = self.stepsByCascadeId[targetCascadeId] {
+                                    await storeRef.saveProjectedSteps(updated, for: targetCascadeId)
+                                }
+                                self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
+                                if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
+                                    self.summaries[sumIdx].status = .pending
+                                    self.summaries[sumIdx].statusSubtitle = "Queued · Will send when back online"
+                                }
+                                let detail = outcome.errorMessage ?? "Host is offline"
+                                let shouldMarkOffline = outcome.hostOfflineDetected
+                                    || ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: 400, body: detail)
+                                if !summaryIsCloud && shouldMarkOffline {
+                                    self.markLocalHostOffline(
+                                        instanceUuid: summaryOriginUuid,
+                                        hostname: currentSummary?.originHostName,
+                                        error: AntigravityRPCError.httpError(statusCode: 503, body: detail)
+                                    )
+                                }
+                            }
+                            return
+                        }
+                        throw AntigravityRPCError.httpError(statusCode: 500, body: outcome.errorMessage ?? "Message dispatch failed")
+                    }
                     if let self, !targetCascadeId.isEmpty {
                         self.optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
                         self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
-                    }
-                    if !outcome.dispatchedLive {
-                        if outcome.queuedInOutbox {
-                            throw AntigravityRPCError.httpError(statusCode: 503, body: outcome.errorMessage ?? "Queued in KMP Durable Outbox")
-                        }
-                        throw AntigravityRPCError.httpError(statusCode: 500, body: outcome.errorMessage ?? "KMP sendMessage failed")
                     }
                 } else if let clientRef {
                     if targetCascadeId.isEmpty || targetCascadeId.hasPrefix("cas-") {
@@ -477,12 +499,19 @@ extension AntigravitySessionStore {
                         }
                         if self.activeHost.channel != .cloudRelay {
                             self.markBackendOffline(error: error)
+                        } else if !summaryIsCloud {
+                            self.markLocalHostOffline(
+                                instanceUuid: summaryOriginUuid,
+                                hostname: currentSummary?.originHostName,
+                                error: error
+                            )
                         }
                     } else {
                         await storeRef.removeOutboxEntry(id: outboxEntry.id)
                         self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
                         self.optimisticActiveUntilByCascadeId.removeValue(forKey: targetCascadeId)
-                        self.stepLoadErrorText = "Failed to send message: \(error.localizedDescription)"
+                        let formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(error)
+                        self.stepLoadErrorText = "Failed to send message: \(formatted)"
                         if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
                             self.summaries[sumIdx].status = .done
                             self.summaries[sumIdx].statusSubtitle = "Send failed · Tap to retry"

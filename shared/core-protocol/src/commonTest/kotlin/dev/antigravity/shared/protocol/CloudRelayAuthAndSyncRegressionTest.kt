@@ -5,15 +5,18 @@ import dev.antigravity.shared.model.RemoteHostInstance
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import okio.ByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CloudRelayAuthAndSyncRegressionTest {
@@ -648,7 +651,185 @@ class CloudRelayAuthAndSyncRegressionTest {
             assertEquals("MacBook Pro", handshake.resolvedHostname)
             assertEquals(rawUuid, handshake.resolvedInstanceUuid)
             assertTrue(handshake.isSelectedHostOnline)
+            assertFalse(handshake.initialSyncCompleted)
+            assertTrue(handshake.succeededInstanceUuids.isEmpty())
             assertTrue(handshake.summaries.isEmpty())
+        }
+    }
+
+    @Test
+    fun testInstanceNotRegisteredBoq400ClassificationAndUserFacingFormat() {
+        val boqBody = """[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]"""
+        assertTrue(ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(400, boqBody))
+        assertFalse(ProtocolCompatibilityEngine.isMethodUnimplementedResponse(400, boqBody))
+        assertTrue(ProtocolCompatibilityEngine.isInstanceNotRegisteredError(AntigravityRpcError.HttpError(400, boqBody)))
+
+        val formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(
+            AntigravityRpcError.HttpError(400, boqBody),
+        )
+        assertTrue(formatted.contains("offline", ignoreCase = true), "Expected clean offline guidance, got: $formatted")
+        assertFalse(formatted.contains("type.googleapis.com"), "Raw protobuf @type must not leak: $formatted")
+        assertFalse(formatted.contains("[9,"), "Raw Boq JSON must not leak: $formatted")
+    }
+
+    @Test
+    fun testCloudRelayFailoverOnHttp400InstanceNotRegisteredToSameMacSiblingWindow() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyFAILOVER4000000000000000000000000"
+            val deadUuid = "huangjiafandemac-mini-local-swift-vapor"
+            val liveUuid = "huangjiafandemac-mini-local-game-loop"
+            val boqUnregistered = """[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        // Relay still reports both windows as status=1 CONNECTED even though swift-vapor died
+                        respond(
+                            content = """[[["$deadUuid",["$deadUuid","2.33.0",true],1,[1740000000,0]],["$liveUuid",["$liveUuid","2.33.0",true],1,[1740000005,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = runCatching { request.body.toByteArray().decodeToString() }.getOrDefault("")
+                        if (bodyText.contains(deadUuid)) {
+                            respond(
+                                content = boqUnregistered,
+                                status = HttpStatusCode.BadRequest,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            val payload = """{"workspaces":[{"workspaceUri":"file:///Users/mini/PocketAntigravity","displayName":"PocketAntigravity"}]}"""
+                            val b64 = ByteString.of(*payload.encodeToByteArray()).base64()
+                            respond(
+                                content = """["$b64",[["content-type","application/json"]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = deadUuid,
+                hostname = deadUuid,
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$deadUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val workspaces = client.getWorkspaceInfos()
+            assertEquals(1, workspaces.size)
+            assertEquals("PocketAntigravity", workspaces.first().displayName)
+            assertEquals(liveUuid, client.currentResolvedInstanceUuid())
+            val deadInstance = client.currentCachedRelayInstances().firstOrNull { it.uuid == deadUuid }
+            assertEquals(RelayInstanceStatus.DISCONNECTED, deadInstance?.status)
+        }
+    }
+
+    @Test
+    fun testVerifyConnectionDirectUuidFallbackProbesLivenessAndMarksUnregisteredOffline() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyDIRECTUUID00000000000000000000000"
+            val deadUuid = "huangjiafandemac-mini-local-swift-vapor"
+            val boqUnregistered = """[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = "[]",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        respond(
+                            content = boqUnregistered,
+                            status = HttpStatusCode.BadRequest,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = deadUuid,
+                hostname = deadUuid,
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$deadUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val handshake = client.verifyConnection(allowCrossHostFallback = false)
+            assertFalse(handshake.isSelectedHostOnline, "Unregistered 39-char UUID must NOT be fabricated as online")
+            assertFalse(handshake.initialSyncCompleted)
+            assertTrue(handshake.succeededInstanceUuids.isEmpty())
+            val reported = handshake.availableRelayInstances.firstOrNull { it.uuid == deadUuid }
+            assertEquals(RelayInstanceStatus.DISCONNECTED, reported?.status)
+        }
+    }
+
+    @Test
+    fun testProbeHostReachabilityVerifyEndToEndDowngradesZombieConnectedInstance() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyZOMBIEPROBE0000000000000000000000"
+            val zombieUuid = "huangjiafandemac-mini-local-swift-vapor"
+            val boqUnregistered = """[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$zombieUuid",["$zombieUuid","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        respond(
+                            content = boqUnregistered,
+                            status = HttpStatusCode.BadRequest,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = zombieUuid,
+                hostname = zombieUuid,
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$zombieUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val probe = client.probeHostReachability(allowCrossHostFallback = false, verifyEndToEnd = true)
+            assertFalse(probe.isSelectedHostOnline, "End-to-end probe must detect zombie CONNECTED instance returning HTTP 400")
+            val reported = probe.availableRelayInstances.firstOrNull { it.uuid == zombieUuid }
+            assertEquals(RelayInstanceStatus.DISCONNECTED, reported?.status)
         }
     }
 }

@@ -171,8 +171,24 @@ fun CascadeChatScreen(
     val rawHostLabel = activeSummary?.originHostName
         ?: connectionState.activeHost?.hostname
         ?: "MacBook Pro"
-    val cleanHostLabel = rawHostLabel.removePrefix("Connecting · ").ifBlank { "Desktop" }
-    val headerSubtitle = "${activeSummary?.projectSlug ?: "ledger-svc"} · $cleanHostLabel"
+    val cleanHostLabel = rawHostLabel
+        .removePrefix("Offline · ")
+        .removePrefix("Connecting · ")
+        .ifBlank { "Desktop" }
+    val isActiveSessionHostOnline = remember(activeSummary, resolvedIsCloud, connectionState) {
+        if (resolvedIsCloud) {
+            connectionState.isDeviceNetworkReachable
+        } else {
+            coordinator.isHostOnlineForSummary(activeSummary)
+        }
+    }
+    val effectiveHeaderHostLabel = when {
+        resolvedIsCloud -> if (connectionState.hasPairedBackend || connectionState.isConnected) "Antigravity" else "Cloud"
+        !coordinator.isVerificationMode && connectionState.hasPairedBackend && !isActiveSessionHostOnline ->
+            if (connectionState.isConnecting) "Connecting · $cleanHostLabel" else "Offline · $cleanHostLabel"
+        else -> cleanHostLabel
+    }
+    val headerSubtitle = "${activeSummary?.projectSlug ?: "ledger-svc"} · $effectiveHeaderHostLabel"
     val totalAdditions = activeSummary?.totalAdditions ?: 128
     val totalDeletions = activeSummary?.totalDeletions ?: 14
 
@@ -583,6 +599,86 @@ fun CascadeChatScreen(
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                             )
                         }
+                    }
+                }
+            }
+        } else if (!coordinator.isVerificationMode && displayItems.isEmpty()) {
+            val isNoInternet = connectionState.hasPairedBackend && !connectionState.isDeviceNetworkReachable
+            val isOfflinePaired = !resolvedIsCloud && connectionState.hasPairedBackend && !isActiveSessionHostOnline
+            val rawSlug = AntigravityCloudDetector.stripProjectScopePrefix(
+                activeSummary?.projectSlug.orEmpty().ifBlank { AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME },
+            )
+            val isNoProj = AntigravityCloudDetector.isNoProjectSlug(rawSlug)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .testTag("chat-empty-session-card"),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                AntigravitySurfaceCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(14.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            isNoInternet || isOfflinePaired -> colors.statusError
+                                            connectionState.isConnected -> colors.statusDone
+                                            else -> colors.accentPeriwinkle
+                                        }
+                                    ),
+                            )
+                            Text(
+                                text = when {
+                                    isNoInternet -> tr("No Internet · Queued Outbox Ready", "无网络连接 · 离线发件箱已就绪")
+                                    isOfflinePaired -> if (chatState.pendingOutboxCount > 0) {
+                                        tr(
+                                            "Host Offline · ${chatState.pendingOutboxCount} Queued",
+                                            "主机离线 · ${chatState.pendingOutboxCount} 条排队中",
+                                        )
+                                    } else {
+                                        tr("Host Offline · Queued Outbox Ready", "主机离线 · 离线发件箱已就绪")
+                                    }
+                                    connectionState.isConnected -> tr("Ready for Prompt", "准备就绪")
+                                    else -> tr("New Session Ready", "新会话已就绪")
+                                },
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = colors.inkReading,
+                            )
+                        }
+                        val runtimeTargetName = if (resolvedIsCloud) {
+                            tr("Antigravity Cloud", "Antigravity 云端")
+                        } else {
+                            tr("Antigravity Desktop", "Antigravity 桌面端")
+                        }
+                        Text(
+                            text = if (isNoProj) {
+                                tr(
+                                    "Unassigned conversation on $cleanHostLabel. Send a message below to run on $runtimeTargetName.",
+                                    "位于 $cleanHostLabel 的未归属对话。在下方发送消息即可在${runtimeTargetName}上运行。",
+                                )
+                            } else {
+                                tr(
+                                    "Bound to $rawSlug on $cleanHostLabel. Send a message below to run on $runtimeTargetName.",
+                                    "已绑定 $cleanHostLabel 上的项目 $rawSlug。在下方发送消息即可在${runtimeTargetName}上运行。",
+                                )
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkSecondary,
+                        )
                     }
                 }
             }

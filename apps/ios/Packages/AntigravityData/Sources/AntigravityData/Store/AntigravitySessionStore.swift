@@ -391,10 +391,18 @@ public final class AntigravitySessionStore {
         fallbackActionLabel: String
     ) async {
         await refreshHostCapabilitiesFromClient()
+        if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+            markLocalHostOffline(
+                instanceUuid: activeHost.instanceId,
+                hostname: activeHost.hostname,
+                error: error
+            )
+        }
         if ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
             compatibilityNoticeText = activeHostCapabilities.userFacingUnsupportedMessage(for: capability)
         } else {
-            compatibilityNoticeText = "\(fallbackActionLabel) failed: \(error.localizedDescription)"
+            let formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(error)
+            compatibilityNoticeText = "\(fallbackActionLabel) failed: \(formatted)"
         }
     }
 

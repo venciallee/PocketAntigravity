@@ -1035,4 +1035,77 @@ class AndroidInteractiveE2eTest {
         val live2 = AntigravityCoreCoordinator(preferencesStore = sharedPrefs)
         assertEquals(AppLanguage.ZH_HANS, live2.settingsStore.state.value.appearance.language)
     }
+
+    @Test
+    fun atc32_offlineEmptyChatShowsCleanHostOfflineCardWithoutDuplicatePrefix() {
+        val hostUuid = "huangjiafandemac-mini-local-swift-vapor"
+        val storage = dev.antigravity.shared.domain.InMemoryProjectionStorage()
+        val coordinator = AntigravityCoreCoordinator(
+            preferencesStore = dev.antigravity.shared.platform.InMemoryPreferencesStore(),
+            projectionStorage = storage,
+            autoPreloadConversations = false,
+        )
+        val offlineHost = dev.antigravity.shared.model.RemoteHostInstance(
+            instanceId = hostUuid,
+            hostname = hostUuid,
+            channel = dev.antigravity.shared.model.RemoteConnectionChannel.CLOUD_RELAY,
+            endpointUrl = "https://antigravity.google.com/r/$hostUuid",
+            isOnline = true,
+        )
+        coordinator.connectionStore.seedVerificationConnection(
+            activeHost = offlineHost,
+            knownHosts = listOf(offlineHost),
+            statusText = "Connected · $hostUuid",
+        )
+        coordinator.connectionStore.markInstanceOffline(
+            instanceUuid = hostUuid,
+            errorMessage = "Antigravity Desktop is offline or unregistered on Cloud Relay.",
+        )
+
+        // Queue one message on a sibling draft so pendingOutboxCount == 1, then open an empty draft
+        val queuedDraftId = coordinator.createLocalDraftConversation(
+            workspaceUri = "",
+            projectSlug = "No Project",
+            title = "Queued follow-up",
+        )
+        kotlinx.coroutines.runBlocking {
+            coordinator.sendMessage(
+                cascadeId = queuedDraftId,
+                message = "没拉到任何 project 啊",
+                workspaceUri = "",
+                isOptimisticDraft = true,
+                instanceUuidOverride = hostUuid,
+            )
+        }
+        val emptyDraftId = coordinator.createLocalDraftConversation(
+            workspaceUri = "",
+            projectSlug = "No Project",
+            title = "没拉到任何 project 啊",
+        )
+        coordinator.chatStore.setActiveCascade(emptyDraftId)
+
+        composeRule.setContent {
+            dev.antigravity.android.core.ui.theme.AntigravityTheme {
+                dev.antigravity.android.ui.chat.CascadeChatScreen(
+                    coordinator = coordinator,
+                    onBack = {},
+                    onOpenDiffReview = {},
+                    onOpenPlanReview = {},
+                    onOpenAddContext = {},
+                    onOpenModelAndMode = {},
+                    onOpenOverview = {},
+                    onOpenSideQuestion = {},
+                    onOpenSwarmBoard = {},
+                    onOpenVoiceMode = {},
+                    onBiometricPrompt = { _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("chat-empty-session-card").assertIsDisplayed()
+        composeRule.onNodeWithText("Host Offline · 1 Queued", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Unassigned conversation on $hostUuid", substring = true, useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("No Project · Offline · $hostUuid", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("on Offline ·", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
 }

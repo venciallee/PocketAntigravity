@@ -216,14 +216,25 @@ fun AgentsHomeScreen(
     val isHostOnline = remember(hostScope, connectionState) {
         when {
             !connectionState.hasPairedBackend -> true
+            !connectionState.isDeviceNetworkReachable -> false
             hostScope is AgentsHostFilterScope.AntigravityCloud -> connectionState.isDeviceNetworkReachable
             hostScope is AgentsHostFilterScope.LocalHost -> {
-                val matched = connectionState.knownHosts.firstOrNull {
-                    it.instanceId == hostScope.id || it.hostname == hostScope.name
+                val matchedRelay = connectionState.availableRelayInstances.firstOrNull {
+                    it.uuid == hostScope.id || it.name == hostScope.name
                 }
-                matched?.isOnline ?: (connectionState.isConnected && (connectionState.activeHost?.isOnline != false))
+                if (matchedRelay != null) {
+                    matchedRelay.status.isReachable
+                } else {
+                    val matched = connectionState.knownHosts.firstOrNull {
+                        it.instanceId == hostScope.id || it.hostname == hostScope.name
+                    }
+                    matched?.isOnline ?: (connectionState.isConnected && (connectionState.activeHost?.isOnline != false))
+                }
             }
-            else -> connectionState.isConnected && (connectionState.activeHost?.isOnline != false)
+            else -> {
+                val anyRelayReachable = connectionState.availableRelayInstances.any { it.status.isReachable }
+                anyRelayReachable || (connectionState.isConnected && (connectionState.activeHost?.isOnline != false))
+            }
         }
     }
 

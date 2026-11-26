@@ -163,7 +163,7 @@ public struct CascadeChatViewController: View {
                                     }
                                 }
 
-                                if store.isCascadeStreaming || store.activeSummary?.status == .inProgress || store.activeSummary?.status == .pending {
+                                if store.isCascadeStreaming {
                                     HStack(spacing: 10) {
                                         AntigravityFourDotLoadingView(
                                             isAnimated: shouldAnimateLive,
@@ -479,15 +479,20 @@ public struct CascadeChatViewController: View {
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                 }
+                let cleanHostDisplay = effectiveHeaderHostLabel
+                    .replacingOccurrences(of: "Offline · ", with: "")
+                    .replacingOccurrences(of: "Connecting · ", with: "")
+                    .replacingOccurrences(of: "离线 · ", with: "")
+                    .replacingOccurrences(of: "正在连接 · ", with: "")
                 Text(
                     isNoProjSession
                         ? lang.t(
-                            "Unassigned conversation on `\(effectiveHeaderHostLabel)`. Send a message below to run on \(runtimeTargetName).",
-                            "位于 `\(effectiveHeaderHostLabel)` 的未归属对话。在下方发送消息即可在\(runtimeTargetName)上运行。"
+                            "Unassigned conversation on `\(cleanHostDisplay)`. Send a message below to run on \(runtimeTargetName).",
+                            "位于 `\(cleanHostDisplay)` 的未归属对话。在下方发送消息即可在\(runtimeTargetName)上运行。"
                         )
                         : lang.t(
-                            "Bound to `\(rawSlug)` on `\(effectiveHeaderHostLabel)`. Send a message below to run on \(runtimeTargetName).",
-                            "已绑定 `\(effectiveHeaderHostLabel)` 上的项目 `\(rawSlug)`。在下方发送消息即可在\(runtimeTargetName)上运行。"
+                            "Bound to `\(rawSlug)` on `\(cleanHostDisplay)`. Send a message below to run on \(runtimeTargetName).",
+                            "已绑定 `\(cleanHostDisplay)` 上的项目 `\(rawSlug)`。在下方发送消息即可在\(runtimeTargetName)上运行。"
                         )
                 )
                     .font(.system(size: 13.5))
