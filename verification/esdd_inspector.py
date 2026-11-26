@@ -56,20 +56,21 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
             f"Design tokens verified: {len(EXPECTED_COLORS)} OLED/Periwinkle color tokens & 5 typography tiers"
         )
 
-    # 2. Validate 13 Canonical States + Extended UE v2.1 Screens & Reference UE PNGs
+    # 2. Validate 12 Canonical States + Extended UE v2.1 Screens & Reference UE PNGs
     states_list = ir.get("states", [])
     extended_list = ir.get("extendedScreens", [])
     states = {s["id"]: s for s in states_list}
-    if len(states) != 13:
-        errors.append(f"Expected 13 UE states, found {len(states)}")
+    if len(states) != 12:
+        errors.append(f"Expected 12 canonical UE states, found {len(states)}")
 
     missing_refs = []
     total_selectors = 0
     missing_renderer_selectors = []
-    for idx, st in enumerate(states_list, start=1):
+    for st in states_list:
         raw_ref = Path(st["referenceUEImage"])
         ref_img = raw_ref if raw_ref.is_absolute() else (repo_root / raw_ref)
-        tracked_cmp = repo_root / "verification" / "output" / "comparisons" / f"CMP_UE{idx:02d}.png"
+        ue_code = st["id"].split("_", 1)[0]
+        tracked_cmp = repo_root / "verification" / "output" / "comparisons" / f"CMP_{ue_code}.png"
         if not ref_img.exists() and not tracked_cmp.exists():
             missing_refs.append(str(ref_img))
         req_sels = st.get("requiredSelectors", [])
@@ -100,13 +101,13 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
         errors.append(f"Missing required data-testid selectors in renderer: {missing_renderer_selectors}")
     else:
         checks.append(
-            f"100% selector parity: all {total_selectors} required data-testid selectors present across UE01..UE13"
+            f"100% selector parity: all {total_selectors} required data-testid selectors present across {len(states_list)} canonical UE screens"
         )
 
-    # 3. Validate State × Event DAG (13 transitions, BFS reachability from UE01_AGENTS_HOME)
+    # 3. Validate State × Event DAG (11 transitions, BFS reachability from UE01_AGENTS_HOME)
     events = ir.get("events", [])
-    if len(events) != 13:
-        errors.append(f"Expected 13 navigation transitions, found {len(events)}")
+    if len(events) != 11:
+        errors.append(f"Expected 11 navigation transitions, found {len(events)}")
 
     adj = {sid: [] for sid in states}
     for ev in events:
@@ -138,14 +139,14 @@ def inspect_esdd_spec_and_swift_contracts(repo_root: Path, run_compat_guardrails
             f"State×Event DAG complete: {len(states)} states and {len(events)} transitions reachable from UE01_AGENTS_HOME"
         )
 
-    # 4. Validate 13 Claims (CLAIM-01 .. CLAIM-13)
+    # 4. Validate 12 Claims (one per canonical state)
     claims = ir.get("claims", [])
     claimed_states = {c["state"] for c in claims}
     missing_claims = set(states.keys()) - claimed_states
-    if len(claims) != 13 or missing_claims:
+    if len(claims) != len(states) or missing_claims:
         errors.append(f"Claims coverage mismatch: count={len(claims)}, missing={sorted(missing_claims)}")
     else:
-        checks.append("All 13 UE states covered by executable acceptance claims (CLAIM-01..CLAIM-13)")
+        checks.append(f"All {len(states)} canonical UE states covered by executable acceptance claims")
 
     # 5. Non-blocking Swift 6 Source Tree Inspection
     swift_dirs = ["apps/ios/Packages", "apps/ios/App", "apps/ios/SharedUI", "apps/ios/Extensions"]

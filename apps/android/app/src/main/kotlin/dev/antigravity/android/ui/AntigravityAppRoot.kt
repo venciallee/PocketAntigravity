@@ -70,7 +70,6 @@ import dev.antigravity.android.ui.pairing.RemoteControlLinkDialog
 import dev.antigravity.android.ui.pairing.SettingsAndCustomizationsScreen
 import dev.antigravity.android.ui.pairing.WelcomeAndPairingScreen
 import dev.antigravity.android.ui.projects.CreateProjectScreen
-import dev.antigravity.android.ui.projects.ProjectDetailScreen
 import dev.antigravity.android.ui.projects.ProjectRulesAndSkillsScreen
 import dev.antigravity.android.ui.review.ImplementationPlanReviewScreen
 import dev.antigravity.android.ui.review.TurnDiffReviewScreen
@@ -91,7 +90,6 @@ private sealed interface AppRoute {
     data object NewConversationHome : AppRoute
     data class DisplayOptions(val expandSortMenu: Boolean = false) : AppRoute
     data class ContextMenu(val cascadeId: String) : AppRoute
-    data class ProjectDetail(val projectId: String) : AppRoute
     data object CreateProject : AppRoute
     data class Automations(val expandedMenuId: String? = null) : AppRoute
     data class AutomationDetail(val automationId: String) : AppRoute
@@ -289,7 +287,6 @@ fun AntigravityAppRoot(
         if (destination is AppRoute.CascadeChat || destination == AppRoute.StructuredQuestion) {
             when (currentRoute) {
                 AppRoute.NewConversationHome,
-                is AppRoute.ProjectDetail,
                 is AppRoute.Automations,
                 is AppRoute.AutomationDetail,
                 -> chatOriginRoute = currentRoute
@@ -357,7 +354,6 @@ fun AntigravityAppRoot(
             AppRoute.NewConversationHome -> AppRoute.NewConversationHome
             is AppRoute.DisplayOptions,
             is AppRoute.ContextMenu,
-            is AppRoute.ProjectDetail,
             AppRoute.CreateProject,
             is AppRoute.Automations,
             AppRoute.PermissionsPreset,
@@ -369,15 +365,11 @@ fun AntigravityAppRoot(
             AppRoute.Pairing,
             -> AppRoute.NewConversationHome
 
-            is AppRoute.AutomationDetail -> {
-                if (previousRoute is AppRoute.ProjectDetail) previousRoute else AppRoute.Automations()
-            }
+            is AppRoute.AutomationDetail -> AppRoute.Automations()
 
             is AppRoute.AutomationEdit -> AppRoute.AutomationDetail(route.automationId)
 
-            is AppRoute.RulesAndSkills -> {
-                if (previousRoute is AppRoute.ProjectDetail) previousRoute else AppRoute.NewConversationHome
-            }
+            is AppRoute.RulesAndSkills -> AppRoute.NewConversationHome
 
             is AppRoute.CloudRelaySignIn -> AppRoute.Pairing
 
@@ -535,9 +527,14 @@ fun AntigravityAppRoot(
                             onOpenPermissionsPreset = { navigateTo(AppRoute.PermissionsPreset) },
                             onOpenSlashMenu = { navigateTo(AppRoute.SlashMenu(includeSideQuestionPreview = false)) },
                             onOpenVoiceMode = {
-                                coordinator.chatStore.setActiveCascade("cas-rate-limiter")
-                                currentRoute = AppRoute.CascadeChat("cas-rate-limiter")
-                                activeChatOverlay = ChatOverlaySheet.VOICE_MODE
+                                val targetCascade = coordinator.chatState.value.activeCascadeId
+                                    .ifBlank { coordinator.syncState.value.summaries.firstOrNull()?.cascadeId.orEmpty() }
+                                    .ifBlank { if (coordinator.isVerificationMode) "cas-rate-limiter" else "" }
+                                if (targetCascade.isNotBlank()) {
+                                    coordinator.chatStore.setActiveCascade(targetCascade)
+                                    currentRoute = AppRoute.CascadeChat(targetCascade)
+                                    activeChatOverlay = ChatOverlaySheet.VOICE_MODE
+                                }
                             },
                             onOpenReSignIn = {
                                 val relayUrl = connectionState.activeHost?.endpointUrl
@@ -562,24 +559,6 @@ fun AntigravityAppRoot(
                             coordinator = coordinator,
                             targetCascadeId = route.cascadeId,
                             onDismiss = { returnToSidebarDrawer() },
-                        )
-                    }
-
-                    is AppRoute.ProjectDetail -> {
-                        val projName = workspaceState.projects.firstOrNull { it.id == route.projectId }?.name ?: route.projectId
-                        ProjectDetailScreen(
-                            coordinator = coordinator,
-                            projectId = route.projectId,
-                            onBack = { returnToSidebarDrawer() },
-                            onNewConversation = { openNewConversation(projectId = route.projectId) },
-                            onOpenConversation = { cascadeId -> openConversation(cascadeId) },
-                            onOpenAutomationDetail = { automationId ->
-                                coordinator.workspaceStore.selectAutomation(automationId)
-                                navigateTo(AppRoute.AutomationDetail(automationId))
-                            },
-                            onOpenRulesAndSkills = {
-                                navigateTo(AppRoute.RulesAndSkills(projectName = projName))
-                            },
                         )
                     }
 
@@ -1004,10 +983,20 @@ fun AntigravityAppRoot(
                                 closeDrawer(immediate = true)
                                 navigateTo(AppRoute.CreateProject)
                             },
-                            onOpenProjectDetail = { projectId ->
+                            onSelectProject = { projectId ->
                                 closeDrawer(immediate = true)
                                 coordinator.workspaceStore.selectProject(projectId)
-                                navigateTo(AppRoute.ProjectDetail(projectId))
+                                navigateTo(AppRoute.NewConversationHome)
+                            },
+                            onOpenProjectCustomizations = { projectId, projectName ->
+                                closeDrawer(immediate = true)
+                                coordinator.workspaceStore.selectProject(projectId)
+                                navigateTo(AppRoute.RulesAndSkills(projectName))
+                            },
+                            onRevealProjectInFinder = { projectId ->
+                                scope.launch {
+                                    runCatching { coordinator.revealProjectInFinder(projectId) }
+                                }
                             },
                             onOpenConversation = { cascadeId ->
                                 closeDrawer(immediate = true)
@@ -1035,7 +1024,6 @@ private fun routeForVerifyScene(scene: EsddVerifySceneCase): AppRoute = when (sc
     EsddVerifySceneCase.SIDEBAR_DRAWER -> AppRoute.NewConversationHome
     EsddVerifySceneCase.DISPLAY_OPTIONS -> AppRoute.DisplayOptions(expandSortMenu = true)
     EsddVerifySceneCase.CONTEXT_MENU_PIN -> AppRoute.ContextMenu("cas-flaky-settlement")
-    EsddVerifySceneCase.PROJECT_DETAIL -> AppRoute.ProjectDetail("ledger-svc")
     EsddVerifySceneCase.CREATE_PROJECT -> AppRoute.CreateProject
     EsddVerifySceneCase.AUTOMATIONS -> AppRoute.Automations(expandedMenuId = "auto-nightly-audit")
     EsddVerifySceneCase.AUTOMATION_DETAIL -> AppRoute.AutomationDetail("auto-nightly-audit")

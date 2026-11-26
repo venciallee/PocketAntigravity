@@ -1,18 +1,17 @@
-# PocketAntigravity v2.0 — ESDD End-to-End & 13-Screen `@3x` Visual Parity Report
+# PocketAntigravity v2.0 — ESDD End-to-End & 12-Screen `@3x` Visual Parity Report
 
-- **Overall Status**: ✅ **ALL 4 GATES PASSED** (`13/13` Claims, `16/16` Interactive E2E Tests, `13/13` `@3x` Side-by-Side Comparisons)
-- **Mobile Viewport (`UE01`..`UE12`)**: iPhone 16 Pro `393×852pt @3x` → `1179×2556px` (`0px` horizontal overflow)
+- **Overall Status**: ✅ **ALL 4 GATES PASSED** (`12/12` Claims, `15/15` Interactive E2E Tests, `12/12` `@3x` Side-by-Side Comparisons)
+- **Mobile Viewport (`UE01`..`UE12`, excl. retired `UE04`)**: iPhone 16 Pro `390×844pt @3x` → `1170×2532px` (`0px` horizontal overflow)
 - **Live Activity Spec (`UE13`)**: Landscape `800×500pt @3x` → `2400×1500px` (`0px` horizontal overflow)
 - **Connect-RPC Live E2E**: 5-byte streaming envelope + `605`-step binary Protobuf + Face ID `HandleCascadeUserInteraction` + Workspace & Automation RPCs
 
-## 1. Interactive User-Journey Test Matrix (`TC-01` .. `TC-16`)
+## 1. Interactive User-Journey Test Matrix
 
 | Test ID | Target Screen | Verification Outcome | Status |
 | :--- | :--- | :--- | :--- |
-| `TC-01` | `UE01_AGENTS_HOME` | New Conversation Home sidebar trigger, host online pill, Needs approval banner & cloud toggle verified (0px overflow) | ✅ PASS |
+| `TC-01` | `UE01_AGENTS_HOME` | New Conversation Home sidebar trigger, host online pill, Needs approval banner & local-computer/cloud runtime toggle verified (0px overflow) | ✅ PASS |
 | `TC-02` | `UE02_DISPLAY_OPTIONS` | Sort popover rendered, Auto Pin toggled, Mark All as Read dropped 3->0 unread, Reset restored | ✅ PASS |
 | `TC-03` | `UE03_CONTEXT_MENU_PIN` | Context preview pills + 6 menu actions + Swipe Pin (#8DB8FF) & Archive verified | ✅ PASS |
-| `TC-04` | `UE04_PROJECT_DETAIL` | ~/code/ledger-svc metadata, Active/Archived/Automations tab switching & New Conversation CTA verified | ✅ PASS |
 | `TC-05` | `UE05_CREATE_PROJECT` | Created 'ledger-svc-cloud' via live CreateProjectWorkspace RPC | ✅ PASS |
 | `TC-06` | `UE06_AUTOMATIONS` | Created NL schedule, triggered Nightly dependency audit RPC & resumed Bundle size watch | ✅ PASS |
 | `TC-07` | `UE07_CHAT_AND_COMPOSER` | +128 -14 diff badge, 7-segment task bar (4 blue + 1 amber + 2 dark) & Thought expansion verified | ✅ PASS |
@@ -24,16 +23,15 @@
 | `TC-13` | `UE12_TURN_DIFF_REVIEW` | +96 -4 word-level diff, Line 29 review comment sent, Viewed checked & file accepted | ✅ PASS |
 | `TC-14` | `UE13_LIVE_ACTIVITY_SPEC` | All 7 Dynamic Island (Compact/Minimal/Expanded Face ID) & Lock Screen Multi-Agent states verified | ✅ PASS |
 | `TC-15` | `Connect-RPC Binary Proto` | Decoded 605 binary application/proto trajectory steps without 600-step JSON truncation | ✅ PASS |
-| `TC-16` | `ALL_13_SCREENS` | 0px overflow across 13/13 screens, HIG >=44pt primary controls verified & 13/13 CMP_UE01..CMP_UE13 generated | ✅ PASS |
+| `TC-16` | `ALL_12_SCREENS` | 0px overflow across 12/12 screens, HIG >=44pt primary controls verified & 12/12 side-by-side comparisons generated | ✅ PASS |
 
-## 2. 13-Screen `@3x` Visual & HIG Acceptance Matrix (`CLAIM-01` .. `CLAIM-13`)
+## 2. 12-Screen `@3x` Visual & HIG Acceptance Matrix
 
 | Claim | State | Resolution | Selectors | Side-by-Side Comparison | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `CLAIM-01` | `UE01_AGENTS_HOME` | `1170x2532` | `12` verified | `verification/output/comparisons/CMP_UE01.png` | ✅ PASS |
 | `CLAIM-02` | `UE02_DISPLAY_OPTIONS` | `1170x2532` | `8` verified | `verification/output/comparisons/CMP_UE02.png` | ✅ PASS |
 | `CLAIM-03` | `UE03_CONTEXT_MENU_PIN` | `1170x2532` | `8` verified | `verification/output/comparisons/CMP_UE03.png` | ✅ PASS |
-| `CLAIM-04` | `UE04_PROJECT_DETAIL` | `1170x2532` | `7` verified | `verification/output/comparisons/CMP_UE04.png` | ✅ PASS |
 | `CLAIM-05` | `UE05_CREATE_PROJECT` | `1170x2532` | `8` verified | `verification/output/comparisons/CMP_UE05.png` | ✅ PASS |
 | `CLAIM-06` | `UE06_AUTOMATIONS` | `1170x2532` | `8` verified | `verification/output/comparisons/CMP_UE06.png` | ✅ PASS |
 | `CLAIM-07` | `UE07_CHAT_AND_COMPOSER` | `1170x2532` | `13` verified | `verification/output/comparisons/CMP_UE07.png` | ✅ PASS |

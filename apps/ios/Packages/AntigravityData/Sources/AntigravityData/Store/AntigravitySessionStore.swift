@@ -1,10 +1,9 @@
 import Foundation
 import Observation
 
-/// Active navigation destination in `AntigravityShellController` across all 20 UE screens.
+/// Active navigation destination in `AntigravityShellController` across all 19 UE screens.
 public enum AntigravityNavigationRoute: Sendable, Equatable, Hashable {
     case tabRoot
-    case projectDetail(String)
     case cascadeChat(String)
     case automationDetail(String)
     case rulesAndSkills
@@ -68,8 +67,8 @@ public enum AntigravityModalSheet: Identifiable, Sendable, Equatable {
 }
 
 /// Central `@Observable` state coordinator for `PocketAntigravity` (v2.1 UE Aligned).
-/// Drives all 20 UE screens: Agents Home (`UE01`), Sidebar Drawer (`UE01B`), Display Options (`UE02`),
-/// Long-Press & Pin (`UE03`), Project Detail (`UE04`), Create New Project (`UE05`), Automations (`UE06`),
+/// Drives all 19 UE screens: Agents Home (`UE01`), Sidebar Drawer (`UE01B`), Display Options (`UE02`),
+/// Long-Press & Pin (`UE03`), Create New Project (`UE05`), Automations (`UE06`),
 /// Automation Detail (`UE06B`), Automation Edit (`UE06C`), Chat & Composer (`UE07`), Permissions Preset (`UE07B`),
 /// Add Context (`UE08`), Slash Menu (`UE08B`), Model & Effort (`UE09`), Structured Multi-Step Question (`UE10`),
 /// Implementation Plan Review (`UE11`), Turn Diff Line Review (`UE12`), Live Activity (`UE13`),
@@ -109,12 +108,11 @@ public final class AntigravitySessionStore {
     public var contextMenuTargetCascadeId: String = "cas-flaky-settlement"
     public var swipePreviewCascadeId: String = "cas-upgrade-go"
 
-    // MARK: - Hosts, Projects & Create Project State (`UE01`, `UE04`, `UE05`)
+    // MARK: - Hosts, Projects & Create Project State (`UE01`, `UE05`)
     public var hosts: [RemoteHostInstance]
     public var activeHost: RemoteHostInstance
     public var projects: [ProjectWorkspace]
     public var selectedProjectId: String = "ledger-svc"
-    public var selectedProjectTab: ProjectDetailTab = .active
     public var newProjectDraft: NewProjectDraft = NewProjectDraft()
     public var availableGitHubRepos: [GitHubRepoItem] = GitHubRepoItem.sampleCatalog
     public var workspaces: [WorkspaceInfo]

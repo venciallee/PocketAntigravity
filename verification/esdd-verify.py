@@ -80,12 +80,6 @@ PRIMARY_TOUCH_TARGETS_BY_STATE = {
         "[data-testid='swipe-action-pin']",
         "[data-testid='swipe-action-archive']",
     ],
-    "UE04_PROJECT_DETAIL": [
-        "[data-testid='btn-back-agents']",
-        "[data-testid='btn-new-conv-in-project']",
-        "[data-testid='project-row-automation']",
-        "[data-testid='project-row-skills']",
-    ],
     "UE05_CREATE_PROJECT": [
         "[data-testid='btn-cancel-project']",
         "[data-testid='source-card-github']",
@@ -782,18 +776,6 @@ def run_interactive_e2e_suite(
         assert page.evaluate("document.body.dataset.swipePinned === 'true' && document.body.dataset.swipeArchived === 'true'")
         cases.append({"id": "TC-03", "screen": "UE03_CONTEXT_MENU_PIN", "passed": True, "detail": "Context preview pills + 6 menu actions + Swipe Pin (#8DB8FF) & Archive verified"})
 
-    # TC-04: UE04_PROJECT_DETAIL tabs & New Conversation CTA
-    if should_run("TC-04"):
-        assert page is not None
-        page.goto(scene_url("UE04_PROJECT_DETAIL"), width=390, height=844, scale=3)
-        assert page.text_of("[data-testid='project-hero-title']") == "ledger-svc"
-        page.click("[data-testid='project-tab-archived']")
-        assert page.evaluate("document.body.dataset.activeProjectTab") == "archived"
-        page.click("[data-testid='project-tab-active']")
-        page.click("[data-testid='btn-new-conv-in-project']")
-        assert page.evaluate("document.body.dataset.newConvOpened") == "true"
-        cases.append({"id": "TC-04", "screen": "UE04_PROJECT_DETAIL", "passed": True, "detail": "~/code/ledger-svc metadata, Active/Archived/Automations tab switching & New Conversation CTA verified"})
-
     # TC-05: UE05_CREATE_PROJECT Cloud + GitHub + acme/ledger-svc -> CreateProjectWorkspace RPC
     if should_run("TC-05"):
         assert page is not None
@@ -961,7 +943,7 @@ def _load_label_font(size: int = 16):
 
 
 def build_side_by_side_comparison(
-    idx_1based: int,
+    ue_code: str,
     state_id: str,
     ref_png_path: Path,
     rendered_png_path: Path,
@@ -987,7 +969,7 @@ def build_side_by_side_comparison(
 
     draw.text(
         (pad, 16),
-        f"CMP_UE{idx_1based:02d} · {state_id}",
+        f"CMP_{ue_code} · {state_id}",
         fill=(245, 247, 250),
         font=font_title,
     )
@@ -1036,8 +1018,8 @@ def build_side_by_side_comparison(
     canvas.save(out_cmp_path, format="PNG")
 
 
-def build_13_screen_master_overview(screenshot_entries: list, output_path: Path):
-    """Builds a high-resolution composite gallery of all 13 ESDD screens (UE01..UE12 + UE13)."""
+def build_screen_master_overview(screenshot_entries: list, output_path: Path):
+    """Builds a high-resolution composite gallery of all canonical ESDD screens."""
     font_hdr = _load_label_font(26)
     font_lbl = _load_label_font(14)
 
@@ -1047,20 +1029,22 @@ def build_13_screen_master_overview(screenshot_entries: list, output_path: Path)
     label_h = 28
     header_h = 84
 
-    mobile_entries = screenshot_entries[:12]
-    spec_entry = screenshot_entries[12]
+    mobile_entries = [entry for entry in screenshot_entries if entry[0] != "UE13_LIVE_ACTIVITY_SPEC"]
+    spec_entries = [entry for entry in screenshot_entries if entry[0] == "UE13_LIVE_ACTIVITY_SPEC"]
+    spec_entry = spec_entries[0] if spec_entries else None
 
+    mobile_rows = max(1, (len(mobile_entries) + cols - 1) // cols)
     spec_w = 1120
     spec_h = 700
 
     canvas_w = cols * thumb_w + (cols + 1) * pad
-    canvas_h = header_h + 2 * (thumb_h + label_h + pad) + spec_h + label_h + pad * 2
+    canvas_h = header_h + mobile_rows * (thumb_h + label_h + pad) + (spec_h + label_h + pad * 2 if spec_entry else pad)
 
     grid = Image.new("RGB", (canvas_w, canvas_h), (9, 10, 13))
     draw = ImageDraw.Draw(grid)
     draw.text(
         (pad, 26),
-        "PocketAntigravity v2.0 — 13-Screen @3x ESDD Visual Verification Gallery (UE01..UE13)",
+        f"PocketAntigravity v2.0 — {len(screenshot_entries)}-Screen @3x ESDD Visual Verification Gallery (UE01..UE13)",
         fill=(245, 247, 250),
         font=font_hdr,
     )
@@ -1076,19 +1060,20 @@ def build_13_screen_master_overview(screenshot_entries: list, output_path: Path)
         draw.rectangle([x - 1, y - 1, x + thumb_w, y + thumb_h], outline=(62, 68, 84), width=2)
         draw.text((x, y + thumb_h + 6), state_id, fill=(165, 172, 188), font=font_lbl)
 
-    sx = (canvas_w - spec_w) // 2
-    sy = header_h + 2 * (thumb_h + label_h + pad) + 8
-    with Image.open(spec_entry[1]) as sim:
-        s_resized = sim.convert("RGB").resize((spec_w, spec_h), Image.Resampling.LANCZOS)
-        grid.paste(s_resized, (sx, sy))
-    draw.rectangle([sx - 1, sy - 1, sx + spec_w, sy + spec_h], outline=(142, 180, 255), width=2)
-    draw.text((sx, sy + spec_h + 7), f"{spec_entry[0]} (800x500pt @3x -> 2400x1500px)", fill=(142, 180, 255), font=font_lbl)
+    if spec_entry is not None:
+        sx = (canvas_w - spec_w) // 2
+        sy = header_h + mobile_rows * (thumb_h + label_h + pad) + 8
+        with Image.open(spec_entry[1]) as sim:
+            s_resized = sim.convert("RGB").resize((spec_w, spec_h), Image.Resampling.LANCZOS)
+            grid.paste(s_resized, (sx, sy))
+        draw.rectangle([sx - 1, sy - 1, sx + spec_w, sy + spec_h], outline=(142, 180, 255), width=2)
+        draw.text((sx, sy + spec_h + 7), f"{spec_entry[0]} (800x500pt @3x -> 2400x1500px)", fill=(142, 180, 255), font=font_lbl)
 
     grid.save(output_path, format="PNG")
 
 
 def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids: list[str]) -> dict:
-    all_tcs = [f"TC-{i:02d}" for i in range(1, 17)]
+    all_tcs = [f"TC-{i:02d}" for i in range(1, 17) if i != 4]
     is_full = True
     is_release = bool(args.release)
     stages = {1, 2, 3, 4}
@@ -1176,7 +1161,7 @@ def _resolve_esdd_scope(args: argparse.Namespace, repo_root: Path, all_state_ids
 def main():
     parser = argparse.ArgumentParser(description="ESDD E2E & @3x Visual Parity Verifier")
     parser.add_argument("--auto", action="store_true", help="Run impact-scoped ESDD gates based on git diff + working tree")
-    parser.add_argument("--full", action="store_true", help="Force all 4 ESDD stages (16/16 TCs + 13/13 @3x screens)")
+    parser.add_argument("--full", action="store_true", help="Force all 4 ESDD stages (all TCs + all @3x screens)")
     parser.add_argument("--release", action="store_true", help="Force mandatory full Release ESDD (all 4 gates)")
     parser.add_argument("--plan", default=None, help="Path to JSON plan from e2e_impact_planner.py")
     parser.add_argument("--stages", default=None, help="Comma-separated stages to run (e.g. 1,2)")
@@ -1189,6 +1174,8 @@ def main():
     repo_root = Path(__file__).resolve().parents[1]
     ir = json.loads((repo_root / "specs" / "esdd-ir.json").read_text(encoding="utf-8"))
     all_state_ids = [s["id"] for s in ir["states"]]
+    total_screens = len(all_state_ids)
+    total_tcs = 15
     scope = _resolve_esdd_scope(args, repo_root, all_state_ids)
 
     out_dir = repo_root / "verification" / "output"
@@ -1201,7 +1188,7 @@ def main():
 
     print(
         f"=== ESDD Mode: {scope['mode']} (full={scope['isFull']}, release={scope['isRelease']}, "
-        f"stages={scope['stages']}, TCs={len(scope['testCases'])}/16, screens={len(scope['screens'])}/13) ==="
+        f"stages={scope['stages']}, TCs={len(scope['testCases'])}/{total_tcs}, screens={len(scope['screens'])}/{total_screens}) ==="
     )
 
     print("=== [Stage 1/4] ESDD Spec-DAG & Contract Inspection ===")
@@ -1260,20 +1247,21 @@ def main():
                 assert chromium_bin is not None
                 with SceneRenderServer(states_by_id, mock_ls.port) as scene_srv, CDPPageDriver(chromium_bin) as page:
                     if run_stage3:
-                        print(f"\n=== [Stage 3/4] Interactive Mobile E2E Test Cases ({len(scope['testCases'])}/16 selected) ===")
+                        print(f"\n=== [Stage 3/4] Interactive Mobile E2E Test Cases ({len(scope['testCases'])}/{total_tcs} selected) ===")
                         tc_results = run_interactive_e2e_suite(page, scene_srv.port, mock_ls.port, selected_cases=scope["testCases"])
                         for tc in tc_results:
                             print(f"  ✓ [{tc['id']}] {tc['screen']} -> {tc['detail']}")
                     else:
-                        print("\n=== [Stage 3/4] Skipped (0/16 interactive cases impacted) ===")
+                        print(f"\n=== [Stage 3/4] Skipped (0/{total_tcs} interactive cases impacted) ===")
 
                     if run_stage4:
-                        print(f"\n=== [Stage 4/4] @3x Visual Rendering, HIG Audit & Side-by-Side UE Comparisons ({len(scope['screens'])}/13 selected) ===")
+                        print(f"\n=== [Stage 4/4] @3x Visual Rendering, HIG Audit & Side-by-Side UE Comparisons ({len(scope['screens'])}/{total_screens} selected) ===")
                         selected_screen_set = set(scope["screens"])
-                        for idx, state in enumerate(ir["states"], start=1):
+                        for state in ir["states"]:
                             state_id = state["id"]
                             if state_id not in selected_screen_set:
                                 continue
+                            ue_code = state_id.split("_", 1)[0]
                             claim = claims_by_state[state_id]
                             vp = state.get("viewportOverridePt") or ir["targetPlatform"]["viewportPt"]
                             vp_w, vp_h = int(vp["width"]), int(vp["height"])
@@ -1321,11 +1309,11 @@ def main():
                             if violations:
                                 raise SystemExit(f"Stage 4 Visual/HIG Audit failed on {state_id}: {violations}")
 
-                            cmp_path = cmp_dir / f"CMP_UE{idx:02d}.png"
+                            cmp_path = cmp_dir / f"CMP_{ue_code}.png"
                             raw_ref = Path(state["referenceUEImage"])
                             resolved_ref = raw_ref if raw_ref.is_absolute() else (repo_root / raw_ref)
                             build_side_by_side_comparison(
-                                idx_1based=idx,
+                                ue_code=ue_code,
                                 state_id=state_id,
                                 ref_png_path=resolved_ref,
                                 rendered_png_path=png_path,
@@ -1356,21 +1344,21 @@ def main():
                         if scope["isFull"]:
                             tc16 = {
                                 "id": "TC-16",
-                                "screen": "ALL_13_SCREENS",
+                                "screen": f"ALL_{total_screens}_SCREENS",
                                 "passed": True,
-                                "detail": "0px overflow across 13/13 screens, HIG >=44pt primary controls verified & 13/13 CMP_UE01..CMP_UE13 generated",
+                                "detail": f"0px overflow across {total_screens}/{total_screens} screens, HIG >=44pt primary controls verified & {total_screens}/{total_screens} side-by-side comparisons generated",
                             }
                             tc_results.append(tc16)
                             print(f"  ✓ [{tc16['id']}] {tc16['screen']} -> {tc16['detail']}")
                     else:
-                        print("\n=== [Stage 4/4] Skipped (0/13 screens impacted) ===")
+                        print(f"\n=== [Stage 4/4] Skipped (0/{total_screens} screens impacted) ===")
             elif run_stage3:
                 # Non-browser Stage 3 case(s) only (e.g., TC-15 Binary Protobuf)
                 print(f"\n=== [Stage 3/4] Non-Browser Interactive E2E Cases ({len(scope['testCases'])} selected) ===")
                 tc_results = run_interactive_e2e_suite(None, None, mock_ls.port, selected_cases=scope["testCases"])
                 for tc in tc_results:
                     print(f"  ✓ [{tc['id']}] {tc['screen']} -> {tc['detail']}")
-                print("\n=== [Stage 4/4] Skipped (0/13 screens impacted) ===")
+                print(f"\n=== [Stage 4/4] Skipped (0/{total_screens} screens impacted) ===")
     else:
         print("\n=== [Stage 2-4] Skipped (impact scope requires Stage 1 Spec/Hygiene check only) ===")
 
@@ -1392,8 +1380,8 @@ def main():
         print(f"\n=== Scoped ESDD Verification PASSED -> {scoped_out.relative_to(repo_root)} ===")
         return
 
-    overview_path = shots_dir / "ESDD_13_SCREENS_OVERVIEW.png"
-    build_13_screen_master_overview(screenshot_entries, overview_path)
+    overview_path = shots_dir / f"ESDD_{total_screens}_SCREENS_OVERVIEW.png"
+    build_screen_master_overview(screenshot_entries, overview_path)
     print(f"\n=== Master Overview Saved: {overview_path.relative_to(repo_root)} ===")
 
     summary_payload = {
@@ -1413,14 +1401,14 @@ def main():
     (out_dir / "results.json").write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
 
     report_lines = [
-        "# PocketAntigravity v2.0 — ESDD End-to-End & 13-Screen `@3x` Visual Parity Report",
+        f"# PocketAntigravity v2.0 — ESDD End-to-End & {total_screens}-Screen `@3x` Visual Parity Report",
         "",
-        "- **Overall Status**: ✅ **ALL 4 GATES PASSED** (`13/13` Claims, `16/16` Interactive E2E Tests, `13/13` `@3x` Side-by-Side Comparisons)",
-        "- **Mobile Viewport (`UE01`..`UE12`)**: iPhone 16 Pro `393×852pt @3x` → `1179×2556px` (`0px` horizontal overflow)",
+        f"- **Overall Status**: ✅ **ALL 4 GATES PASSED** (`{len(claim_results)}/{total_screens}` Claims, `{len(tc_results)}/{total_tcs}` Interactive E2E Tests, `{len(claim_results)}/{total_screens}` `@3x` Side-by-Side Comparisons)",
+        "- **Mobile Viewport (`UE01`..`UE12`, excl. retired `UE04`)**: iPhone 16 Pro `390×844pt @3x` → `1170×2532px` (`0px` horizontal overflow)",
         "- **Live Activity Spec (`UE13`)**: Landscape `800×500pt @3x` → `2400×1500px` (`0px` horizontal overflow)",
         "- **Connect-RPC Live E2E**: 5-byte streaming envelope + `605`-step binary Protobuf + Face ID `HandleCascadeUserInteraction` + Workspace & Automation RPCs",
         "",
-        "## 1. Interactive User-Journey Test Matrix (`TC-01` .. `TC-16`)",
+        "## 1. Interactive User-Journey Test Matrix",
         "",
         "| Test ID | Target Screen | Verification Outcome | Status |",
         "| :--- | :--- | :--- | :--- |",
@@ -1431,7 +1419,7 @@ def main():
     report_lines.extend(
         [
             "",
-            "## 2. 13-Screen `@3x` Visual & HIG Acceptance Matrix (`CLAIM-01` .. `CLAIM-13`)",
+            f"## 2. {total_screens}-Screen `@3x` Visual & HIG Acceptance Matrix",
             "",
             "| Claim | State | Resolution | Selectors | Side-by-Side Comparison | Status |",
             "| :--- | :--- | :--- | :--- | :--- | :--- |",

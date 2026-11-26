@@ -3,12 +3,14 @@ package dev.antigravity.android
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import dev.antigravity.android.ui.AntigravityAppRoot
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentPermissionPreset
@@ -33,8 +35,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Complete Android Interactive Compose E2E suite (`ATC-01` .. `ATC-22`),
- * verifying every user journey across all 20 aligned UE boards (`UE01`..`UE15`),
+ * Complete Android Interactive Compose E2E suite (`ATC-01` .. `ATC-28`),
+ * verifying every user journey across all 19 aligned UE boards (`UE01`..`UE15`),
  * v2.33 sheets, and forward-compatible unknown steps/gates.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -120,22 +122,30 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc04_projectDetailNavigatesToAutomationDetailAndRulesSkills() {
+    fun atc04_sidebarProjectHeaderCollapsesAndLongPressOpensProjectActions() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
                 coordinator = coordinator,
-                initialVerifyScene = EsddVerifySceneCase.PROJECT_DETAIL,
+                initialVerifyScene = EsddVerifySceneCase.SIDEBAR_DRAWER,
             )
         }
 
-        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
-        composeRule.onNodeWithTag("btn-new-conv-in-project").assertIsDisplayed()
-        composeRule.onNodeWithTag("project-row-automation").assertIsDisplayed()
-        composeRule.onNodeWithTag("project-row-rules-skills").assertIsDisplayed()
+        // Tapping project header directly collapses & expands conversations (no intermediate Project Detail screen)
+        composeRule.onNodeWithTag("project-header-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
+        assertTrue(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        assertEquals(0, composeRule.onAllNodesWithTag("conversation-row-cas-rate-limiter").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
+        assertFalse(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
 
-        // Tap Project rules & skills -> UE14
-        composeRule.onNodeWithTag("project-row-rules-skills").performClick()
+        // Long-pressing local project exposes New conversation, Project rules & skills, and Reveal in Finder
+        composeRule.onNodeWithTag("project-header-ledger-svc").performTouchInput { longClick() }
+        composeRule.onNodeWithTag("project-menu-new-conv-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-menu-reveal-finder-ledger-svc").assertIsDisplayed()
+        composeRule.onNodeWithTag("project-menu-rules-skills-ledger-svc").performClick()
         composeRule.onNodeWithTag("rules-token-budget-card").assertIsDisplayed()
     }
 
@@ -779,7 +789,7 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc27_sidebarProjectCollapseToggleHidesAndRestoresConversationsWhileHeaderStillOpensProjectDetail() {
+    fun atc27_sidebarProjectHeaderAndToggleBothCollapseAndRestoreConversations() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
@@ -804,9 +814,15 @@ class AndroidInteractiveE2eTest {
         assertFalse(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
         composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
 
-        // Tapping project header still navigates cleanly to Project Detail (UE04)
+        // Tapping project header directly also collapses & expands cleanly without navigating away
         composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
-        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
+        assertTrue(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        assertEquals(0, composeRule.onAllNodesWithTag("conversation-row-cas-rate-limiter").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("project-collapsed-count-ledger-svc", useUnmergedTree = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("project-header-ledger-svc").performClick()
+        assertFalse(coordinator.workspaceStore.isProjectCollapsed("ledger-svc"))
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").assertIsDisplayed()
     }
 
     @Test
@@ -857,7 +873,6 @@ class AndroidInteractiveE2eTest {
                     onOpenCustomizations = {},
                     onOpenDisplayOptions = {},
                     onOpenNewProject = {},
-                    onOpenProjectDetail = {},
                     onOpenConversation = {},
                     onLongPressConversation = {},
                     onOpenSettings = {},
@@ -926,7 +941,57 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
-    fun atc30_offlineEmptyChatShowsCleanHostOfflineCardWithoutDuplicatePrefix() {
+    fun atc30_voiceDictationButtonsNeverCrashAndPreserveHomeContext() {
+        // 1. Pure transcript merging matches iOS VoiceInputManager.mergeTranscript semantics
+        assertEquals("Fix auth bug", dev.antigravity.android.ui.chat.mergeDictatedTranscript("", "Fix auth bug"))
+        assertEquals(
+            "Check middleware Fix auth bug",
+            dev.antigravity.android.ui.chat.mergeDictatedTranscript("Check middleware", "Fix auth bug"),
+        )
+        assertEquals(
+            "Check middleware Fix auth bug",
+            dev.antigravity.android.ui.chat.mergeDictatedTranscript("Check middleware ", "Fix auth bug"),
+        )
+        assertEquals(
+            "Keep typed text",
+            dev.antigravity.android.ui.chat.mergeDictatedTranscript("Keep typed text", "   "),
+        )
+
+        // Grant RECORD_AUDIO in Robolectric so VoiceDictationController exercises the SpeechRecognizer path
+        val app = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+        org.robolectric.Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.AGENTS_HOME,
+            )
+        }
+
+        // 2. Tapping Home mic stays on Home (never jumps to hardcoded mock conversation) and never crashes
+        composeRule.onNodeWithTag("btn-voice-mode").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("home-greeting").assertIsDisplayed()
+        composeRule.onNodeWithTag("home-voice-error").assertIsDisplayed()
+        composeRule.onNodeWithTag("home-voice-error").performClick()
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("home-voice-error").fetchSemanticsNodes().size)
+
+        // 3. Navigate into Chat and verify composer mic button never crashes and shows dismissible status when recognizer is absent
+        composeRule.onNodeWithTag("btn-sidebar").performClick()
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").performClick()
+        composeRule.onNodeWithTag("composer-btn-voice").assertIsDisplayed()
+        composeRule.onNodeWithTag("composer-btn-voice").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("composer-voice-error").assertIsDisplayed()
+        composeRule.onNodeWithTag("composer-voice-error").performClick()
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("composer-voice-error").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun atc31_offlineEmptyChatShowsCleanHostOfflineCardWithoutDuplicatePrefix() {
         val hostUuid = "huangjiafandemac-mini-local-swift-vapor"
         val storage = dev.antigravity.shared.domain.InMemoryProjectionStorage()
         val coordinator = AntigravityCoreCoordinator(

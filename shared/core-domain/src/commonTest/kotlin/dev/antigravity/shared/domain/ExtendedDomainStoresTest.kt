@@ -159,8 +159,8 @@ class ExtendedDomainStoresTest {
         }
         assertTrue(settings.state.value.appearance.useDynamicColor)
 
-        // Configure scene helper routes cleanly across all 20 ESDD scenes
-        assertEquals(20, EsddVerifySceneCase.entries.size)
+        // Configure scene helper routes cleanly across all 19 ESDD scenes
+        assertEquals(19, EsddVerifySceneCase.entries.size)
         for (scene in EsddVerifySceneCase.entries) {
             EsddVerificationFixtures.configureCoordinatorForVerifyScene(coordinator, scene)
         }

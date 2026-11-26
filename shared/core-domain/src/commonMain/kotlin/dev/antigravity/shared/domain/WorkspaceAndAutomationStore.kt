@@ -7,7 +7,6 @@ import dev.antigravity.shared.model.ComposerAttachmentChip
 import dev.antigravity.shared.model.ContextCandidateItem
 import dev.antigravity.shared.model.GitHubRepoItem
 import dev.antigravity.shared.model.NewProjectDraft
-import dev.antigravity.shared.model.ProjectDetailTab
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
 import dev.antigravity.shared.platform.InMemoryPreferencesStore
@@ -33,13 +32,12 @@ public data class WorkspaceAndAutomationState(
     public val displayOptions: AgentDisplayOptions = AgentDisplayOptions(),
     public val collapsedProjectIds: Set<String> = emptySet(),
     public val selectedProjectId: String = "ledger-svc",
-    public val selectedProjectTab: ProjectDetailTab = ProjectDetailTab.ACTIVE,
     public val newProjectDraft: NewProjectDraft = NewProjectDraft(),
     public val lastCapabilityError: String? = null,
 )
 
 /**
- * Shared KMP domain store managing Projects (`UE04`/`UE05`), Display Options (`UE02`),
+ * Shared KMP domain store managing Projects (`UE05`), Display Options (`UE02`),
  * Native Sidecar Automations (`UE06`), and Composer Add-Context candidates/chips (`UE08`).
  */
 public class WorkspaceAndAutomationStore(
@@ -60,7 +58,6 @@ public class WorkspaceAndAutomationStore(
         contextCandidates: List<ContextCandidateItem>,
         attachedComposerChips: List<ComposerAttachmentChip> = emptyList(),
         selectedProjectId: String = "ledger-svc",
-        selectedProjectTab: ProjectDetailTab = ProjectDetailTab.ACTIVE,
     ) {
         _state.update {
             it.copy(
@@ -72,7 +69,6 @@ public class WorkspaceAndAutomationStore(
                 displayOptions = AgentDisplayOptions(),
                 collapsedProjectIds = emptySet(),
                 selectedProjectId = selectedProjectId,
-                selectedProjectTab = selectedProjectTab,
                 newProjectDraft = NewProjectDraft(selectedRepo = availableRepos.firstOrNull()),
                 lastCapabilityError = null,
             )
@@ -133,10 +129,6 @@ public class WorkspaceAndAutomationStore(
                 Json.decodeFromString<List<String>>(raw).toSet()
             }.getOrDefault(emptySet())
         }
-    }
-
-    public fun selectProjectTab(tab: ProjectDetailTab) {
-        _state.update { it.copy(selectedProjectTab = tab) }
     }
 
     public fun updateNewProjectDraft(transform: (NewProjectDraft) -> NewProjectDraft) {

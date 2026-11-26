@@ -174,9 +174,10 @@ def main() -> int:
             continue
 
         is_canonical = idx <= len(canonical_states)
-        out_name = f"ANDROID_CMP_UE{idx:02d}.png" if is_canonical else f"ANDROID_CMP_{state_id}.png"
+        ue_code = state_id.split("_", 1)[0]
+        out_name = f"ANDROID_CMP_{ue_code}.png" if is_canonical else f"ANDROID_CMP_{state_id}.png"
         out_cmp = cmp_dir / out_name
-        label_prefix = f"ANDROID_CMP_UE{idx:02d}" if is_canonical else f"ANDROID_CMP_{state_id}"
+        label_prefix = f"ANDROID_CMP_{ue_code}" if is_canonical else f"ANDROID_CMP_{state_id}"
         entry = build_side_by_side(
             label_prefix=label_prefix,
             state_id=state_id,
@@ -195,31 +196,33 @@ def main() -> int:
             print(f"[ERROR] {m}", file=sys.stderr)
         return 1
 
-    overview_13 = args.out_dir / "ANDROID_13_SCREENS_OVERVIEW.png"
+    canonical_count = len(canonical_entries)
+    total_count = len(all_entries)
+    overview_canonical = args.out_dir / f"ANDROID_{canonical_count}_SCREENS_OVERVIEW.png"
     build_master_overview(
         canonical_entries,
-        overview_13,
-        "AG Pocket Android — 13 Canonical Material 3 Jetpack Compose Gallery (UE01..UE13)",
+        overview_canonical,
+        f"AG Pocket Android — {canonical_count} Canonical Material 3 Jetpack Compose Gallery (UE01..UE13)",
     )
-    overview_20 = args.out_dir / "ANDROID_20_SCREENS_OVERVIEW.png"
+    overview_all = args.out_dir / f"ANDROID_{total_count}_SCREENS_OVERVIEW.png"
     build_master_overview(
         all_entries,
-        overview_20,
-        f"AG Pocket Android — {len(all_entries)}-Screen Native Material 3 Jetpack Compose Gallery (UE01..UE15)",
+        overview_all,
+        f"AG Pocket Android — {total_count}-Screen Native Material 3 Jetpack Compose Gallery (UE01..UE15)",
     )
 
     report = {
         "totalScreens": len(results),
-        "canonicalScreens": len(canonical_entries),
-        "extendedScreens": len(all_entries) - len(canonical_entries),
-        "overviewPng": str(overview_13.relative_to(REPO_ROOT)),
-        "overview20Png": str(overview_20.relative_to(REPO_ROOT)),
+        "canonicalScreens": canonical_count,
+        "extendedScreens": total_count - canonical_count,
+        "overviewPng": str(overview_canonical.relative_to(REPO_ROOT)),
+        "overviewAllPng": str(overview_all.relative_to(REPO_ROOT)),
         "comparisons": results,
     }
     report_path = args.out_dir / "android_visual_report.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"[OK] Generated {len(results)}/{len(all_states)} Android UE vs Compose side-by-side comparisons -> {cmp_dir.relative_to(REPO_ROOT)}")
-    print(f"[OK] Generated 20-screen master gallery -> {overview_20.relative_to(REPO_ROOT)}")
+    print(f"[OK] Generated {total_count}-screen master gallery -> {overview_all.relative_to(REPO_ROOT)}")
     return 0
 
 

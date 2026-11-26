@@ -58,6 +58,7 @@ public struct ChatComposerView: View {
     @State private var isImportingMedia: Bool = false
     @State private var mediaErrorMessage: String? = nil
     @State private var voiceManager = VoiceInputManager()
+    @State private var dictationDraftPrefix: String = ""
 
     public init(
         store: AntigravitySessionStore,
@@ -419,6 +420,10 @@ public struct ChatComposerView: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(AntigravityTheme.statusWaiting)
                         .padding(.horizontal, 4)
+                        .accessibilityIdentifier("composer-voice-error")
+                        .onTapGesture {
+                            voiceManager.clearError()
+                        }
                 }
 
                 if let mediaErr = mediaErrorMessage {
@@ -441,6 +446,9 @@ public struct ChatComposerView: View {
                 .onChange(of: draftMessageText) { _, newValue in
                     if !newValue.hasPrefix("/") {
                         store.isSlashPopupDismissedManually = false
+                    }
+                    if !newValue.isEmpty && !voiceManager.isRecording && voiceManager.errorMessage != nil {
+                        voiceManager.clearError()
                     }
                 }
                 .onSubmit {
@@ -754,13 +762,21 @@ public struct ChatComposerView: View {
 
             // 4. Speech-to-Text Dictation Button (`mic`)
             Button {
+                if !voiceManager.isRecording && !voiceManager.isStarting {
+                    dictationDraftPrefix = draftMessageText
+                }
+                let prefix = dictationDraftPrefix
                 voiceManager.toggleRecording { transcript in
-                    draftMessageText = transcript
+                    draftMessageText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
                 }
             } label: {
                 Image(systemName: voiceManager.isRecording ? "stop.fill" : "mic")
                     .font(.system(size: voiceManager.isRecording ? 12.5 : 16, weight: .regular))
-                    .foregroundStyle(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.inkReading)
+                    .foregroundStyle(
+                        voiceManager.isRecording
+                            ? AntigravityTheme.statusError
+                            : (voiceManager.isStarting ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkReading)
+                    )
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 30, height: AntigravityTheme.minTouchTargetPt)
                     .contentShape(Rectangle())

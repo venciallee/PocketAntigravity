@@ -209,7 +209,6 @@ public struct AntigravityRootContainerView: View {
     }
 
     private enum ShellPushDestination: Hashable {
-        case projectDetail(String)
         case cascadeChat
         case automationDetail(String)
         case rulesAndSkills
@@ -353,9 +352,16 @@ public struct AntigravityRootContainerView: View {
                     onOpenNewProject: {
                         activeModalSheet = .createProject
                     },
-                    onOpenProjectDetail: { slug in
+                    onSelectProject: { slug in
+                        closeSidebarDrawer()
+                        navigationPath.removeAll()
+                        selectedTab = .agents
+                        store.selectProject(slug)
+                    },
+                    onOpenProjectCustomizations: { slug in
                         closeSidebarDrawer()
                         store.selectProject(slug)
+                        store.activeRoute = .rulesAndSkills
                     },
                     onOpenConversation: { convId in
                         closeSidebarDrawer()
@@ -693,9 +699,6 @@ public struct AntigravityRootContainerView: View {
                 },
                 onOpenDisplayOptions: { activeModalSheet = .displayOptions },
                 onOpenNewProject: { activeModalSheet = .createProject },
-                onOpenProjectDetail: { slug in
-                    store.selectProject(slug)
-                },
                 onOpenContextMenuPreview: { activeModalSheet = .contextMenuPreview },
                 onOpenConversation: { convId in
                     openOrCreateConversation(convId, defaultProjectSlug: store.selectedProjectId)
@@ -725,17 +728,6 @@ public struct AntigravityRootContainerView: View {
     @ViewBuilder
     private func pushedDestinationView(for destination: ShellPushDestination) -> some View {
         switch destination {
-        case .projectDetail(let projectSlug):
-            ProjectDetailViewController(
-                store: store,
-                projectSlug: projectSlug,
-                onBack: {
-                    popTopDestination()
-                },
-                onOpenConversation: { convId in
-                    openOrCreateConversation(convId, defaultProjectSlug: projectSlug)
-                }
-            )
         case .cascadeChat:
             CascadeChatViewController(
                 store: store,
@@ -806,24 +798,12 @@ public struct AntigravityRootContainerView: View {
             if !navigationPath.isEmpty {
                 navigationPath.removeAll()
             }
-        case .projectDetail(let slug):
-            let target = ShellPushDestination.projectDetail(slug)
-            if navigationPath.last == target {
-                return
-            }
-            if let existingIndex = navigationPath.lastIndex(of: target) {
-                navigationPath.removeSubrange((existingIndex + 1)...)
-            } else {
-                navigationPath = [target]
-            }
         case .cascadeChat:
             if navigationPath.last == .cascadeChat {
                 return
             }
             if let existingIndex = navigationPath.lastIndex(of: .cascadeChat) {
                 navigationPath.removeSubrange((existingIndex + 1)...)
-            } else if case .projectDetail = navigationPath.last {
-                navigationPath.append(.cascadeChat)
             } else if case .automationDetail = navigationPath.last {
                 navigationPath.append(.cascadeChat)
             } else {
@@ -839,11 +819,7 @@ public struct AntigravityRootContainerView: View {
             if navigationPath.last == .rulesAndSkills {
                 return
             }
-            if case .projectDetail = navigationPath.last {
-                navigationPath.append(.rulesAndSkills)
-            } else {
-                navigationPath = [.rulesAndSkills]
-            }
+            navigationPath = [.rulesAndSkills]
         case .planReview:
             if navigationPath.last == .planReview {
                 return
@@ -877,10 +853,6 @@ public struct AntigravityRootContainerView: View {
         case .none:
             if store.activeRoute != .tabRoot && store.activeRoute != .pairingSettings {
                 store.activeRoute = .tabRoot
-            }
-        case .projectDetail(let slug):
-            if store.activeRoute != .projectDetail(slug) {
-                store.activeRoute = .projectDetail(slug)
             }
         case .cascadeChat:
             if case .cascadeChat = store.activeRoute {
@@ -955,7 +927,7 @@ public struct AntigravityRootContainerView: View {
         store.selectCascade(mappedId)
     }
 
-    // MARK: - Isolated Deterministic ESDD Scenes (All 20 UE v2.1 Boards)
+    // MARK: - Isolated Deterministic ESDD Scenes (All 19 UE v2.1 Boards)
 
     @ViewBuilder
     private func isolatedESDDSceneView(for verifyCase: ESDDVerifySceneCase) -> some View {
@@ -968,8 +940,6 @@ public struct AntigravityRootContainerView: View {
             DisplayOptionsSheetView(store: store)
         case .contextMenuPin:
             ConversationContextPreviewMenu(store: store)
-        case .projectDetail:
-            ProjectDetailViewController(store: store)
         case .createProject:
             CreateProjectSheetView(store: store)
         case .automations:

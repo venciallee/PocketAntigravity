@@ -12,7 +12,7 @@
 4. **Layer 4 — 20-Screen Real Compose Screenshot Capture & Strict Target-UE Visual Comparison (`AndroidUeScreenshotTest` + `android_visual_compare.py`)**:
    - Captures pixel-accurate PNGs of ALL **13 core screens (`UE01`..`UE13`) + 7 extended screens (`UE01B`, `UE06B`, `UE06C`, `UE07B`, `UE08B`, `UE14`, `UE15`) + Light Mode spot checks** via Roborazzi (`GraphicsMode.NATIVE`, `412×915dp` Pixel portrait).
    - Enforces Material `>= 48dp` touch target bounds and `0px` horizontal overflow.
-   - Generates 20 side-by-side comparison sheets (**LEFT: `docs/ue/android/*.png` Target UE** vs **RIGHT: Real Android Jetpack Compose Render**) + master overview gallery (`ANDROID_13_SCREENS_OVERVIEW.png` & `ANDROID_20_SCREENS_OVERVIEW.png`).
+   - Generates 19 side-by-side comparison sheets (**LEFT: `docs/ue/android/*.png` Target UE** vs **RIGHT: Real Android Jetpack Compose Render**) + master overview galleries (`ANDROID_12_SCREENS_OVERVIEW.png` & `ANDROID_19_SCREENS_OVERVIEW.png`).
 
 ---
 
@@ -21,10 +21,10 @@
 | Test ID | Target Screen / Domain | Test Action | Expected Assertion |
 | :--- | :--- | :--- | :--- |
 | **`ATC-01`** | `UE01_AGENTS_HOME` (`and-new`) | Render New Conversation Home; verify `☰`, `MacBook Pro` host pill, `🔍`, greeting, amber `Needs approval` banner, Composer (`ledger-svc`, `Repo default`, `Gemini 4 Neon / Extra High`, `Default`). Tap `Needs approval` | Routes directly into `Add rate limiter to /transfers` (`UE07`) with `>=48dp` targets & `0px` overflow |
-| **`ATC-02`** | `UE01B_SIDEBAR_DRAWER` (`and-home`) | Open Drawer; verify `+ New Conversation`, `Automations`, `Customizations`, `Pinned`, `Projects` (`ledger-svc`, `acme/web-console`), `Settings`. Tap `Automations` / `Customizations` / `ledger-svc` | Each drawer entry routes cleanly to its destination without bottom tab bar |
+| **`ATC-02`** | `UE01B_SIDEBAR_DRAWER` (`and-home`) | Open Drawer; verify `+ New Conversation`, `Automations`, `Customizations`, `Pinned`, `Projects` (`ledger-svc`, `acme/web-console`), `Settings`. Tap `Automations` / `Customizations` / `ledger-svc` | Navigation entries route cleanly without bottom tab bar; tapping `ledger-svc` collapses/expands directly |
 | **`ATC-03`** | `UE02_DISPLAY_OPTIONS` | Open Display Options sheet; change sort field, toggle `Auto pin` & `Archived only`, tap `Mark all as read`, then `Reset` | Unread count drops `3 -> 0`; `Reset` restores defaults |
 | **`ATC-04`** | `UE03_CONTEXT_MENU_PIN` | Open Context Action Sheet for `Fix flaky TestSettlementBatch`; verify `Gemini 4 Neon` preview card & all 7 actions; tap `Pin` | Toggles pinned state on `cas-flaky-settlement` |
-| **`ATC-05`** | `UE04_PROJECT_DETAIL` | Navigate to `ledger-svc`; verify `main ↑2`, `Clean`, `Active · 4 / Archived · 2 / Automations · 1` tabs, `This project` tools; tap `Project rules & skills` and Extended FAB `New conversation in project` | Routes to `UE14` Rules & Skills and Cascade Chat cleanly |
+| **`ATC-05`** | `UE01B_SIDEBAR_DRAWER` (Project Collapse & Actions Menu) | Tap `ledger-svc` header (and collapse chevron) in Drawer; long-press `ledger-svc` to open project menu; verify `New conversation in project`, `Project rules & skills`, and local-only `Reveal in Finder on Mac`; tap `Project rules & skills` | Header collapses/expands directly without a Project Detail page; long-press menu routes to `UE14` Rules & Skills cleanly |
 | **`ATC-06`** | `UE05_CREATE_PROJECT` | Open `New project` full-screen dialog; toggle `Cloud` + `GitHub repository`, pick `acme/ledger-svc`, enter name, tap `Create` | Adds new project to `WorkspaceAndAutomationStore` |
 | **`ATC-07`** | `UE06_AUTOMATIONS` | Open `Automations`; tap `Scheduled` / `Paused` filter chips, enter NL prompt + tap `Create`, open `⋮` overflow menu (`Run Now`), tap `Resume` on `Bundle size watch` | Filters list accurately, creates automation, triggers run, resumes paused item |
 | **`ATC-08`** | `UE06B` & `UE06C` (`Automation Detail` & `Edit`) | Open `Nightly dependency audit` detail; tap `Retry` on Failed run, tap `Pause`, open `Edit automation`, modify prompt/cadence/model, tap `Save` | Updates run status, pauses automation, and saves edited schedule & prompt |

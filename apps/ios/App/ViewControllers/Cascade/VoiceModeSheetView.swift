@@ -56,7 +56,13 @@ public struct VoiceModeSheetView: View {
                     .font(.system(size: 32, weight: .semibold))
                     .foregroundStyle(store.voiceModeState.isMuted ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle)
             }
-            Text(voiceManager.isRecording ? "Listening..." : (store.voiceModeState.isMuted ? "Microphone Muted" : "Connected · \(store.voiceModeState.selectedVoiceId.capitalized)"))
+            Text(
+                voiceManager.isRecording
+                    ? "Listening..."
+                    : (voiceManager.isStarting
+                        ? "Starting microphone..."
+                        : (store.voiceModeState.isMuted ? "Microphone Muted" : "Connected · \(store.voiceModeState.selectedVoiceId.capitalized)"))
+            )
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
 
@@ -161,6 +167,7 @@ public struct VoiceModeSheetView: View {
                 Text(err)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.statusWaiting)
+                    .accessibilityIdentifier("voice-mode-error")
             }
             HStack(spacing: 10) {
                 TextField("Or type a live voice turn...", text: $manualPromptText)
@@ -171,6 +178,7 @@ public struct VoiceModeSheetView: View {
                     .background(AntigravityTheme.surfaceInput, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(AntigravityTheme.cardBorder, lineWidth: 1))
                 Button("Send") {
+                    voiceManager.stopRecording()
                     let text = manualPromptText
                     manualPromptText = ""
                     store.appendVoiceTranscriptTurn(isUser: true, text: text)
@@ -198,16 +206,26 @@ public struct VoiceModeSheetView: View {
                 }
 
                 Button {
+                    if !voiceManager.isRecording && !voiceManager.isStarting && store.voiceModeState.isMuted {
+                        store.toggleVoiceMute()
+                    }
+                    let prefix = manualPromptText
                     voiceManager.toggleRecording { spoken in
-                        manualPromptText = spoken
+                        manualPromptText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: spoken)
                     }
                 } label: {
-                    Label(voiceManager.isRecording ? "Stop Mic" : "Speak", systemImage: voiceManager.isRecording ? "stop.circle.fill" : "waveform.circle.fill")
+                    Label(
+                        voiceManager.isRecording
+                            ? "Stop Mic"
+                            : (voiceManager.isStarting ? "Starting..." : "Speak"),
+                        systemImage: (voiceManager.isRecording || voiceManager.isStarting) ? "stop.circle.fill" : "waveform.circle.fill"
+                    )
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .background(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle, in: RoundedRectangle(cornerRadius: 14))
                 }
+                .accessibilityIdentifier("btn_voice_mode_speak")
             }
         }
     }

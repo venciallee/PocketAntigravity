@@ -105,22 +105,22 @@ class AndroidSidebarDrawerGestureTest {
     }
 
     @Test
-    fun pushedProjectDetailDoesNotOpenSidebarOnLeftSwipe() {
+    fun pushedRulesAndSkillsDoesNotOpenSidebarOnLeftSwipe() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
             AntigravityAppRoot(
                 coordinator = coordinator,
-                initialVerifyScene = EsddVerifySceneCase.PROJECT_DETAIL,
+                initialVerifyScene = EsddVerifySceneCase.RULES_AND_SKILLS,
             )
         }
 
-        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
+        composeRule.onNodeWithTag("rules-token-budget-card").assertIsDisplayed()
         composeRule.onRoot().performTouchInput {
             swipeRight(startX = width * 0.03f, endX = width * 0.85f, durationMillis = 220)
         }
         composeRule.waitForIdle()
         assertEquals(0, composeRule.onAllNodesWithTag("sidebar-drawer").fetchSemanticsNodes().size)
-        composeRule.onNodeWithTag("project-tab-active").assertIsDisplayed()
+        composeRule.onNodeWithTag("rules-token-budget-card").assertIsDisplayed()
     }
 
     @Test
