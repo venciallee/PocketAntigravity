@@ -939,4 +939,54 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("project-add-ledger-svc").performClick()
         composeRule.onNodeWithTag("home-composer-card").assertIsDisplayed()
     }
+
+    @Test
+    fun atc30_voiceDictationButtonsNeverCrashAndPreserveHomeContext() {
+        // 1. Pure transcript merging matches iOS VoiceInputManager.mergeTranscript semantics
+        assertEquals("Fix auth bug", dev.antigravity.android.ui.chat.mergeDictatedTranscript("", "Fix auth bug"))
+        assertEquals(
+            "Check middleware Fix auth bug",
+            dev.antigravity.android.ui.chat.mergeDictatedTranscript("Check middleware", "Fix auth bug"),
+        )
+        assertEquals(
+            "Check middleware Fix auth bug",
+            dev.antigravity.android.ui.chat.mergeDictatedTranscript("Check middleware ", "Fix auth bug"),
+        )
+        assertEquals(
+            "Keep typed text",
+            dev.antigravity.android.ui.chat.mergeDictatedTranscript("Keep typed text", "   "),
+        )
+
+        // Grant RECORD_AUDIO in Robolectric so VoiceDictationController exercises the SpeechRecognizer path
+        val app = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+        org.robolectric.Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.AGENTS_HOME,
+            )
+        }
+
+        // 2. Tapping Home mic stays on Home (never jumps to hardcoded mock conversation) and never crashes
+        composeRule.onNodeWithTag("btn-voice-mode").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("home-greeting").assertIsDisplayed()
+        composeRule.onNodeWithTag("home-voice-error").assertIsDisplayed()
+        composeRule.onNodeWithTag("home-voice-error").performClick()
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("home-voice-error").fetchSemanticsNodes().size)
+
+        // 3. Navigate into Chat and verify composer mic button never crashes and shows dismissible status when recognizer is absent
+        composeRule.onNodeWithTag("btn-sidebar").performClick()
+        composeRule.onNodeWithTag("conversation-row-cas-rate-limiter").performClick()
+        composeRule.onNodeWithTag("composer-btn-voice").assertIsDisplayed()
+        composeRule.onNodeWithTag("composer-btn-voice").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("composer-voice-error").assertIsDisplayed()
+        composeRule.onNodeWithTag("composer-voice-error").performClick()
+        composeRule.waitForIdle()
+        assertEquals(0, composeRule.onAllNodesWithTag("composer-voice-error").fetchSemanticsNodes().size)
+    }
 }

@@ -575,6 +575,33 @@ final class AntigravityInteractiveUITests: XCTestCase {
         return app
     }
 
+    private func dismissSpringboardAlerts(
+        maxRounds: Int = 3,
+        firstAlertTimeout: TimeInterval = 10.0,
+        subsequentTimeout: TimeInterval = 6.0
+    ) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for round in 0..<maxRounds {
+            let timeout = round == 0 ? firstAlertTimeout : subsequentTimeout
+            let alert = springboard.alerts.firstMatch
+            guard alert.waitForExistence(timeout: timeout) else { break }
+            let allowButton = alert.buttons["Allow"].firstMatch
+            let okButton = alert.buttons["OK"].firstMatch
+            if allowButton.exists {
+                allowButton.tap()
+            } else if okButton.exists {
+                okButton.tap()
+            } else if alert.buttons.count > 0 {
+                alert.buttons.element(boundBy: alert.buttons.count - 1).tap()
+            }
+            // Wait until SpringBoard finishes dismissing the alert animation before continuing.
+            let dismissDeadline = Date().addingTimeInterval(4.0)
+            while alert.exists && Date() < dismissDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            }
+        }
+    }
+
     /// Domain: Agents Home (`UE01`) + Cascade Chat (`UE07`) + Real-Time PC Sync + Inline/Status Permission Gate.
     func testHomeCloudLocalBadgesAndChatRealtimeSyncAndApprovalGate() throws {
         let server = try EmbeddedDesktopMockServer()
@@ -1051,7 +1078,27 @@ final class AntigravityInteractiveUITests: XCTestCase {
         closeAddContextButton.tap()
         XCTAssertTrue(app.buttons["composer-pill-model"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["composer-pill-permissions"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["composer-btn-mic"].waitForExistence(timeout: 5))
+        let micButton = app.buttons["composer-btn-mic"]
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
+        // Tap composer mic button to exercise real VoiceInputManager (Speech/Mic TCC + AVAudioSession/AVAudioEngine)
+        // and verify Swift 6 isolation & audio-format guards never crash on tap.
+        defer {
+            dismissSpringboardAlerts(maxRounds: 2, firstAlertTimeout: 1.5, subsequentTimeout: 1.0)
+        }
+        micButton.tap()
+        dismissSpringboardAlerts(maxRounds: 3, firstAlertTimeout: 10.0, subsequentTimeout: 6.0)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+        // Catch any late-arriving secondary TCC alert (e.g. Microphone dialog after Speech dialog).
+        dismissSpringboardAlerts(maxRounds: 2, firstAlertTimeout: 2.0, subsequentTimeout: 2.0)
+        XCTAssertEqual(app.state, .runningForeground, "Tapping composer mic button must never crash AGPocket")
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5), "Composer mic button must stay responsive after tapping voice")
+        if micButton.label == "Stop dictation" {
+            micButton.tap()
+        }
+        let voiceErrorBanner = app.descendants(matching: .any)["composer-voice-error"].firstMatch
+        if voiceErrorBanner.exists {
+            voiceErrorBanner.tap()
+        }
         let sendButton = app.buttons["composer-btn-send"]
         XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
         XCTAssertFalse(sendButton.isEnabled, "Send button must stay disabled when draft text is empty")

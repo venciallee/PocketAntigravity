@@ -49,6 +49,7 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WorkOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -90,6 +91,7 @@ import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.antigravityColors
 import dev.antigravity.android.ui.chat.ComposerAttachmentsStrip
 import dev.antigravity.android.ui.chat.formatComposerModelPillName
+import dev.antigravity.android.ui.chat.rememberVoiceDictationController
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentsHostFilterScope
 import dev.antigravity.shared.model.AntigravityCloudDetector
@@ -239,6 +241,7 @@ fun AgentsHomeScreen(
         }
     }
 
+    val voiceController = rememberVoiceDictationController()
     val selectedModelName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
     val permissionLabel = when (settingsState.activePermissionPreset.displayTitle) {
         "Default" -> "Default"
@@ -246,6 +249,7 @@ fun AgentsHomeScreen(
     }
 
     fun submitHomePrompt() {
+        voiceController.stopRecording()
         val text = draftText.trim()
         val attachments = workspaceState.attachedComposerChips
         if (text.isEmpty() && attachments.isEmpty()) return
@@ -793,10 +797,25 @@ fun AgentsHomeScreen(
                                     )
                                 }
 
+                                voiceController.errorMessage?.let { voiceErr ->
+                                    Text(
+                                        text = voiceErr,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                                        color = colors.statusWaiting,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { voiceController.clearError() }
+                                            .testTag("home-voice-error"),
+                                    )
+                                }
+
                                 BasicTextField(
                                     value = draftText,
                                     onValueChange = { updated ->
                                         draftText = updated
+                                        if (updated.isNotEmpty() && !voiceController.isRecording && voiceController.errorMessage != null) {
+                                            voiceController.clearError()
+                                        }
                                         if (updated == "/") {
                                             onOpenSlashMenu()
                                         }
@@ -909,16 +928,24 @@ fun AgentsHomeScreen(
                                     Spacer(modifier = Modifier.weight(1f))
 
                                     IconButton(
-                                        onClick = onOpenVoiceMode,
+                                        onClick = {
+                                            voiceController.toggleRecording(existingDraft = draftText) { updated ->
+                                                draftText = updated
+                                            }
+                                        },
                                         modifier = Modifier
                                             .size(34.dp)
                                             .testTag("btn-voice-mode"),
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Rounded.Mic,
-                                            contentDescription = "Voice mode",
-                                            tint = colors.inkLabel,
-                                            modifier = Modifier.size(20.dp),
+                                            imageVector = if (voiceController.isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                                            contentDescription = if (voiceController.isRecording) "Stop dictation" else "Dictate message",
+                                            tint = when {
+                                                voiceController.isRecording -> colors.statusError
+                                                voiceController.isStarting -> colors.accentPeriwinkle
+                                                else -> colors.inkLabel
+                                            },
+                                            modifier = Modifier.size(if (voiceController.isRecording) 17.dp else 20.dp),
                                         )
                                     }
 
