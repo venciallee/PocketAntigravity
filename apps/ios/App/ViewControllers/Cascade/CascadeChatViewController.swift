@@ -457,57 +457,34 @@ public struct CascadeChatViewController: View {
         } else {
             let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
             let isOfflinePaired = !isActiveSessionCloud && store.hasPairedBackend && !isActiveSessionHostOnline
-            let rawSlug = AntigravityCloudDetector.stripProjectScopePrefix(
-                activeProjectWorkspace?.name ?? store.activeSummary?.projectSlug ?? AntigravityCloudDetector.noProjectDisplayName
-            )
-            let isNoProjSession = (activeProjectWorkspace?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(rawSlug)
-            let runtimeTargetName = isActiveSessionCloud ? lang.t("Antigravity Cloud", "Antigravity 云端") : lang.t("Antigravity Desktop", "Antigravity 桌面端")
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
+            if isNoInternet || isOfflinePaired {
+                HStack(spacing: 7) {
                     Circle()
-                        .fill((isNoInternet || isOfflinePaired) ? AntigravityTheme.statusError : (store.isLiveBackendConnected ? AntigravityTheme.statusDone : AntigravityTheme.accentPeriwinkle))
-                        .frame(width: 8, height: 8)
+                        .fill(AntigravityTheme.statusError)
+                        .frame(width: 7, height: 7)
                     Text(
                         isNoInternet
-                            ? lang.t("No Internet · Queued Outbox Ready", "无网络连接 · 离线发件箱已就绪")
-                            : (isOfflinePaired
-                                ? (store.pendingOutboxCount > 0
-                                    ? lang.t("Host Offline · \(store.pendingOutboxCount) Queued", "主机离线 · \(store.pendingOutboxCount) 条排队中")
-                                    : lang.t("Host Offline · Queued Outbox Ready", "主机离线 · 离线发件箱已就绪"))
-                                : (store.isLiveBackendConnected ? lang.t("Ready for Prompt", "准备就绪") : lang.t("New Session Ready", "新会话已就绪")))
+                            ? lang.t("No internet · Messages will queue", "无网络 · 消息将排队等待发送")
+                            : (store.pendingOutboxCount > 0
+                                ? lang.t("Host offline · \(store.pendingOutboxCount) queued", "主机离线 · \(store.pendingOutboxCount) 条排队中")
+                                : lang.t("Host offline · Messages will send on reconnect", "主机离线 · 重连后自动发送"))
                     )
-                        .font(.system(size: 14.5, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
                 }
-                let cleanHostDisplay = effectiveHeaderHostLabel
-                    .replacingOccurrences(of: "Offline · ", with: "")
-                    .replacingOccurrences(of: "Connecting · ", with: "")
-                    .replacingOccurrences(of: "离线 · ", with: "")
-                    .replacingOccurrences(of: "正在连接 · ", with: "")
-                Text(
-                    isNoProjSession
-                        ? lang.t(
-                            "Unassigned conversation on `\(cleanHostDisplay)`. Send a message below to run on \(runtimeTargetName).",
-                            "位于 `\(cleanHostDisplay)` 的未归属对话。在下方发送消息即可在\(runtimeTargetName)上运行。"
-                        )
-                        : lang.t(
-                            "Bound to `\(rawSlug)` on `\(cleanHostDisplay)`. Send a message below to run on \(runtimeTargetName).",
-                            "已绑定 `\(cleanHostDisplay)` 上的项目 `\(rawSlug)`。在下方发送消息即可在\(runtimeTargetName)上运行。"
-                        )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(AntigravityTheme.surfaceCard)
+                .overlay(
+                    Capsule()
+                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                 )
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(AntigravityTheme.inkSecondary)
-                    .lineSpacing(2)
+                .clipShape(Capsule())
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 16)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("chat-offline-status-pill")
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AntigravityTheme.surfaceCard)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .padding(.top, 12)
         }
     }
 
