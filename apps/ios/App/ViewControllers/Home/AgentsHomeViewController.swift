@@ -486,15 +486,6 @@ public struct AgentsHomeViewController: View {
                                 systemImage: isSelectedHostOnline ? "arrow.clockwise" : "bolt.horizontal.circle"
                             )
                         }
-                        Button {
-                            if let onOpenSettings {
-                                onOpenSettings()
-                            } else {
-                                store.activeRoute = .pairingSettings
-                            }
-                        } label: {
-                            Label("Host & Pairing Settings", systemImage: "qrcode.viewfinder")
-                        }
                     } else {
                         Button {
                             if let onOpenSettings {
@@ -510,7 +501,7 @@ public struct AgentsHomeViewController: View {
 
                 Section {
                     Toggle(isOn: hostSelectionBinding(for: .allHosts)) {
-                        Label("All Hosts (Antigravity & Local)", systemImage: "square.stack.3d.up")
+                        Label("All Hosts (Cloud & Local)", systemImage: "square.stack.3d.up")
                     }
 
                     Toggle(isOn: hostSelectionBinding(for: .antigravityCloud)) {
