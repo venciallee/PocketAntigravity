@@ -44,7 +44,6 @@ import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Shield
@@ -122,7 +121,6 @@ private const val ENABLE_SIDE_QUESTION_BTW: Boolean = false
 fun CascadeChatScreen(
     coordinator: AntigravityCoreCoordinator,
     onBack: () -> Unit,
-    onOpenSidebar: () -> Unit = onBack,
     onOpenDiffReview: () -> Unit,
     onOpenPlanReview: () -> Unit,
     onOpenAddContext: () -> Unit,
@@ -194,7 +192,7 @@ fun CascadeChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 IconButton(
-                    onClick = onOpenSidebar,
+                    onClick = onBack,
                     modifier = Modifier
                         .defaultMinSize(
                             minWidth = AntigravityDesignTokens.MinTouchTarget,
@@ -203,8 +201,8 @@ fun CascadeChatScreen(
                         .testTag("btn-chat-back"),
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Menu,
-                        contentDescription = "Open sidebar",
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back",
                         tint = colors.inkReading,
                     )
                 }

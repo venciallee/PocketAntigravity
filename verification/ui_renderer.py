@@ -287,11 +287,13 @@ window.__AGY_COLLECT_AX = function(stateId, selectors) {
   };
 };
 
+window.__AGY_INFLIGHT_RPCS = 0;
 window.__AGY_RPC = async function(method, payload, extraHeaders) {
   const params = new URLSearchParams(window.location.search);
   const rpcPort = params.get('rpcPort') || window.__AGY_RPC_PORT;
   window.__AGY_LAST_RPC = { method, payload };
   if (!rpcPort) return { ok: true, offline: true };
+  window.__AGY_INFLIGHT_RPCS = (window.__AGY_INFLIGHT_RPCS || 0) + 1;
   try {
     const headers = Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {});
     const res = await fetch(`http://127.0.0.1:${rpcPort}/exa.language_server_pb.LanguageServerService/${method}`, {
@@ -304,6 +306,8 @@ window.__AGY_RPC = async function(method, payload, extraHeaders) {
     return data;
   } catch (err) {
     return { ok: false, error: String(err) };
+  } finally {
+    window.__AGY_INFLIGHT_RPCS = Math.max(0, (window.__AGY_INFLIGHT_RPCS || 1) - 1);
   }
 };
 """

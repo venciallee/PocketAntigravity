@@ -173,6 +173,7 @@ fun AntigravityAppRoot(
 
     var currentRoute by remember(initialVerifyScene) { mutableStateOf(defaultStartRoute) }
     var previousRoute by remember(initialVerifyScene) { mutableStateOf<AppRoute>(AppRoute.NewConversationHome) }
+    var chatOriginRoute by remember(initialVerifyScene) { mutableStateOf<AppRoute>(AppRoute.NewConversationHome) }
     var activeChatOverlay by remember(initialVerifyScene) { mutableStateOf(ChatOverlaySheet.NONE) }
     var isDrawerOpen by remember(initialVerifyScene) { mutableStateOf(startsWithSidebarOpen) }
     val drawerProgress = remember(initialVerifyScene) { Animatable(if (startsWithSidebarOpen) 1f else 0f) }
@@ -285,6 +286,17 @@ fun AntigravityAppRoot(
 
     fun navigateTo(destination: AppRoute, keepDrawerOpen: Boolean = false) {
         dismissKeyboard()
+        if (destination is AppRoute.CascadeChat || destination == AppRoute.StructuredQuestion) {
+            when (currentRoute) {
+                AppRoute.NewConversationHome,
+                is AppRoute.ProjectDetail,
+                is AppRoute.Automations,
+                is AppRoute.AutomationDetail,
+                -> chatOriginRoute = currentRoute
+
+                else -> Unit
+            }
+        }
         previousRoute = currentRoute
         activeChatOverlay = ChatOverlaySheet.NONE
         if (!keepDrawerOpen && (isDrawerOpen || drawerProgress.value > 0.001f)) {
@@ -371,7 +383,7 @@ fun AntigravityAppRoot(
 
             is AppRoute.CascadeChat,
             AppRoute.StructuredQuestion,
-            -> if (previousRoute is AppRoute.ProjectDetail) previousRoute else AppRoute.NewConversationHome
+            -> chatOriginRoute
 
             AppRoute.PlanReview,
             AppRoute.TurnDiffReview,
@@ -389,7 +401,6 @@ fun AntigravityAppRoot(
         AppRoute.Settings,
         -> true
 
-        is AppRoute.CascadeChat -> activeChatOverlay == ChatOverlaySheet.NONE
         else -> false
     }
     val latestIsDrawerOpen by rememberUpdatedState(isDrawerOpen)
@@ -620,7 +631,6 @@ fun AntigravityAppRoot(
                             CascadeChatScreen(
                                 coordinator = coordinator,
                                 onBack = { navigateBack() },
-                                onOpenSidebar = { openDrawer() },
                                 onOpenDiffReview = { navigateTo(AppRoute.TurnDiffReview) },
                                 onOpenPlanReview = { navigateTo(AppRoute.PlanReview) },
                                 onOpenAddContext = {

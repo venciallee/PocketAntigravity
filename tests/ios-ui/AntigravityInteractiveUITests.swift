@@ -664,6 +664,14 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Tapping a conversation row in Sidebar Drawer MUST navigate to CascadeChatViewController"
         )
         XCTAssertTrue(navTitle.label.contains("Slardar Tag Code Review"))
+        XCTAssertTrue(
+            app.buttons["btn-back-sessions"].waitForExistence(timeout: 5),
+            "CascadeChatViewController must render top-left back button (btn-back-sessions)"
+        )
+        XCTAssertFalse(
+            app.buttons["btn-sidebar"].exists,
+            "CascadeChatViewController must not render sidebar drawer button (btn-sidebar)"
+        )
 
         XCTAssertTrue(
             waitForTextContaining("请帮我 Review Slardar Tag 核心代码逻辑", in: app, timeout: 6),
@@ -779,17 +787,41 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Swiping right-to-left on the open Sidebar Drawer must dismiss it back to Home"
         )
 
-        // 1. Re-open Sidebar via edge swipe -> open Conversation -> swipe left-to-right -> must open Sidebar Drawer (not pop to blank Home)
+        // 1. Re-open Sidebar via edge swipe -> open Conversation -> verify top-left Back button & edge-swipe back return to Home
         performEdgeSwipeBack(in: app)
         XCTAssertTrue(reviewRow.waitForExistence(timeout: 5))
         reviewRow.tap()
         let chatNavTitle = app.descendants(matching: .any)["chat-nav-title"].firstMatch
         XCTAssertTrue(chatNavTitle.waitForExistence(timeout: 6))
+        let backToSessionsFromHomeChat = app.buttons["btn-back-sessions"]
+        XCTAssertTrue(
+            backToSessionsFromHomeChat.waitForExistence(timeout: 5),
+            "Conversation page must display top-left Back button instead of drawer button"
+        )
+        XCTAssertFalse(
+            sidebarButton.exists,
+            "Conversation page must not display top-left drawer button"
+        )
+        backToSessionsFromHomeChat.tap()
+        XCTAssertTrue(
+            heroGreeting.waitForExistence(timeout: 5),
+            "Tapping top-left Back button on Conversation page must return to Home"
+        )
 
+        sidebarButton.tap()
+        XCTAssertTrue(reviewRow.waitForExistence(timeout: 5))
+        reviewRow.tap()
+        XCTAssertTrue(backToSessionsFromHomeChat.waitForExistence(timeout: 5))
         performEdgeSwipeBack(in: app)
         XCTAssertTrue(
+            heroGreeting.waitForExistence(timeout: 5),
+            "Swiping left-to-right from the left edge on Conversation page must pop back to Home"
+        )
+
+        sidebarButton.tap()
+        XCTAssertTrue(
             drawerPanel.waitForExistence(timeout: 5),
-            "Swiping left-to-right from the left edge on a sidebar-launched Conversation must open the Sidebar Drawer"
+            "Tapping btn-sidebar on Home must re-open the Sidebar Drawer"
         )
 
         // 2. Collapse & expand project conversation list, then open Project Detail from swiped-open Sidebar
@@ -1191,7 +1223,11 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertTrue(permissionsDoneButton.waitForExistence(timeout: 5))
         permissionsDoneButton.tap()
 
-        // 8. Navigate via Sidebar -> Settings and restore Default permission & System appearance mode
+        // 8. Tap Back to return to Home -> open Sidebar -> Settings and restore Default permission & System appearance mode
+        let chatBackButton = app.buttons["btn-back-sessions"]
+        XCTAssertTrue(chatBackButton.waitForExistence(timeout: 5))
+        chatBackButton.tap()
+        XCTAssertTrue(sidebarButton.waitForExistence(timeout: 5))
         sidebarButton.tap()
         XCTAssertTrue(settingsNav.waitForExistence(timeout: 5))
         settingsNav.tap()
