@@ -535,9 +535,14 @@ fun AntigravityAppRoot(
                             onOpenPermissionsPreset = { navigateTo(AppRoute.PermissionsPreset) },
                             onOpenSlashMenu = { navigateTo(AppRoute.SlashMenu(includeSideQuestionPreview = false)) },
                             onOpenVoiceMode = {
-                                coordinator.chatStore.setActiveCascade("cas-rate-limiter")
-                                currentRoute = AppRoute.CascadeChat("cas-rate-limiter")
-                                activeChatOverlay = ChatOverlaySheet.VOICE_MODE
+                                val targetCascade = coordinator.chatState.value.activeCascadeId
+                                    .ifBlank { coordinator.syncState.value.summaries.firstOrNull()?.cascadeId.orEmpty() }
+                                    .ifBlank { if (coordinator.isVerificationMode) "cas-rate-limiter" else "" }
+                                if (targetCascade.isNotBlank()) {
+                                    coordinator.chatStore.setActiveCascade(targetCascade)
+                                    currentRoute = AppRoute.CascadeChat(targetCascade)
+                                    activeChatOverlay = ChatOverlaySheet.VOICE_MODE
+                                }
                             },
                             onOpenReSignIn = {
                                 val relayUrl = connectionState.activeHost?.endpointUrl

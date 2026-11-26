@@ -1058,7 +1058,36 @@ final class AntigravityInteractiveUITests: XCTestCase {
         closeAddContextButton.tap()
         XCTAssertTrue(app.buttons["composer-pill-model"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["composer-pill-permissions"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["composer-btn-mic"].waitForExistence(timeout: 5))
+        let micButton = app.buttons["composer-btn-mic"]
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5))
+        // Tap composer mic button to exercise real VoiceInputManager (Speech/Mic TCC + AVAudioSession/AVAudioEngine)
+        // and verify Swift 6 isolation & audio-format guards never crash on tap.
+        micButton.tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for _ in 0..<2 {
+            let alert = springboard.alerts.firstMatch
+            guard alert.waitForExistence(timeout: 2.0) else { break }
+            let allowButton = alert.buttons["Allow"].firstMatch
+            let okButton = alert.buttons["OK"].firstMatch
+            if allowButton.exists {
+                allowButton.tap()
+            } else if okButton.exists {
+                okButton.tap()
+            } else if alert.buttons.count > 0 {
+                alert.buttons.element(boundBy: alert.buttons.count - 1).tap()
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertEqual(app.state, .runningForeground, "Tapping composer mic button must never crash AGPocket")
+        XCTAssertTrue(micButton.waitForExistence(timeout: 5), "Composer mic button must stay responsive after tapping voice")
+        if micButton.label == "Stop dictation" {
+            micButton.tap()
+        }
+        let voiceErrorBanner = app.descendants(matching: .any)["composer-voice-error"].firstMatch
+        if voiceErrorBanner.exists {
+            voiceErrorBanner.tap()
+        }
         let sendButton = app.buttons["composer-btn-send"]
         XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
         XCTAssertFalse(sendButton.isEnabled, "Send button must stay disabled when draft text is empty")
