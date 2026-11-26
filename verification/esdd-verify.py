@@ -372,6 +372,12 @@ class CDPPageDriver:
             {"type": "mouseReleased", "x": cx, "y": cy, "button": "left", "clickCount": 1},
         )
         time.sleep(0.05)
+        for _ in range(50):
+            inflight = self.evaluate("Number(window.__AGY_INFLIGHT_RPCS || 0)")
+            if not inflight:
+                break
+            time.sleep(0.04)
+        self.evaluate("new Promise(r => setTimeout(r, 0))")
 
     def fill(self, selector: str, text: str):
         self.click(selector)
