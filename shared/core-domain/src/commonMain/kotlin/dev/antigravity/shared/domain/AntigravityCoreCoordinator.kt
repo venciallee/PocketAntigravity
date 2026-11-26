@@ -1357,7 +1357,9 @@ public class AntigravityCoreCoordinator(
             }
             scope.launch {
                 try {
-                    chatStore.replayPendingOutbox(client)
+                    if (connectionStore.state.value.isConnected) {
+                        chatStore.replayPendingOutbox(client)
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Throwable) {

@@ -964,6 +964,7 @@ class CoreDomainStoreTest {
             val validKey = "AI" + "zaSySENDUNREG400000000000000000000000"
             val hostUuid = "huangjiafandemac-mini-local-swift-vapor"
             val boqUnregistered = """[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]"""
+            val callMutex = Mutex()
             var startCascadeCalls = 0
 
             val engine = MockEngine { request ->
@@ -979,7 +980,7 @@ class CoreDomainStoreTest {
                     path.endsWith("/ProxyCommand") -> {
                         val bodyText = runCatching { request.body.toByteArray().decodeToString() }.getOrDefault("")
                         if (bodyText.contains("StartCascade") || bodyText.contains("SendUserCascadeMessage")) {
-                            startCascadeCalls += 1
+                            callMutex.withLock { startCascadeCalls += 1 }
                             respond(
                                 content = boqUnregistered,
                                 status = HttpStatusCode.BadRequest,
@@ -1027,7 +1028,10 @@ class CoreDomainStoreTest {
                 relayApiKey = validKey,
                 startSummaryStream = false,
             )
-            assertTrue(coordinator.connectionState.value.activeHost?.isOnline == true)
+            assertTrue(
+                coordinator.connectionState.value.activeHost?.isOnline == true,
+                "Expected host online immediately after initial handshake",
+            )
 
             val draftId = coordinator.createLocalDraftConversation(
                 workspaceUri = "",
@@ -1042,15 +1046,16 @@ class CoreDomainStoreTest {
                 instanceUuidOverride = hostUuid,
             )
 
-            assertFalse(outcome.dispatchedLive)
-            assertTrue(outcome.queuedInOutbox)
-            assertTrue(outcome.hostOfflineDetected)
-            assertEquals(1, startCascadeCalls, "StartCascade must not fire twice on unregistered host")
+            assertFalse(outcome.dispatchedLive, "Expected dispatchedLive=false, outcome=$outcome")
+            assertTrue(outcome.queuedInOutbox, "Expected queuedInOutbox=true, outcome=$outcome")
+            assertTrue(outcome.hostOfflineDetected, "Expected hostOfflineDetected=true, outcome=$outcome")
+            val observedCalls = callMutex.withLock { startCascadeCalls }
+            assertEquals(1, observedCalls, "StartCascade must not fire twice on unregistered host")
             assertFalse(coordinator.connectionState.value.activeHost?.isOnline == true, "Active host must flip offline immediately")
             assertFalse(coordinator.isCascadeActivelyStreaming(outcome.resolvedCascadeId), "Queued offline turn must never appear streaming")
             val summary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == outcome.resolvedCascadeId }
-            assertEquals(CortexStepStatus.PENDING, summary?.status)
-            assertFalse((outcome.errorMessage ?: "").contains("type.googleapis.com"))
+            assertEquals(CortexStepStatus.PENDING, summary?.status, "Expected PENDING summary status, summary=$summary")
+            assertFalse((outcome.errorMessage ?: "").contains("type.googleapis.com"), "Raw @type leaked: ${outcome.errorMessage}")
             coordinator.close()
         }
     }
