@@ -161,7 +161,7 @@ public struct CascadeChatViewController: View {
                                     }
                                 }
 
-                                if store.isCascadeStreaming || store.activeSummary?.status == .inProgress || store.activeSummary?.status == .pending {
+                                if store.isCascadeStreaming {
                                     HStack(spacing: 10) {
                                         AntigravityFourDotLoadingView(
                                             isAnimated: shouldAnimateLive,
@@ -465,10 +465,13 @@ public struct CascadeChatViewController: View {
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                 }
+                let cleanHostDisplay = effectiveHeaderHostLabel
+                    .replacingOccurrences(of: "Offline · ", with: "")
+                    .replacingOccurrences(of: "Connecting · ", with: "")
                 Text(
                     isNoProjSession
-                        ? "Unassigned conversation on `\(effectiveHeaderHostLabel)`. Send a message below to run on \(isActiveSessionCloud ? "Antigravity Cloud" : "Antigravity Desktop")."
-                        : "Bound to `\(rawSlug)` on `\(effectiveHeaderHostLabel)`. Send a message below to run on \(isActiveSessionCloud ? "Antigravity Cloud" : "Antigravity Desktop")."
+                        ? "Unassigned conversation on `\(cleanHostDisplay)`. Send a message below to run on \(isActiveSessionCloud ? "Antigravity Cloud" : "Antigravity Desktop")."
+                        : "Bound to `\(rawSlug)` on `\(cleanHostDisplay)`. Send a message below to run on \(isActiveSessionCloud ? "Antigravity Cloud" : "Antigravity Desktop")."
                 )
                     .font(.system(size: 13.5))
                     .foregroundStyle(AntigravityTheme.inkSecondary)

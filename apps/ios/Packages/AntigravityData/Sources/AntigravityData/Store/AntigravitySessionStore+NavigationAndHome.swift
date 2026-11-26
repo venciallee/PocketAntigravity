@@ -423,10 +423,23 @@ extension AntigravitySessionStore {
     }
 
     public var isCascadeStreaming: Bool {
-        if let summary = activeSummary, summary.status == .inProgress || summary.status == .pending {
-            return true
+        if let summary = activeSummary {
+            if summary.status == .pending {
+                if !isSummaryHostOnline(summary)
+                    || activeSteps.isEmpty
+                    || activeSteps.contains(where: \.isQueuedInOutbox) {
+                    return false
+                }
+                return true
+            }
+            if summary.status == .inProgress {
+                if hasPairedBackend && !isSummaryHostOnline(summary) {
+                    return false
+                }
+                return !activeSteps.isEmpty
+            }
         }
-        return activeSteps.contains(where: { $0.status == .inProgress || $0.status == .pending })
+        return activeSteps.contains(where: { $0.status == .inProgress || ($0.status == .pending && !$0.isQueuedInOutbox) })
     }
 
     public var currentQuestionStep: StructuredQuestionStepItem? {

@@ -36,6 +36,7 @@ import dev.antigravity.shared.protocol.BackendHandshakeResult
 import dev.antigravity.shared.protocol.FederatedWorkspaceSyncResult
 import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.HostReachabilityProbeResult
+import dev.antigravity.shared.protocol.ProtocolCompatibilityEngine
 import dev.antigravity.shared.protocol.RelayInstanceInfo
 import dev.antigravity.shared.protocol.RelayInstanceStatus
 import dev.antigravity.shared.protocol.TlsEngineConfig
@@ -321,8 +322,14 @@ public class AntigravityCoreCoordinator(
     }
 
     @Throws(Throwable::class)
-    public suspend fun probeHostReachability(allowCrossHostFallback: Boolean = true): HostReachabilityProbeResult =
-        connectionStore.probeHostReachability(allowCrossHostFallback = allowCrossHostFallback)
+    public suspend fun probeHostReachability(
+        allowCrossHostFallback: Boolean = true,
+        verifyEndToEnd: Boolean = false,
+    ): HostReachabilityProbeResult =
+        connectionStore.probeHostReachability(
+            allowCrossHostFallback = allowCrossHostFallback,
+            verifyEndToEnd = verifyEndToEnd,
+        )
 
     @Throws(Throwable::class)
     public suspend fun refreshWorkspacesAndSummaries(
@@ -346,12 +353,33 @@ public class AntigravityCoreCoordinator(
             }
             else -> activeHost
         }
-        val result = conversationSyncStore.refreshWorkspacesAndSummaries(
-            client = client,
-            host = effectiveHost,
-            hostScope = effectiveScope,
-            skipRelayListRefresh = skipRelayListRefresh,
-        )
+        val result = try {
+            conversationSyncStore.refreshWorkspacesAndSummaries(
+                client = client,
+                host = effectiveHost,
+                hostScope = effectiveScope,
+                skipRelayListRefresh = skipRelayListRefresh,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                connectionStore.markInstanceOffline(
+                    instanceUuid = effectiveHost.instanceId,
+                    errorMessage = ProtocolCompatibilityEngine.formatUserFacingRpcError(e),
+                )
+            }
+            throw e
+        }
+        if (effectiveHost.channel == RemoteConnectionChannel.CLOUD_RELAY &&
+            effectiveScope is AgentsHostFilterScope.LocalHost &&
+            result.succeededInstanceUuids.isEmpty()
+        ) {
+            connectionStore.markInstanceOffline(
+                instanceUuid = effectiveHost.instanceId,
+                errorMessage = "${effectiveHost.hostname} is currently offline.",
+            )
+        }
         reconcileSelectedProjectForScope(effectiveScope)
         conversationSyncStore.resetSettledEmptyTitles()
         scheduleConversationPreload()
@@ -725,6 +753,35 @@ public class AntigravityCoreCoordinator(
         )
     }
 
+    public fun isHostOnlineForSummary(summary: CascadeSummary?): Boolean {
+        val conn = connectionStore.state.value
+        if (!conn.hasPairedBackend) return true
+        if (!conn.isDeviceNetworkReachable) return false
+        if (summary == null) return conn.isConnected && (conn.activeHost?.isOnline != false)
+        return isSummaryHostReachable(summary, conn)
+    }
+
+    public fun isCascadeActivelyStreaming(cascadeId: String): Boolean {
+        val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+        val steps = chatStore.state.value.stepsByCascadeId[cascadeId].orEmpty()
+        val conn = connectionStore.state.value
+        if (summary != null) {
+            if (summary.status == CortexStepStatus.PENDING) {
+                if (!isHostOnlineForSummary(summary) || steps.isEmpty() || steps.any { it.isQueuedInOutbox }) {
+                    return false
+                }
+                return true
+            }
+            if (summary.status == CortexStepStatus.IN_PROGRESS) {
+                if (conn.hasPairedBackend && !isHostOnlineForSummary(summary)) {
+                    return false
+                }
+                return steps.isNotEmpty()
+            }
+        }
+        return steps.any { it.status == CortexStepStatus.IN_PROGRESS }
+    }
+
     @Throws(Throwable::class)
     public suspend fun sendMessage(
         cascadeId: String,
@@ -767,6 +824,37 @@ public class AntigravityCoreCoordinator(
         )
         if (outcome.resolvedCascadeId != cascadeId) {
             conversationSyncStore.replaceCascadeId(cascadeId, outcome.resolvedCascadeId)
+        }
+        val effectiveCid = outcome.resolvedCascadeId.ifBlank { cascadeId }
+        val existingSummary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == effectiveCid }
+        if (existingSummary != null) {
+            val updatedSummary = when {
+                outcome.dispatchedLive -> existingSummary.copy(
+                    status = CortexStepStatus.IN_PROGRESS,
+                    statusSubtitle = "Running...",
+                    updatedAtEpochMs = currentTimeMillis(),
+                )
+                outcome.queuedInOutbox -> existingSummary.copy(
+                    status = CortexStepStatus.PENDING,
+                    statusSubtitle = "Queued · Will send when back online",
+                    updatedAtEpochMs = currentTimeMillis(),
+                )
+                !isVerificationMode && !outcome.errorMessage.isNullOrBlank() -> existingSummary.copy(
+                    status = CortexStepStatus.DONE,
+                    statusSubtitle = "Send failed · Tap to retry",
+                    updatedAtEpochMs = currentTimeMillis(),
+                )
+                else -> existingSummary
+            }
+            if (updatedSummary != existingSummary) {
+                conversationSyncStore.upsertSummary(updatedSummary)
+            }
+        }
+        if (!isCloud && outcome.hostOfflineDetected) {
+            connectionStore.markInstanceOffline(
+                instanceUuid = instanceUuidOverride ?: existingSummary?.originInstanceUuid,
+                errorMessage = outcome.errorMessage,
+            )
         }
         return outcome
     }
@@ -1216,23 +1304,34 @@ public class AntigravityCoreCoordinator(
                 conversationSyncStore.startSummarySubscriptionStream(client, host)
             }
             if (host.channel == RemoteConnectionChannel.CLOUD_RELAY &&
-                (handshake.summaries.isEmpty() || handshake.workspaces.isEmpty())
+                (!handshake.initialSyncCompleted || handshake.summaries.isEmpty() || handshake.workspaces.isEmpty())
             ) {
                 val activeScope = connectionStore.state.value.selectedHostScope
                 scope.launch {
                     try {
-                        conversationSyncStore.refreshWorkspacesAndSummaries(
+                        val synced = conversationSyncStore.refreshWorkspacesAndSummaries(
                             client = client,
                             host = host,
                             hostScope = activeScope,
                             skipRelayListRefresh = true,
                         )
+                        if (activeScope is AgentsHostFilterScope.LocalHost && synced.succeededInstanceUuids.isEmpty()) {
+                            connectionStore.markInstanceOffline(
+                                instanceUuid = host.instanceId,
+                                errorMessage = "${host.hostname} is currently offline.",
+                            )
+                        }
                         reconcileSelectedProjectForScope(activeScope)
                         scheduleConversationPreload()
                     } catch (e: CancellationException) {
                         throw e
-                    } catch (_: Throwable) {
-                        // Best-effort deferred hydration after fast handshake; UI stays connected and pull-to-refresh can retry.
+                    } catch (e: Throwable) {
+                        if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                            connectionStore.markInstanceOffline(
+                                instanceUuid = host.instanceId,
+                                errorMessage = ProtocolCompatibilityEngine.formatUserFacingRpcError(e),
+                            )
+                        }
                     }
                 }
             } else {

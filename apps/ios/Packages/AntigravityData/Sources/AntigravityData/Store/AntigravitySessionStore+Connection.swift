@@ -1572,6 +1572,9 @@ extension AntigravitySessionStore {
         if error is CancellationError {
             return false
         }
+        if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+            return true
+        }
         if let rpcErr = error as? AntigravityRPCError {
             switch rpcErr {
             case .unauthorized, .invalidEndpoint:
@@ -1590,6 +1593,41 @@ extension AntigravitySessionStore {
             return true
         }
         return false
+    }
+
+    /// Marks a specific local Desktop host offline (without clobbering other healthy peer hosts) and
+    /// transitions `activeHost` / `isLiveBackendConnected` offline when that host is currently active.
+    internal func markLocalHostOffline(
+        instanceUuid: String?,
+        hostname: String? = nil,
+        error: Error
+    ) {
+        guard hasPairedBackend || isLiveBackendConnected else { return }
+        let trimmedUuid = instanceUuid?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedName = hostname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let targetMatchesActive = (trimmedUuid.isEmpty && trimmedName.isEmpty)
+            || (!trimmedUuid.isEmpty && activeHost.instanceId == trimmedUuid)
+            || (!trimmedName.isEmpty && activeHost.hostname == trimmedName)
+
+        if !trimmedUuid.isEmpty || !trimmedName.isEmpty {
+            for idx in hosts.indices {
+                if (!trimmedUuid.isEmpty && hosts[idx].instanceId == trimmedUuid)
+                    || (!trimmedName.isEmpty && hosts[idx].hostname == trimmedName) {
+                    hosts[idx].isOnline = false
+                }
+            }
+            availableRelayInstances = availableRelayInstances.map { inst in
+                let matched = (!trimmedUuid.isEmpty && inst.uuid == trimmedUuid)
+                    || (!trimmedName.isEmpty && inst.name == trimmedName)
+                return matched ? inst.withStatus(.disconnected) : inst
+            }
+        }
+
+        if targetMatchesActive {
+            let hasOtherOnlinePeers = hosts.contains(where: { $0.instanceId != activeHost.instanceId && $0.isOnline })
+                || availableRelayInstances.contains(where: { $0.uuid != activeHost.instanceId && $0.status.isReachable })
+            markBackendOffline(error: error, preservePeerOnlineStates: hasOtherOnlinePeers)
+        }
     }
 
     internal func markBackendOffline(error: Error, preservePeerOnlineStates: Bool = false) {
@@ -1620,7 +1658,7 @@ extension AntigravitySessionStore {
             }
         }
 
-        connectionErrorText = error.localizedDescription
+        connectionErrorText = ProtocolCompatibilityEngine.formatUserFacingRpcError(error)
         connectionStatusText = "Offline · \(updatedHost.hostname)"
 
         if isNetworkingSuspended {
@@ -2256,28 +2294,40 @@ extension AntigravitySessionStore {
         let existingWorkspacesBeforeConnect = wasAlreadyPaired ? workspaces : []
 
         var refreshedHostKeys = Set<String>()
-        if updatedHost.channel == .cloudRelay {
-            for inst in handshake.availableRelayInstances where inst.status.isReachable {
-                refreshedHostKeys.insert("host:\(inst.uuid)")
-            }
-            if hostOnline && !updatedHost.instanceId.isEmpty && updatedHost.instanceId != "unpaired" {
-                refreshedHostKeys.insert("host:\(updatedHost.instanceId)")
-            }
-            if !handshake.cloudProjects.isEmpty || handshake.summaries.contains(where: \.isCloud) {
-                refreshedHostKeys.insert("cloud")
-            }
-        } else {
-            refreshedHostKeys.insert(
-                Self.projectionHostKey(
-                    isCloud: false,
-                    instanceId: updatedHost.instanceId,
-                    hostname: updatedHost.hostname,
-                    fallbackHostId: updatedHost.instanceId,
-                    fallbackHostName: updatedHost.hostname
-                )
-            )
-            if !handshake.cloudProjects.isEmpty || handshake.summaries.contains(where: \.isCloud) {
-                refreshedHostKeys.insert("cloud")
+        let hasLocalIncomingData = handshake.workspaces.contains(where: { !$0.isCloud })
+            || handshake.summaries.contains(where: { !$0.isCloud })
+        if handshake.initialSyncCompleted {
+            if updatedHost.channel == .cloudRelay {
+                if !handshake.succeededInstanceUuids.isEmpty {
+                    for uuid in handshake.succeededInstanceUuids where !uuid.isEmpty && uuid != "unpaired" {
+                        refreshedHostKeys.insert("host:\(uuid)")
+                    }
+                } else if hasLocalIncomingData {
+                    for inst in handshake.availableRelayInstances where inst.status.isReachable {
+                        refreshedHostKeys.insert("host:\(inst.uuid)")
+                    }
+                    if hostOnline && !updatedHost.instanceId.isEmpty && updatedHost.instanceId != "unpaired" {
+                        refreshedHostKeys.insert("host:\(updatedHost.instanceId)")
+                    }
+                }
+                if !handshake.cloudProjects.isEmpty || handshake.summaries.contains(where: \.isCloud) {
+                    refreshedHostKeys.insert("cloud")
+                }
+            } else {
+                if hostOnline || !handshake.succeededInstanceUuids.isEmpty || hasLocalIncomingData {
+                    refreshedHostKeys.insert(
+                        Self.projectionHostKey(
+                            isCloud: false,
+                            instanceId: updatedHost.instanceId,
+                            hostname: updatedHost.hostname,
+                            fallbackHostId: updatedHost.instanceId,
+                            fallbackHostName: updatedHost.hostname
+                        )
+                    )
+                }
+                if !handshake.cloudProjects.isEmpty || handshake.summaries.contains(where: \.isCloud) {
+                    refreshedHostKeys.insert("cloud")
+                }
             }
         }
 
@@ -2404,7 +2454,7 @@ extension AntigravitySessionStore {
         }
 
         let keysToPersist = refreshedHostKeys
-        let needsDeferredInitialSync = hostOnline && handshake.summaries.isEmpty && handshake.workspaces.isEmpty
+        let needsDeferredInitialSync = hostOnline && (!handshake.initialSyncCompleted || (handshake.summaries.isEmpty && handshake.workspaces.isEmpty))
         Task { [weak self] in
             if !keysToPersist.isEmpty {
                 await self?.persistHostProjections(refreshedHostKeys: keysToPersist)

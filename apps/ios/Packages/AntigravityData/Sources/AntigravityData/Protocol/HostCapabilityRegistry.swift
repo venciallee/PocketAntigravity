@@ -550,8 +550,42 @@ public enum ProtocolCompatibilityEngine: Sendable {
         return isTrajectoryNotFoundResponse(statusCode: code, body: body)
     }
 
+    /// Returns `true` when a Google Cloud Relay `ProxyCommand` error indicates the target Desktop
+    /// instance is no longer registered or reachable (e.g., Boq HTTP 400
+    /// `[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo",...]]]`).
+    public static func isInstanceNotRegisteredResponse(statusCode: Int, body: String) -> Bool {
+        if isTrajectoryNotFoundResponse(statusCode: statusCode, body: body) {
+            return false
+        }
+        guard statusCode == 400 || statusCode == 404 || statusCode == 412 || statusCode == 502 || statusCode == 503 else {
+            return false
+        }
+        let detail = unwrapErrorDetail(from: body, statusCode: statusCode).lowercased()
+        let rawLower = body.lowercased()
+        func matches(_ text: String) -> Bool {
+            text.contains("instance not registered")
+                || text.contains("instance is not registered")
+                || text.contains("instance_not_registered")
+                || text.contains("instance not found")
+                || text.contains("instance is offline")
+                || text.contains("instance offline")
+                || text.contains("instance disconnected")
+                || text.contains("target instance not connected")
+                || text.contains("no active tunnel")
+        }
+        return matches(detail) || matches(rawLower)
+    }
+
+    public static func isInstanceNotRegisteredError(_ error: Error) -> Bool {
+        guard case let AntigravityRPCError.httpError(code, body) = error else { return false }
+        return isInstanceNotRegisteredResponse(statusCode: code, body: body)
+    }
+
     private static func isResourceNotFoundResponse(statusCode: Int, body: String) -> Bool {
         if isTrajectoryNotFoundResponse(statusCode: statusCode, body: body) {
+            return true
+        }
+        if isInstanceNotRegisteredResponse(statusCode: statusCode, body: body) {
             return true
         }
         let lower = body.lowercased()
@@ -604,8 +638,10 @@ public enum ProtocolCompatibilityEngine: Sendable {
             case .array(let arr):
                 var collected: [String] = []
                 collectJsonArrayStrings(arr, into: &collected)
-                if let first = collected.first(where: { !$0.isEmpty }) {
-                    return first
+                if let preferred = collected.first(where: {
+                    !$0.isEmpty && !$0.lowercased().hasPrefix("type.googleapis.com/")
+                }) ?? collected.first(where: { !$0.isEmpty }) {
+                    return preferred
                 }
             case .object(let obj):
                 let code = obj["code"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -630,6 +666,9 @@ public enum ProtocolCompatibilityEngine: Sendable {
     public static func formatUserFacingRpcError(_ error: Error) -> String {
         if case let AntigravityRPCError.httpError(code, body) = error {
             let detail = unwrapErrorDetail(from: body, statusCode: code)
+            if isInstanceNotRegisteredResponse(statusCode: code, body: body) {
+                return "Antigravity Desktop is offline or unregistered on Cloud Relay. Ensure Antigravity Desktop is open with Remote Control enabled."
+            }
             if isTrajectoryNotFoundResponse(statusCode: code, body: body) {
                 if !detail.isEmpty {
                     return "Conversation history could not be found on this host (\(detail)). Try Retry or open it once on Antigravity Desktop."

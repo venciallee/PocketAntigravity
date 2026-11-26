@@ -168,8 +168,24 @@ fun CascadeChatScreen(
     val rawHostLabel = activeSummary?.originHostName
         ?: connectionState.activeHost?.hostname
         ?: "MacBook Pro"
-    val cleanHostLabel = rawHostLabel.removePrefix("Connecting · ").ifBlank { "Desktop" }
-    val headerSubtitle = "${activeSummary?.projectSlug ?: "ledger-svc"} · $cleanHostLabel"
+    val cleanHostLabel = rawHostLabel
+        .removePrefix("Offline · ")
+        .removePrefix("Connecting · ")
+        .ifBlank { "Desktop" }
+    val isActiveSessionHostOnline = remember(activeSummary, resolvedIsCloud, connectionState) {
+        if (resolvedIsCloud) {
+            connectionState.isDeviceNetworkReachable
+        } else {
+            coordinator.isHostOnlineForSummary(activeSummary)
+        }
+    }
+    val effectiveHeaderHostLabel = when {
+        resolvedIsCloud -> if (connectionState.hasPairedBackend || connectionState.isConnected) "Antigravity" else "Cloud"
+        !coordinator.isVerificationMode && connectionState.hasPairedBackend && !isActiveSessionHostOnline ->
+            if (connectionState.isConnecting) "Connecting · $cleanHostLabel" else "Offline · $cleanHostLabel"
+        else -> cleanHostLabel
+    }
+    val headerSubtitle = "${activeSummary?.projectSlug ?: "ledger-svc"} · $effectiveHeaderHostLabel"
     val totalAdditions = activeSummary?.totalAdditions ?: 128
     val totalDeletions = activeSummary?.totalDeletions ?: 14
 
@@ -564,6 +580,72 @@ fun CascadeChatScreen(
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                             )
                         }
+                    }
+                }
+            }
+        } else if (!coordinator.isVerificationMode && displayItems.isEmpty()) {
+            val isNoInternet = connectionState.hasPairedBackend && !connectionState.isDeviceNetworkReachable
+            val isOfflinePaired = !resolvedIsCloud && connectionState.hasPairedBackend && !isActiveSessionHostOnline
+            val rawSlug = AntigravityCloudDetector.stripProjectScopePrefix(
+                activeSummary?.projectSlug.orEmpty().ifBlank { AntigravityCloudDetector.NO_PROJECT_DISPLAY_NAME },
+            )
+            val isNoProj = AntigravityCloudDetector.isNoProjectSlug(rawSlug)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .testTag("chat-empty-session-card"),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                AntigravitySurfaceCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(14.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            isNoInternet || isOfflinePaired -> colors.statusError
+                                            connectionState.isConnected -> colors.statusDone
+                                            else -> colors.accentPeriwinkle
+                                        }
+                                    ),
+                            )
+                            Text(
+                                text = when {
+                                    isNoInternet -> "No Internet · Queued Outbox Ready"
+                                    isOfflinePaired -> if (chatState.pendingOutboxCount > 0) {
+                                        "Host Offline · ${chatState.pendingOutboxCount} Queued"
+                                    } else {
+                                        "Host Offline · Queued Outbox Ready"
+                                    }
+                                    connectionState.isConnected -> "Ready for Prompt"
+                                    else -> "New Session Ready"
+                                },
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = colors.inkReading,
+                            )
+                        }
+                        Text(
+                            text = if (isNoProj) {
+                                "Unassigned conversation on $cleanHostLabel. Send a message below to run on ${if (resolvedIsCloud) "Antigravity Cloud" else "Antigravity Desktop"}."
+                            } else {
+                                "Bound to $rawSlug on $cleanHostLabel. Send a message below to run on ${if (resolvedIsCloud) "Antigravity Cloud" else "Antigravity Desktop"}."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkSecondary,
+                        )
                     }
                 }
             }

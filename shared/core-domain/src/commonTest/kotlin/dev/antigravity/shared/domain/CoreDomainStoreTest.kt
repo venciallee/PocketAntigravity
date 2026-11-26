@@ -884,4 +884,174 @@ class CoreDomainStoreTest {
             restartedAfterCollapse.close()
         }
     }
+
+    @Test
+    fun testFailedOrDeferredHandshakePreservesCachedProjectsAndSummaries() = runTest {
+        val hostUuid = "huangjiafandemac-mini-local-swift-vapor"
+        val storage = InMemoryProjectionStorage()
+        storage.saveHostShards(
+            listOf(
+                HostProjectionShard(
+                    hostKey = "host:$hostUuid",
+                    instanceId = hostUuid,
+                    hostname = hostUuid,
+                    projects = listOf(
+                        ProjectWorkspace(
+                            id = "PocketAntigravity",
+                            name = "PocketAntigravity",
+                            pathDisplay = "Local · $hostUuid",
+                            workspaceUri = "file:///Users/mini/PocketAntigravity",
+                            runtime = ProjectRuntimeTarget.MAC_BOOK_PRO,
+                            hostName = hostUuid,
+                            activeBranch = "main",
+                            originInstanceUuid = hostUuid,
+                        ),
+                    ),
+                    summaries = listOf(
+                        CascadeSummary(
+                            cascadeId = "cas-cached-mini-1",
+                            title = "Cached Mini Session",
+                            projectSlug = "PocketAntigravity",
+                            workspaceUri = "file:///Users/mini/PocketAntigravity",
+                            status = CortexStepStatus.DONE,
+                            stepCount = 3,
+                            originInstanceUuid = hostUuid,
+                            originHostName = hostUuid,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val syncStore = ConversationSyncStore(scope = this, projectionStorage = storage)
+        syncStore.hydrateFromCache()
+        assertEquals(1, syncStore.state.value.projects.count { !it.isNoProject })
+        assertEquals(1, syncStore.state.value.summaries.size)
+
+        val host = RemoteHostInstance(
+            instanceId = hostUuid,
+            hostname = hostUuid,
+            channel = RemoteConnectionChannel.CLOUD_RELAY,
+            endpointUrl = "https://antigravity.google.com/r/$hostUuid",
+            isOnline = false,
+        )
+        val failedHandshake = BackendHandshakeResult(
+            latencyMs = 180,
+            workspaces = emptyList(),
+            summaries = emptyList(),
+            resolvedHostname = hostUuid,
+            resolvedInstanceUuid = hostUuid,
+            availableRelayInstances = listOf(
+                RelayInstanceInfo(uuid = hostUuid, name = hostUuid, status = RelayInstanceStatus.DISCONNECTED),
+            ),
+            isSelectedHostOnline = false,
+            succeededInstanceUuids = emptyList(),
+            initialSyncCompleted = false,
+        )
+        syncStore.applyHandshake(host, failedHandshake)
+
+        // Cached project & conversation MUST survive failed/deferred handshake in memory and on disk
+        assertTrue(syncStore.state.value.projects.any { it.name == "PocketAntigravity" })
+        assertTrue(syncStore.state.value.summaries.any { it.cascadeId == "cas-cached-mini-1" })
+        val persistedShard = storage.loadAllHostShards().firstOrNull { it.hostKey == "host:$hostUuid" }
+        assertEquals(1, persistedShard?.projects?.size)
+        assertEquals(1, persistedShard?.summaries?.size)
+    }
+
+    @Test
+    fun testSendMessageAgainstUnregisteredRelayQueuesOutboxMarksHostOfflineAndStopsStreaming() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSySENDUNREG400000000000000000000000"
+            val hostUuid = "huangjiafandemac-mini-local-swift-vapor"
+            val boqUnregistered = """[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]"""
+            var startCascadeCalls = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$hostUuid",["$hostUuid","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = runCatching { request.body.toByteArray().decodeToString() }.getOrDefault("")
+                        if (bodyText.contains("StartCascade") || bodyText.contains("SendUserCascadeMessage")) {
+                            startCascadeCalls += 1
+                            respond(
+                                content = boqUnregistered,
+                                status = HttpStatusCode.BadRequest,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            val payload = if (bodyText.contains("GetWorkspaceInfos")) {
+                                """{"workspaces":[{"workspaceUri":"file:///Users/mini/PocketAntigravity","displayName":"PocketAntigravity"}]}"""
+                            } else {
+                                """{"trajectorySummaries":{}}"""
+                            }
+                            val b64 = ByteString.of(*payload.encodeToByteArray()).base64()
+                            respond(
+                                content = """["$b64",[["content-type","application/json"]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = InMemoryPreferencesStore(),
+                projectionStorage = InMemoryProjectionStorage(),
+                autoPreloadConversations = false,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+
+            coordinator.connectCloudRelay(
+                relayUrlString = "https://antigravity.google.com/r/$hostUuid",
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                startSummaryStream = false,
+            )
+            assertTrue(coordinator.connectionState.value.activeHost?.isOnline == true)
+
+            val draftId = coordinator.createLocalDraftConversation(
+                workspaceUri = "",
+                projectSlug = "No Project",
+                title = "没拉到任何 project 啊",
+            )
+            val outcome = coordinator.sendMessage(
+                cascadeId = draftId,
+                message = "没拉到任何 project 啊",
+                workspaceUri = "",
+                isOptimisticDraft = true,
+                instanceUuidOverride = hostUuid,
+            )
+
+            assertFalse(outcome.dispatchedLive)
+            assertTrue(outcome.queuedInOutbox)
+            assertTrue(outcome.hostOfflineDetected)
+            assertEquals(1, startCascadeCalls, "StartCascade must not fire twice on unregistered host")
+            assertFalse(coordinator.connectionState.value.activeHost?.isOnline == true, "Active host must flip offline immediately")
+            assertFalse(coordinator.isCascadeActivelyStreaming(outcome.resolvedCascadeId), "Queued offline turn must never appear streaming")
+            val summary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == outcome.resolvedCascadeId }
+            assertEquals(CortexStepStatus.PENDING, summary?.status)
+            assertFalse((outcome.errorMessage ?: "").contains("type.googleapis.com"))
+            coordinator.close()
+        }
+    }
 }

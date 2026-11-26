@@ -591,8 +591,37 @@ public object ProtocolCompatibilityEngine {
         return isTrajectoryNotFoundResponse(http.statusCode, http.body)
     }
 
+    /**
+     * Returns `true` when a Google Cloud Relay `ProxyCommand` error indicates the target Desktop
+     * instance is no longer registered or reachable (for example, Boq HTTP 400
+     * `[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo",...]]]`).
+     */
+    public fun isInstanceNotRegisteredResponse(statusCode: Int, body: String): Boolean {
+        if (isTrajectoryNotFoundResponse(statusCode, body)) return false
+        if (statusCode !in setOf(400, 404, 412, 502, 503)) return false
+        val detail = unwrapErrorDetail(body, statusCode = statusCode).lowercase()
+        val rawLower = body.lowercase()
+        fun matches(text: String): Boolean =
+            text.contains("instance not registered") ||
+                text.contains("instance is not registered") ||
+                text.contains("instance_not_registered") ||
+                text.contains("instance not found") ||
+                text.contains("instance is offline") ||
+                text.contains("instance offline") ||
+                text.contains("instance disconnected") ||
+                text.contains("target instance not connected") ||
+                text.contains("no active tunnel")
+        return matches(detail) || matches(rawLower)
+    }
+
+    public fun isInstanceNotRegisteredError(error: Throwable): Boolean {
+        val http = error as? AntigravityRpcError.HttpError ?: return false
+        return isInstanceNotRegisteredResponse(http.statusCode, http.body)
+    }
+
     private fun isResourceNotFoundResponse(statusCode: Int, body: String): Boolean {
         if (isTrajectoryNotFoundResponse(statusCode, body)) return true
+        if (isInstanceNotRegisteredResponse(statusCode, body)) return true
         val lower = body.lowercase()
         return lower.contains("project not found") ||
             lower.contains("artifact not found") ||
@@ -631,7 +660,10 @@ public object ProtocolCompatibilityEngine {
             is JsonArray -> {
                 val collected = mutableListOf<String>()
                 collectJsonArrayStrings(parsed, collected)
-                collected.firstOrNull { it.isNotBlank() }?.let { return it.trim() }
+                val preferred = collected.firstOrNull {
+                    it.isNotBlank() && !it.startsWith("type.googleapis.com/", ignoreCase = true)
+                } ?: collected.firstOrNull { it.isNotBlank() }
+                preferred?.let { return it.trim() }
             }
             is JsonObject -> {
                 val code = (parsed["code"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
@@ -654,6 +686,9 @@ public object ProtocolCompatibilityEngine {
         val http = error as? AntigravityRpcError.HttpError
         if (http != null) {
             val detail = unwrapErrorDetail(http.body, statusCode = http.statusCode)
+            if (isInstanceNotRegisteredResponse(http.statusCode, http.body)) {
+                return "Antigravity Desktop is offline or unregistered on Cloud Relay. Ensure Antigravity Desktop is open with Remote Control enabled."
+            }
             if (isTrajectoryNotFoundResponse(http.statusCode, http.body)) {
                 return if (detail.isNotEmpty()) {
                     "Conversation history could not be found on this host ($detail). Try Retry or open it once on Antigravity Desktop."

@@ -16,7 +16,9 @@ import dev.antigravity.shared.protocol.BackendHandshakeResult
 import dev.antigravity.shared.protocol.ConnectionLifecyclePhase
 import dev.antigravity.shared.protocol.ConnectionPowerPolicy
 import dev.antigravity.shared.protocol.HostReachabilityProbeResult
+import dev.antigravity.shared.protocol.ProtocolCompatibilityEngine
 import dev.antigravity.shared.protocol.RelayInstanceInfo
+import dev.antigravity.shared.protocol.RelayInstanceStatus
 import dev.antigravity.shared.protocol.SapisidHashGenerator
 import dev.antigravity.shared.protocol.TlsEngineConfig
 import dev.antigravity.shared.protocol.currentTimeMillis
@@ -484,15 +486,49 @@ public class ConnectionDomainStore(
     }
 
     @Throws(Throwable::class)
-    public suspend fun probeHostReachability(allowCrossHostFallback: Boolean = true): HostReachabilityProbeResult {
+    public suspend fun probeHostReachability(
+        allowCrossHostFallback: Boolean = true,
+        verifyEndToEnd: Boolean = false,
+    ): HostReachabilityProbeResult {
         val client = activeClient()
             ?: throw AntigravityRpcError.HttpError(503, "No active backend client")
-        val result = client.probeHostReachability(allowCrossHostFallback = allowCrossHostFallback)
+        val result = client.probeHostReachability(
+            allowCrossHostFallback = allowCrossHostFallback,
+            verifyEndToEnd = verifyEndToEnd,
+        )
         _state.update { prev ->
+            val nextRelayInstances = result.availableRelayInstances.ifEmpty { prev.availableRelayInstances }
+            val statusByUuid = nextRelayInstances.associate { it.uuid to it.status.isReachable }
+            val nextKnownHosts = prev.knownHosts.map { host ->
+                val live = statusByUuid[host.instanceId]
+                if (live != null) host.copy(isOnline = live, latencyMs = result.latencyMs) else host
+            }
+            val nextActiveHost = result.activeRelayInstance?.let { inst ->
+                val base = prev.activeHost
+                if (base != null) {
+                    base.copy(
+                        instanceId = inst.uuid,
+                        hostname = inst.name.ifBlank { base.hostname },
+                        version = inst.version.ifBlank { base.version },
+                        isOnline = result.isSelectedHostOnline,
+                        latencyMs = result.latencyMs,
+                    )
+                } else {
+                    null
+                }
+            } ?: prev.activeHost?.copy(isOnline = result.isSelectedHostOnline, latencyMs = result.latencyMs)
+            val displayHostName = nextActiveHost?.hostname?.takeIf { it.isNotBlank() } ?: "Desktop"
             prev.copy(
                 isConnected = result.isSelectedHostOnline,
                 lastPingLatencyMs = result.latencyMs,
-                availableRelayInstances = result.availableRelayInstances.ifEmpty { prev.availableRelayInstances },
+                activeHost = nextActiveHost,
+                knownHosts = nextKnownHosts,
+                availableRelayInstances = nextRelayInstances,
+                statusText = if (result.isSelectedHostOnline) {
+                    "Connected · $displayHostName · ${result.latencyMs}ms"
+                } else {
+                    "Offline · $displayHostName"
+                },
                 lifecyclePhase = if (result.isSelectedHostOnline) {
                     ConnectionLifecyclePhase.OnlineIdle
                 } else {
@@ -505,6 +541,52 @@ public class ConnectionDomainStore(
             )
         }
         return result
+    }
+
+    public fun markInstanceOffline(
+        instanceUuid: String? = null,
+        errorMessage: String? = null,
+    ) {
+        _state.update { prev ->
+            val targetId = instanceUuid?.takeIf { it.isNotBlank() } ?: prev.activeHost?.instanceId
+            val nextRelayInstances = prev.availableRelayInstances.map { inst ->
+                if (targetId == null || inst.uuid == targetId) {
+                    inst.copy(status = RelayInstanceStatus.DISCONNECTED)
+                } else {
+                    inst
+                }
+            }
+            val nextKnownHosts = prev.knownHosts.map { h ->
+                if (targetId == null || h.instanceId == targetId) h.copy(isOnline = false) else h
+            }
+            val activeMatches = targetId == null || prev.activeHost?.instanceId == targetId
+            val nextActive = if (activeMatches) prev.activeHost?.copy(isOnline = false) else prev.activeHost
+            val displayName = nextActive?.hostname?.takeIf { it.isNotBlank() } ?: "Desktop"
+            if (activeMatches) {
+                val delay = ConnectionPowerPolicy.offlineBackoffBaseDelaySeconds(
+                    reconnectAttempt,
+                    powerStateProvider.isLowPowerModeEnabled,
+                )
+                prev.copy(
+                    isConnected = false,
+                    activeHost = nextActive,
+                    knownHosts = nextKnownHosts,
+                    availableRelayInstances = nextRelayInstances,
+                    statusText = "Offline · $displayName",
+                    errorText = errorMessage ?: prev.errorText,
+                    lifecyclePhase = if (prev.hasPairedBackend) {
+                        ConnectionLifecyclePhase.OfflineBackoff(reconnectAttempt, delay)
+                    } else {
+                        prev.lifecyclePhase
+                    },
+                )
+            } else {
+                prev.copy(
+                    knownHosts = nextKnownHosts,
+                    availableRelayInstances = nextRelayInstances,
+                )
+            }
+        }
     }
 
     public fun selectHostScope(scope: AgentsHostFilterScope) {
@@ -663,7 +745,7 @@ public class ConnectionDomainStore(
         val isAuthError = error is AntigravityRpcError.Unauthorized
         val errMsg = when (error) {
             is AntigravityRpcError.Unauthorized -> error.detail.ifBlank { "Authentication rejected (401/403). Please re-authenticate." }
-            is AntigravityRpcError.HttpError -> "HTTP ${error.statusCode}: ${error.body}"
+            is AntigravityRpcError.HttpError -> ProtocolCompatibilityEngine.formatUserFacingRpcError(error)
             else -> error.message ?: "Connection failed"
         }
         val nextDelay = ConnectionPowerPolicy.offlineBackoffBaseDelaySeconds(

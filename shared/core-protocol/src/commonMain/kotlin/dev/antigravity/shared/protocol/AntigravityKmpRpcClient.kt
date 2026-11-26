@@ -90,6 +90,8 @@ public data class BackendHandshakeResult(
     public val resolvedRelayApiKey: String? = null,
     public val availableRelayInstances: List<RelayInstanceInfo> = emptyList(),
     public val isSelectedHostOnline: Boolean = true,
+    public val succeededInstanceUuids: List<String> = emptyList(),
+    public val initialSyncCompleted: Boolean = true,
 )
 
 @Serializable
@@ -893,6 +895,13 @@ public class AntigravityKmpRpcClient(
     ): RelayResolutionResult {
         val rawTarget = (preferredIdentifier ?: stateMutex.withLock { targetInstanceIdentifier }).trim()
         val isWildcard = isWildcardRelayIdentifier(rawTarget)
+        val fallbackFamilyName = host.hostname.trim().takeIf {
+            it.isNotEmpty() &&
+                !it.equals("Antigravity Desktop", ignoreCase = true) &&
+                !it.equals("MacBook Pro", ignoreCase = true) &&
+                !isWildcardRelayIdentifier(it) &&
+                !it.equals(rawTarget, ignoreCase = true)
+        }
 
         val candidateAuthUsers = buildList {
             explicitAuthUser?.takeIf { it.isNotEmpty() }?.let { add(it) }
@@ -925,10 +934,17 @@ public class AntigravityKmpRpcClient(
                     updateRelayCache(candidateUser, fam.uuid, instances)
                     return RelayResolutionResult(fam, instances, candidateUser)
                 }
+                if (fallbackFamilyName != null) {
+                    instances.firstOrNull { it.sameHostFamily(fallbackFamilyName) && it.status.isReachable }?.let { hostFam ->
+                        updateRelayCache(candidateUser, hostFam.uuid, instances)
+                        return RelayResolutionResult(hostFam, instances, candidateUser)
+                    }
+                }
                 val exactTargetMatch = instances.firstOrNull { it.matches(rawTarget) }
                 if (bestOfflineMatch == null) {
                     val offline = exactTargetMatch
                         ?: instances.firstOrNull { it.sameHostFamily(rawTarget) }
+                        ?: fallbackFamilyName?.let { fam -> instances.firstOrNull { it.sameHostFamily(fam) } }
                     if (offline != null) bestOfflineMatch = Triple(offline, instances, candidateUser)
                 }
                 if (bestReachableFallback == null) {
@@ -1029,7 +1045,11 @@ public class AntigravityKmpRpcClient(
             return RelayResolutionResult(bestOfflineMatch.first, bestOfflineMatch.second, bestOfflineMatch.third)
         }
         if (!allowCrossHostFallback && !isWildcard && firstNonEmpty != null) {
-            val syntheticOffline = RelayInstanceInfo(uuid = rawTarget, name = rawTarget, status = RelayInstanceStatus.DISCONNECTED)
+            val syntheticOffline = RelayInstanceInfo(
+                uuid = rawTarget,
+                name = fallbackFamilyName ?: rawTarget,
+                status = RelayInstanceStatus.DISCONNECTED,
+            )
             updateRelayCache(firstNonEmpty.second, rawTarget, firstNonEmpty.first)
             recordHandshakeTrace("resolve:targetOffline")
             return RelayResolutionResult(syntheticOffline, firstNonEmpty.first, firstNonEmpty.second)
@@ -1040,13 +1060,19 @@ public class AntigravityKmpRpcClient(
             recordHandshakeTrace("resolve:firstNonEmpty(u=${firstNonEmpty.second})")
             return RelayResolutionResult(chosen, firstNonEmpty.first, firstNonEmpty.second)
         }
-        // Only allow direct-UUID fallback when ListInstances genuinely succeeded (HTTP 200) with empty results.
-        // Never swallow Unauthorized (401/403) or network errors into a fake connected UUID host.
+        // Only allow direct-UUID fallback when ListInstances genuinely succeeded (HTTP 200) with empty results,
+        // AND prove liveness via a short ProxyCommand probe before reporting CONNECTED so an unregistered/offline
+        // host (like `huangjiafandemac-mini-local-swift-vapor`) is never fabricated as `.CONNECTED`.
         if (anySucceededCall && lastError == null && !isWildcard && (rawTarget.endsWith("-v2") || rawTarget.length >= 32)) {
-            val direct = RelayInstanceInfo(uuid = rawTarget, name = rawTarget, status = RelayInstanceStatus.CONNECTED)
             val auth = stateMutex.withLock { currentAuthUser }
+            val isAlive = probeRelayInstanceLiveness(rawTarget, timeoutMs = 4_000L)
+            val direct = RelayInstanceInfo(
+                uuid = rawTarget,
+                name = fallbackFamilyName ?: rawTarget,
+                status = if (isAlive) RelayInstanceStatus.CONNECTED else RelayInstanceStatus.DISCONNECTED,
+            )
             updateRelayCache(auth, rawTarget, listOf(direct))
-            recordHandshakeTrace("resolve:directUuid")
+            recordHandshakeTrace(if (isAlive) "resolve:directUuid:live" else "resolve:directUuid:offline")
             return RelayResolutionResult(direct, listOf(direct), auth)
         }
         if (anySucceededCall && primaryError == null && lastError == null) {
@@ -1069,6 +1095,41 @@ public class AntigravityKmpRpcClient(
         }
     }
 
+    private suspend fun markRelayInstancesDisconnected(uuids: Set<String>): List<RelayInstanceInfo> {
+        if (uuids.isEmpty()) return currentCachedRelayInstances()
+        return stateMutex.withLock {
+            val updated = cachedRelayInstances.map { inst ->
+                if (inst.uuid in uuids) inst.copy(status = RelayInstanceStatus.DISCONNECTED) else inst
+            }
+            cachedRelayInstances = updated
+            updated
+        }
+    }
+
+    private suspend fun probeRelayInstanceLiveness(
+        instanceUuid: String,
+        timeoutMs: Long = 4_000L,
+    ): Boolean {
+        return try {
+            callCloudRelayProxyCommand(
+                method = "GetWorkspaceInfos",
+                payload = "{}".encodeToByteArray(),
+                contentType = "application/json",
+                instanceUuidOverride = instanceUuid,
+                allowCrossHostFailover = false,
+                perCallTimeoutMs = timeoutMs,
+                ignoreCachedOfflineStatus = true,
+            )
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: AntigravityRpcError.HttpError) {
+            e.statusCode == 404 && !ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     // MARK: - Handshake & Reachability Probe
 
     @Throws(Throwable::class)
@@ -1081,6 +1142,7 @@ public class AntigravityKmpRpcClient(
         var isSelectedOnline = true
         var serverVersion = "v2.33.0"
         var allRelayInstances = emptyList<RelayInstanceInfo>()
+        var initialSyncCompleted = false
 
         if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
             val preferred = selectedUuid?.takeIf { it.isNotEmpty() } ?: stateMutex.withLock { targetInstanceIdentifier }
@@ -1102,6 +1164,7 @@ public class AntigravityKmpRpcClient(
             // trajectory list over VPN, complete handshake immediately and finish hydrating in background.
             val initialSyncBudgetMs = (17_000L - resolveElapsedMs).coerceIn(2_500L, 6_500L)
             recordHandshakeTrace("sync:start(${initialSyncBudgetMs}ms)")
+            var syncUnregisteredError = false
             val synced = try {
                 withSafeTimeoutOrNull(initialSyncBudgetMs) {
                     fetchFederatedWorkspacesAndSummaries(
@@ -1117,14 +1180,38 @@ public class AntigravityKmpRpcClient(
                 throw e
             } catch (e: AntigravityRpcError.Unauthorized) {
                 throw e
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                    syncUnregisteredError = true
+                }
                 null
             }
             if (synced != null) {
+                initialSyncCompleted = synced.succeededInstanceUuids.isNotEmpty() || synced.cloudSucceeded
                 recordHandshakeTrace("sync:ok(sum=${synced.summaries.size},ws=${synced.workspaces.size})")
+                val currentSelected = selectedUuid
+                if (currentSelected != null &&
+                    currentSelected !in synced.succeededInstanceUuids &&
+                    synced.availableRelayInstances.any { it.uuid == currentSelected && !it.status.isReachable }
+                ) {
+                    isSelectedOnline = false
+                }
                 synced
             } else {
-                recordHandshakeTrace("sync:deferred")
+                if (syncUnregisteredError && selectedUuid != null) {
+                    val downgraded = markRelayInstancesDisconnected(setOf(selectedUuid!!))
+                    if (downgraded.isNotEmpty()) {
+                        allRelayInstances = downgraded
+                    } else {
+                        allRelayInstances = allRelayInstances.map { inst ->
+                            if (inst.uuid == selectedUuid) inst.copy(status = RelayInstanceStatus.DISCONNECTED) else inst
+                        }
+                    }
+                    isSelectedOnline = false
+                    recordHandshakeTrace("sync:unregistered")
+                } else {
+                    recordHandshakeTrace("sync:deferred")
+                }
                 FederatedWorkspaceSyncResult(
                     workspaces = emptyList(),
                     summaries = emptyList(),
@@ -1133,6 +1220,7 @@ public class AntigravityKmpRpcClient(
                 )
             }
         } else {
+            initialSyncCompleted = true
             fetchFederatedWorkspacesAndSummaries(
                 skipRelayListRefresh = false,
                 targetInstanceUuid = null,
@@ -1146,6 +1234,13 @@ public class AntigravityKmpRpcClient(
             currentCachedRelayInstances().ifEmpty { allRelayInstances }
         }
         val latestActive = currentActiveRelayInstance()
+        val effectiveUuid = latestActive?.uuid?.takeIf { it.isNotBlank() } ?: selectedUuid ?: currentResolvedInstanceUuid()
+        if (channel == RemoteConnectionChannel.CLOUD_RELAY && effectiveUuid != null) {
+            val matchedInLatest = latestInstances.firstOrNull { it.uuid == effectiveUuid }
+            if (matchedInLatest != null && !matchedInLatest.status.isReachable) {
+                isSelectedOnline = false
+            }
+        }
         val elapsedMs = max(1L, currentTimeMillis() - startMs).toInt()
         recordHandshakeTrace("verify:done")
         return BackendHandshakeResult(
@@ -1155,31 +1250,75 @@ public class AntigravityKmpRpcClient(
             cloudProjects = federated.cloudProjects,
             serverVersion = latestActive?.version?.takeIf { it.isNotBlank() } ?: serverVersion,
             resolvedHostname = latestActive?.name ?: resolvedName ?: host.hostname,
-            resolvedInstanceUuid = selectedUuid ?: currentResolvedInstanceUuid(),
+            resolvedInstanceUuid = effectiveUuid,
             resolvedAuthUser = if (channel == RemoteConnectionChannel.CLOUD_RELAY) currentAuthUser() else null,
             resolvedRelayApiKey = if (channel == RemoteConnectionChannel.CLOUD_RELAY) currentRelayApiKey() else null,
             availableRelayInstances = latestInstances,
             isSelectedHostOnline = isSelectedOnline,
+            succeededInstanceUuids = federated.succeededInstanceUuids,
+            initialSyncCompleted = initialSyncCompleted,
         )
     }
 
-    public suspend fun probeHostReachability(allowCrossHostFallback: Boolean = true): HostReachabilityProbeResult {
+    @Throws(Throwable::class)
+    public suspend fun probeHostReachability(
+        allowCrossHostFallback: Boolean = true,
+        verifyEndToEnd: Boolean = false,
+    ): HostReachabilityProbeResult {
         val startMs = currentTimeMillis()
         if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
             val prev = currentCachedRelayInstances()
+            val prevDisconnectedUuids = prev.filter { !it.status.isReachable }.map { it.uuid }.toSet()
             val resolution = resolveCloudRelayInstance(allowCrossHostFallback = allowCrossHostFallback)
+            var updatedInstances = resolution.allInstances
+            var selectedInst = resolution.selected
+
+            // Verify end-to-end when explicitly requested (e.g. offline recovery / settings refresh) OR
+            // whenever a previously disconnected/failed instance reappears as CONNECTED in stale ListInstances.
+            val needsEndToEndCheck = verifyEndToEnd ||
+                (selectedInst.status.isReachable && selectedInst.uuid in prevDisconnectedUuids)
+            if (needsEndToEndCheck && updatedInstances.isNotEmpty()) {
+                val toProbe = if (verifyEndToEnd) {
+                    updatedInstances.filter { it.status.isReachable }
+                } else {
+                    listOf(selectedInst)
+                }
+                if (toProbe.isNotEmpty()) {
+                    val failedUuids = coroutineScope {
+                        toProbe.map { inst ->
+                            async {
+                                inst.uuid to probeRelayInstanceLiveness(inst.uuid, timeoutMs = 4_500L)
+                            }
+                        }.awaitAll()
+                    }.filter { !it.second }.map { it.first }.toSet()
+
+                    if (failedUuids.isNotEmpty()) {
+                        updatedInstances = updatedInstances.map { inst ->
+                            if (inst.uuid in failedUuids) inst.copy(status = RelayInstanceStatus.DISCONNECTED) else inst
+                        }
+                        val nextSelected = updatedInstances.firstOrNull { it.uuid == selectedInst.uuid && it.status.isReachable }
+                            ?: updatedInstances.firstOrNull { it.sameHostFamily(selectedInst.name) && it.status.isReachable }
+                            ?: (if (allowCrossHostFallback) updatedInstances.firstOrNull { it.status.isReachable } else null)
+                            ?: updatedInstances.firstOrNull { it.uuid == selectedInst.uuid }
+                            ?: selectedInst.copy(status = RelayInstanceStatus.DISCONNECTED)
+                        selectedInst = nextSelected
+                        updateRelayCache(resolution.matchedAuthUser, selectedInst.uuid, updatedInstances)
+                    }
+                }
+            }
+
             val elapsedMs = max(1L, currentTimeMillis() - startMs).toInt()
             val prevUuids = prev.map { it.uuid to it.status }.toSet()
-            val nextUuids = resolution.allInstances.map { it.uuid to it.status }.toSet()
+            val nextUuids = updatedInstances.map { it.uuid to it.status }.toSet()
             val prevNames = prev.map { it.uuid to it.name }.toSet()
-            val nextNames = resolution.allInstances.map { it.uuid to it.name }.toSet()
+            val nextNames = updatedInstances.map { it.uuid to it.name }.toSet()
             return HostReachabilityProbeResult(
                 latencyMs = elapsedMs,
-                availableRelayInstances = resolution.allInstances,
-                activeRelayInstance = resolution.selected,
+                availableRelayInstances = updatedInstances,
+                activeRelayInstance = selectedInst,
                 relayTopologyChanged = prevUuids != nextUuids,
                 relayMetadataChanged = prevNames != nextNames,
-                isSelectedHostOnline = resolution.selected.status.isReachable,
+                isSelectedHostOnline = selectedInst.status.isReachable,
             )
         }
         // Direct LAN lightweight reachability check
@@ -1430,11 +1569,12 @@ public class AntigravityKmpRpcClient(
         instanceUuidOverride: String? = null,
         allowCrossHostFailover: Boolean = false,
         perCallTimeoutMs: Long? = null,
+        ignoreCachedOfflineStatus: Boolean = false,
     ): DecodedProxyCommandResponse {
-        val needsResolve = stateMutex.withLock { instanceUuidOverride == null && resolvedInstanceUuidState == null }
+        val needsResolve = !ignoreCachedOfflineStatus && stateMutex.withLock { instanceUuidOverride == null && resolvedInstanceUuidState == null }
         if (needsResolve) {
             resolveCloudRelayInstance(allowCrossHostFallback = allowCrossHostFailover)
-        } else if (currentCachedRelayInstances().isEmpty()) {
+        } else if (!ignoreCachedOfflineStatus && currentCachedRelayInstances().isEmpty()) {
             runCatching { listRelayInstances() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { refreshed ->
                 stateMutex.withLock {
                     cachedRelayInstances = refreshed
@@ -1443,9 +1583,13 @@ public class AntigravityKmpRpcClient(
             }
         }
 
-        val initialTargetUuid = selectReachableRelayUuid(instanceUuidOverride, allowCrossHostFailover)
-            ?.takeIf { it.isNotEmpty() }
-            ?: throw AntigravityRpcError.HttpError(503, "Selected Antigravity Desktop host is offline")
+        val initialTargetUuid = if (ignoreCachedOfflineStatus && !instanceUuidOverride.isNullOrEmpty()) {
+            instanceUuidOverride
+        } else {
+            selectReachableRelayUuid(instanceUuidOverride, allowCrossHostFailover)
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw AntigravityRpcError.HttpError(503, "Selected Antigravity Desktop host is offline")
+        }
 
         val url = "$relayOrigin${SapisidHashGenerator.API_SERVICE_PREFIX}/ProxyCommand?\$unique=$method"
         val effectiveTimeoutMs = perCallTimeoutMs ?: 12_000L
@@ -1544,7 +1688,7 @@ public class AntigravityKmpRpcClient(
         return try {
             sendOnce(initialTargetUuid)
         } catch (e: AntigravityRpcError.Unauthorized) {
-            if (perCallTimeoutMs != null) throw e
+            if (perCallTimeoutMs != null || ignoreCachedOfflineStatus) throw e
             val prevAuth = currentAuthUser()
             val resolved = runCatching {
                 withSafeTimeoutOrNull(6_000L) {
@@ -1562,26 +1706,50 @@ public class AntigravityKmpRpcClient(
                 throw e
             }
         } catch (e: Throwable) {
-            if (perCallTimeoutMs != null) throw e
+            if (e is CancellationException) throw e
+            val isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)
+            if (isInstanceUnregistered) {
+                markRelayInstancesDisconnected(setOf(initialTargetUuid))
+            }
+            if (ignoreCachedOfflineStatus) throw e
+            if (perCallTimeoutMs != null && !isInstanceUnregistered) throw e
             val isHttp404 = e is AntigravityRpcError.HttpError && e.statusCode == 404
             val isTrajectoryNotFound = ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)
             val shouldFailover = !isTrajectoryNotFound && (
-                e !is AntigravityRpcError ||
+                isInstanceUnregistered ||
+                    e !is AntigravityRpcError ||
                     (e is AntigravityRpcError.HttpError && e.statusCode in setOf(404, 502, 503, 504))
                 )
             if (shouldFailover) {
-                val refreshed = runCatching { listRelayInstances() }.getOrNull().orEmpty()
-                if (refreshed.isNotEmpty()) {
+                val prevNameForTarget = currentCachedRelayInstances().firstOrNull { it.uuid == initialTargetUuid }?.name
+                val refreshTimeoutMs = if (perCallTimeoutMs != null) minOf(perCallTimeoutMs, 3_500L) else 7_000L
+                val refreshedRaw = runCatching { listRelayInstances(timeoutMs = refreshTimeoutMs) }.getOrNull().orEmpty()
+                if (refreshedRaw.isNotEmpty()) {
+                    val refreshed = if (isInstanceUnregistered) {
+                        refreshedRaw.map { inst ->
+                            if (inst.uuid == initialTargetUuid) inst.copy(status = RelayInstanceStatus.DISCONNECTED) else inst
+                        }
+                    } else {
+                        refreshedRaw
+                    }
                     stateMutex.withLock {
                         cachedRelayInstances = refreshed
                         recordRelayInstanceVersionsLocked(refreshed)
                     }
-                    if (isHttp404 && refreshed.any { it.uuid == initialTargetUuid && it.status.isReachable }) {
+                    if (isHttp404 && !isInstanceUnregistered && refreshed.any { it.uuid == initialTargetUuid && it.status.isReachable }) {
                         throw e
                     }
                     val familySeed = refreshed.firstOrNull { it.uuid == initialTargetUuid }?.name
+                        ?: prevNameForTarget
                         ?: stateMutex.withLock {
                             if (instanceUuidOverride == null && !isWildcardRelayIdentifier(targetInstanceIdentifier)) targetInstanceIdentifier else ""
+                        }.ifBlank {
+                            host.hostname.takeIf {
+                                it.isNotBlank() &&
+                                    !it.equals("Antigravity Desktop", ignoreCase = true) &&
+                                    !it.equals("MacBook Pro", ignoreCase = true) &&
+                                    !isWildcardRelayIdentifier(it)
+                            }.orEmpty()
                         }
                     val sameFamAlt = if (familySeed.isNotEmpty()) {
                         refreshed.firstOrNull { it.uuid != initialTargetUuid && it.status.isReachable && it.sameHostFamily(familySeed) }
@@ -1591,8 +1759,10 @@ public class AntigravityKmpRpcClient(
                     } else null
                     val alt = sameFamAlt ?: crossAlt
                     if (alt != null) {
-                        if (instanceUuidOverride == null) {
-                            stateMutex.withLock { resolvedInstanceUuidState = alt.uuid }
+                        stateMutex.withLock {
+                            if (instanceUuidOverride == null || resolvedInstanceUuidState == initialTargetUuid) {
+                                resolvedInstanceUuidState = alt.uuid
+                            }
                         }
                         return sendOnce(alt.uuid)
                     }
@@ -1918,7 +2088,11 @@ public class AntigravityKmpRpcClient(
                         } catch (e: AntigravityRpcError.Unauthorized) {
                             Triple(false, emptyList(), e)
                         } catch (e: AntigravityRpcError.HttpError) {
-                            Triple(e.statusCode == 404, emptyList(), null)
+                            Triple(
+                                e.statusCode == 404 && !ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e),
+                                emptyList(),
+                                null,
+                            )
                         } catch (_: Throwable) {
                             Triple(false, emptyList(), null)
                         }
@@ -1959,6 +2133,8 @@ public class AntigravityKmpRpcClient(
             Triple(localDeferreds.awaitAll(), cloudProjectsDeferred.await(), cloudSummariesDeferred.await())
         }
 
+        val failedLocalUuids = mutableSetOf<String>()
+        val latestAfterFetch = currentCachedRelayInstances()
         for (outcome in perInstanceResults) {
             if (outcome.wsAuthError != null) {
                 authError = outcome.wsAuthError
@@ -1972,18 +2148,43 @@ public class AntigravityKmpRpcClient(
 
             val trajList = outcome.trajResult.getOrNull()
             val instOk = outcome.wsOk || trajList != null || outcome.jbSummaries.isNotEmpty()
+            val originalMarkedOffline = latestAfterFetch.any { it.uuid == outcome.inst.uuid && !it.status.isReachable }
+            val activeAfterFailover = if (originalMarkedOffline) {
+                currentActiveRelayInstance()?.takeIf { it.status.isReachable && it.uuid != outcome.inst.uuid }
+            } else {
+                null
+            }
+            val effectiveInstUuid = activeAfterFailover?.uuid ?: outcome.inst.uuid
+            val effectiveInstName = activeAfterFailover?.name ?: outcome.inst.name
+
             if (instOk) {
-                succeededUuids.add(outcome.inst.uuid)
+                succeededUuids.add(effectiveInstUuid)
+            } else {
+                failedLocalUuids.add(outcome.inst.uuid)
             }
             for (ws in outcome.workspaces) {
-                val wsKey = "${if (ws.isCloud) "cloud" else (ws.originInstanceUuid ?: outcome.inst.uuid)}|${ws.workspaceUri}"
+                val remappedWs = if (activeAfterFailover != null && !ws.isCloud) {
+                    ws.copy(originInstanceUuid = effectiveInstUuid, originHostName = effectiveInstName)
+                } else {
+                    ws
+                }
+                val wsKey = "${if (remappedWs.isCloud) "cloud" else (remappedWs.originInstanceUuid ?: effectiveInstUuid)}|${remappedWs.workspaceUri}"
                 if (!mergedWorkspaces.containsKey(wsKey)) {
-                    mergedWorkspaces[wsKey] = ws
+                    mergedWorkspaces[wsKey] = remappedWs
                 }
             }
             for (s in (trajList.orEmpty() + outcome.jbSummaries)) {
-                mergeSummaryInto(s, mergedSummaries)
+                val remapped = if (activeAfterFailover != null && !s.isCloud) {
+                    s.copy(originInstanceUuid = effectiveInstUuid, originHostName = effectiveInstName)
+                } else {
+                    s
+                }
+                mergeSummaryInto(remapped, mergedSummaries)
             }
+        }
+
+        if (failedLocalUuids.isNotEmpty()) {
+            markRelayInstancesDisconnected(failedLocalUuids)
         }
 
         if (includeCloud) {
@@ -2015,12 +2216,21 @@ public class AntigravityKmpRpcClient(
         val sortedSummaries = mergedSummaries.values.sortedWith(
             compareByDescending<CascadeSummary> { it.updatedAtEpochMs }.thenBy { it.cascadeId }
         )
+        val latestRelaySnapshot = currentCachedRelayInstances().ifEmpty {
+            if (failedLocalUuids.isEmpty()) {
+                relayInstances
+            } else {
+                relayInstances.map { inst ->
+                    if (inst.uuid in failedLocalUuids) inst.copy(status = RelayInstanceStatus.DISCONNECTED) else inst
+                }
+            }
+        }
         val elapsedMs = max(1L, currentTimeMillis() - startMs).toInt()
         return FederatedWorkspaceSyncResult(
             workspaces = mergedWorkspaces.values.toList(),
             summaries = sortedSummaries,
             cloudProjects = cloudProjects,
-            availableRelayInstances = relayInstances,
+            availableRelayInstances = latestRelaySnapshot,
             succeededInstanceUuids = succeededUuids,
             cloudSucceeded = includeCloud && (cloudSummaries.isNotEmpty() || cloudProjects.isNotEmpty() || sortedSummaries.any { it.isCloud }),
             latencyMs = elapsedMs,

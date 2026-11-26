@@ -84,9 +84,20 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
     public func probeHostReachability(
         allowCrossHostFallback: Bool
     ) async throws -> AntigravityData.HostReachabilityProbeResult {
+        try await probeHostReachability(
+            allowCrossHostFallback: allowCrossHostFallback,
+            verifyEndToEnd: false
+        )
+    }
+
+    public func probeHostReachability(
+        allowCrossHostFallback: Bool,
+        verifyEndToEnd: Bool
+    ) async throws -> AntigravityData.HostReachabilityProbeResult {
         do {
             let result = try await coordinator.probeHostReachability(
-                allowCrossHostFallback: allowCrossHostFallback
+                allowCrossHostFallback: allowCrossHostFallback,
+                verifyEndToEnd: verifyEndToEnd
             )
             return KmpModelConverters.toSwiftProbeResult(result)
         } catch {
@@ -212,7 +223,8 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
                 resolvedCascadeId: outcome.resolvedCascadeId,
                 dispatchedLive: outcome.dispatchedLive,
                 queuedInOutbox: outcome.queuedInOutbox,
-                errorMessage: outcome.errorMessage
+                errorMessage: outcome.errorMessage,
+                hostOfflineDetected: outcome.hostOfflineDetected
             )
         } catch {
             throw KmpModelConverters.mapKmpError(error)
@@ -324,6 +336,7 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
     public func connectDirectLan(endpointURLString: String, csrfToken: String, certSHA256: String?, hostName: String, isRestoringSavedSession: Bool) async throws -> AntigravityData.BackendHandshakeResult { throw AntigravityRPCError.invalidEndpoint }
     public func connectCloudRelay(relayURLString: String, sessionCookie: String, authUser: String?, resolvedInstanceUuid: String?, relayApiKey: String?, hostName: String, isRestoringSavedSession: Bool, strictTargetMatch: Bool) async throws -> AntigravityData.BackendHandshakeResult { throw AntigravityRPCError.invalidEndpoint }
     public func probeHostReachability(allowCrossHostFallback: Bool) async throws -> AntigravityData.HostReachabilityProbeResult { throw AntigravityRPCError.invalidEndpoint }
+    public func probeHostReachability(allowCrossHostFallback: Bool, verifyEndToEnd: Bool) async throws -> AntigravityData.HostReachabilityProbeResult { throw AntigravityRPCError.invalidEndpoint }
     public func refreshWorkspacesAndSummaries(hostScope: AntigravityData.AgentsHostFilterScope, skipRelayListRefresh: Bool) async throws -> AntigravityData.KmpFederatedSyncResult { throw AntigravityRPCError.invalidEndpoint }
     public func syncSteps(cascadeId: String, knownStepCount: Int, isCloud: Bool, instanceUuidOverride: String?) async throws -> [AntigravityData.CascadeStep] { [] }
     public func preloadSteps(cascadeId: String, knownStepCount: Int, isCloud: Bool, instanceUuidOverride: String?, requireRemoteRefresh: Bool) async throws -> [AntigravityData.CascadeStep] { [] }
