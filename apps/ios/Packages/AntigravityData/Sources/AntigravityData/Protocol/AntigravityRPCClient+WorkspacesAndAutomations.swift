@@ -2,7 +2,7 @@ import Foundation
 
 /// Workspace/Project operations and Antigravity 2.0 native Automations sidecar RPCs.
 extension AntigravityRPCClient {
-    // MARK: - Workspace & Project Operations (`UE01`, `UE04`, `UE05`)
+    // MARK: - Workspace & Project Operations (`UE01`, `UE05`)
 
     public func getWorkspaceInfos(
         instanceUuidOverride: String? = nil,

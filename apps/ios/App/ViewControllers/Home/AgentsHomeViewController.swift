@@ -19,7 +19,6 @@ public struct AgentsHomeViewController: View {
     public var onOpenSidebar: (() -> Void)?
     public var onOpenDisplayOptions: (() -> Void)?
     public var onOpenNewProject: (() -> Void)?
-    public var onOpenProjectDetail: ((String) -> Void)?
     public var onOpenContextMenuPreview: (() -> Void)?
     public var onOpenConversation: ((String) -> Void)?
     public var onOpenSettings: (() -> Void)?
@@ -47,7 +46,6 @@ public struct AgentsHomeViewController: View {
         onOpenSidebar: (() -> Void)? = nil,
         onOpenDisplayOptions: (() -> Void)? = nil,
         onOpenNewProject: (() -> Void)? = nil,
-        onOpenProjectDetail: ((String) -> Void)? = nil,
         onOpenContextMenuPreview: (() -> Void)? = nil,
         onOpenConversation: ((String) -> Void)? = nil,
         onOpenSettings: (() -> Void)? = nil
@@ -57,7 +55,6 @@ public struct AgentsHomeViewController: View {
         self.onOpenSidebar = onOpenSidebar
         self.onOpenDisplayOptions = onOpenDisplayOptions
         self.onOpenNewProject = onOpenNewProject
-        self.onOpenProjectDetail = onOpenProjectDetail
         self.onOpenContextMenuPreview = onOpenContextMenuPreview
         self.onOpenConversation = onOpenConversation
         self.onOpenSettings = onOpenSettings
@@ -404,7 +401,7 @@ public struct AgentsHomeViewController: View {
                     },
                     onSelectProject: { slug in
                         activeHomeSheet = nil
-                        triggerOpenProjectDetail(slug)
+                        store.selectProject(slug)
                     },
                     onDismiss: {
                         activeHomeSheet = nil
@@ -843,14 +840,6 @@ public struct AgentsHomeViewController: View {
             store.selectCascade(id)
         }
     }
-
-    private func triggerOpenProjectDetail(_ slug: String) {
-        if let onOpenProjectDetail {
-            onOpenProjectDetail(slug)
-        } else {
-            store.selectProject(slug)
-        }
-    }
 }
 
 // MARK: - State `UE01B_SIDEBAR_DRAWER`: Left Slide-Over Sidebar Drawer (`docs/ue/ios/ios-drawer.png`)
@@ -867,7 +856,8 @@ public struct AgentsSidebarDrawerView: View {
     public var onOpenSettings: (() -> Void)?
     public var onOpenDisplayOptions: (() -> Void)?
     public var onOpenNewProject: (() -> Void)?
-    public var onOpenProjectDetail: ((String) -> Void)?
+    public var onSelectProject: ((String) -> Void)?
+    public var onOpenProjectCustomizations: ((String) -> Void)?
     public var onOpenConversation: ((String) -> Void)?
     public var onOpenContextMenuPreview: ((String) -> Void)?
 
@@ -882,7 +872,8 @@ public struct AgentsSidebarDrawerView: View {
         onOpenSettings: (() -> Void)? = nil,
         onOpenDisplayOptions: (() -> Void)? = nil,
         onOpenNewProject: (() -> Void)? = nil,
-        onOpenProjectDetail: ((String) -> Void)? = nil,
+        onSelectProject: ((String) -> Void)? = nil,
+        onOpenProjectCustomizations: ((String) -> Void)? = nil,
         onOpenConversation: ((String) -> Void)? = nil,
         onOpenContextMenuPreview: ((String) -> Void)? = nil
     ) {
@@ -896,7 +887,8 @@ public struct AgentsSidebarDrawerView: View {
         self.onOpenSettings = onOpenSettings
         self.onOpenDisplayOptions = onOpenDisplayOptions
         self.onOpenNewProject = onOpenNewProject
-        self.onOpenProjectDetail = onOpenProjectDetail
+        self.onSelectProject = onSelectProject
+        self.onOpenProjectCustomizations = onOpenProjectCustomizations
         self.onOpenConversation = onOpenConversation
         self.onOpenContextMenuPreview = onOpenContextMenuPreview
     }
@@ -940,7 +932,8 @@ public struct AgentsSidebarDrawerView: View {
                     onOpenSettings: onOpenSettings,
                     onOpenDisplayOptions: onOpenDisplayOptions,
                     onOpenNewProject: onOpenNewProject,
-                    onOpenProjectDetail: onOpenProjectDetail,
+                    onSelectProject: onSelectProject,
+                    onOpenProjectCustomizations: onOpenProjectCustomizations,
                     onOpenConversation: onOpenConversation,
                     onOpenContextMenuPreview: onOpenContextMenuPreview
                 )
@@ -978,7 +971,8 @@ public struct AgentsSidebarDrawerPanelView: View {
     public var onOpenSettings: (() -> Void)?
     public var onOpenDisplayOptions: (() -> Void)?
     public var onOpenNewProject: (() -> Void)?
-    public var onOpenProjectDetail: ((String) -> Void)?
+    public var onSelectProject: ((String) -> Void)?
+    public var onOpenProjectCustomizations: ((String) -> Void)?
     public var onOpenConversation: ((String) -> Void)?
     public var onOpenContextMenuPreview: ((String) -> Void)?
 
@@ -995,7 +989,8 @@ public struct AgentsSidebarDrawerPanelView: View {
         onOpenSettings: (() -> Void)? = nil,
         onOpenDisplayOptions: (() -> Void)? = nil,
         onOpenNewProject: (() -> Void)? = nil,
-        onOpenProjectDetail: ((String) -> Void)? = nil,
+        onSelectProject: ((String) -> Void)? = nil,
+        onOpenProjectCustomizations: ((String) -> Void)? = nil,
         onOpenConversation: ((String) -> Void)? = nil,
         onOpenContextMenuPreview: ((String) -> Void)? = nil
     ) {
@@ -1008,7 +1003,8 @@ public struct AgentsSidebarDrawerPanelView: View {
         self.onOpenSettings = onOpenSettings
         self.onOpenDisplayOptions = onOpenDisplayOptions
         self.onOpenNewProject = onOpenNewProject
-        self.onOpenProjectDetail = onOpenProjectDetail
+        self.onSelectProject = onSelectProject
+        self.onOpenProjectCustomizations = onOpenProjectCustomizations
         self.onOpenConversation = onOpenConversation
         self.onOpenContextMenuPreview = onOpenContextMenuPreview
     }
@@ -1407,14 +1403,19 @@ public struct AgentsSidebarDrawerPanelView: View {
                     .padding(.trailing, 10)
                     .padding(.top, 14)
 
-                    // Project Groups & Conversations (with persistent collapse/expand)
+                    // Project Groups & Conversations (with direct tap collapse/expand & long-press project actions)
                     ForEach(projectGroups) { group in
                         let isCollapsed = searchQuery.isEmpty && store.isProjectCollapsed(group.id)
+                        let isNoProjectGroup = AntigravityCloudDetector.isNoProjectSlug(group.id)
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 2) {
                                 Button {
-                                    if let onOpenProjectDetail {
-                                        onOpenProjectDetail(group.id)
+                                    if !group.conversations.isEmpty {
+                                        withAnimation(.snappy(duration: 0.2)) {
+                                            store.toggleProjectCollapsedPersisted(group.id)
+                                        }
+                                    } else if let onSelectProject {
+                                        onSelectProject(group.id)
                                     } else {
                                         store.isSidebarPresented = false
                                         store.selectProject(group.id)
@@ -1448,6 +1449,40 @@ public struct AgentsSidebarDrawerPanelView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("project-header-\(group.id)")
+                                .contextMenu {
+                                    Button {
+                                        if let onOpenConversation {
+                                            onOpenConversation("new-\(group.id)")
+                                        } else {
+                                            store.isSidebarPresented = false
+                                            _ = store.createConversationInProject(group.id)
+                                        }
+                                    } label: {
+                                        Label(lang.t("New Conversation in Project", "在项目中新建会话"), systemImage: "plus.bubble")
+                                    }
+
+                                    if !isNoProjectGroup {
+                                        Button {
+                                            if let onOpenProjectCustomizations {
+                                                onOpenProjectCustomizations(group.id)
+                                            } else {
+                                                store.isSidebarPresented = false
+                                                store.selectProject(group.id)
+                                                store.activeRoute = .rulesAndSkills
+                                            }
+                                        } label: {
+                                            Label(lang.t("Project Rules & Skills", "项目规则与技能"), systemImage: "doc.text")
+                                        }
+
+                                        if !group.isCloud {
+                                            Button {
+                                                store.revealProjectInFinder(group.id)
+                                            } label: {
+                                                Label(lang.t("Reveal in Finder on Mac", "在 Mac 访达中显示"), systemImage: "laptopcomputer")
+                                            }
+                                        }
+                                    }
+                                }
 
                                 if !group.conversations.isEmpty {
                                     Button {

@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   android-jvm-and-roborazzi:
-    name: Android Lint, Unit/E2E Tests, Roborazzi 13-Screen Capture & Visual Compare (Linux)
+    name: Android Lint, Unit/E2E Tests, Roborazzi Capture & Visual Compare (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
@@ -92,7 +92,7 @@ jobs:
             :apps:android:app:testDebugUnitTest --rerun \
             --no-daemon
 
-      - name: Generate iOS vs Android 13-Screen Side-by-Side Visual Comparisons
+      - name: Generate Android UE vs Compose Side-by-Side Visual Comparisons
         if: github.event_name != 'pull_request' || steps.plan.outputs.android_unit_and_roborazzi == 'true'
         run: |
           set -euo pipefail
@@ -107,7 +107,7 @@ jobs:
           name: android-visual-comparisons
           path: |
             verification/output/android/comparisons/
-            verification/output/android/ANDROID_13_SCREENS_OVERVIEW.png
+            verification/output/android/ANDROID_*_SCREENS_OVERVIEW.png
             verification/output/android/android_visual_report.json
             apps/android/app/build/outputs/android_ue/
           if-no-files-found: warn

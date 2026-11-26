@@ -180,6 +180,7 @@ fun CascadeChatScreen(
     val lang = LocalAppLanguage.current
     val modelDisplayName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
     val permissionLabel = settingsState.activePermissionPreset.localizedTitle(lang)
+    val voiceController = rememberVoiceDictationController()
 
     Scaffold(
         modifier = modifier
@@ -419,16 +420,30 @@ fun CascadeChatScreen(
                 // Docked Material 3 Chat Composer (`and-chat.png`)
                 ChatComposerCard(
                     draftText = chatState.draftInputText,
-                    onDraftChange = { coordinator.chatStore.setDraftInputText(it) },
+                    onDraftChange = { updated ->
+                        coordinator.chatStore.setDraftInputText(updated)
+                        if (updated.isNotEmpty() && !voiceController.isRecording && voiceController.errorMessage != null) {
+                            voiceController.clearError()
+                        }
+                    },
                     chips = workspaceState.attachedComposerChips,
                     onRemoveChip = { coordinator.workspaceStore.removeComposerChip(it) },
                     modelLabel = modelDisplayName,
                     permissionLabel = permissionLabel,
+                    isVoiceRecording = voiceController.isRecording,
+                    isVoiceStarting = voiceController.isStarting,
+                    voiceErrorMessage = voiceController.errorMessage,
+                    onDismissVoiceError = { voiceController.clearError() },
                     onAddContext = onOpenAddContext,
                     onOpenModelAndMode = onOpenModelAndMode,
                     onOpenPermissionsPreset = onOpenPermissionsPreset,
-                    onOpenVoice = onOpenVoiceMode,
+                    onOpenVoice = {
+                        voiceController.toggleRecording(existingDraft = chatState.draftInputText) { updated ->
+                            coordinator.chatStore.setDraftInputText(updated)
+                        }
+                    },
                     onSend = {
+                        voiceController.stopRecording()
                         val text = chatState.draftInputText.trim()
                         when (text.lowercase()) {
                             "/btw" -> {
@@ -1655,6 +1670,10 @@ private fun ChatComposerCard(
     onRemoveChip: (String) -> Unit,
     modelLabel: String,
     permissionLabel: String,
+    isVoiceRecording: Boolean = false,
+    isVoiceStarting: Boolean = false,
+    voiceErrorMessage: String? = null,
+    onDismissVoiceError: () -> Unit = {},
     onAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
     onOpenPermissionsPreset: () -> Unit,
@@ -1681,6 +1700,19 @@ private fun ChatComposerCard(
                 ComposerAttachmentsStrip(
                     chips = chips,
                     onRemoveChip = onRemoveChip,
+                )
+            }
+
+            if (!voiceErrorMessage.isNullOrBlank()) {
+                Text(
+                    text = voiceErrorMessage,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                    color = colors.statusWaiting,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 2.dp)
+                        .clickable(onClick = onDismissVoiceError)
+                        .testTag("composer-voice-error"),
                 )
             }
 
@@ -1800,10 +1832,14 @@ private fun ChatComposerCard(
                         .testTag("composer-btn-voice"),
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Mic,
-                        contentDescription = tr("Voice mode", "语音模式"),
-                        tint = colors.inkLabel,
-                        modifier = Modifier.size(20.dp),
+                        imageVector = if (isVoiceRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                        contentDescription = if (isVoiceRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
+                        tint = when {
+                            isVoiceRecording -> colors.statusError
+                            isVoiceStarting -> colors.accentPeriwinkle
+                            else -> colors.inkLabel
+                        },
+                        modifier = Modifier.size(if (isVoiceRecording) 17.dp else 20.dp),
                     )
                 }
 

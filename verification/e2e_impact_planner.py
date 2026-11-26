@@ -27,7 +27,7 @@ from typing import Any
 
 ALL_XCUITESTS: list[str] = [
     "testHomeCloudLocalBadgesAndChatRealtimeSyncAndApprovalGate",
-    "testProjectDetailNavigationAndEdgeSwipeBack",
+    "testSidebarProjectCollapseAndConversationNavigationBack",
     "testOfflineHostRecoveryAndSettingsAttribution",
     "testAutomationsCreateWithPromptDraftFlow",
     "testComposeFABStartCascadeAndStreamedReply",
@@ -39,7 +39,6 @@ ALL_UE_STATES: list[str] = [
     "UE01_AGENTS_HOME",
     "UE02_DISPLAY_OPTIONS",
     "UE03_CONTEXT_MENU_PIN",
-    "UE04_PROJECT_DETAIL",
     "UE05_CREATE_PROJECT",
     "UE06_AUTOMATIONS",
     "UE07_CHAT_AND_COMPOSER",
@@ -51,7 +50,7 @@ ALL_UE_STATES: list[str] = [
     "UE13_LIVE_ACTIVITY_SPEC",
 ]
 
-ALL_ESDD_TCS: list[str] = [f"TC-{i:02d}" for i in range(1, 17)]
+ALL_ESDD_TCS: list[str] = [f"TC-{i:02d}" for i in range(1, 17) if i != 4]
 
 RELEASE_LABELS = {"release", "full-e2e", "full-verification"}
 VERSION_BUMP_KEYS = (
@@ -322,12 +321,12 @@ def classify_file(path: str) -> dict[str, Any]:
             res["gate3_ios_build"] = True
             res["xcuitests"] = [
                 "testHomeCloudLocalBadgesAndChatRealtimeSyncAndApprovalGate",
-                "testProjectDetailNavigationAndEdgeSwipeBack",
+                "testSidebarProjectCollapseAndConversationNavigationBack",
                 "testOfflineHostRecoveryAndSettingsAttribution",
             ]
             res["run_live_app_rpc"] = True
             res["esdd_stages"] = [1, 3]
-            res["esdd_tcs"] = ["TC-01", "TC-04", "TC-05"]
+            res["esdd_tcs"] = ["TC-01", "TC-05"]
             return res
 
         if rel in {"Models/CascadeModels.swift", "Models/InteractionModels.swift"}:
@@ -402,7 +401,7 @@ def classify_file(path: str) -> dict[str, Any]:
             res["gate3_ios_build"] = True
             res["xcuitests"] = [
                 "testHomeCloudLocalBadgesAndChatRealtimeSyncAndApprovalGate",
-                "testProjectDetailNavigationAndEdgeSwipeBack",
+                "testSidebarProjectCollapseAndConversationNavigationBack",
             ]
             res["simulator_screens"] = ["UE01_AGENTS_HOME", "UE02_DISPLAY_OPTIONS", "UE03_CONTEXT_MENU_PIN"]
             res["esdd_stages"] = [1, 3, 4]
@@ -416,13 +415,13 @@ def classify_file(path: str) -> dict[str, Any]:
             res["gate2_live_rpc"] = True
             res["gate3_ios_build"] = True
             res["xcuitests"] = [
-                "testProjectDetailNavigationAndEdgeSwipeBack",
+                "testSidebarProjectCollapseAndConversationNavigationBack",
                 "testAutomationsCreateWithPromptDraftFlow",
             ]
-            res["simulator_screens"] = ["UE04_PROJECT_DETAIL", "UE05_CREATE_PROJECT", "UE06_AUTOMATIONS"]
+            res["simulator_screens"] = ["UE05_CREATE_PROJECT", "UE06_AUTOMATIONS"]
             res["esdd_stages"] = [1, 2, 3, 4]
-            res["esdd_tcs"] = ["TC-04", "TC-05", "TC-06"]
-            res["esdd_screens"] = ["UE04_PROJECT_DETAIL", "UE05_CREATE_PROJECT", "UE06_AUTOMATIONS"]
+            res["esdd_tcs"] = ["TC-05", "TC-06"]
+            res["esdd_screens"] = ["UE05_CREATE_PROJECT", "UE06_AUTOMATIONS"]
             return res
 
         if rel == "Store/AntigravitySessionStore+ChatAndInteractions.swift":
@@ -487,7 +486,7 @@ def classify_file(path: str) -> dict[str, Any]:
         res["gate3_ios_build"] = True
         res["xcuitests"] = [
             "testHomeCloudLocalBadgesAndChatRealtimeSyncAndApprovalGate",
-            "testProjectDetailNavigationAndEdgeSwipeBack",
+            "testSidebarProjectCollapseAndConversationNavigationBack",
         ]
         res["simulator_screens"] = ["UE01_AGENTS_HOME"]
         res["esdd_stages"] = [1, 3, 4]
@@ -512,16 +511,6 @@ def classify_file(path: str) -> dict[str, Any]:
         res["esdd_stages"] = [1, 3, 4]
         res["esdd_tcs"] = ["TC-03"]
         res["esdd_screens"] = ["UE03_CONTEXT_MENU_PIN"]
-        return res
-
-    if norm == "apps/ios/App/ViewControllers/Projects/ProjectDetailViewController.swift":
-        res = _empty_impact("ui-project-detail", "Project Detail (UE04) changed")
-        res["gate3_ios_build"] = True
-        res["xcuitests"] = ["testProjectDetailNavigationAndEdgeSwipeBack"]
-        res["simulator_screens"] = ["UE04_PROJECT_DETAIL"]
-        res["esdd_stages"] = [1, 3, 4]
-        res["esdd_tcs"] = ["TC-04"]
-        res["esdd_screens"] = ["UE04_PROJECT_DETAIL"]
         return res
 
     if norm == "apps/ios/App/ViewControllers/Projects/CreateProjectSheetView.swift":
@@ -1327,19 +1316,18 @@ def run_self_tests() -> None:
     assert p9e["gates"]["androidUnitAndRoborazzi"] is True
     assert p9e["gates"]["androidEmulatorE2E"] is False
 
-    # 10. Multi-file union (Automations + Project Detail)
+    # 10. Multi-file union (Automations + Create Project)
     p10 = build_verification_plan(
         changed_files=[
             "apps/ios/App/ViewControllers/Automations/AutomationsViewController.swift",
-            "apps/ios/App/ViewControllers/Projects/ProjectDetailViewController.swift",
+            "apps/ios/App/ViewControllers/Projects/CreateProjectSheetView.swift",
         ]
     )
     assert p10["mode"] == "scoped"
     assert p10["xcuitests"] == [
-        "testProjectDetailNavigationAndEdgeSwipeBack",
         "testAutomationsCreateWithPromptDraftFlow",
     ]
-    assert p10["simulatorScreens"] == ["UE04_PROJECT_DETAIL", "UE06_AUTOMATIONS"]
+    assert p10["simulatorScreens"] == ["UE05_CREATE_PROJECT", "UE06_AUTOMATIONS"]
 
     # 11. Core global file -> auto-escalated to full
     p11 = build_verification_plan(changed_files=["apps/ios/SharedUI/DesignSystem/AntigravityTheme.swift"])

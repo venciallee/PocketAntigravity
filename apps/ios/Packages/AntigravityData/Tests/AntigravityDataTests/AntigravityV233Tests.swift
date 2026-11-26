@@ -643,11 +643,11 @@ final class AntigravityV233Tests: XCTestCase {
         )
     }
 
-    // MARK: - TC-25: UE v2.1 20-Scene Alignment, Automation Detail/Retry, Rules & Skills, Language
+    // MARK: - TC-25: UE v2.1 19-Scene Alignment, Automation Detail/Retry, Rules & Skills, Language
 
     @MainActor
-    func testTC25_UeV21Alignment20ScenesAutomationDetailAndLanguagePreferences() async {
-        XCTAssertEqual(ESDDVerifySceneCase.allCases.count, 20)
+    func testTC25_UeV21Alignment19ScenesAutomationDetailAndLanguagePreferences() async {
+        XCTAssertEqual(ESDDVerifySceneCase.allCases.count, 19)
         let store = AntigravitySessionStore.makeESDDVerificationStore()
         XCTAssertEqual(store.hosts.count, 3)
         XCTAssertEqual(store.selectedModelConfig.displayName, "Gemini 4 Neon")

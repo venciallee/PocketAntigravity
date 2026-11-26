@@ -3,7 +3,7 @@ import AntigravityData
 
 /// State `UE14_RULES_AND_SKILLS`: Mobile Rules & Skills viewer (`iOS · 项目 Rules & skills`)
 /// aligned 1:1 with `docs/ue/ios/ios-customizations.png`.
-/// Reachable from both Left Sidebar `Customizations` and Project Detail `Project rules & skills (4)`.
+/// Reachable from Left Sidebar `Customizations` and sidebar project context menus (`Project Rules & Skills`).
 public struct CustomizationsSettingsView: View {
     @Bindable public var store: AntigravitySessionStore
     public var projectName: String

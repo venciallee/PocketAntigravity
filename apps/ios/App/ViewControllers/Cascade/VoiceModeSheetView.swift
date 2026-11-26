@@ -61,9 +61,11 @@ public struct VoiceModeSheetView: View {
             Text(
                 voiceManager.isRecording
                     ? lang.t("Listening...", "正在聆听...")
-                    : (store.voiceModeState.isMuted
-                        ? lang.t("Microphone Muted", "麦克风已静音")
-                        : lang.t("Connected · \(store.voiceModeState.selectedVoiceId.capitalized)", "已连接 · \(store.voiceModeState.selectedVoiceId.capitalized)"))
+                    : (voiceManager.isStarting
+                        ? lang.t("Starting microphone...", "正在启动麦克风...")
+                        : (store.voiceModeState.isMuted
+                            ? lang.t("Microphone Muted", "麦克风已静音")
+                            : lang.t("Connected · \(store.voiceModeState.selectedVoiceId.capitalized)", "已连接 · \(store.voiceModeState.selectedVoiceId.capitalized)")))
             )
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
@@ -169,6 +171,7 @@ public struct VoiceModeSheetView: View {
                 Text(err)
                     .font(.system(size: 12))
                     .foregroundStyle(AntigravityTheme.statusWaiting)
+                    .accessibilityIdentifier("voice-mode-error")
             }
             HStack(spacing: 10) {
                 TextField(lang.t("Or type a live voice turn...", "或输入实时语音消息..."), text: $manualPromptText)
@@ -179,6 +182,7 @@ public struct VoiceModeSheetView: View {
                     .background(AntigravityTheme.surfaceInput, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(AntigravityTheme.cardBorder, lineWidth: 1))
                 Button(lang.t("Send", "发送")) {
+                    voiceManager.stopRecording()
                     let text = manualPromptText
                     manualPromptText = ""
                     store.appendVoiceTranscriptTurn(isUser: true, text: text)
@@ -206,16 +210,26 @@ public struct VoiceModeSheetView: View {
                 }
 
                 Button {
+                    if !voiceManager.isRecording && !voiceManager.isStarting && store.voiceModeState.isMuted {
+                        store.toggleVoiceMute()
+                    }
+                    let prefix = manualPromptText
                     voiceManager.toggleRecording { spoken in
-                        manualPromptText = spoken
+                        manualPromptText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: spoken)
                     }
                 } label: {
-                    Label(voiceManager.isRecording ? lang.t("Stop Mic", "停止收音") : lang.t("Speak", "说话"), systemImage: voiceManager.isRecording ? "stop.circle.fill" : "waveform.circle.fill")
+                    Label(
+                        voiceManager.isRecording
+                            ? lang.t("Stop Mic", "停止收音")
+                            : (voiceManager.isStarting ? lang.t("Starting...", "启动中...") : lang.t("Speak", "说话")),
+                        systemImage: (voiceManager.isRecording || voiceManager.isStarting) ? "stop.circle.fill" : "waveform.circle.fill"
+                    )
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkOnPrimaryCTA)
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .background(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle, in: RoundedRectangle(cornerRadius: 14))
                 }
+                .accessibilityIdentifier("btn_voice_mode_speak")
             }
         }
     }

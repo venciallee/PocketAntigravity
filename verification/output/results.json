@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-23T13:17:49.258555+00:00",
+  "timestamp": "2026-11-26T16:20:57.377317+00:00",
   "specVersion": "2.1.0",
   "methodology": "ESDD (Executable Spec Driven Development)",
   "mode": "full",
@@ -9,28 +9,28 @@
   "specInspection": {
     "passed": true,
     "specVersion": "2.1.0",
-    "swiftFileCount": 88,
-    "matchedSwiftControllers": 20,
-    "stateCount": 13,
-    "eventCount": 13,
-    "claimCount": 13,
-    "selectorCount": 116,
+    "swiftFileCount": 95,
+    "matchedSwiftControllers": 19,
+    "stateCount": 12,
+    "eventCount": 11,
+    "claimCount": 12,
+    "selectorCount": 109,
     "checks": [
       "Design tokens verified: 10 OLED/Periwinkle color tokens & 5 typography tiers",
-      "All 20 reference UE baselines verified on disk (13 canonical + 7 extended)",
-      "100% selector parity: all 116 required data-testid selectors present across UE01..UE13",
-      "State\u00d7Event DAG complete: 13 states and 13 transitions reachable from UE01_AGENTS_HOME",
-      "All 13 UE states covered by executable acceptance claims (CLAIM-01..CLAIM-13)",
-      "All 20/20 Swift controllers grounded across 88 Swift files",
+      "All 19 reference UE baselines verified on disk (12 canonical + 7 extended)",
+      "100% selector parity: all 109 required data-testid selectors present across 12 canonical UE screens",
+      "State\u00d7Event DAG complete: 12 states and 11 transitions reachable from UE01_AGENTS_HOME",
+      "All 12 canonical UE states covered by executable acceptance claims",
+      "All 19/19 Swift controllers grounded across 95 Swift files",
       "Pure Swift 6 AntigravityData isolation verified (zero UIKit/WebKit/AVFoundation imports; Official Cloud Relay + QR Scanner grounded)",
       "Original AG Pocket AppIcon.appiconset (1024x1024 opaque RGB), AGPocket target/bundle ID/agpocket:// scheme & App Store 5.2.2 trademark compliance verified",
       "Secret hygiene verified: zero hardcoded Google API key literals across source tree",
-      "RPC registration guardrail passed: all 56 Connect-RPC methods registered in HostCapabilityRegistry.swift",
-      "KMP RPC registration guardrail passed: all 54 Connect-RPC methods registered in HostCapabilityRegistry.kt",
+      "RPC registration guardrail passed: all 57 Connect-RPC methods registered in HostCapabilityRegistry.swift",
+      "KMP RPC registration guardrail passed: all 57 Connect-RPC methods registered in HostCapabilityRegistry.kt",
       "Zero silent `try?` mutating RPC calls in AntigravitySessionStore verified",
       "Zero silent `runCatching` mutating RPC calls in shared/core-domain/ verified",
-      "Forward-compatible enum guardrail passed: all 36 String Codable enums in Models/ are resilient",
-      "KMP forward-compatible enum guardrail passed: all 37 @Serializable enums in shared/core-model/ use resilient serializers",
+      "Forward-compatible enum guardrail passed: all 43 String Codable enums in Models/ are resilient",
+      "KMP forward-compatible enum guardrail passed: all 36 @Serializable enums in shared/core-model/ use resilient serializers",
       "Swift <-> Companion Bridge enum downgrade parity verified (12 mappings in sync)",
       "Three-way Swift <-> KMP <-> Companion Bridge enum downgrade parity verified (12 mappings in sync)"
     ],
@@ -54,7 +54,7 @@
       "id": "TC-01",
       "screen": "UE01_AGENTS_HOME",
       "passed": true,
-      "detail": "New Conversation Home sidebar trigger, host online pill, Needs approval banner & cloud toggle verified (0px overflow)"
+      "detail": "New Conversation Home sidebar trigger, host online pill, Needs approval banner & local-computer/cloud runtime toggle verified (0px overflow)"
     },
     {
       "id": "TC-02",
@@ -67,12 +67,6 @@
       "screen": "UE03_CONTEXT_MENU_PIN",
       "passed": true,
       "detail": "Context preview pills + 6 menu actions + Swipe Pin (#8DB8FF) & Archive verified"
-    },
-    {
-      "id": "TC-04",
-      "screen": "UE04_PROJECT_DETAIL",
-      "passed": true,
-      "detail": "~/code/ledger-svc metadata, Active/Archived/Automations tab switching & New Conversation CTA verified"
     },
     {
       "id": "TC-05",
@@ -142,9 +136,9 @@
     },
     {
       "id": "TC-16",
-      "screen": "ALL_13_SCREENS",
+      "screen": "ALL_12_SCREENS",
       "passed": true,
-      "detail": "0px overflow across 13/13 screens, HIG >=44pt primary controls verified & 13/13 CMP_UE01..CMP_UE13 generated"
+      "detail": "0px overflow across 12/12 screens, HIG >=44pt primary controls verified & 12/12 side-by-side comparisons generated"
     }
   ],
   "claims": [
@@ -183,18 +177,6 @@
       "axSnapshot": "verification/output/ax_trees/UE03_CONTEXT_MENU_PIN.json",
       "verifiedSelectors": 8,
       "verifiedTouchTargets": 5
-    },
-    {
-      "claimId": "CLAIM-04",
-      "state": "UE04_PROJECT_DETAIL",
-      "description": "Project Detail renders ledger-svc metadata pills (Local \u00b7 MacBook Pro, main \u21912, Working tree clean), New Conversation CTA, Active 4/Archived 2/Automations 1 tabs, clean single-line conversation rows, and wired THIS PROJECT tools (Nightly dependency audit, Project rules & skills, Reveal in Finder)",
-      "passed": true,
-      "screenshot": "verification/output/screenshots/UE04_PROJECT_DETAIL.png",
-      "comparison": "verification/output/comparisons/CMP_UE04.png",
-      "resolutionPx": "1170x2532",
-      "axSnapshot": "verification/output/ax_trees/UE04_PROJECT_DETAIL.json",
-      "verifiedSelectors": 7,
-      "verifiedTouchTargets": 4
     },
     {
       "claimId": "CLAIM-05",
@@ -305,5 +287,5 @@
       "verifiedTouchTargets": 0
     }
   ],
-  "masterOverview": "verification/output/screenshots/ESDD_13_SCREENS_OVERVIEW.png"
+  "masterOverview": "verification/output/screenshots/ESDD_12_SCREENS_OVERVIEW.png"
 }

@@ -49,6 +49,7 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WorkOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -92,6 +93,7 @@ import dev.antigravity.android.core.ui.theme.antigravityColors
 import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.android.ui.chat.ComposerAttachmentsStrip
 import dev.antigravity.android.ui.chat.formatComposerModelPillName
+import dev.antigravity.android.ui.chat.rememberVoiceDictationController
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentsHostFilterScope
 import dev.antigravity.shared.model.AntigravityCloudDetector
@@ -244,10 +246,12 @@ fun AgentsHomeScreen(
         }
     }
 
+    val voiceController = rememberVoiceDictationController()
     val selectedModelName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
     val permissionLabel = settingsState.activePermissionPreset.localizedTitle(lang)
 
     fun submitHomePrompt() {
+        voiceController.stopRecording()
         val text = draftText.trim()
         val attachments = workspaceState.attachedComposerChips
         if (text.isEmpty() && attachments.isEmpty()) return
@@ -827,10 +831,26 @@ fun AgentsHomeScreen(
                                     "Ask anything, @ to mention, / for actions",
                                     "随便问点什么，输入 @ 引用，/ 调用指令",
                                 )
+
+                                voiceController.errorMessage?.let { voiceErr ->
+                                    Text(
+                                        text = voiceErr,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                                        color = colors.statusWaiting,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { voiceController.clearError() }
+                                            .testTag("home-voice-error"),
+                                    )
+                                }
+
                                 BasicTextField(
                                     value = draftText,
                                     onValueChange = { updated ->
                                         draftText = updated
+                                        if (updated.isNotEmpty() && !voiceController.isRecording && voiceController.errorMessage != null) {
+                                            voiceController.clearError()
+                                        }
                                         if (updated == "/") {
                                             onOpenSlashMenu()
                                         }
@@ -943,16 +963,24 @@ fun AgentsHomeScreen(
                                     Spacer(modifier = Modifier.weight(1f))
 
                                     IconButton(
-                                        onClick = onOpenVoiceMode,
+                                        onClick = {
+                                            voiceController.toggleRecording(existingDraft = draftText) { updated ->
+                                                draftText = updated
+                                            }
+                                        },
                                         modifier = Modifier
                                             .size(34.dp)
                                             .testTag("btn-voice-mode"),
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Rounded.Mic,
-                                            contentDescription = tr("Voice mode", "语音模式"),
-                                            tint = colors.inkLabel,
-                                            modifier = Modifier.size(20.dp),
+                                            imageVector = if (voiceController.isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                                            contentDescription = if (voiceController.isRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
+                                            tint = when {
+                                                voiceController.isRecording -> colors.statusError
+                                                voiceController.isStarting -> colors.accentPeriwinkle
+                                                else -> colors.inkLabel
+                                            },
+                                            modifier = Modifier.size(if (voiceController.isRecording) 17.dp else 20.dp),
                                         )
                                     }
 
@@ -1121,7 +1149,9 @@ fun AgentsSidebarDrawerOverlay(
     onOpenCustomizations: () -> Unit,
     onOpenDisplayOptions: () -> Unit,
     onOpenNewProject: () -> Unit,
-    onOpenProjectDetail: (String) -> Unit,
+    onSelectProject: (String) -> Unit = {},
+    onOpenProjectCustomizations: (projectId: String, projectName: String) -> Unit = { _, _ -> },
+    onRevealProjectInFinder: (String) -> Unit = {},
     onOpenConversation: (String) -> Unit,
     onLongPressConversation: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -1172,7 +1202,9 @@ fun AgentsSidebarDrawerOverlay(
                 onOpenCustomizations = onOpenCustomizations,
                 onOpenDisplayOptions = onOpenDisplayOptions,
                 onOpenNewProject = onOpenNewProject,
-                onOpenProjectDetail = onOpenProjectDetail,
+                onSelectProject = onSelectProject,
+                onOpenProjectCustomizations = onOpenProjectCustomizations,
+                onRevealProjectInFinder = onRevealProjectInFinder,
                 onOpenConversation = onOpenConversation,
                 onLongPressConversation = onLongPressConversation,
                 onOpenSettings = onOpenSettings,
@@ -1191,7 +1223,9 @@ fun AgentsSidebarDrawerContent(
     onOpenCustomizations: () -> Unit,
     onOpenDisplayOptions: () -> Unit,
     onOpenNewProject: () -> Unit,
-    onOpenProjectDetail: (String) -> Unit,
+    onSelectProject: (String) -> Unit = {},
+    onOpenProjectCustomizations: (projectId: String, projectName: String) -> Unit = { _, _ -> },
+    onRevealProjectInFinder: (String) -> Unit = {},
     onOpenConversation: (String) -> Unit,
     onLongPressConversation: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -1419,90 +1453,167 @@ fun AgentsSidebarDrawerContent(
 
             dedupedGroups.forEach { (project, projectItems) ->
                 val isCollapsed = project.id in workspaceState.collapsedProjectIds
+                val isNoProjectGroup = project.isNoProject || AntigravityCloudDetector.isNoProjectSlug(project.id)
+                val isLocalProject = project.runtime != ProjectRuntimeTarget.CLOUD && !isNoProjectGroup
                 item(key = "project-header-${project.id}") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpenProjectDetail(project.id) }
-                            .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
-                            .testTag("project-header-${project.id}"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (project.runtime == ProjectRuntimeTarget.CLOUD) Icons.Rounded.Cloud else Icons.Rounded.Folder,
-                            contentDescription = null,
-                            tint = colors.inkSecondary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(
-                            text = if (coordinator.isVerificationMode && project.runtime == ProjectRuntimeTarget.CLOUD && !project.name.contains("/")) {
-                                "acme/${project.name}"
-                            } else {
-                                project.name
-                            },
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.Medium,
-                            ),
-                            color = colors.inkSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (isCollapsed && projectItems.isNotEmpty()) {
-                            Surface(
-                                shape = RoundedCornerShape(100.dp),
-                                color = colors.surfaceActiveTab,
-                                modifier = Modifier.testTag("project-collapsed-count-${project.id}"),
-                            ) {
-                                Text(
-                                    text = "${projectItems.size}",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                    ),
-                                    color = colors.inkMuted,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                                )
-                            }
-                        }
-                        if (projectItems.isNotEmpty()) {
-                            IconButton(
-                                onClick = {
-                                    coordinator.workspaceStore.toggleProjectExpanded(
-                                        projectId = project.id,
-                                        persist = !coordinator.isVerificationMode,
-                                    )
-                                },
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .testTag("project-toggle-${project.id}"),
-                            ) {
-                                Icon(
-                                    imageVector = if (isCollapsed) Icons.Rounded.ChevronRight else Icons.Rounded.KeyboardArrowDown,
-                                    contentDescription = if (isCollapsed) {
-                                        tr("Expand ${project.name}", "展开 ${project.name}")
-                                    } else {
-                                        tr("Collapse ${project.name}", "收起 ${project.name}")
-                                    },
-                                    tint = colors.inkMuted,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = { onNewConversation(project.id) },
+                    var projectMenuExpanded by remember(project.id) { mutableStateOf(false) }
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Row(
                             modifier = Modifier
-                                .size(34.dp)
-                                .testTag("project-add-${project.id}"),
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = {
+                                        if (projectItems.isNotEmpty()) {
+                                            coordinator.workspaceStore.toggleProjectExpanded(
+                                                projectId = project.id,
+                                                persist = !coordinator.isVerificationMode,
+                                            )
+                                        } else {
+                                            onSelectProject(project.id)
+                                        }
+                                    },
+                                    onLongClick = { projectMenuExpanded = true },
+                                )
+                                .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
+                                .testTag("project-header-${project.id}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Add,
-                                contentDescription = tr("New conversation in ${project.name}", "在 ${project.name} 中新建会话"),
-                                tint = colors.inkLabel,
-                                modifier = Modifier.size(19.dp),
+                                imageVector = if (project.runtime == ProjectRuntimeTarget.CLOUD) Icons.Rounded.Cloud else Icons.Rounded.Folder,
+                                contentDescription = null,
+                                tint = colors.inkSecondary,
+                                modifier = Modifier.size(18.dp),
                             )
+                            Text(
+                                text = if (coordinator.isVerificationMode && project.runtime == ProjectRuntimeTarget.CLOUD && !project.name.contains("/")) {
+                                    "acme/${project.name}"
+                                } else {
+                                    project.name
+                                },
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 14.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                                color = colors.inkSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (isCollapsed && projectItems.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(100.dp),
+                                    color = colors.surfaceActiveTab,
+                                    modifier = Modifier.testTag("project-collapsed-count-${project.id}"),
+                                ) {
+                                    Text(
+                                        text = "${projectItems.size}",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        ),
+                                        color = colors.inkMuted,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                            if (projectItems.isNotEmpty()) {
+                                IconButton(
+                                    onClick = {
+                                        coordinator.workspaceStore.toggleProjectExpanded(
+                                            projectId = project.id,
+                                            persist = !coordinator.isVerificationMode,
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .testTag("project-toggle-${project.id}"),
+                                ) {
+                                    Icon(
+                                        imageVector = if (isCollapsed) Icons.Rounded.ChevronRight else Icons.Rounded.KeyboardArrowDown,
+                                        contentDescription = if (isCollapsed) {
+                                            tr("Expand ${project.name}", "展开 ${project.name}")
+                                        } else {
+                                            tr("Collapse ${project.name}", "收起 ${project.name}")
+                                        },
+                                        tint = colors.inkMuted,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { onNewConversation(project.id) },
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .testTag("project-add-${project.id}"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Add,
+                                    contentDescription = tr("New conversation in ${project.name}", "在 ${project.name} 中新建会话"),
+                                    tint = colors.inkLabel,
+                                    modifier = Modifier.size(19.dp),
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = projectMenuExpanded,
+                            onDismissRequest = { projectMenuExpanded = false },
+                            containerColor = colors.surfacePopover,
+                            modifier = Modifier.testTag("project-context-menu-${project.id}"),
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(tr("New conversation in project", "在项目中新建会话"), color = colors.inkReading) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Add,
+                                        contentDescription = null,
+                                        tint = colors.inkSecondary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = {
+                                    projectMenuExpanded = false
+                                    onNewConversation(project.id)
+                                },
+                                modifier = Modifier.testTag("project-menu-new-conv-${project.id}"),
+                            )
+                            if (!isNoProjectGroup) {
+                                DropdownMenuItem(
+                                    text = { Text(tr("Project rules & skills", "项目规则与技能"), color = colors.inkReading) },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Hub,
+                                            contentDescription = null,
+                                            tint = colors.inkSecondary,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    },
+                                    onClick = {
+                                        projectMenuExpanded = false
+                                        onOpenProjectCustomizations(project.id, project.name)
+                                    },
+                                    modifier = Modifier.testTag("project-menu-rules-skills-${project.id}"),
+                                )
+                                if (isLocalProject) {
+                                    DropdownMenuItem(
+                                        text = { Text(tr("Reveal in Finder on Mac", "在 Mac 访达中显示"), color = colors.inkReading) },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Computer,
+                                                contentDescription = null,
+                                                tint = colors.inkSecondary,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        },
+                                        onClick = {
+                                            projectMenuExpanded = false
+                                            onRevealProjectInFinder(project.id)
+                                        },
+                                        modifier = Modifier.testTag("project-menu-reveal-finder-${project.id}"),
+                                    )
+                                }
+                            }
                         }
                     }
                 }

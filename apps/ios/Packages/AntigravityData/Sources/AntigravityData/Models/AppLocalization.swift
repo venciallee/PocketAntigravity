@@ -76,16 +76,6 @@ public extension ProjectSourceKind {
     }
 }
 
-public extension ProjectDetailTab {
-    func localizedTitle(for language: AppLanguage) -> String {
-        switch self {
-        case .active: return language.t("Active", "进行中")
-        case .archived: return language.t("Archived", "已归档")
-        case .automations: return language.t("Automations", "自动化")
-        }
-    }
-}
-
 public extension ThinkingEffortLevel {
     func localizedTitle(for language: AppLanguage) -> String {
         switch self {

@@ -4258,7 +4258,7 @@ public class AntigravityKmpRpcClient(
         )
     }
 
-    // MARK: - Cloud Projects, Repositories & Automations (`UE04`, `UE05`, `UE06`)
+    // MARK: - Cloud Projects, Repositories & Automations (`UE05`, `UE06`)
 
     public suspend fun fetchCloudProjects(
         candidateInstances: List<RelayInstanceInfo> = emptyList(),
@@ -4441,6 +4441,15 @@ public class AntigravityKmpRpcClient(
             runtime = draft.runsOn,
             hostName = if (draft.runsOn == ProjectRuntimeTarget.CLOUD) "Antigravity" else host.hostname,
             activeBranch = draft.selectedRepo?.defaultBranch ?: "main",
+        )
+    }
+
+    public suspend fun openWorkspaceInFinder(workspaceUri: String) {
+        callUnaryJson(
+            method = "OpenWorkspaceInFinder",
+            body = buildJsonObject {
+                put("workspaceUri", workspaceUri)
+            },
         )
     }
 

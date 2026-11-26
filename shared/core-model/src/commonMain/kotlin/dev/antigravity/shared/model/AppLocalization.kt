@@ -50,12 +50,6 @@ public fun ProjectSourceKind.localizedTitle(language: AppLanguage): String = whe
     ProjectSourceKind.DRIVE_FOLDER -> language.t("Drive folder", "云端硬盘文件夹")
 }
 
-public fun ProjectDetailTab.localizedTitle(language: AppLanguage): String = when (this) {
-    ProjectDetailTab.ACTIVE -> language.t("Active", "进行中")
-    ProjectDetailTab.ARCHIVED -> language.t("Archived", "已归档")
-    ProjectDetailTab.AUTOMATIONS -> language.t("Automations", "自动化")
-}
-
 public fun ThinkingEffortLevel.localizedTitle(language: AppLanguage): String = when (this) {
     ThinkingEffortLevel.LOW -> language.t("Low", "低")
     ThinkingEffortLevel.MEDIUM -> language.t("Medium", "中")

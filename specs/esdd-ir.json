@@ -82,22 +82,6 @@
       ]
     },
     {
-      "id": "UE04_PROJECT_DETAIL",
-      "title": "Project Detail Page & New Conversation in Project",
-      "referenceUEImage": "docs/ue/ios/ios-project-detail.png",
-      "swiftController": "ProjectDetailViewController",
-      "claimId": "CLAIM-04",
-      "requiredSelectors": [
-        "[data-testid='btn-back-agents']",
-        "[data-testid='project-hero-title']",
-        "[data-testid='btn-new-conv-in-project']",
-        "[data-testid='project-tab-active']",
-        "[data-testid='project-conv-list']",
-        "[data-testid='project-row-automation']",
-        "[data-testid='project-row-skills']"
-      ]
-    },
-    {
       "id": "UE05_CREATE_PROJECT",
       "title": "Create New Project (MacBook Pro / Cloud + GitHub / Drive)",
       "referenceUEImage": "docs/ue/ios/ios-new-project.png",
@@ -308,11 +292,9 @@
   "events": [
     { "id": "E01", "from": "UE01_AGENTS_HOME", "to": "UE02_DISPLAY_OPTIONS", "trigger": "Open Sidebar Drawer and tap Display Options filter icon" },
     { "id": "E02", "from": "UE01_AGENTS_HOME", "to": "UE03_CONTEXT_MENU_PIN", "trigger": "Open Sidebar Drawer and long-press or swipe conversation row" },
-    { "id": "E03", "from": "UE01_AGENTS_HOME", "to": "UE04_PROJECT_DETAIL", "trigger": "Open Sidebar Drawer and tap project ledger-svc" },
     { "id": "E04", "from": "UE01_AGENTS_HOME", "to": "UE05_CREATE_PROJECT", "trigger": "Open Sidebar Drawer and tap New Project folder+ button" },
     { "id": "E05", "from": "UE01_AGENTS_HOME", "to": "UE06_AUTOMATIONS", "trigger": "Open Sidebar Drawer and tap Automations" },
     { "id": "E06", "from": "UE01_AGENTS_HOME", "to": "UE07_CHAT_AND_COMPOSER", "trigger": "Tap Needs approval banner or conversation row Add rate limiter to /transfers" },
-    { "id": "E07", "from": "UE04_PROJECT_DETAIL", "to": "UE07_CHAT_AND_COMPOSER", "trigger": "Tap New Conversation in Project CTA" },
     { "id": "E08", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE08_ADD_CONTEXT", "trigger": "Tap + button in ChatComposerView" },
     { "id": "E09", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE09_MODEL_AND_MODE", "trigger": "Tap Gemini 4 Neon / Extra High pill in ChatComposerView" },
     { "id": "E10", "from": "UE07_CHAT_AND_COMPOSER", "to": "UE10_STRUCTURED_QUESTION", "trigger": "Invoke /plan interview and receive ask_question step" },
@@ -324,7 +306,6 @@
     { "id": "CLAIM-01", "state": "UE01_AGENTS_HOME", "description": "New Conversation Home renders Sidebar toggle, Host switcher pill, Search, Welcome greeting, amber Needs approval banner, and PC-aligned bottom Composer (Project, Branch, Cloud, +, Gemini 4 Neon / Extra High, Default preset, Mic, Send)" },
     { "id": "CLAIM-02", "state": "UE02_DISPLAY_OPTIONS", "description": "Display Options sheet renders Group By Project, Sort Conversations popover menu, Sort Projects, Filter, Display, Auto Pin / Archived Only toggles, and Mark All as Read" },
     { "id": "CLAIM-03", "state": "UE03_CONTEXT_MENU_PIN", "description": "Context Menu renders rich Plan preview card (Gemini 4 Neon), Pin/Unread/Rename/Move/Archive/Delete actions, and Swipe Pin/Archive shortcuts" },
-    { "id": "CLAIM-04", "state": "UE04_PROJECT_DETAIL", "description": "Project Detail renders ledger-svc metadata pills (Local · MacBook Pro, main ↑2, Working tree clean), New Conversation CTA, Active 4/Archived 2/Automations 1 tabs, clean single-line conversation rows, and wired THIS PROJECT tools (Nightly dependency audit, Project rules & skills, Reveal in Finder)" },
     { "id": "CLAIM-05", "state": "UE05_CREATE_PROJECT", "description": "New Project sheet supports MacBook Pro vs Cloud runtime, GitHub vs Drive source, repo search, worktree config, and Create Project CTA" },
     { "id": "CLAIM-06", "state": "UE06_AUTOMATIONS", "description": "Automations hub (sidebar-navigated without bottom tab bar) renders NL quick-create bar, Scheduled cards with Next/Last Run stats & Run Now, Always On PR triage, Paused Resume action, and navigates to Automation Detail & Edit" },
     { "id": "CLAIM-07", "state": "UE07_CHAT_AND_COMPOSER", "description": "Chat screen renders +128 -14 badge, Thought for 14s, Plan card, 7-segment Task card, Face ID Allow/Deny command card, Stop bar, and Composer with @chip, +, Gemini 4 Neon / Extra High, Default permission preset, Mic, and Send" },

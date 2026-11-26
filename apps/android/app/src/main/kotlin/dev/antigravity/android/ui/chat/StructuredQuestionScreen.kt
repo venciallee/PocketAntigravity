@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -87,6 +88,7 @@ fun StructuredQuestionScreen(
 
     var freeformReply by remember { mutableStateOf("") }
     var submittedBanner by remember { mutableStateOf<String?>(null) }
+    val voiceController = rememberVoiceDictationController()
 
     Scaffold(
         modifier = modifier
@@ -179,18 +181,23 @@ fun StructuredQuestionScreen(
                         },
                     )
                     Icon(
-                        imageVector = Icons.Rounded.Mic,
-                        contentDescription = tr("Voice reply", "语音回复"),
-                        tint = colors.inkLabel,
+                        imageVector = if (voiceController.isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                        contentDescription = if (voiceController.isRecording) tr("Stop voice reply", "停止语音回复") else tr("Voice reply", "语音回复"),
+                        tint = if (voiceController.isRecording) colors.statusError else colors.inkLabel,
                         modifier = Modifier
                             .size(21.dp)
                             .clickable {
-                                if (freeformReply.isNotBlank()) {
+                                if (freeformReply.isNotBlank() && !voiceController.isRecording && !voiceController.isStarting) {
+                                    voiceController.stopRecording()
                                     submittedBanner = lang.t(
                                         "Sent reply: $freeformReply",
                                         "已发送回复：$freeformReply",
                                     )
                                     freeformReply = ""
+                                } else {
+                                    voiceController.toggleRecording(existingDraft = freeformReply) { updated ->
+                                        freeformReply = updated
+                                    }
                                 }
                             },
                     )

@@ -1204,6 +1204,22 @@ public class AntigravityCoreCoordinator(
         return connectionStore.state.value.userDisplayName
     }
 
+    @Throws(Throwable::class)
+    public suspend fun revealProjectInFinder(projectId: String): Boolean {
+        val project = (workspaceStore.state.value.projects + conversationSyncStore.state.value.projects)
+            .firstOrNull { it.id == projectId || it.name == projectId }
+            ?: return false
+        if (project.runtime == ProjectRuntimeTarget.CLOUD ||
+            project.isNoProject ||
+            project.workspaceUri.isBlank()
+        ) {
+            return false
+        }
+        val client = connectionStore.activeClient() ?: return false
+        client.openWorkspaceInFinder(project.workspaceUri)
+        return true
+    }
+
     private suspend fun onHandshakeSucceeded(
         handshake: BackendHandshakeResult,
         startSummaryStream: Boolean,

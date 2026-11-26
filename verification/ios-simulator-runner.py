@@ -114,7 +114,7 @@ def build_overview_sheet(out_dir: Path, state_ids: list[str], device_label: str,
 
     board = Image.new("RGB", (canvas_w, canvas_h), (9, 10, 13))
     draw = ImageDraw.Draw(board)
-    title_scope = "All 13 Native SwiftUI Captures" if is_full else f"Impact-Scoped Captures ({len(state_ids)} screen(s))"
+    title_scope = f"All {len(state_ids)} Native SwiftUI Captures" if is_full else f"Impact-Scoped Captures ({len(state_ids)} screen(s))"
     draw.text(
         (pad_x, 28),
         f"PocketAntigravity — Real Xcode iOS Simulator {title_scope} ({device_label})",
@@ -141,14 +141,9 @@ def build_overview_sheet(out_dir: Path, state_ids: list[str], device_label: str,
         draw.text((x, y), sid, fill=(213, 216, 226))
         board.paste(img, (ox, oy))
 
-    filename = "REAL_SIMULATOR_20_SCREENS_OVERVIEW.png" if (is_full and len(state_ids) > 13) else (
-        "REAL_SIMULATOR_13_SCREENS_OVERVIEW.png" if is_full else "REAL_SIMULATOR_SCOPED_SCREENS_OVERVIEW.png"
-    )
+    filename = f"REAL_SIMULATOR_{len(state_ids)}_SCREENS_OVERVIEW.png" if is_full else "REAL_SIMULATOR_SCOPED_SCREENS_OVERVIEW.png"
     overview_path = out_dir / filename
     board.save(overview_path, format="PNG")
-    if is_full and len(state_ids) > 13:
-        legacy_path = out_dir / "REAL_SIMULATOR_13_SCREENS_OVERVIEW.png"
-        board.save(legacy_path, format="PNG")
     print(f"  [OVERVIEW] {overview_path}", flush=True)
 
 

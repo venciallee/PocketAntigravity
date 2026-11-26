@@ -37,6 +37,7 @@ public struct StructuredQuestionCardView: View {
     ]
     @State private var somethingElseText: String = ""
     @State private var freeformReplyText: String = ""
+    @State private var voiceManager = VoiceInputManager()
 
     private let steps: [QuestionStepModel] = [
         QuestionStepModel(
@@ -148,6 +149,9 @@ public struct StructuredQuestionCardView: View {
                     currentStepIndex = 0
                 }
             }
+        }
+        .onDisappear {
+            voiceManager.stopRecording()
         }
     }
 
@@ -384,42 +388,59 @@ public struct StructuredQuestionCardView: View {
     // MARK: - Bottom Freeform Composer Bar
 
     private var freeformComposerBar: some View {
-        HStack(spacing: 10) {
-            TextField(lang.t("Reply in your own words", "直接输入你的回复"), text: $freeformReplyText)
-                .font(.system(size: 15))
-                .foregroundStyle(AntigravityTheme.inkReading)
-                .onSubmit {
-                    submitFreeformReply()
-                }
-
-            Button {
-                submitFreeformReply()
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(AntigravityTheme.surfaceBadge)
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "mic")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(AntigravityTheme.inkLabel)
-                }
-                .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+        VStack(alignment: .leading, spacing: 6) {
+            if let voiceErr = voiceManager.errorMessage {
+                Text(voiceErr)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(AntigravityTheme.statusWaiting)
+                    .padding(.horizontal, 10)
             }
-            .buttonStyle(.plain)
+            HStack(spacing: 10) {
+                TextField(lang.t("Reply in your own words", "直接输入你的回复"), text: $freeformReplyText)
+                    .font(.system(size: 15))
+                    .foregroundStyle(AntigravityTheme.inkReading)
+                    .onSubmit {
+                        submitFreeformReply()
+                    }
+
+                Button {
+                    let hasTypedText = !freeformReplyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    if hasTypedText && !voiceManager.isRecording && !voiceManager.isStarting {
+                        submitFreeformReply()
+                    } else {
+                        let prefix = freeformReplyText
+                        voiceManager.toggleRecording { transcript in
+                            freeformReplyText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
+                        }
+                    }
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(AntigravityTheme.surfaceBadge)
+                            .frame(width: 36, height: 36)
+                        Image(systemName: voiceManager.isRecording ? "stop.fill" : "mic")
+                            .font(.system(size: voiceManager.isRecording ? 12 : 15, weight: .medium))
+                            .foregroundStyle(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.inkLabel)
+                    }
+                    .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 6)
+            .frame(minHeight: 50)
+            .background(AntigravityTheme.surfaceCard)
+            .overlay(
+                Capsule()
+                    .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+            )
+            .clipShape(Capsule())
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 6)
-        .frame(minHeight: 50)
-        .background(AntigravityTheme.surfaceCard)
-        .overlay(
-            Capsule()
-                .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(Capsule())
         .accessibilityIdentifier("composer-freeform-reply")
     }
 
     private func submitStructuredAnswers() {
+        voiceManager.stopRecording()
         let answers = selectedByStep[currentStepIndex].map(Array.init) ?? []
         if let waiting = store.pendingWaitingStep {
             store.resolveWaitingStep(
@@ -434,6 +455,7 @@ public struct StructuredQuestionCardView: View {
     }
 
     private func submitFreeformReply() {
+        voiceManager.stopRecording()
         let trimmed = freeformReplyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         store.composerDraftText = trimmed

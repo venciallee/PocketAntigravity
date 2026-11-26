@@ -2,6 +2,7 @@ package dev.antigravity.android.ui.chat
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Reply
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DeviceHub
@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -900,6 +901,7 @@ fun VoiceModeSheet(
     val colors = LocalAntigravityColors.current
     val orchState by coordinator.orchestrationStore.state.collectAsState()
     val voiceState = orchState.voiceState
+    val voiceController = rememberVoiceDictationController()
 
     LaunchedEffect(Unit) {
         if (!voiceState.isActive) {
@@ -937,6 +939,7 @@ fun VoiceModeSheet(
                 )
                 TextButton(
                     onClick = {
+                        voiceController.stopRecording()
                         coordinator.orchestrationStore.endVoiceMode()
                         onDismiss()
                     },
@@ -960,10 +963,10 @@ fun VoiceModeSheet(
                             .size(76.dp)
                             .clip(CircleShape)
                             .background(
-                                if (voiceState.isMuted) {
-                                    colors.statusError.copy(alpha = 0.16f)
-                                } else {
-                                    colors.accentPeriwinkle.copy(alpha = 0.2f)
+                                when {
+                                    voiceController.isRecording -> colors.accentPeriwinkle.copy(alpha = 0.28f)
+                                    voiceState.isMuted -> colors.statusError.copy(alpha = 0.16f)
+                                    else -> colors.accentPeriwinkle.copy(alpha = 0.2f)
                                 },
                             ),
                         contentAlignment = Alignment.Center,
@@ -976,7 +979,11 @@ fun VoiceModeSheet(
                         )
                     }
                     Text(
-                        text = voiceState.statusLabel,
+                        text = when {
+                            voiceController.isRecording -> "Listening..."
+                            voiceController.isStarting -> "Starting microphone..."
+                            else -> voiceState.statusLabel
+                        },
                         style = MaterialTheme.typography.titleSmall,
                         color = colors.inkReading,
                     )
@@ -1032,6 +1039,18 @@ fun VoiceModeSheet(
                 }
             }
 
+            voiceController.errorMessage?.let { voiceErr ->
+                Text(
+                    text = voiceErr,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.statusWaiting,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { voiceController.clearError() }
+                        .testTag("voice-mode-error"),
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1046,7 +1065,7 @@ fun VoiceModeSheet(
                     Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp)) {
                         if (turnDraft.isEmpty()) {
                             Text(
-                                text = tr("Type a live voice turn...", "输入实时语音对话..."),
+                                text = tr("Or type a live voice turn...", "或输入实时语音消息..."),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = colors.inkMuted,
                             )
@@ -1062,6 +1081,7 @@ fun VoiceModeSheet(
                 }
                 Button(
                     onClick = {
+                        voiceController.stopRecording()
                         val t = turnDraft.trim()
                         if (t.isNotEmpty()) {
                             turnDraft = ""
@@ -1083,7 +1103,12 @@ fun VoiceModeSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 FilledTonalButton(
-                    onClick = { coordinator.orchestrationStore.toggleVoiceMute() },
+                    onClick = {
+                        coordinator.orchestrationStore.toggleVoiceMute()
+                        if (!voiceState.isMuted) {
+                            voiceController.stopRecording()
+                        }
+                    },
                     modifier = Modifier
                         .weight(1f)
                         .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget),
@@ -1103,25 +1128,40 @@ fun VoiceModeSheet(
                 }
                 Button(
                     onClick = {
-                        coordinator.orchestrationStore.endVoiceMode()
-                        onDismiss()
+                        if (!voiceController.isRecording && !voiceController.isStarting && voiceState.isMuted) {
+                            coordinator.orchestrationStore.toggleVoiceMute()
+                        }
+                        voiceController.toggleRecording(existingDraft = turnDraft) { updated ->
+                            turnDraft = updated
+                        }
                     },
                     modifier = Modifier
                         .weight(1f)
-                        .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget),
+                        .defaultMinSize(minHeight = AntigravityDesignTokens.MinTouchTarget)
+                        .testTag("btn-voice-mode-speak"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = colors.statusError,
+                        containerColor = if (voiceController.isRecording) colors.statusError else colors.accentPeriwinkle,
                         contentColor = colors.inkOnPrimaryCta,
                     ),
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Close,
+                        imageVector = if (voiceController.isRecording || voiceController.isStarting) {
+                            Icons.Rounded.Stop
+                        } else {
+                            Icons.Rounded.GraphicEq
+                        },
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.size(6.dp))
-                    Text(tr("End & Summarize", "结束并生成摘要"))
+                    Text(
+                        when {
+                            voiceController.isRecording -> tr("Stop Mic", "停止收音")
+                            voiceController.isStarting -> tr("Starting...", "启动中...")
+                            else -> tr("Speak", "说话")
+                        },
+                    )
                 }
             }
         }
