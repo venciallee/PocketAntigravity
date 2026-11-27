@@ -38,7 +38,7 @@ extension AntigravitySessionStore {
         let trimmedId = instanceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let trimmedName = hostname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        if !availableRelayInstances.isEmpty {
+        if activeHost.channel == .cloudRelay && !availableRelayInstances.isEmpty {
             if !trimmedId.isEmpty,
                let exact = availableRelayInstances.first(where: { $0.uuid == trimmedId }) {
                 return exact.status.isReachable
@@ -47,6 +47,10 @@ extension AntigravitySessionStore {
                let byName = availableRelayInstances.first(where: { $0.name == trimmedName }) {
                 return byName.status.isReachable
             }
+            if !trimmedId.isEmpty || !trimmedName.isEmpty {
+                return false
+            }
+            return availableRelayInstances.first(where: { $0.uuid == activeHost.instanceId })?.status.isReachable ?? false
         }
 
         if !trimmedId.isEmpty,
@@ -66,9 +70,9 @@ extension AntigravitySessionStore {
         guard isDeviceNetworkReachable else { return false }
         if summary?.isCloud == true {
             if activeHost.channel == .cloudRelay && !availableRelayInstances.isEmpty {
-                return availableRelayInstances.contains(where: \.status.isReachable) || isLiveBackendConnected
+                return availableRelayInstances.contains(where: \.status.isReachable)
             }
-            return isLiveBackendConnected || activeHost.isOnline
+            return isLiveBackendConnected && activeHost.isOnline
         }
         return isLocalHostOnline(
             instanceId: summary?.originInstanceUuid,
@@ -537,31 +541,72 @@ extension AntigravitySessionStore {
     /// (such as a Mac that recently closed or slept) are truthfully marked Offline.
     public func refreshAvailableRelayHosts(verifyEndToEnd: Bool = true) async {
         guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
-        guard activeHost.channel == .cloudRelay, let client = rpcClient else { return }
+        guard activeHost.channel == .cloudRelay, (kmpEngine != nil || rpcClient != nil) else { return }
         guard !isRefreshingRelayHosts else { return }
 
         isRefreshingRelayHosts = true
         defer { isRefreshingRelayHosts = false }
 
+        let generation = hostSwitchGeneration
         let allowCrossHostFallback = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
+        let wasOfflineBeforeProbe = !isLiveBackendConnected || !activeHost.isOnline
         do {
-            let probe = try await client.probeHostReachability(
-                timeoutInterval: 8.0,
-                allowCrossHostFallback: allowCrossHostFallback,
-                verifyEndToEnd: verifyEndToEnd
-            )
-            applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHostFallback)
+            let probe: HostReachabilityProbeResult
+            if let kmpEngine {
+                probe = try await kmpEngine.probeHostReachability(
+                    allowCrossHostFallback: allowCrossHostFallback,
+                    verifyEndToEnd: verifyEndToEnd
+                )
+            } else if let client = rpcClient {
+                probe = try await client.probeHostReachability(
+                    timeoutInterval: 8.0,
+                    allowCrossHostFallback: allowCrossHostFallback,
+                    verifyEndToEnd: verifyEndToEnd
+                )
+            } else {
+                return
+            }
+            if generation != hostSwitchGeneration {
+                if !probe.availableRelayInstances.isEmpty {
+                    syncRelayInstancesToHosts(
+                        probe.availableRelayInstances,
+                        latencyMs: probe.latencyMs,
+                        preferredActiveInstance: nil
+                    )
+                }
+                return
+            }
+            let currentAllowCrossHost = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
+            applyRelayProbeMetadata(probe, allowCrossHostFallback: currentAllowCrossHost)
+            if probe.isSelectedHostOnline && activeHost.isOnline {
+                if wasOfflineBeforeProbe {
+                    markBackendReconnected(forceReconnectedActions: true)
+                }
+            } else {
+                let hasReachablePeers = probe.availableRelayInstances.contains(where: \.status.isReachable)
+                markBackendOffline(
+                    error: AntigravityRPCError.httpError(
+                        statusCode: 503,
+                        body: "\(activeHost.hostname) is offline"
+                    ),
+                    preservePeerOnlineStates: hasReachablePeers
+                )
+            }
             let localHostsSnapshot = pairedLocalHosts
             if !localHostsSnapshot.isEmpty {
                 await projectionStore.saveKnownHosts(localHostsSnapshot)
             }
         } catch {
+            guard generation == hostSwitchGeneration else { return }
             if Self.isBackendOfflineError(error) {
-                let latestInstances = await client.currentCachedRelayInstances()
-                if !latestInstances.isEmpty {
-                    let downgraded = latestInstances.map { $0.withStatus(.disconnected) }
-                    syncRelayInstancesToHosts(downgraded, latencyMs: nil)
+                if let client = rpcClient {
+                    let latestInstances = await client.currentCachedRelayInstances()
+                    if !latestInstances.isEmpty {
+                        let downgraded = latestInstances.map { $0.withStatus(.disconnected) }
+                        syncRelayInstancesToHosts(downgraded, latencyMs: nil)
+                    }
                 }
+                markBackendOffline(error: error)
             }
         }
     }
@@ -929,9 +974,19 @@ extension AntigravitySessionStore {
 
         reconcileSelectedProjectForCurrentHostScope()
 
-        let activeHostResponded = replacedLocalUuids.contains(activeHost.instanceId)
+        var activeHostResponded = replacedLocalUuids.contains(activeHost.instanceId)
             || replacedLocalHostNames.contains(activeHost.hostname)
-            || (scope == .allHosts && !replacedLocalUuids.isEmpty)
+        if !activeHostResponded && scope == .allHosts && activeHost.channel == .cloudRelay,
+           let onlinePeerUuid = replacedLocalUuids.first,
+           let onlinePeerInst = availableRelayInstances.first(where: { $0.uuid == onlinePeerUuid && $0.status.isReachable }) {
+            syncRelayInstancesToHosts(
+                availableRelayInstances,
+                latencyMs: lastPingLatencyMs,
+                preferredActiveInstance: onlinePeerInst,
+                persistKeychainIfChanged: false
+            )
+            activeHostResponded = true
+        }
         if activeHostResponded {
             if hasPairedBackend && (!isLiveBackendConnected || !activeHost.isOnline) {
                 markBackendReconnected()

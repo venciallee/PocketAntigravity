@@ -383,6 +383,7 @@ extension AntigravitySessionStore {
         forceFullSync: Bool = false,
         includeAutomations: Bool = false,
         skipRelayMetadataProbe: Bool = false,
+        verifyRelayEndToEnd: Bool = false,
         targetScope: AgentsHostFilterScope? = nil,
         expectedGeneration: UInt64? = nil
     ) async {
@@ -408,12 +409,14 @@ extension AntigravitySessionStore {
             let probeResult: HostReachabilityProbeResult?
             if let kmpEngine {
                 probeResult = try? await kmpEngine.probeHostReachability(
-                    allowCrossHostFallback: allowCrossHostFallback
+                    allowCrossHostFallback: allowCrossHostFallback,
+                    verifyEndToEnd: verifyRelayEndToEnd
                 )
             } else {
                 probeResult = try? await client.probeHostReachability(
                     timeoutInterval: min(syncTimeout, 8.0),
-                    allowCrossHostFallback: allowCrossHostFallback
+                    allowCrossHostFallback: allowCrossHostFallback,
+                    verifyEndToEnd: verifyRelayEndToEnd
                 )
             }
             if let probe = probeResult {
@@ -603,9 +606,20 @@ extension AntigravitySessionStore {
                 workspaces = federated.workspaces
             }
 
-            let activeHostResponded = !isRelay
-                || federated.succeededInstanceUuids.contains(activeHost.instanceId)
-                || (effectiveScope == .allHosts && !federated.succeededInstanceUuids.isEmpty)
+            var activeHostResponded = !isRelay || federated.succeededInstanceUuids.contains(activeHost.instanceId)
+            if !activeHostResponded && isRelay && effectiveScope == .allHosts,
+               let onlinePeerUuid = federated.succeededInstanceUuids.first,
+               let onlinePeerInst = availableRelayInstances.first(where: { $0.uuid == onlinePeerUuid && $0.status.isReachable }) {
+                // Promote activeHost to the responding online peer in All Hosts mode rather than
+                // falsely marking the offline previous activeHost back to online.
+                syncRelayInstancesToHosts(
+                    availableRelayInstances,
+                    latencyMs: lastPingLatencyMs,
+                    preferredActiveInstance: onlinePeerInst,
+                    persistKeychainIfChanged: false
+                )
+                activeHostResponded = true
+            }
             if activeHostResponded {
                 if hasPairedBackend && (!isLiveBackendConnected || !activeHost.isOnline) {
                     markBackendReconnected()

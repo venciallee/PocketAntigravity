@@ -155,6 +155,8 @@ public class ConversationSyncStore(
     public fun startSummarySubscriptionStream(
         client: AntigravityKmpRpcClient,
         host: RemoteHostInstance,
+        onStreamActivity: (() -> Unit)? = null,
+        onStreamError: ((Throwable) -> Unit)? = null,
     ) {
         stopSummarySubscriptionStream()
         val isRelay = host.channel == RemoteConnectionChannel.CLOUD_RELAY
@@ -168,6 +170,7 @@ public class ConversationSyncStore(
                         .collect { jsonObj ->
                             receivedFrame = true
                             consecutiveErrors = 0
+                            onStreamActivity?.invoke()
                             val event = JsonStepAndSummaryDecoder.decodeJetboxSummariesEvent(
                                 obj = jsonObj,
                                 originInstanceUuid = host.instanceId,
@@ -186,8 +189,9 @@ public class ConversationSyncStore(
                     delay(cleanEofDelayMs)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Throwable) {
+                } catch (e: Throwable) {
                     _state.update { prev -> prev.copy(isStreamHealthy = false) }
+                    onStreamError?.invoke(e)
                     if (!isActive) break
                     consecutiveErrors += 1
                     val backoffMs = when {

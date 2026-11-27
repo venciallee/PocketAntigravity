@@ -773,6 +773,49 @@ final class KmpEnginePortTests: XCTestCase {
         store.stepsByCascadeId["kmp-coalesce-1"] = updated
         XCTAssertEqual(store.displayItems.count, 3)
     }
+
+    @MainActor
+    func testRefreshAvailableRelayHostsUsesKmpEngineAndReconcilesOfflineRecovery() async throws {
+        let hostUuid = "probe-kmp-macbook-v2"
+        let engine = ProbeStateToggleKmpEngineDouble(hostUuid: hostUuid)
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+        defer { store.suspendNetworkingForBackground() }
+        store.isVerificationMode = false
+        store.isNetworkingSuspended = false
+        store.isDeviceNetworkReachable = true
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.activeHost = RemoteHostInstance(
+            instanceId: hostUuid,
+            hostname: "MacBook Pro",
+            version: "2.34.0",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(hostUuid)")!,
+            isOnline: true
+        )
+        store.hosts = [store.activeHost]
+        store.selectedHostScope = .localHost(id: hostUuid, name: "MacBook Pro")
+
+        // 1. Host goes offline -> refreshAvailableRelayHosts routes through kmpEngine with verifyEndToEnd=true
+        //    and flips BOTH activeHost.isOnline AND isLiveBackendConnected to false.
+        await engine.setOnline(false)
+        await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+        let verifyFlag1 = await engine.lastVerifyEndToEnd
+        XCTAssertEqual(verifyFlag1, true)
+        XCTAssertFalse(store.activeHost.isOnline)
+        XCTAssertFalse(store.isLiveBackendConnected)
+        XCTAssertEqual(store.connectionStatusText, "Offline · MacBook Pro")
+
+        // 2. Host comes back online -> refreshAvailableRelayHosts flips BOTH activeHost.isOnline AND
+        //    isLiveBackendConnected back to true so Settings Hero Card and Available Hosts stay in sync.
+        await engine.setOnline(true)
+        await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+        let probeCalls = await engine.probeCallCount
+        XCTAssertEqual(probeCalls, 2)
+        XCTAssertTrue(store.activeHost.isOnline)
+        XCTAssertTrue(store.isLiveBackendConnected)
+        XCTAssertTrue(store.connectionStatusText.hasPrefix("Connected · MacBook Pro"))
+    }
 }
 
 private actor UnregisteredRelayKmpEngineDouble: AntigravityKmpEnginePort {
@@ -1464,6 +1507,135 @@ private actor SlowStepKmpEngineDouble: AntigravityKmpEnginePort {
         isCloud: Bool,
         instanceUuidOverride: String?
     ) async throws -> String { "cid-coalesce-created" }
+
+    func sendMessage(
+        cascadeId: String,
+        message: String,
+        workspaceUri: String,
+        attachments: [ComposerAttachmentChip],
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode,
+        agentPersona: String,
+        isCloud: Bool,
+        cloudProjectId: String?,
+        permissionPreset: AgentPermissionPreset?,
+        instanceUuidOverride: String?,
+        isOptimisticDraft: Bool
+    ) async throws -> KmpSendMessageResult {
+        KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: true, queuedInOutbox: false)
+    }
+
+    func resolveWaitingInteraction(
+        step: CascadeStep,
+        decision: InteractionDecision,
+        workspaceUri: String?,
+        instanceUuidOverride: String?
+    ) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { AsyncStream { $0.finish() } }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
+}
+
+private actor ProbeStateToggleKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "ProbeStateToggleKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=ProbeStateToggleKmpEngineDouble" }
+
+    let hostUuid: String
+    private var online: Bool = true
+    var probeCallCount: Int = 0
+    var lastVerifyEndToEnd: Bool? = nil
+
+    init(hostUuid: String) {
+        self.hostUuid = hostUuid
+    }
+
+    func setOnline(_ value: Bool) {
+        online = value
+    }
+
+    func connectDirectLan(
+        endpointURLString: String,
+        csrfToken: String,
+        certSHA256: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool
+    ) async throws -> BackendHandshakeResult {
+        throw AntigravityRPCError.invalidEndpoint
+    }
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult {
+        throw AntigravityRPCError.invalidEndpoint
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        try await probeHostReachability(allowCrossHostFallback: allowCrossHostFallback, verifyEndToEnd: false)
+    }
+
+    func probeHostReachability(
+        allowCrossHostFallback: Bool,
+        verifyEndToEnd: Bool
+    ) async throws -> HostReachabilityProbeResult {
+        probeCallCount += 1
+        lastVerifyEndToEnd = verifyEndToEnd
+        let inst = RelayInstanceInfo(
+            uuid: hostUuid,
+            name: "MacBook Pro",
+            version: "2.34.0",
+            status: online ? .connected : .disconnected
+        )
+        return HostReachabilityProbeResult(
+            latencyMs: 28,
+            availableRelayInstances: [inst],
+            activeRelayInstance: inst,
+            relayTopologyChanged: false,
+            relayMetadataChanged: false,
+            isSelectedHostOnline: online
+        )
+    }
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult {
+        KmpFederatedSyncResult(workspaces: [], summaries: [])
+    }
+
+    func syncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        []
+    }
+
+    func startConversation(
+        workspaceUri: String,
+        initialPrompt: String,
+        modelId: String,
+        cloudProjectId: String?,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> String {
+        "cid-probe-test"
+    }
 
     func sendMessage(
         cascadeId: String,

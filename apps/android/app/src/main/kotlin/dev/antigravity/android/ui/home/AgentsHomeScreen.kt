@@ -107,6 +107,7 @@ import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.ProjectWorkspace
 import dev.antigravity.shared.model.UserGreetingFormatter
 import dev.antigravity.shared.model.localizedTitle
+import dev.antigravity.shared.protocol.ConnectionLifecyclePhase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -207,37 +208,58 @@ fun AgentsHomeScreen(
         }
     }
 
-    val hostDisplayName = remember(hostScope, connectionState.activeHost, lang) {
+    val isConnectingToHost = !coordinator.isVerificationMode &&
+        connectionState.hasPairedBackend &&
+        connectionState.isDeviceNetworkReachable &&
+        !connectionState.isConnected &&
+        (connectionState.isConnecting || connectionState.lifecyclePhase is ConnectionLifecyclePhase.Connecting)
+
+    val isHostOnline = remember(hostScope, connectionState) {
+        connectionState.isHostScopeOnline(hostScope)
+    }
+
+    val hostDisplayName = remember(hostScope, connectionState, pairedLocalHosts, isHostOnline, isConnectingToHost, lang, coordinator.isVerificationMode) {
+        if (!coordinator.isVerificationMode && connectionState.hasPairedBackend && !connectionState.isDeviceNetworkReachable) {
+            return@remember lang.t("No Network", "无网络")
+        }
         when (hostScope) {
             AgentsHostFilterScope.AntigravityCloud -> lang.t("Cloud", "云端")
-            is AgentsHostFilterScope.LocalHost -> hostScope.name.ifBlank { "MacBook Pro" }
-            AgentsHostFilterScope.AllHosts ->
-                connectionState.activeHost?.hostname?.takeIf { it.isNotBlank() } ?: "MacBook Pro"
+            is AgentsHostFilterScope.LocalHost -> {
+                val baseName = hostScope.name.ifBlank { "MacBook Pro" }
+                if (!coordinator.isVerificationMode && connectionState.hasPairedBackend && !isConnectingToHost && !isHostOnline) {
+                    lang.t("$baseName · Offline", "$baseName · 离线")
+                } else {
+                    baseName
+                }
+            }
+            AgentsHostFilterScope.AllHosts -> {
+                if (coordinator.isVerificationMode) {
+                    connectionState.activeHost?.hostname?.takeIf { it.isNotBlank() } ?: "MacBook Pro"
+                } else if (connectionState.hasPairedBackend) {
+                    if (pairedLocalHosts.size > 1) {
+                        if (isConnectingToHost || isHostOnline) {
+                            lang.t("All Hosts", "全部主机")
+                        } else {
+                            lang.t("All Hosts · Offline", "全部主机 · 离线")
+                        }
+                    } else {
+                        val activeName = connectionState.activeHost?.hostname?.takeIf { it.isNotBlank() } ?: "MacBook Pro"
+                        if (isConnectingToHost || isHostOnline) {
+                            activeName
+                        } else {
+                            lang.t("$activeName · Offline", "$activeName · 离线")
+                        }
+                    }
+                } else {
+                    "MacBook Pro"
+                }
+            }
         }
     }
-    val isHostOnline = remember(hostScope, connectionState) {
-        when {
-            !connectionState.hasPairedBackend -> true
-            !connectionState.isDeviceNetworkReachable -> false
-            hostScope is AgentsHostFilterScope.AntigravityCloud -> connectionState.isDeviceNetworkReachable
-            hostScope is AgentsHostFilterScope.LocalHost -> {
-                val matchedRelay = connectionState.availableRelayInstances.firstOrNull {
-                    it.uuid == hostScope.id || it.name == hostScope.name
-                }
-                if (matchedRelay != null) {
-                    matchedRelay.status.isReachable
-                } else {
-                    val matched = connectionState.knownHosts.firstOrNull {
-                        it.instanceId == hostScope.id || it.hostname == hostScope.name
-                    }
-                    matched?.isOnline ?: (connectionState.isConnected && (connectionState.activeHost?.isOnline != false))
-                }
-            }
-            else -> {
-                val anyRelayReachable = connectionState.availableRelayInstances.any { it.status.isReachable }
-                anyRelayReachable || (connectionState.isConnected && (connectionState.activeHost?.isOnline != false))
-            }
-        }
+
+    val hostDotColor = when (hostScope) {
+        AgentsHostFilterScope.AntigravityCloud -> if (isHostOnline) colors.accentPeriwinkle else colors.statusError
+        else -> if (isHostOnline) colors.statusDone else colors.statusError
     }
 
     val scopedSummaries = remember(
@@ -375,11 +397,19 @@ fun AgentsHomeScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                StatusDot(
-                                    color = if (isHostOnline) colors.statusDone else colors.statusError,
-                                    size = 8.dp,
-                                    glow = false,
-                                )
+                                if (isConnectingToHost) {
+                                    CircularProgressIndicator(
+                                        strokeWidth = 1.8.dp,
+                                        color = colors.accentPeriwinkle,
+                                        modifier = Modifier.size(10.dp),
+                                    )
+                                } else {
+                                    StatusDot(
+                                        color = hostDotColor,
+                                        size = 8.dp,
+                                        glow = false,
+                                    )
+                                }
                                 Text(
                                     text = hostDisplayName,
                                     style = MaterialTheme.typography.labelLarge.copy(
@@ -407,6 +437,47 @@ fun AgentsHomeScreen(
                             onDismissRequest = { hostMenuExpanded = false },
                             containerColor = colors.surfacePopover,
                         ) {
+                            if (!coordinator.isVerificationMode && connectionState.hasPairedBackend) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (isHostOnline) {
+                                                tr("Sync Now", "立即同步")
+                                            } else {
+                                                tr("Reconnect Now", "立即重连")
+                                            },
+                                            color = colors.accentPeriwinkle,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Refresh,
+                                            contentDescription = null,
+                                            tint = colors.accentPeriwinkle,
+                                        )
+                                    },
+                                    onClick = {
+                                        hostMenuExpanded = false
+                                        scope.launch {
+                                            try {
+                                                if (isHostOnline) {
+                                                    coordinator.refreshAvailableRelayHosts(verifyEndToEnd = true)
+                                                    coordinator.refreshWorkspacesAndSummaries(skipRelayListRefresh = true)
+                                                } else {
+                                                    coordinator.reconnectNow()
+                                                }
+                                            } catch (e: CancellationException) {
+                                                throw e
+                                            } catch (_: Throwable) {
+                                                // Error state is reflected in connectionState.
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("host-option-sync-now"),
+                                )
+                                HorizontalDivider(color = colors.cardBorder.copy(alpha = 0.6f))
+                            }
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -452,6 +523,7 @@ fun AgentsHomeScreen(
                             pairedLocalHosts.forEach { host ->
                                 val isSelectedHost = hostScope is AgentsHostFilterScope.LocalHost &&
                                     (hostScope.id == host.instanceId || hostScope.name == host.hostname)
+                                val hostOnline = connectionState.isLocalHostOnline(host.instanceId, host.hostname)
                                 DropdownMenuItem(
                                     text = {
                                         Column {
@@ -461,16 +533,20 @@ fun AgentsHomeScreen(
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                             )
-                                            val stateLabel = if (host.isOnline) tr("Online", "在线") else tr("Offline", "离线")
+                                            val stateLabel = if (hostOnline) tr("Online", "在线") else tr("Offline", "离线")
                                             Text(
                                                 text = "$stateLabel · ${host.version}",
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = if (host.isOnline) colors.statusDone else colors.inkMuted,
+                                                color = if (hostOnline) colors.statusDone else colors.statusError,
                                             )
                                         }
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Rounded.Computer, contentDescription = null, tint = colors.inkSecondary)
+                                        Icon(
+                                            imageVector = Icons.Rounded.Computer,
+                                            contentDescription = null,
+                                            tint = if (hostOnline) colors.inkSecondary else colors.inkMuted,
+                                        )
                                     },
                                     trailingIcon = {
                                         if (isSelectedHost) {
