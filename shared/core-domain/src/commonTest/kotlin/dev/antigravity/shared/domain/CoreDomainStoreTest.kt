@@ -1702,6 +1702,74 @@ class CoreDomainStoreTest {
     }
 
     @Test
+    fun testHistoryLoadingFlagTracksStaleCacheBackfillAndClearsOnConversationSwitch() = runTest {
+        val storage = InMemoryProjectionStorage()
+        val store = CascadeChatDomainStore(projectionStorage = storage)
+        val staleId = "cas-stale-history"
+        val cachedId = "cas-cached-history"
+
+        // Seed 1 cached step for staleId (server has 3 steps) and 2 steps for cachedId
+        store.seedFixtureSteps(
+            stepsByCascade = mapOf(
+                staleId to listOf(
+                    CascadeStep(cascadeId = staleId, stepIndex = 0, type = CortexStepType.USER_INPUT, status = CortexStepStatus.DONE, userInput = "Old prompt"),
+                ),
+                cachedId to listOf(
+                    CascadeStep(cascadeId = cachedId, stepIndex = 0, type = CortexStepType.USER_INPUT, status = CortexStepStatus.DONE, userInput = "Cached prompt"),
+                    CascadeStep(cascadeId = cachedId, stepIndex = 1, type = CortexStepType.PLANNER_RESPONSE, status = CortexStepStatus.DONE),
+                ),
+            ),
+            questions = emptyList(),
+        )
+        store.setActiveCascade(staleId)
+
+        var observedLoadingDuringFetch = false
+        val engine = MockEngine { req ->
+            val path = req.url.encodedPath
+            if (path.endsWith("/GetCascadeTrajectorySteps")) {
+                observedLoadingDuringFetch = store.state.value.isLoadingSteps
+                respond(
+                    content = """{
+                        "steps": [
+                            {"stepIndex": 0, "type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "userInput": {"userResponse": "Old prompt"}},
+                            {"stepIndex": 1, "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE", "plannerResponse": {"response": "Answer 1"}},
+                            {"stepIndex": 2, "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE", "plannerResponse": {"response": "Answer 2"}}
+                        ]
+                    }""",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            } else {
+                respond("""{}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+            }
+        }
+        val client = AntigravityKmpRpcClient(
+            host = RemoteHostInstance(
+                instanceId = "local-1",
+                hostname = "MacBook Pro",
+                endpointUrl = "https://127.0.0.1:42069",
+                channel = RemoteConnectionChannel.DIRECT_HOST,
+            ),
+            csrfToken = "csrf-test",
+            httpClientOverride = HttpClient(engine),
+        )
+
+        val fetched = store.syncSteps(
+            client = client,
+            cascadeId = staleId,
+            knownStepCount = 3,
+            summaryStatus = CortexStepStatus.DONE,
+        )
+        assertTrue(observedLoadingDuringFetch, "Expected isLoadingSteps=true while backfilling stale cached historical conversation")
+        assertEquals(3, fetched.size)
+        assertFalse(store.state.value.isLoadingSteps, "isLoadingSteps must reset to false after history sync completes")
+
+        // Switching to another cached conversation always keeps isLoadingSteps = false
+        store.setActiveCascade(cachedId)
+        assertFalse(store.state.value.isLoadingSteps)
+    }
+
+    @Test
     fun testReconcileLiveRunStatusUpdatesSummaryInRealTime() = runTest {
         val syncStore = ConversationSyncStore(
             scope = this,
@@ -2006,3 +2074,5 @@ class CoreDomainStoreTest {
         }
     }
 }
+
+

@@ -1,5 +1,11 @@
 package dev.antigravity.android.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -76,6 +82,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,6 +93,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.antigravity.android.core.ui.components.AntigravityFloatingLoadingPill
 import dev.antigravity.android.core.ui.components.AntigravitySurfaceCard
 import dev.antigravity.android.core.ui.components.DiffCounterBadge
 import dev.antigravity.android.core.ui.components.MarkdownContentView
@@ -113,6 +121,9 @@ import dev.antigravity.shared.model.TaskBoundaryPayload
 import dev.antigravity.shared.model.TaskChecklistStatus
 import dev.antigravity.shared.model.VoiceCallTranscriptSummary
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 
 /** Deferred `/btw` side-question feature flag (kept in sync with iOS deferral). */
@@ -552,249 +563,88 @@ fun CascadeChatScreen(
             }
         },
     ) { innerPadding ->
-        if (!coordinator.isVerificationMode && displayItems.isEmpty() && (connectionState.isConnecting || chatState.isLoadingSteps)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                AntigravitySurfaceCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(18.dp),
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = tr("Loading conversation history...", "正在加载会话记录…"),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = colors.inkReading,
-                        )
-                        Text(
-                            text = if (!connectionState.isConnected && connectionState.isConnecting) {
-                                tr("Connecting to $cleanHostLabel...", "正在连接 $cleanHostLabel…")
-                            } else {
-                                tr("Syncing trajectory steps from $cleanHostLabel", "正在从 $cleanHostLabel 同步执行轨迹")
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.inkSecondary,
-                        )
-                    }
-                }
+        val isCascadeStreaming = activeSummary?.status == CortexStepStatus.IN_PROGRESS ||
+            activeSummary?.status == CortexStepStatus.PENDING ||
+            chatState.activeSteps.any {
+                it.status == CortexStepStatus.IN_PROGRESS || it.status == CortexStepStatus.PENDING
             }
-        } else if (displayItems.isEmpty() && !chatState.stepLoadErrorText.isNullOrBlank()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(20.dp)
-                    .testTag("chat-step-load-error-card"),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                AntigravitySurfaceCard(
+        var visibleTailLimit by remember(activeCascadeId) { mutableIntStateOf(60) }
+        var isLoadingOlderMessages by remember(activeCascadeId) { mutableStateOf(false) }
+        var hasSettledInitialScroll by remember(activeCascadeId) { mutableStateOf(false) }
+        var olderMessagesLoadNonce by remember(activeCascadeId) { mutableIntStateOf(0) }
+
+        val hiddenPrefixCount = if (coordinator.isVerificationMode) {
+            0
+        } else {
+            (displayItems.size - visibleTailLimit).coerceAtLeast(0)
+        }
+        val renderedItems = remember(displayItems, visibleTailLimit, coordinator.isVerificationMode) {
+            if (hiddenPrefixCount > 0) displayItems.takeLast(visibleTailLimit) else displayItems
+        }
+
+        val isShowingHistoryLoadPill = !coordinator.isVerificationMode && (
+            (displayItems.isEmpty() && (connectionState.isConnecting || chatState.isLoadingSteps)) ||
+                (displayItems.isNotEmpty() && chatState.isLoadingSteps && !isCascadeStreaming)
+            )
+        val activeFloatingPillTitle: String? = when {
+            isLoadingOlderMessages -> tr("Loading older messages...", "正在加载更早消息...")
+            isShowingHistoryLoadPill && !connectionState.isConnected && connectionState.isConnecting ->
+                tr("Connecting to $cleanHostLabel...", "正在连接 $cleanHostLabel...")
+            isShowingHistoryLoadPill -> tr("Loading older messages...", "正在加载历史消息...")
+            else -> null
+        }
+        val activeFloatingPillTag = if (isLoadingOlderMessages) {
+            "chat-loading-older-pill"
+        } else {
+            "chat-loading-steps"
+        }
+        var lastFloatingPillTitle by remember(activeCascadeId) { mutableStateOf("") }
+        var lastFloatingPillTag by remember(activeCascadeId) { mutableStateOf("chat-loading-steps") }
+        if (activeFloatingPillTitle != null) {
+            lastFloatingPillTitle = activeFloatingPillTitle
+            lastFloatingPillTag = activeFloatingPillTag
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+        ) {
+            if (displayItems.isEmpty() && !chatState.stepLoadErrorText.isNullOrBlank() && !isShowingHistoryLoadPill) {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp),
-                    contentPadding = PaddingValues(18.dp),
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(colors.statusError),
-                            )
-                            Text(
-                                text = tr("Could not load trajectory steps", "无法加载会话执行记录"),
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = colors.inkReading,
-                            )
-                        }
-                        Text(
-                            text = chatState.stepLoadErrorText.orEmpty(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.inkSecondary,
-                        )
-                        FilledTonalButton(
-                            onClick = {
-                                coordinator.chatStore.clearStepLoadError()
-                                onRetryLoadSteps()
-                            },
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
-                                contentColor = colors.accentPeriwinkle,
-                            ),
-                            modifier = Modifier.testTag("btn-chat-retry-steps"),
-                        ) {
-                            Text(
-                                text = tr("Retry", "重试"),
-                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                            )
-                        }
-                    }
-                }
-            }
-        } else if (!coordinator.isVerificationMode && displayItems.isEmpty()) {
-            val isNoInternet = connectionState.hasPairedBackend && !connectionState.isDeviceNetworkReachable
-            val isOfflinePaired = connectionState.hasPairedBackend && !isActiveSessionHostOnline
-            val isBrandNewEmpty = activeCascadeId.startsWith("cascade-new-") ||
-                (activeSummary == null && chatState.activeSteps.isEmpty()) ||
-                (activeSummary != null &&
-                    activeSummary.stepCount == 0 &&
-                    activeSummary.needsTitleHydration &&
-                    chatState.activeSteps.isEmpty())
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 14.dp, vertical = 16.dp),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                val knownStepCount = activeSummary?.stepCount ?: 0
-                if (isNoInternet || isOfflinePaired) {
-                    if (!isBrandNewEmpty && chatState.activeSteps.isEmpty()) {
-                        AntigravitySurfaceCard(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp)
-                                .testTag("chat-empty-history-card"),
-                            contentPadding = PaddingValues(18.dp),
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(colors.statusError),
-                                    )
-                                    Text(
-                                        text = when {
-                                            isNoInternet -> tr("No internet connection", "无网络连接")
-                                            resolvedIsCloud -> tr("Antigravity Desktop host offline", "Antigravity 桌面主机离线")
-                                            else -> tr("Host offline", "主机离线")
-                                        },
-                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                                        color = colors.inkReading,
-                                    )
-                                }
-                                Text(
-                                    text = if (isNoInternet) {
-                                        tr(
-                                            "This conversation has not been cached on this device yet. Reconnect to load its history.",
-                                            "此对话尚未缓存到当前设备，恢复网络后即可加载历史记录。",
-                                        )
-                                    } else {
-                                        tr(
-                                            "This conversation has not been cached on this device yet. Bring an Antigravity Desktop host online, then tap Retry.",
-                                            "此对话尚未缓存到当前设备。请确保 Antigravity 桌面端在线后点击重试。",
-                                        )
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = colors.inkSecondary,
-                                )
-                                FilledTonalButton(
-                                    onClick = {
-                                        coordinator.chatStore.clearStepLoadError()
-                                        onRetryLoadSteps()
-                                    },
-                                    colors = ButtonDefaults.filledTonalButtonColors(
-                                        containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
-                                        contentColor = colors.accentPeriwinkle,
-                                    ),
-                                    modifier = Modifier.testTag("btn-chat-reload-empty"),
-                                ) {
-                                    Text(
-                                        text = tr("Retry", "重试"),
-                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = colors.surfaceCard,
-                            border = BorderStroke(1.dp, colors.cardBorder),
-                            modifier = Modifier.testTag("chat-offline-status-pill"),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(colors.statusError),
-                                )
-                                Text(
-                                    text = when {
-                                        isNoInternet -> tr("No internet · Messages will queue", "无网络 · 消息将排队等待发送")
-                                        chatState.pendingOutboxCount > 0 -> tr(
-                                            "Host offline · ${chatState.pendingOutboxCount} queued",
-                                            "主机离线 · ${chatState.pendingOutboxCount} 条排队中",
-                                        )
-                                        else -> tr("Host offline · Messages will send on reconnect", "主机离线 · 重连后自动发送")
-                                    },
-                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                                    color = colors.inkSecondary,
-                                )
-                            }
-                        }
-                    }
-                } else if ((connectionState.hasPairedBackend || connectionState.isConnected) && !isBrandNewEmpty) {
-                    val rawStepCount = chatState.activeSteps.size
+                        .fillMaxSize()
+                        .padding(20.dp)
+                        .testTag("chat-step-load-error-card"),
+                    contentAlignment = Alignment.TopCenter,
                     AntigravitySurfaceCard(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp)
-                            .testTag("chat-empty-history-card"),
+                            .padding(top = 12.dp),
                         contentPadding = PaddingValues(18.dp),
                     ) {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(colors.statusError),
+                                )
+                                Text(
+                                    text = tr("Could not load trajectory steps", "无法加载会话执行记录"),
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = colors.inkReading,
+                                )
+                            }
                             Text(
-                                text = if (rawStepCount > 0) {
-                                    tr("No visible messages in this conversation", "该对话暂无可显示的消息")
-                                } else {
-                                    tr("No conversation history loaded", "未加载到对话记录")
-                                },
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = colors.inkReading,
-                            )
-                            Text(
-                                text = if (rawStepCount > 0) {
-                                    tr(
-                                        "$rawStepCount internal steps were synced from $effectiveHeaderHostLabel. Tap Reload to refresh.",
-                                        "已从 $effectiveHeaderHostLabel 同步 $rawStepCount 条内部步骤，可点击重新加载刷新。",
-                                    )
-                                } else {
-                                    tr(
-                                        "$effectiveHeaderHostLabel returned no trajectory steps for this conversation yet. Tap Reload to try again.",
-                                        "$effectiveHeaderHostLabel 暂未返回此对话的执行轨迹，可点击重新加载重试。",
-                                    )
-                                },
+                                text = chatState.stepLoadErrorText.orEmpty(),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colors.inkSecondary,
                             )
@@ -807,10 +657,10 @@ fun CascadeChatScreen(
                                     containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
                                     contentColor = colors.accentPeriwinkle,
                                 ),
-                                modifier = Modifier.testTag("btn-chat-reload-empty"),
+                                modifier = Modifier.testTag("btn-chat-retry-steps"),
                             ) {
                                 Text(
-                                    text = tr("Reload", "重新加载"),
+                                    text = tr("Retry", "重试"),
                                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                                 )
                             }
@@ -919,140 +769,357 @@ fun CascadeChatScreen(
                         }
                     }
                 }
-            }
-        } else {
-        val listState = rememberLazyListState()
-        var anchoredCascadeId by remember { mutableStateOf<String?>(null) }
-        var visibleTailLimit by remember(activeCascadeId) { mutableIntStateOf(60) }
-        val hiddenPrefixCount = if (coordinator.isVerificationMode) 0 else (displayItems.size - visibleTailLimit).coerceAtLeast(0)
-        val renderedItems = remember(displayItems, hiddenPrefixCount) {
-            if (hiddenPrefixCount > 0) displayItems.subList(hiddenPrefixCount, displayItems.size) else displayItems
-        }
-        val extraTopItems = if (hiddenPrefixCount > 0) 1 else 0
-        LaunchedEffect(activeCascadeId, renderedItems.size, extraTopItems) {
-            if (!coordinator.isVerificationMode && renderedItems.isNotEmpty()) {
-                val lastIdx = (renderedItems.lastIndex + extraTopItems).coerceAtLeast(0)
-                val isInitialAnchor = anchoredCascadeId != activeCascadeId
-                val nearBottom = listState.firstVisibleItemIndex >= (lastIdx - 4).coerceAtLeast(0)
-                if (isInitialAnchor || nearBottom) {
-                    listState.scrollToItem(lastIdx)
-                    anchoredCascadeId = activeCascadeId
-                }
-            }
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .testTag("chat-steps-list"),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (hiddenPrefixCount > 0) {
-                item(key = "load-earlier-messages") {
-                    Surface(
-                        onClick = { visibleTailLimit += 80 },
+            } else if (!coordinator.isVerificationMode && displayItems.isEmpty()) {
+                if (!isShowingHistoryLoadPill) {
+                    val isNoInternet = connectionState.hasPairedBackend && !connectionState.isDeviceNetworkReachable
+                    val isOfflinePaired = connectionState.hasPairedBackend && !isActiveSessionHostOnline
+                    val isBrandNewEmpty = activeCascadeId.startsWith("cascade-new-") ||
+                        (activeSummary == null && chatState.activeSteps.isEmpty()) ||
+                        (activeSummary != null &&
+                            activeSummary.stepCount == 0 &&
+                            activeSummary.needsTitleHydration &&
+                            chatState.activeSteps.isEmpty())
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("btn-load-earlier-messages"),
-                        shape = RoundedCornerShape(12.dp),
-                        color = colors.surfaceCard,
-                        border = BorderStroke(1.dp, colors.cardBorder),
+                            .fillMaxSize()
+                            .padding(horizontal = 14.dp, vertical = 16.dp),
+                        contentAlignment = Alignment.TopCenter,
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 9.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = tr(
-                                    "Load earlier messages ($hiddenPrefixCount hidden)",
-                                    "加载更早消息（已折叠 $hiddenPrefixCount 条）",
-                                ),
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = colors.accentPeriwinkle,
-                            )
-                        }
-                    }
-                }
-            }
-            items(
-                items = renderedItems,
-                key = { it.id },
-            ) { item ->
-                when (item) {
-                    is CascadeDisplayItem.EvidenceGroup -> {
-                        EvidenceGroupCompactRow(
-                            item = item,
-                            expanded = item.id in chatState.expandedEvidenceGroupIds,
-                            onToggle = { coordinator.chatStore.toggleEvidenceGroupExpanded(item.id) },
-                        )
-                    }
-
-                    is CascadeDisplayItem.Single -> {
-                        val step = item.step
-                        CascadeStepItemView(
-                            step = step,
-                            isThinkingExpanded = step.id in chatState.expandedThinkingStepIds,
-                            onToggleThinking = { coordinator.chatStore.toggleThinkingExpanded(step.id) },
-                            onOpenPlanReview = onOpenPlanReview,
-                            onOpenSwarmBoard = onOpenSwarmBoard,
-                            onApproveCommand = {
-                                onBiometricPrompt("Approve command execution") {
-                                    coordinator.chatStore.resolveWaitingInteractionLocally(
-                                        cascadeId = activeCascadeId,
-                                        stepIndex = step.stepIndex,
-                                        approved = true,
-                                    )
-                                    if (!coordinator.isVerificationMode) {
-                                        scope.launch {
-                                            runCatching {
-                                                coordinator.resolveWaitingInteraction(
-                                                    cascadeId = activeCascadeId,
-                                                    stepIndex = step.stepIndex,
-                                                    decision = InteractionDecision.AllowWithBiometric,
-                                                )
-                                            }
+                        if (isNoInternet || isOfflinePaired) {
+                            if (!isBrandNewEmpty && chatState.activeSteps.isEmpty()) {
+                                AntigravitySurfaceCard(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp)
+                                        .testTag("chat-empty-history-card"),
+                                    contentPadding = PaddingValues(18.dp),
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(colors.statusError),
+                                            )
+                                            Text(
+                                                text = when {
+                                                    isNoInternet -> tr("No internet connection", "无网络连接")
+                                                    resolvedIsCloud -> tr("Antigravity Desktop host offline", "Antigravity 桌面主机离线")
+                                                    else -> tr("Host offline", "主机离线")
+                                                },
+                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                                color = colors.inkReading,
+                                            )
                                         }
-                                    }
-                                }
-                            },
-                            onDenyCommand = {
-                                coordinator.chatStore.resolveWaitingInteractionLocally(
-                                    cascadeId = activeCascadeId,
-                                    stepIndex = step.stepIndex,
-                                    approved = false,
-                                )
-                                if (!coordinator.isVerificationMode) {
-                                    scope.launch {
-                                        runCatching {
-                                            coordinator.resolveWaitingInteraction(
-                                                cascadeId = activeCascadeId,
-                                                stepIndex = step.stepIndex,
-                                                decision = InteractionDecision.Reject,
+                                        Text(
+                                            text = if (isNoInternet) {
+                                                tr(
+                                                    "This conversation has not been cached on this device yet. Reconnect to load its history.",
+                                                    "此对话尚未缓存到当前设备，恢复网络后即可加载历史记录。",
+                                                )
+                                            } else {
+                                                tr(
+                                                    "This conversation has not been cached on this device yet. Bring an Antigravity Desktop host online, then tap Retry.",
+                                                    "此对话尚未缓存到当前设备。请确保 Antigravity 桌面端在线后点击重试。",
+                                                )
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.inkSecondary,
+                                        )
+                                        FilledTonalButton(
+                                            onClick = {
+                                                coordinator.chatStore.clearStepLoadError()
+                                                onRetryLoadSteps()
+                                            },
+                                            colors = ButtonDefaults.filledTonalButtonColors(
+                                                containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
+                                                contentColor = colors.accentPeriwinkle,
+                                            ),
+                                            modifier = Modifier.testTag("btn-chat-reload-empty"),
+                                        ) {
+                                            Text(
+                                                text = tr("Retry", "重试"),
+                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                                             )
                                         }
                                     }
                                 }
-                            },
-                            onStopSubagent = { subagentId ->
-                                scope.launch {
-                                    val client = coordinator.connectionStore.activeClient()
-                                    coordinator.orchestrationStore.stopSubagent(
-                                        client = client,
-                                        cascadeId = activeCascadeId,
-                                        subagentId = subagentId,
-                                    )
+                            } else {
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = colors.surfaceCard,
+                                    border = BorderStroke(1.dp, colors.cardBorder),
+                                    modifier = Modifier.testTag("chat-offline-status-pill"),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(7.dp)
+                                                .clip(CircleShape)
+                                                .background(colors.statusError),
+                                        )
+                                        Text(
+                                            text = when {
+                                                isNoInternet -> tr("No internet · Messages will queue", "无网络 · 消息将排队等待发送")
+                                                chatState.pendingOutboxCount > 0 -> tr(
+                                                    "Host offline · ${chatState.pendingOutboxCount} queued",
+                                                    "主机离线 · ${chatState.pendingOutboxCount} 条排队中",
+                                                )
+                                                else -> tr("Host offline · Messages will send on reconnect", "主机离线 · 重连后自动发送")
+                                            },
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                            color = colors.inkSecondary,
+                                        )
+                                    }
                                 }
-                            },
-                        )
+                            }
+                        } else if ((connectionState.hasPairedBackend || connectionState.isConnected) && !isBrandNewEmpty) {
+                            val rawStepCount = chatState.activeSteps.size
+                            AntigravitySurfaceCard(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp)
+                                    .testTag("chat-empty-history-card"),
+                                contentPadding = PaddingValues(18.dp),
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Text(
+                                        text = if (rawStepCount > 0) {
+                                            tr("No visible messages in this conversation", "该对话暂无可显示的消息")
+                                        } else {
+                                            tr("No conversation history loaded", "未加载到对话记录")
+                                        },
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = colors.inkReading,
+                                    )
+                                    Text(
+                                        text = if (rawStepCount > 0) {
+                                            tr(
+                                                "$rawStepCount internal steps were synced from $effectiveHeaderHostLabel. Tap Reload to refresh.",
+                                                "已从 $effectiveHeaderHostLabel 同步 $rawStepCount 条内部步骤，可点击重新加载刷新。",
+                                            )
+                                        } else {
+                                            tr(
+                                                "$effectiveHeaderHostLabel returned no trajectory steps for this conversation yet. Tap Reload to try again.",
+                                                "$effectiveHeaderHostLabel 暂未返回此对话的执行轨迹，可点击重新加载重试。",
+                                            )
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colors.inkSecondary,
+                                    )
+                                    FilledTonalButton(
+                                        onClick = {
+                                            coordinator.chatStore.clearStepLoadError()
+                                            onRetryLoadSteps()
+                                        },
+                                        colors = ButtonDefaults.filledTonalButtonColors(
+                                            containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
+                                            contentColor = colors.accentPeriwinkle,
+                                        ),
+                                        modifier = Modifier.testTag("btn-chat-reload-empty"),
+                                    ) {
+                                        Text(
+                                            text = tr("Reload", "重新加载"),
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                val listState = rememberLazyListState()
+                var anchoredCascadeId by remember { mutableStateOf<String?>(null) }
+
+                LaunchedEffect(activeCascadeId, renderedItems.size) {
+                    if (!coordinator.isVerificationMode && renderedItems.isNotEmpty()) {
+                        val hasSentinel = hiddenPrefixCount > 0
+                        val lastIdx = renderedItems.lastIndex + if (hasSentinel) 1 else 0
+                        val isInitialAnchor = anchoredCascadeId != activeCascadeId
+                        val nearBottom = listState.firstVisibleItemIndex >= (lastIdx - 4).coerceAtLeast(0)
+                        if (isInitialAnchor || (nearBottom && !isLoadingOlderMessages)) {
+                            listState.scrollToItem(lastIdx)
+                            anchoredCascadeId = activeCascadeId
+                        }
+                        if (!hasSettledInitialScroll) {
+                            hasSettledInitialScroll = true
+                        }
+                    }
+                }
+
+                LaunchedEffect(activeCascadeId, olderMessagesLoadNonce) {
+                    if (olderMessagesLoadNonce <= 0) return@LaunchedEffect
+                    val currentHidden = (displayItems.size - visibleTailLimit).coerceAtLeast(0)
+                    if (currentHidden <= 0) return@LaunchedEffect
+                    isLoadingOlderMessages = true
+                    val prevRenderedCount = renderedItems.size
+                    val anchorIndex = listState.firstVisibleItemIndex
+                    val anchorOffset = listState.firstVisibleItemScrollOffset
+                    try {
+                        if (!coordinator.isVerificationMode) {
+                            delay(260L)
+                        }
+                        val nextLimit = visibleTailLimit + 60
+                        val nextRenderedCount = displayItems.size.coerceAtMost(nextLimit)
+                        val addedCount = (nextRenderedCount - prevRenderedCount).coerceAtLeast(0)
+                        val sentinelRemoved = nextLimit >= displayItems.size
+                        visibleTailLimit = nextLimit
+                        if (addedCount > 0) {
+                            val adjustedIndex = (anchorIndex + addedCount - if (sentinelRemoved) 1 else 0)
+                                .coerceAtLeast(0)
+                            listState.scrollToItem(
+                                index = adjustedIndex,
+                                scrollOffset = anchorOffset,
+                            )
+                        }
+                    } finally {
+                        isLoadingOlderMessages = false
+                    }
+                }
+
+                LaunchedEffect(activeCascadeId, listState, hasSettledInitialScroll, hiddenPrefixCount) {
+                    if (!hasSettledInitialScroll || hiddenPrefixCount <= 0) return@LaunchedEffect
+                    snapshotFlow { listState.firstVisibleItemIndex }
+                        .distinctUntilChanged()
+                        .filter { it == 0 }
+                        .collect {
+                            if (!isLoadingOlderMessages && (displayItems.size - visibleTailLimit) > 0) {
+                                olderMessagesLoadNonce += 1
+                            }
+                        }
+                }
+
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("chat-steps-list"),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (hiddenPrefixCount > 0) {
+                        item(key = "chat-load-earlier-sentinel") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(12.dp)
+                                    .clickable(enabled = !isLoadingOlderMessages) {
+                                        olderMessagesLoadNonce += 1
+                                    }
+                                    .testTag("btn-load-earlier-messages"),
+                            )
+                        }
+                    }
+
+                    items(
+                        items = renderedItems,
+                        key = { it.id },
+                    ) { item ->
+                        when (item) {
+                            is CascadeDisplayItem.EvidenceGroup -> {
+                                EvidenceGroupCompactRow(
+                                    item = item,
+                                    expanded = item.id in chatState.expandedEvidenceGroupIds,
+                                    onToggle = { coordinator.chatStore.toggleEvidenceGroupExpanded(item.id) },
+                                )
+                            }
+
+                            is CascadeDisplayItem.Single -> {
+                                val step = item.step
+                                CascadeStepItemView(
+                                    step = step,
+                                    isThinkingExpanded = step.id in chatState.expandedThinkingStepIds,
+                                    onToggleThinking = { coordinator.chatStore.toggleThinkingExpanded(step.id) },
+                                    onOpenPlanReview = onOpenPlanReview,
+                                    onOpenSwarmBoard = onOpenSwarmBoard,
+                                    onApproveCommand = {
+                                        onBiometricPrompt("Approve command execution") {
+                                            coordinator.chatStore.resolveWaitingInteractionLocally(
+                                                cascadeId = activeCascadeId,
+                                                stepIndex = step.stepIndex,
+                                                approved = true,
+                                            )
+                                            if (!coordinator.isVerificationMode) {
+                                                scope.launch {
+                                                    runCatching {
+                                                        coordinator.resolveWaitingInteraction(
+                                                            cascadeId = activeCascadeId,
+                                                            stepIndex = step.stepIndex,
+                                                            decision = InteractionDecision.AllowWithBiometric,
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onDenyCommand = {
+                                        coordinator.chatStore.resolveWaitingInteractionLocally(
+                                            cascadeId = activeCascadeId,
+                                            stepIndex = step.stepIndex,
+                                            approved = false,
+                                        )
+                                        if (!coordinator.isVerificationMode) {
+                                            scope.launch {
+                                                runCatching {
+                                                    coordinator.resolveWaitingInteraction(
+                                                        cascadeId = activeCascadeId,
+                                                        stepIndex = step.stepIndex,
+                                                        decision = InteractionDecision.Reject,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onStopSubagent = { subagentId ->
+                                        scope.launch {
+                                            val client = coordinator.connectionStore.activeClient()
+                                            coordinator.orchestrationStore.stopSubagent(
+                                                client = client,
+                                                cascadeId = activeCascadeId,
+                                                subagentId = subagentId,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
-        }
+
+            AnimatedVisibility(
+                visible = activeFloatingPillTitle != null,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 10.dp),
+                enter = fadeIn(animationSpec = tween(durationMillis = 180)) +
+                    slideInVertically(animationSpec = tween(durationMillis = 200)) { -it / 2 },
+                exit = fadeOut(animationSpec = tween(durationMillis = 160)) +
+                    slideOutVertically(animationSpec = tween(durationMillis = 180)) { -it / 2 },
+            ) {
+                AntigravityFloatingLoadingPill(
+                    title = activeFloatingPillTitle ?: lastFloatingPillTitle,
+                    animated = !coordinator.isVerificationMode,
+                    modifier = Modifier.testTag(
+                        if (activeFloatingPillTitle != null) activeFloatingPillTag else lastFloatingPillTag,
+                    ),
+                )
+            }
         }
     }
 }

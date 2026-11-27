@@ -126,8 +126,20 @@ public class CascadeChatDomainStore(
     private val inFlightStepFetches = linkedMapOf<String, CompletableDeferred<List<CascadeStep>>>()
     private val syncedMarkersByCascadeId = MutableStateFlow<Map<String, SyncedTrajectoryMarker>>(emptyMap())
 
-    public fun setActiveCascade(cascadeId: String) {
-        _state.update { it.copy(activeCascadeId = cascadeId, stepLoadErrorText = null) }
+    public fun setActiveCascade(cascadeId: String, markLoadingIfEmpty: Boolean = false) {
+        _state.update { prev ->
+            val hasCachedSteps = !prev.stepsByCascadeId[cascadeId].isNullOrEmpty()
+            val nextLoading = when {
+                hasCachedSteps -> false
+                markLoadingIfEmpty && cascadeId.isNotBlank() && !cascadeId.startsWith("cascade-new-") -> true
+                else -> prev.activeCascadeId == cascadeId && prev.isLoadingSteps
+            }
+            prev.copy(
+                activeCascadeId = cascadeId,
+                isLoadingSteps = nextLoading,
+                stepLoadErrorText = null,
+            )
+        }
     }
 
     public fun injectDebugSteps(extraSteps: List<CascadeStep>) {
@@ -526,7 +538,11 @@ public class CascadeChatDomainStore(
     /**
      * Applies progressive or live-streamed steps immediately to UI state without blocking on disk I/O.
      */
-    public fun applyLiveSteps(cascadeId: String, steps: List<CascadeStep>) {
+    public fun applyLiveSteps(
+        cascadeId: String,
+        steps: List<CascadeStep>,
+        keepLoadingWhileBackfillingOlder: Boolean = false,
+    ) {
         if (cascadeId.isEmpty() || steps.isEmpty()) return
         val existing = _state.value.stepsByCascadeId[cascadeId].orEmpty()
         if (existing != steps) {
@@ -534,7 +550,10 @@ public class CascadeChatDomainStore(
         }
         _state.update {
             if (it.activeCascadeId == cascadeId) {
-                it.copy(isLoadingSteps = false, stepLoadErrorText = null)
+                it.copy(
+                    isLoadingSteps = if (keepLoadingWhileBackfillingOlder) it.isLoadingSteps else false,
+                    stepLoadErrorText = null,
+                )
             } else {
                 it
             }
@@ -621,6 +640,19 @@ public class CascadeChatDomainStore(
             }
         }
 
+        val needsHistoryBackfillIndicator = existingSteps.isEmpty() ||
+            forceRefresh ||
+            (knownStepCount > existingSteps.size && !isActiveSummary && !hasActiveOrPendingSteps(existingSteps))
+        if (needsHistoryBackfillIndicator) {
+            _state.update {
+                if (it.activeCascadeId == cascadeId) {
+                    it.copy(isLoadingSteps = true, stepLoadErrorText = null)
+                } else {
+                    it
+                }
+            }
+        }
+
         return try {
             val remoteSteps = executeCoalescedStepFetch(
                 cascadeId = cascadeId,
@@ -634,7 +666,12 @@ public class CascadeChatDomainStore(
                     existingSteps = if (forceRefresh) emptyList() else existingSteps,
                     onPartialSteps = { partial ->
                         if (partial.isNotEmpty()) {
-                            applyLiveSteps(cascadeId, partial)
+                            val stillLoadingOlderPrefix = (partial.firstOrNull()?.stepIndex ?: 0) > 0
+                            applyLiveSteps(
+                                cascadeId = cascadeId,
+                                steps = partial,
+                                keepLoadingWhileBackfillingOlder = stillLoadingOlderPrefix,
+                            )
                             onPartialSteps?.invoke(partial)
                         }
                     },

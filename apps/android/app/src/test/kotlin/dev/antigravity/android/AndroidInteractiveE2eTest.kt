@@ -1442,4 +1442,69 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("btn-chat-reload-empty").performClick()
         assertEquals(2, retryTapCount)
     }
+
+    @Test
+    fun atc35_enteringHistoricalConversationRendersFloatingTopLoadingPill() {
+        val coordinator = AntigravityCoreCoordinator(
+            autoPreloadConversations = false,
+            enableForegroundHeartbeatLoop = false,
+        )
+        val macHost = dev.antigravity.shared.domain.EsddVerificationFixtures.macHost
+        coordinator.connectionStore.seedVerificationConnection(
+            activeHost = macHost,
+            knownHosts = listOf(macHost),
+            statusText = "Connected · MacBook Pro · 42ms",
+        )
+        coordinator.isVerificationMode = false
+        val historyCid = "hist-loading-pill-1"
+        coordinator.chatStore.setActiveCascade(historyCid, markLoadingIfEmpty = true)
+
+        composeRule.setContent {
+            dev.antigravity.android.core.ui.theme.AntigravityTheme {
+                dev.antigravity.android.ui.chat.CascadeChatScreen(
+                    coordinator = coordinator,
+                    onBack = {},
+                    onOpenDiffReview = {},
+                    onOpenPlanReview = {},
+                    onOpenAddContext = {},
+                    onOpenModelAndMode = {},
+                    onOpenOverview = {},
+                    onOpenSideQuestion = {},
+                    onOpenSwarmBoard = {},
+                    onOpenVoiceMode = {},
+                    onBiometricPrompt = { _, onSuccess -> onSuccess() },
+                )
+            }
+        }
+
+        // Floating top-center pill appears during historical conversation entry (never the old bulky card)
+        composeRule.onNodeWithTag("chat-loading-steps").assertIsDisplayed()
+        composeRule.onNodeWithText("Loading older messages...", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals(
+            0,
+            composeRule.onAllNodesWithTag("chat-step-load-error-card").fetchSemanticsNodes().size,
+        )
+
+        // Once historical steps arrive (> 60 items), floating pill dismisses and tail window renders
+        val longHistorySteps = (0 until 75).map { idx ->
+            CascadeStep(
+                cascadeId = historyCid,
+                stepIndex = idx,
+                type = CortexStepType.USER_INPUT,
+                status = CortexStepStatus.DONE,
+                userInput = "Historical message #$idx",
+            )
+        }
+        coordinator.chatStore.seedFixtureSteps(
+            stepsByCascade = mapOf(historyCid to longHistorySteps),
+            questions = emptyList(),
+        )
+        composeRule.waitForIdle()
+
+        assertEquals(0, composeRule.onAllNodesWithTag("chat-loading-steps").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("chat-steps-list").assertIsDisplayed()
+        composeRule.onNodeWithText("Historical message #74", useUnmergedTree = true).assertIsDisplayed()
+    }
 }
+
+

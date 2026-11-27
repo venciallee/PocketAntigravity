@@ -657,7 +657,11 @@ public final class AntigravitySessionStore {
                 scheduleDebouncedStepsPersist(mergedSteps, for: cid, immediate: update.isSnapshotComplete)
             }
             if self.activeCascadeId == cid {
-                self.isLoadingSteps = false
+                let isTailFirstPartialSlice = !update.isSnapshotComplete
+                    && (mergedSteps.first?.stepIndex ?? 0) > 0
+                if !isTailFirstPartialSlice {
+                    self.isLoadingSteps = false
+                }
                 self.stepLoadErrorText = nil
             }
         }
