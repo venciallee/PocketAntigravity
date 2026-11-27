@@ -373,4 +373,52 @@ class CoreProtocolParityTest {
         )
         assertEquals("Audit iOS sidebar preloading", derivedFromSteps)
     }
+
+    @Test
+    fun testPermissionPresetToolConfigEncodesAutoDistinctly() {
+        val autoCfg = AntigravityKmpRpcClient.buildToolConfigForPermissionPreset(
+            dev.antigravity.shared.model.AgentPermissionPreset.AUTO,
+        )
+        val autoRunCmd = autoCfg["runCommand"] as? kotlinx.serialization.json.JsonObject
+        val autoCmdCfg = autoRunCmd?.get("autoCommandConfig") as? kotlinx.serialization.json.JsonObject
+        assertEquals(
+            "CASCADE_COMMANDS_AUTO_EXECUTION_AUTO",
+            (autoCmdCfg?.get("autoExecutionPolicy") as? kotlinx.serialization.json.JsonPrimitive)?.content,
+        )
+        val autoNotify = autoCfg["notifyUser"] as? kotlinx.serialization.json.JsonObject
+        assertEquals(
+            "ARTIFACT_REVIEW_MODE_AUTO",
+            (autoNotify?.get("artifactReviewMode") as? kotlinx.serialization.json.JsonPrimitive)?.content,
+        )
+
+        val defaultCfg = AntigravityKmpRpcClient.buildToolConfigForPermissionPreset(
+            dev.antigravity.shared.model.AgentPermissionPreset.DEFAULT_POLICY,
+        )
+        assertNull(defaultCfg["runCommand"])
+        val defaultNotify = defaultCfg["notifyUser"] as? kotlinx.serialization.json.JsonObject
+        assertEquals(
+            "ARTIFACT_REVIEW_MODE_AUTO",
+            (defaultNotify?.get("artifactReviewMode") as? kotlinx.serialization.json.JsonPrimitive)?.content,
+        )
+
+        val reviewCfg = AntigravityKmpRpcClient.buildToolConfigForPermissionPreset(
+            dev.antigravity.shared.model.AgentPermissionPreset.REQUEST_REVIEW,
+        )
+        val reviewCmdCfg = (reviewCfg["runCommand"] as? kotlinx.serialization.json.JsonObject)
+            ?.get("autoCommandConfig") as? kotlinx.serialization.json.JsonObject
+        assertEquals(
+            "CASCADE_COMMANDS_AUTO_EXECUTION_OFF",
+            (reviewCmdCfg?.get("autoExecutionPolicy") as? kotlinx.serialization.json.JsonPrimitive)?.content,
+        )
+
+        val turboCfg = AntigravityKmpRpcClient.buildToolConfigForPermissionPreset(
+            dev.antigravity.shared.model.AgentPermissionPreset.TURBO,
+        )
+        val turboCmdCfg = (turboCfg["runCommand"] as? kotlinx.serialization.json.JsonObject)
+            ?.get("autoCommandConfig") as? kotlinx.serialization.json.JsonObject
+        assertEquals(
+            "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER",
+            (turboCmdCfg?.get("autoExecutionPolicy") as? kotlinx.serialization.json.JsonPrimitive)?.content,
+        )
+    }
 }

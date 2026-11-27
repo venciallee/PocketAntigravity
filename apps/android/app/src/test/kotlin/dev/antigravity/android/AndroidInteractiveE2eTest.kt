@@ -1115,4 +1115,39 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithText("No Project · Offline · $hostUuid", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("Unassigned conversation", substring = true, useUnmergedTree = true).assertDoesNotExist()
     }
+
+    @Test
+    fun atc32_localProjectAutoPermissionModeAndRemoteIsolation() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.AGENTS_HOME,
+            )
+        }
+
+        // 1. Local project (`ledger-svc`) exposes Auto mode in Permissions popover and updates composer pill
+        composeRule.onNodeWithTag("btn-permissions-preset").performClick()
+        composeRule.onNodeWithTag("permissions-preset-popover").assertIsDisplayed()
+        composeRule.onNodeWithText("Permissions for this conversation", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("preset-option-auto").assertIsDisplayed()
+        composeRule.onNodeWithTag("preset-option-auto").performClick()
+
+        assertEquals(AgentPermissionPreset.AUTO, coordinator.settingsStore.state.value.localPermissionPreset)
+        assertEquals(AgentPermissionPreset.AUTO, coordinator.settingsStore.state.value.activePermissionPreset)
+        assertEquals(AgentPermissionPreset.TURBO, coordinator.settingsStore.state.value.remotePermissionPreset)
+        composeRule.onNodeWithText("Auto", useUnmergedTree = true).assertIsDisplayed()
+
+        // 2. Switching Home runtime toggle to Cloud opens Remote Permissions (no Auto) and isolates remote preset
+        composeRule.onNodeWithTag("home-cloud-toggle").performClick()
+        composeRule.onNodeWithText("Turbo", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-permissions-preset").performClick()
+        composeRule.onNodeWithTag("permissions-preset-popover").assertIsDisplayed()
+        composeRule.onNodeWithText("Remote Permissions", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithTag("preset-option-auto").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("preset-option-request_review").performClick()
+
+        assertEquals(AgentPermissionPreset.REQUEST_REVIEW, coordinator.settingsStore.state.value.remotePermissionPreset)
+        assertEquals(AgentPermissionPreset.AUTO, coordinator.settingsStore.state.value.localPermissionPreset)
+    }
 }

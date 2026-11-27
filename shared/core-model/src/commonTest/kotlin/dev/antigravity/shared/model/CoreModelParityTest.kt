@@ -13,9 +13,29 @@ class CoreModelParityTest {
     @Test
     fun testSemanticIconCoverageAndSlashCommands() {
         assertEquals(AgentPermissionPreset.entries.size, AgentPermissionPreset.entries.map { it.semanticIcon }.toSet().size)
-        assertEquals(listOf(AgentPermissionPreset.REQUEST_REVIEW, AgentPermissionPreset.TURBO), AgentPermissionPreset.availablePresets(isRemote = true))
+        assertEquals(
+            listOf(
+                AgentPermissionPreset.REQUEST_REVIEW,
+                AgentPermissionPreset.DEFAULT_POLICY,
+                AgentPermissionPreset.TURBO,
+            ),
+            AgentPermissionPreset.availablePresets(isRemote = true),
+        )
+        assertEquals(
+            listOf(
+                AgentPermissionPreset.REQUEST_REVIEW,
+                AgentPermissionPreset.DEFAULT_POLICY,
+                AgentPermissionPreset.AUTO,
+                AgentPermissionPreset.TURBO,
+            ),
+            AgentPermissionPreset.availablePresets(isRemote = false),
+        )
         assertEquals(AgentPermissionPreset.TURBO, AgentPermissionPreset.defaultPreset(isRemote = true))
         assertEquals(AgentPermissionPreset.DEFAULT_POLICY, AgentPermissionPreset.defaultPreset(isRemote = false))
+        assertEquals(AgentPermissionPreset.AUTO, AgentPermissionPreset.AUTO.resolveForRuntime(isRemote = false))
+        assertEquals(AgentPermissionPreset.DEFAULT_POLICY, AgentPermissionPreset.AUTO.resolveForRuntime(isRemote = true))
+        assertEquals(AgentPermissionPreset.DEFAULT_POLICY, AgentPermissionPreset.INHERIT_GLOBAL.resolveForRuntime(isRemote = false))
+        assertEquals(AgentPermissionPreset.TURBO, AgentPermissionPreset.INHERIT_GLOBAL.resolveForRuntime(isRemote = true))
 
         assertTrue(SlashCommandItem.allCommands.isNotEmpty())
         assertEquals(SemanticIcon.COMMAND_PLAN, SlashCommandItem.allCommands.first { it.command == "/plan" }.icon)

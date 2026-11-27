@@ -378,4 +378,78 @@ class ExtendedDomainStoresTest {
         assertEquals(dev.antigravity.shared.model.AppLanguage.ENGLISH, verifyStore.state.value.appearance.language)
         assertEquals("zh-Hans", sharedPrefs.getString(SettingsAndCustomizationStore.KEY_APP_LANGUAGE))
     }
+
+    @Test
+    fun localAutoPermissionPresetIsolatesFromRemoteAndPersistsAcrossRestarts() {
+        val sharedPrefs = dev.antigravity.shared.platform.InMemoryPreferencesStore()
+        val store1 = SettingsAndCustomizationStore(preferencesStore = sharedPrefs)
+        assertEquals(AgentPermissionPreset.DEFAULT_POLICY, store1.state.value.localPermissionPreset)
+        assertEquals(AgentPermissionPreset.TURBO, store1.state.value.remotePermissionPreset)
+
+        // Selecting Auto on local persists cleanly while leaving remote Turbo untouched
+        store1.selectPermissionPreset(AgentPermissionPreset.AUTO, isRemote = false)
+        assertEquals(AgentPermissionPreset.AUTO, store1.state.value.localPermissionPreset)
+        assertEquals(AgentPermissionPreset.AUTO, store1.state.value.activePermissionPreset)
+        assertEquals(AgentPermissionPreset.AUTO, store1.state.value.permissionPresetFor(isRemote = false))
+        assertEquals(AgentPermissionPreset.AUTO, store1.state.value.appearance.globalPermissionPreset)
+        assertEquals(AgentPermissionPreset.TURBO, store1.state.value.remotePermissionPreset)
+        assertEquals(AgentPermissionPreset.TURBO, store1.state.value.permissionPresetFor(isRemote = true))
+
+        // Attempting Auto on remote resolves safely to Default without mutating local Auto
+        store1.selectPermissionPreset(AgentPermissionPreset.AUTO, isRemote = true)
+        assertEquals(AgentPermissionPreset.DEFAULT_POLICY, store1.state.value.remotePermissionPreset)
+        assertEquals(AgentPermissionPreset.AUTO, store1.state.value.localPermissionPreset)
+
+        // Fresh store hydrates both presets from PreferencesStore
+        val store2 = SettingsAndCustomizationStore(preferencesStore = sharedPrefs)
+        assertEquals(AgentPermissionPreset.AUTO, store2.state.value.localPermissionPreset)
+        assertEquals(AgentPermissionPreset.AUTO, store2.state.value.activePermissionPreset)
+        assertEquals(AgentPermissionPreset.DEFAULT_POLICY, store2.state.value.remotePermissionPreset)
+
+        // Coordinator runtime disambiguation: concrete local file:// summary is never hijacked by same-name Cloud project
+        val coordinator = AntigravityCoreCoordinator(preferencesStore = sharedPrefs)
+        val cloudProj = dev.antigravity.shared.model.ProjectWorkspace(
+            id = "cloud:PocketAntigravity",
+            name = "PocketAntigravity",
+            pathDisplay = "Cloud · PocketAntigravity",
+            workspaceUri = "cloud://venciallee/PocketAntigravity",
+            runtime = ProjectRuntimeTarget.CLOUD,
+            hostName = "Antigravity Cloud",
+        )
+        val localProj = dev.antigravity.shared.model.ProjectWorkspace(
+            id = "local:PocketAntigravity",
+            name = "PocketAntigravity",
+            pathDisplay = "~/code/PocketAntigravity",
+            workspaceUri = "file:///Users/dev/code/PocketAntigravity",
+            runtime = ProjectRuntimeTarget.MAC_BOOK_PRO,
+            hostName = "MacBook Pro",
+        )
+        coordinator.workspaceStore.seedFixture(
+            projects = listOf(cloudProj, localProj),
+            automations = emptyList(),
+            availableRepos = emptyList(),
+            contextCandidates = emptyList(),
+            selectedProjectId = localProj.id,
+        )
+        val localSummary = dev.antigravity.shared.model.CascadeSummary(
+            cascadeId = "cas-local-1",
+            title = "Local Auto check",
+            projectSlug = "PocketAntigravity",
+            workspaceUri = "file:///Users/dev/code/PocketAntigravity",
+            status = dev.antigravity.shared.model.CortexStepStatus.DONE,
+            stepCount = 2,
+            isCloud = false,
+        )
+        val cloudSummary = dev.antigravity.shared.model.CascadeSummary(
+            cascadeId = "v1/default/jetski_remote_agents/cloud-1",
+            title = "Cloud build",
+            projectSlug = "PocketAntigravity",
+            workspaceUri = "cloud://venciallee/PocketAntigravity",
+            status = dev.antigravity.shared.model.CortexStepStatus.DONE,
+            stepCount = 2,
+            isCloud = true,
+        )
+        assertFalse(coordinator.isSummaryCloudRuntime(localSummary.cascadeId, localSummary))
+        assertTrue(coordinator.isSummaryCloudRuntime(cloudSummary.cascadeId, cloudSummary))
+    }
 }

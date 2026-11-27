@@ -1146,12 +1146,47 @@ final class AntigravityInteractiveUITests: XCTestCase {
             "Selecting local project must switch runtime toggle to computer icon (got label=\(runtimeToggle.label), value=\(String(describing: runtimeToggle.value)))"
         )
 
+        // Local project must expose Auto permission mode in Home composer Permissions sheet
+        let homePermPill = app.buttons["composer-pill-permissions"]
+        XCTAssertTrue(homePermPill.waitForExistence(timeout: 5))
+        homePermPill.tap()
+        let homeAutoRow = app.buttons["permission-row-auto"]
+        XCTAssertTrue(
+            homeAutoRow.waitForExistence(timeout: 5),
+            "Selecting a local project on Home must expose permission-row-auto in PermissionsSheetView"
+        )
+        homeAutoRow.tap()
+        XCTAssertTrue(
+            waitForAppearanceOptionSelected(homeAutoRow, timeout: 4),
+            "Tapping permission-row-auto on a local project must select Auto mode"
+        )
+        let homePermDone = app.buttons["btn-permissions-done"]
+        XCTAssertTrue(homePermDone.waitForExistence(timeout: 5))
+        homePermDone.tap()
+        XCTAssertTrue(
+            homePermPill.waitForExistence(timeout: 5),
+            "Composer permissions pill must remain visible after closing local Permissions sheet"
+        )
+
         // Direct toggle switches between cloud and local computer states
         runtimeToggle.tap()
         XCTAssertTrue(
             waitForRuntimeToggleState(runtimeToggle, label: "Cloud runtime selected", value: "cloud"),
             "Tapping runtime toggle must switch to cloud state (got label=\(runtimeToggle.label), value=\(String(describing: runtimeToggle.value)))"
         )
+
+        // Cloud runtime must open Remote Permissions without local-only Auto mode
+        homePermPill.tap()
+        XCTAssertTrue(
+            app.buttons["permission-row-turbo"].waitForExistence(timeout: 5),
+            "Cloud runtime must display Remote Permissions presets"
+        )
+        XCTAssertFalse(
+            app.buttons["permission-row-auto"].exists,
+            "Cloud runtime Remote Permissions must not expose local-only Auto mode"
+        )
+        XCTAssertTrue(homePermDone.waitForExistence(timeout: 5))
+        homePermDone.tap()
 
         runtimeToggle.tap()
         XCTAssertTrue(

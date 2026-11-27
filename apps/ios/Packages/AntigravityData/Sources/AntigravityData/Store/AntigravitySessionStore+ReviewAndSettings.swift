@@ -447,13 +447,19 @@ extension AntigravitySessionStore {
 
     // MARK: - Antigravity 2.0 (v2.33) Capabilities (P0 - P2)
 
-    /// Returns the effective permission preset for a conversation (falls back to global preset).
-    public func effectivePermissionPreset(for cascadeId: String? = nil) -> AgentPermissionPreset {
+    /// Returns the effective permission preset for a conversation (falls back to runtime preset).
+    public func effectivePermissionPreset(
+        for cascadeId: String? = nil,
+        isRemoteOverride: Bool? = nil
+    ) -> AgentPermissionPreset {
+        let isRemote = isRemoteOverride ?? isActiveSessionCloud
         let cid = cascadeId ?? activeCascadeId
-        if let explicit = conversationPermissionPresets[cid], explicit != .inheritGlobal {
-            return explicit
+        if !cid.isEmpty,
+           let explicit = conversationPermissionPresets[cid],
+           explicit != .inheritGlobal {
+            return explicit.resolvedForRuntime(isRemote: isRemote)
         }
-        return activePermissionPreset
+        return permissionPreset(isRemote: isRemote)
     }
 
     public func setConversationPermissionPreset(_ preset: AgentPermissionPreset, for cascadeId: String? = nil) {

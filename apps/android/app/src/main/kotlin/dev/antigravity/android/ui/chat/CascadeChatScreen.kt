@@ -90,7 +90,6 @@ import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
 import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
-import dev.antigravity.shared.model.AntigravityCloudDetector
 import dev.antigravity.shared.model.localizedTitle
 import dev.antigravity.shared.model.CascadeDisplayItem
 import dev.antigravity.shared.model.CascadeStep
@@ -100,7 +99,6 @@ import dev.antigravity.shared.model.CortexStepType
 import dev.antigravity.shared.model.DynamicWorkflowPayload
 import dev.antigravity.shared.model.InteractionDecision
 import dev.antigravity.shared.model.McpToolCallPayload
-import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.SlashCommandItem
 import dev.antigravity.shared.model.SubagentPayload
 import dev.antigravity.shared.model.SwarmBoardPayload
@@ -148,21 +146,8 @@ fun CascadeChatScreen(
     val activeCascadeId = chatState.activeCascadeId.ifBlank { "cas-rate-limiter" }
     val activeSummary = syncState.summaries.firstOrNull { it.cascadeId == activeCascadeId }
         ?: syncState.summaries.firstOrNull()
-    val resolvedIsCloud = remember(activeCascadeId, activeSummary, workspaceState.projects) {
-        if (activeSummary?.isCloud == true) {
-            true
-        } else if (AntigravityCloudDetector.isCloudWorkspaceUri(activeSummary?.workspaceUri.orEmpty(), cascadeId = activeCascadeId)) {
-            true
-        } else {
-            val matchedProject = activeSummary?.let { item ->
-                workspaceState.projects.firstOrNull { proj ->
-                    (!item.cloudProjectId.isNullOrBlank() && (proj.cloudProjectId == item.cloudProjectId || proj.id == item.cloudProjectId)) ||
-                        (item.workspaceUri.isNotBlank() && proj.workspaceUri == item.workspaceUri) ||
-                        (item.projectSlug.isNotBlank() && proj.name.equals(item.projectSlug, ignoreCase = true))
-                }
-            }
-            matchedProject?.runtime == ProjectRuntimeTarget.CLOUD
-        }
+    val resolvedIsCloud = remember(activeCascadeId, activeSummary, workspaceState.projects, syncState.projects) {
+        coordinator.isSummaryCloudRuntime(activeCascadeId, activeSummary)
     }
 
     val isHeaderTitleLoading = activeSummary != null && coordinator.isSummaryTitleLoading(activeSummary)
@@ -195,7 +180,8 @@ fun CascadeChatScreen(
     val displayItems = chatState.activeDisplayItems
     val lang = LocalAppLanguage.current
     val modelDisplayName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
-    val permissionLabel = settingsState.activePermissionPreset.localizedTitle(lang)
+    val activePermissionPreset = settingsState.permissionPresetFor(isRemote = resolvedIsCloud)
+    val permissionLabel = activePermissionPreset.localizedTitle(lang)
     val voiceController = rememberVoiceDictationController()
 
     Scaffold(
@@ -494,7 +480,7 @@ fun CascadeChatScreen(
                                             agentPersona = settingsState.selectedAgentPersona,
                                             isCloud = resolvedIsCloud,
                                             cloudProjectId = activeSummary?.cloudProjectId,
-                                            permissionPreset = settingsState.activePermissionPreset,
+                                            permissionPreset = activePermissionPreset,
                                             instanceUuidOverride = activeSummary?.originInstanceUuid,
                                             isOptimisticDraft = isDraft,
                                         )

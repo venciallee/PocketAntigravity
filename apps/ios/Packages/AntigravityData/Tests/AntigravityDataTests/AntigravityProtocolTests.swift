@@ -2186,6 +2186,82 @@ final class AntigravityProtocolTests: XCTestCase {
         store.setActivePermissionPreset(.defaultPolicy)
         XCTAssertEqual(store.remotePermissionPreset, .defaultPolicy)
         XCTAssertEqual(store.localPermissionPreset, .requestReview)
+
+        // Local Auto resolves cleanly and never leaks into Remote Permissions
+        XCTAssertEqual(AgentPermissionPreset.auto.resolvedForRuntime(isRemote: false), .auto)
+        XCTAssertEqual(AgentPermissionPreset.auto.resolvedForRuntime(isRemote: true), .defaultPolicy)
+        store.setActivePermissionPreset(.auto, isRemoteOverride: false)
+        XCTAssertEqual(store.localPermissionPreset, .auto)
+        XCTAssertEqual(store.permissionPreset(isRemote: false), .auto)
+        XCTAssertEqual(store.remotePermissionPreset, .defaultPolicy)
+        store.setActivePermissionPreset(.auto, isRemoteOverride: true)
+        XCTAssertEqual(store.remotePermissionPreset, .defaultPolicy)
+        XCTAssertEqual(store.localPermissionPreset, .auto)
+
+        // Wire protocol: Auto explicitly encodes CASCADE_COMMANDS_AUTO_EXECUTION_AUTO (distinct from Default)
+        let autoToolCfg = AntigravityRPCClient.buildToolConfig(for: .auto)
+        XCTAssertEqual(
+            autoToolCfg["runCommand"]?.objectValue?["autoCommandConfig"]?.objectValue?["autoExecutionPolicy"]?.stringValue,
+            "CASCADE_COMMANDS_AUTO_EXECUTION_AUTO"
+        )
+        XCTAssertEqual(
+            autoToolCfg["notifyUser"]?.objectValue?["artifactReviewMode"]?.stringValue,
+            "ARTIFACT_REVIEW_MODE_AUTO"
+        )
+        let defaultToolCfg = AntigravityRPCClient.buildToolConfig(for: .defaultPolicy)
+        XCTAssertNil(defaultToolCfg["runCommand"])
+
+        // Same-name Cloud project + stale Cloud workspace selection must NEVER hijack a local file:// chat
+        let cloudSameName = ProjectWorkspace(
+            id: "cloud:shared-app",
+            name: "shared-app",
+            pathDisplay: "Cloud · shared-app",
+            workspaceUri: "cloud://acme/shared-app",
+            runtime: .cloud,
+            hostName: "Antigravity Cloud"
+        )
+        let localSameName = ProjectWorkspace(
+            id: "local:shared-app",
+            name: "shared-app",
+            pathDisplay: "~/code/shared-app",
+            workspaceUri: "file:///Users/alex/code/shared-app",
+            runtime: .macBookPro,
+            hostName: "MacBook Pro"
+        )
+        store.projects.insert(contentsOf: [cloudSameName, localSameName], at: 0)
+        store.selectedProjectId = cloudSameName.id
+        store.selectedWorkspaceUri = cloudSameName.workspaceUri
+        XCTAssertTrue(store.isHomeSelectedProjectCloud)
+
+        let localChat = CascadeSummary(
+            cascadeId: "cas-local-shared-app",
+            title: "Run local tests",
+            projectSlug: "shared-app",
+            workspaceUri: "file:///Users/alex/code/shared-app",
+            status: .done,
+            stepCount: 2,
+            isCloud: false
+        )
+        store.summaries.insert(localChat, at: 0)
+        store.activeCascadeId = localChat.cascadeId
+        XCTAssertFalse(store.isSummaryCloudRuntime(localChat))
+        XCTAssertFalse(store.isActiveSessionCloud)
+        XCTAssertEqual(store.activePermissionPreset, .auto)
+
+        // Switching Home project back to local updates isHomeSelectedProjectCloud even if activeCascadeId is Cloud
+        store.activeCascadeId = "v1/default/jetski_remote_agents_3p/demo-cloud-session"
+        store.selectedProjectId = localSameName.id
+        store.selectedWorkspaceUri = localSameName.workspaceUri
+        XCTAssertFalse(store.isHomeSelectedProjectCloud)
+        XCTAssertTrue(store.isActiveSessionCloud)
+
+        // Selecting Auto on an active local session clears any stale per-conversation override
+        store.activeCascadeId = localChat.cascadeId
+        store.conversationPermissionPresets[localChat.cascadeId] = .requestReview
+        XCTAssertEqual(store.effectivePermissionPreset(for: localChat.cascadeId, isRemoteOverride: false), .requestReview)
+        store.setActivePermissionPreset(.auto, isRemoteOverride: false)
+        XCTAssertNil(store.conversationPermissionPresets[localChat.cascadeId])
+        XCTAssertEqual(store.effectivePermissionPreset(for: localChat.cascadeId, isRemoteOverride: false), .auto)
     }
 
     @MainActor
