@@ -401,6 +401,97 @@ def _resolve_execution_config(args: argparse.Namespace, repo_root: Path, all_sta
     }
 
 
+def _read_xcode_target_build_settings(repo_root: Path) -> dict[str, dict[str, str]]:
+    res = subprocess.run(
+        [
+            "xcodebuild",
+            "-project",
+            "PocketAntigravity.xcodeproj",
+            "-alltargets",
+            "-configuration",
+            "Debug",
+            "-showBuildSettings",
+            "-json",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    raw = res.stdout or ""
+    bracket_idx = raw.find("[")
+    if bracket_idx < 0:
+        raise RuntimeError(f"xcodebuild -showBuildSettings -json produced unexpected output: {raw[:400]}")
+    entries = json.loads(raw[bracket_idx:])
+    by_target: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        target = str(entry.get("target") or "")
+        bs = entry.get("buildSettings") or {}
+        if target and isinstance(bs, dict):
+            by_target[target] = {str(k): str(v) for k, v in bs.items()}
+    return by_target
+
+
+def verify_local_signing_xcconfig(repo_root: Path) -> None:
+    """Verify apps/ios/Config/LocalSigning.xcconfig defaults & optional gitignored local.signing.xcconfig overrides."""
+    local_xc = repo_root / "local.signing.xcconfig"
+    expected_targets = {
+        "AGPocket": "",
+        "AGPocketWatch": ".watchkitapp",
+        "AGPocketLiveActivity": ".LiveActivity",
+        "AGPocketShare": ".Share",
+    }
+
+    if local_xc.exists():
+        # Developer workstation with real local.signing.xcconfig — verify project loads cleanly without mutating user file.
+        settings = _read_xcode_target_build_settings(repo_root)
+        for target in expected_targets:
+            if target not in settings:
+                raise RuntimeError(f"Missing target {target} in xcodebuild -showBuildSettings")
+        print("  [PASS] LocalSigning.xcconfig verified (existing local.signing.xcconfig preserved untouched).", flush=True)
+        return
+
+    default_settings = _read_xcode_target_build_settings(repo_root)
+    for target, suffix in expected_targets.items():
+        bs = default_settings.get(target)
+        if not bs:
+            raise RuntimeError(f"Missing target {target} in xcodebuild -showBuildSettings")
+        expected_bid = f"com.thousandtimes.agpocket{suffix}"
+        actual_bid = bs.get("PRODUCT_BUNDLE_IDENTIFIER", "")
+        if actual_bid != expected_bid:
+            raise RuntimeError(
+                f"LocalSigning.xcconfig default mismatch for {target}: expected PRODUCT_BUNDLE_IDENTIFIER={expected_bid}, got {actual_bid!r}"
+            )
+
+    try:
+        local_xc.write_text(
+            "DEVELOPMENT_TEAM = A1B2C3D4E5\nANTIGRAVITY_BUNDLE_PREFIX = com.example.localverify\n",
+            encoding="utf-8",
+        )
+        override_settings = _read_xcode_target_build_settings(repo_root)
+        for target, suffix in expected_targets.items():
+            bs = override_settings.get(target) or {}
+            actual_team = bs.get("DEVELOPMENT_TEAM", "")
+            expected_bid = f"com.example.localverify{suffix}"
+            actual_bid = bs.get("PRODUCT_BUNDLE_IDENTIFIER", "")
+            if actual_team != "A1B2C3D4E5":
+                raise RuntimeError(
+                    f"local.signing.xcconfig DEVELOPMENT_TEAM override failed for {target}: got {actual_team!r}"
+                )
+            if actual_bid != expected_bid:
+                raise RuntimeError(
+                    f"local.signing.xcconfig ANTIGRAVITY_BUNDLE_PREFIX override failed for {target}: expected {expected_bid}, got {actual_bid!r}"
+                )
+    finally:
+        if local_xc.exists():
+            local_xc.unlink()
+
+    print(
+        "  [PASS] LocalSigning.xcconfig verified on real Xcode (defaults + local.signing.xcconfig DEVELOPMENT_TEAM & Bundle Prefix inherited across all 4 targets).",
+        flush=True,
+    )
+
+
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -487,6 +578,9 @@ def main() -> None:
     print("=== [1/5] Generating Xcode Project via XcodeGen ===", flush=True)
     subprocess.run(["xcodegen", "generate"], cwd=repo_root, check=True)
     timings["xcodegen"] = round(time.monotonic() - t0, 2)
+
+    # Verify apps/ios/Config/LocalSigning.xcconfig resolves default bundle prefix & honors gitignored local.signing.xcconfig
+    verify_local_signing_xcconfig(repo_root)
 
     derived = repo_root / ".build" / "DerivedData"
 

@@ -1698,5 +1698,110 @@ class CoreDomainStoreTest {
         store.setActiveCascade(cachedId)
         assertFalse(store.state.value.isLoadingSteps)
     }
+
+    @Test
+    fun testConnectionStateIsLocalHostOnlinePrefersOnlineDuplicateAndTransient504DoesNotWipeOnlineHosts() = runTest {
+        withContext(Dispatchers.Default) {
+            val miniUuid = "1111-dom-mini-v2"
+            val vencialleeUuid = "2222-dom-venciallee-v2"
+            val validKey = "AI" + "zaSyDOMAIN504000000000000000000000000"
+            var failListWith504 = false
+
+            // 1. ConnectionState.isLocalHostOnline must prefer reachable duplicate over stale disconnected entry
+            val dupState = ConnectionState(
+                activeHost = RemoteHostInstance(
+                    instanceId = miniUuid,
+                    hostname = "mac-mini",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$miniUuid",
+                    isOnline = true,
+                ),
+                availableRelayInstances = listOf(
+                    RelayInstanceInfo(uuid = miniUuid, name = "mac-mini", status = RelayInstanceStatus.CONNECTED),
+                    RelayInstanceInfo(uuid = "stale-venciallee", name = "Venciallee", status = RelayInstanceStatus.DISCONNECTED),
+                    RelayInstanceInfo(uuid = vencialleeUuid, name = "Venciallee", status = RelayInstanceStatus.CONNECTED),
+                ),
+                hasPairedBackend = true,
+                isConnected = true,
+                isDeviceNetworkReachable = true,
+            )
+            assertTrue(dupState.isLocalHostOnline(instanceId = null, hostname = "Venciallee"))
+            assertFalse(dupState.isLocalHostOnline(instanceId = "stale-venciallee", hostname = "Venciallee"))
+
+            // 2. Single transient HTTP 504 in ConnectionDomainStore.probeHostReachability must NOT wipe online Cloud Relay hosts
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        if (failListWith504) {
+                            respond(
+                                content = "gateway timeout",
+                                status = HttpStatusCode.GatewayTimeout,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            respond(
+                                content = """[[["$miniUuid",["mac-mini","2.34.0",true],1,[1740000000,0]],["$vencialleeUuid",["Venciallee","2.34.0",true],1,[1740000000,0]]],5]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val b64 = ByteString.of(*"""{"workspaces":[],"trajectorySummaries":{}}""".encodeToByteArray()).base64()
+                        respond(
+                            content = """["$b64",[["content-type","application/json"]]]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = InMemoryPreferencesStore(),
+                projectionStorage = InMemoryProjectionStorage(),
+                autoPreloadConversations = false,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+
+            coordinator.connectCloudRelay(
+                relayUrlString = "https://antigravity.google.com/r/$miniUuid",
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                startSummaryStream = false,
+            )
+            assertTrue(coordinator.connectionState.value.isConnected)
+            assertTrue(coordinator.connectionState.value.isLocalHostOnline(miniUuid, "mac-mini"))
+            assertTrue(coordinator.connectionState.value.isLocalHostOnline(vencialleeUuid, "Venciallee"))
+
+            failListWith504 = true
+            var threw504 = false
+            try {
+                coordinator.probeHostReachability(allowCrossHostFallback = true, verifyEndToEnd = true)
+            } catch (e: AntigravityRpcError.HttpError) {
+                threw504 = (e.statusCode == 504)
+            }
+            assertTrue(threw504, "Expected transient 504 to throw to caller")
+            // Online hosts MUST NOT be wiped on strike 1 by ConnectionDomainStore.probeHostReachability
+            assertTrue(coordinator.connectionState.value.isConnected)
+            assertTrue(coordinator.connectionState.value.isLocalHostOnline(miniUuid, "mac-mini"))
+            assertTrue(coordinator.connectionState.value.isLocalHostOnline(vencialleeUuid, "Venciallee"))
+            coordinator.close()
+        }
+    }
 }
+
 
