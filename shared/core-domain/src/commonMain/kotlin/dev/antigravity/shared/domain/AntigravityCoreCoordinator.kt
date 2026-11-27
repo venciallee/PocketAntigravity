@@ -46,8 +46,10 @@ import dev.antigravity.shared.protocol.currentTimeMillis
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -66,6 +68,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlin.Throws
 
 /**
@@ -137,7 +140,7 @@ public class AntigravityCoreCoordinator(
     private val preloadMutex = Mutex()
     private val preloadQueue = ArrayDeque<String>()
     private val preloadAttemptedAtMs = mutableMapOf<String, Long>()
-    private val activePreloadJobsByCascadeId = mutableMapOf<String, Job>()
+    private val activePreloadJobsByCascadeId = linkedMapOf<String, Job>()
     private var preloadWorkerJob: Job? = null
     private val activeForegroundSyncCount = MutableStateFlow(0)
 
@@ -721,9 +724,9 @@ public class AntigravityCoreCoordinator(
         if (cascadeId.isBlank() || startIndex < 0) return emptyList()
         val client = connectionStore.activeClient() ?: return emptyList()
         if (client.isBinaryProtobufStepsUnsupported(instanceUuidOverride)) return emptyList()
-        preemptNonTargetPreloads(keepCascadeId = cascadeId)
         activeForegroundSyncCount.update { it + 1 }
         return try {
+            preemptNonTargetPreloads(keepCascadeId = cascadeId)
             val steps = client.fetchTrajectoryStepsProtobuf(
                 cascadeId = cascadeId,
                 startIndex = startIndex,
@@ -981,12 +984,11 @@ public class AntigravityCoreCoordinator(
             chatStore.setLoadingSteps(cascadeId, false)
             return emptyList()
         }
-        chatStore.setActiveCascade(cascadeId)
-        preemptNonTargetPreloads(keepCascadeId = cascadeId)
         val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
         val effectiveKnownCount = maxOf(knownStepCount, summary?.stepCount ?: 0)
         activeForegroundSyncCount.update { it + 1 }
         return try {
+            preemptNonTargetPreloads(keepCascadeId = cascadeId)
             val steps = chatStore.syncSteps(
                 client = client,
                 cascadeId = cascadeId,
@@ -1222,6 +1224,22 @@ public class AntigravityCoreCoordinator(
     private fun stopConversationPreload() {
         preloadWorkerJob?.cancel()
         preloadWorkerJob = null
+        scope.launch {
+            try {
+                val activeJobs = preloadMutex.withLock {
+                    val snapshot = activePreloadJobsByCascadeId.values.toList()
+                    activePreloadJobsByCascadeId.clear()
+                    snapshot
+                }
+                for (job in activeJobs) {
+                    job.cancel()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort cleanup
+            }
+        }
     }
 
     /**
@@ -1229,20 +1247,17 @@ public class AntigravityCoreCoordinator(
      * [keepCascadeId] so foreground chat opening gets 100% of relay/LAN bandwidth and Desktop CPU.
      */
     private suspend fun preemptNonTargetPreloads(keepCascadeId: String) {
-        val jobsToCancel = mutableListOf<Pair<String, Job>>()
-        preloadMutex.withLock {
-            val iter = activePreloadJobsByCascadeId.entries.iterator()
-            while (iter.hasNext()) {
-                val (cid, job) = iter.next()
-                if (cid != keepCascadeId) {
-                    jobsToCancel.add(cid to job)
-                    iter.remove()
-                    preloadAttemptedAtMs.remove(cid)
-                    if (cid !in preloadQueue) {
-                        preloadQueue.addLast(cid)
-                    }
-                }
+        val jobsToCancel = preloadMutex.withLock {
+            val active = activePreloadJobsByCascadeId.entries
+                .filter { (cid, job) -> cid != keepCascadeId && job.isActive }
+                .map { it.key to it.value }
+            for ((cid, _) in active) {
+                activePreloadJobsByCascadeId.remove(cid)
+                preloadAttemptedAtMs.remove(cid)
+                preloadQueue.remove(cid)
+                preloadQueue.addFirst(cid)
             }
+            active
         }
         for ((_, job) in jobsToCancel) {
             job.cancel()
@@ -1251,7 +1266,11 @@ public class AntigravityCoreCoordinator(
 
     private suspend fun runPreloadWorkers() {
         val conn = connectionStore.state.value
-        val maxConcurrency = if (powerStateProvider.isLowPowerModeEnabled || conn.isNetworkExpensiveOrConstrained) 1 else 2
+        val maxConcurrency = if (
+            powerStateProvider.isLowPowerModeEnabled ||
+            conn.isNetworkExpensiveOrConstrained ||
+            conn.activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY
+        ) 1 else 2
         coroutineScope {
             repeat(maxConcurrency) {
                 launch {
@@ -1266,20 +1285,32 @@ public class AntigravityCoreCoordinator(
                         if (!liveConn.isConnected || liveConn.isNetworkingSuspended || !liveConn.isDeviceNetworkReachable) {
                             break
                         }
-                        if (activeForegroundSyncCount.value > 0) {
-                            preloadMutex.withLock { preloadQueue.addFirst(nextId) }
-                            continue
-                        }
-                        val childJob = launch {
+                        val childJob = launch(start = CoroutineStart.LAZY) {
                             preloadSingleConversation(nextId)
                         }
-                        preloadMutex.withLock { activePreloadJobsByCascadeId[nextId] = childJob }
+                        val preemptedBeforeStart = preloadMutex.withLock {
+                            if (activeForegroundSyncCount.value > 0 && chatStore.state.value.activeCascadeId != nextId) {
+                                preloadQueue.remove(nextId)
+                                preloadQueue.addFirst(nextId)
+                                true
+                            } else {
+                                activePreloadJobsByCascadeId[nextId] = childJob
+                                false
+                            }
+                        }
+                        if (preemptedBeforeStart) {
+                            childJob.cancel()
+                            continue
+                        }
+                        childJob.start()
                         try {
                             childJob.join()
                         } finally {
-                            preloadMutex.withLock {
-                                if (activePreloadJobsByCascadeId[nextId] === childJob) {
-                                    activePreloadJobsByCascadeId.remove(nextId)
+                            withContext(NonCancellable) {
+                                preloadMutex.withLock {
+                                    if (activePreloadJobsByCascadeId[nextId] === childJob) {
+                                        activePreloadJobsByCascadeId.remove(nextId)
+                                    }
                                 }
                             }
                         }
@@ -2017,10 +2048,15 @@ public class AntigravityCoreCoordinator(
         stopForegroundConnectivityLoop()
         stopConversationPreload()
         stopLiveChatStream()
-        preloadMutex.withLock {
+        val activePreloads = preloadMutex.withLock {
             preloadQueue.clear()
             preloadAttemptedAtMs.clear()
+            val snapshot = activePreloadJobsByCascadeId.values.toList()
             activePreloadJobsByCascadeId.clear()
+            snapshot
+        }
+        for (job in activePreloads) {
+            job.cancel()
         }
         conversationSyncStore.clear()
         chatStore.clear()

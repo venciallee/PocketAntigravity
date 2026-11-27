@@ -79,6 +79,7 @@ import dev.antigravity.shared.domain.EsddVerificationFixtures
 import dev.antigravity.shared.model.AppAppearanceMode
 import dev.antigravity.shared.model.AppThemePreset
 import dev.antigravity.shared.model.CascadeSummary
+import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.EsddVerifySceneCase
 import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.RemoteHostInstance
@@ -269,8 +270,6 @@ fun AntigravityAppRoot(
     var lastHandledStepRetryNonce by remember { mutableStateOf(0) }
     LaunchedEffect(
         activeChatRouteId,
-        activeChatSummary?.stepCount,
-        activeChatSummary?.status,
         connectionState.isConnected,
         hasAnyReachableRelayHost,
         stepSyncRetryNonce,
@@ -279,7 +278,7 @@ fun AntigravityAppRoot(
         if (coordinator.isVerificationMode || cid.startsWith("cascade-new-")) return@LaunchedEffect
         val isManualRetry = stepSyncRetryNonce != lastHandledStepRetryNonce
         lastHandledStepRetryNonce = stepSyncRetryNonce
-        val summary = activeChatSummary
+        val summary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == cid }
         val resolvedIsCloud = isCloudConversation(cid, summary)
         runCatching {
             if (isManualRetry) {
@@ -300,6 +299,32 @@ fun AntigravityAppRoot(
                     instanceUuidOverride = summary?.originInstanceUuid,
                 )
             }
+        }
+    }
+    LaunchedEffect(
+        activeChatRouteId,
+        activeChatSummary?.stepCount,
+        activeChatSummary?.status,
+    ) {
+        val cid = activeChatRouteId ?: return@LaunchedEffect
+        if (coordinator.isVerificationMode || cid.startsWith("cascade-new-")) return@LaunchedEffect
+        if (!connectionState.isConnected && !hasAnyReachableRelayHost) return@LaunchedEffect
+        val summary = activeChatSummary ?: return@LaunchedEffect
+        if (coordinator.chatState.value.isLoadingSteps) return@LaunchedEffect
+        val loadedCount = coordinator.chatState.value.stepsByCascadeId[cid]?.size ?: 0
+        val summaryIsActiveOrWaiting = summary.status == CortexStepStatus.IN_PROGRESS ||
+            summary.status == CortexStepStatus.PENDING ||
+            summary.status == CortexStepStatus.WAITING ||
+            summary.status == CortexStepStatus.BLOCKED
+        if (summary.stepCount <= loadedCount && !summaryIsActiveOrWaiting) return@LaunchedEffect
+        val resolvedIsCloud = isCloudConversation(cid, summary)
+        runCatching {
+            coordinator.syncSteps(
+                cascadeId = cid,
+                knownStepCount = summary.stepCount,
+                isCloud = resolvedIsCloud,
+                instanceUuidOverride = summary.originInstanceUuid,
+            )
         }
     }
 

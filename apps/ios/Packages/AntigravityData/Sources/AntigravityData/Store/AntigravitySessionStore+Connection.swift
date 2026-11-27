@@ -672,7 +672,12 @@ extension AntigravitySessionStore {
         isConnectingToBackend = true
         connectionErrorText = nil
         connectionStatusText = "Handshaking with \(url.host ?? endpointURLString)..."
-        defer { isConnectingToBackend = false }
+        defer {
+            isConnectingToBackend = false
+            if !isLiveBackendConnected && stepPollingTask == nil {
+                isLoadingSteps = false
+            }
+        }
 
         let hostInstance = RemoteHostInstance(
             instanceId: "direct-\(url.host ?? "mac")",
@@ -847,6 +852,10 @@ extension AntigravitySessionStore {
         summaryPollingTask = nil
         stepPollingTask?.cancel()
         stepPollingTask = nil
+        activeStepSyncCascadeId = nil
+        activeStepSyncPollsUntilIdle = false
+        isSleepingBetweenStepPolls = false
+        pendingStreamResyncCascadeId = nil
 
         isConnectingToBackend = true
         connectionErrorText = nil
@@ -854,6 +863,9 @@ extension AntigravitySessionStore {
             if self.hostSwitchGeneration == generation {
                 self.isConnectingToBackend = false
                 self.isSwitchingHost = false
+                if !self.isLiveBackendConnected && self.stepPollingTask == nil {
+                    self.isLoadingSteps = false
+                }
                 if !self.isLiveBackendConnected && self.connectionLifecyclePhase == .connecting {
                     self.connectionLifecyclePhase = self.hasPairedBackend
                         ? .offlineBackoff(
@@ -1174,6 +1186,9 @@ extension AntigravitySessionStore {
         hostSwitchTask = nil
         isConnectingToBackend = false
         isSwitchingHost = false
+        if stepPollingTask == nil {
+            isLoadingSteps = false
+        }
         if isOptimisticInitialPairing && !isLiveBackendConnected {
             isOptimisticInitialPairing = false
             hasPairedBackend = false
@@ -1204,6 +1219,9 @@ extension AntigravitySessionStore {
         activeStepSyncCascadeId = nil
         activeStepSyncPollsUntilIdle = false
         activeForegroundStepSyncCount = 0
+        isSleepingBetweenStepPolls = false
+        pendingStreamResyncCascadeId = nil
+        isLoadingSteps = false
         for task in inFlightPreloadTasksByCascadeId.values {
             task.cancel()
         }
@@ -2492,6 +2510,8 @@ extension AntigravitySessionStore {
                 activeCascadeId,
                 pollUntilIdle: true
             )
+        } else {
+            isLoadingSteps = false
         }
         if hostOnline {
             scheduleConversationPreload()

@@ -45,6 +45,7 @@ public actor AntigravityRPCClient {
     internal var repairedStepCacheOrder: [String] = []
     internal var attemptedRepairStepKeys: Set<String> = []
     internal var learnedWireStepTypeByHost: [String: CortexStepType] = [:]
+    internal var learnedHousekeepingWireKeys: Set<String> = []
     internal var stepOffsetIgnoredHosts: Set<String> = []
 
     internal enum RelayLivenessOutcome: Sendable, Equatable {
