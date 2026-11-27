@@ -525,7 +525,7 @@ public struct StepInlineApprovalCardView: View {
                     .foregroundStyle(AntigravityTheme.inkSecondary)
 
                 Button {
-                    store.syncStepsForCascade(step.cascadeId, pollUntilIdle: false)
+                    store.syncStepsForCascade(step.cascadeId, pollUntilIdle: false, forceRefresh: true)
                 } label: {
                     Label(lang.t("Refresh Status", "刷新状态"), systemImage: "arrow.clockwise")
                         .font(.system(size: 13.5, weight: .semibold))

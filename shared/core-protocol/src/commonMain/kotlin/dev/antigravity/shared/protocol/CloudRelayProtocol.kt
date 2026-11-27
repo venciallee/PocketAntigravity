@@ -643,12 +643,16 @@ public object CloudRelayJspbCodec {
         remoteUserAgent: String = SapisidHashGenerator.MOBILE_REMOTE_USER_AGENT,
     ): ByteArray {
         val base64Payload = if (payload.isEmpty()) "" else payload.toByteString().base64()
-        val headerPairs = listOf(
-            listOf("x-is-streaming", if (isStreaming) "true" else "false"),
-            listOf("x-jetski-remote-control-user-agent", remoteUserAgent),
-            listOf("content-type", contentType),
-            listOf("connect-protocol-version", "1"),
-        )
+        val headerPairs = buildList {
+            add(listOf("x-is-streaming", if (isStreaming) "true" else "false"))
+            add(listOf("x-jetski-remote-control-user-agent", remoteUserAgent))
+            add(listOf("content-type", contentType))
+            add(listOf("connect-protocol-version", "1"))
+            add(listOf("accept-encoding", "gzip"))
+            if (contentType.equals("application/proto", ignoreCase = true)) {
+                add(listOf("accept", "application/proto"))
+            }
+        }
         val jspb = JsonArray(
             listOf(
                 JsonPrimitive(targetInstanceUuid),

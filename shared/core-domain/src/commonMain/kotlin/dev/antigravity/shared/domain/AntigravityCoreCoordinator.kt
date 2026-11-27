@@ -53,6 +53,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -113,6 +115,7 @@ public class AntigravityCoreCoordinator(
     private val preloadQueue = ArrayDeque<String>()
     private val preloadAttemptedAtMs = mutableMapOf<String, Long>()
     private var preloadWorkerJob: Job? = null
+    private val activeForegroundSyncCount = MutableStateFlow(0)
 
     public val connectionStore: ConnectionDomainStore = ConnectionDomainStore(
         secretStore = secretStore,
@@ -405,6 +408,34 @@ public class AntigravityCoreCoordinator(
         knownStepCount: Int = 0,
         isCloud: Boolean = false,
         instanceUuidOverride: String? = null,
+    ): List<CascadeStep> = syncStepsInternal(
+        cascadeId = cascadeId,
+        knownStepCount = knownStepCount,
+        isCloud = isCloud,
+        instanceUuidOverride = instanceUuidOverride,
+        forceRefresh = false,
+    )
+
+    @Throws(Throwable::class)
+    public suspend fun forceSyncSteps(
+        cascadeId: String,
+        knownStepCount: Int = 0,
+        isCloud: Boolean = false,
+        instanceUuidOverride: String? = null,
+    ): List<CascadeStep> = syncStepsInternal(
+        cascadeId = cascadeId,
+        knownStepCount = knownStepCount,
+        isCloud = isCloud,
+        instanceUuidOverride = instanceUuidOverride,
+        forceRefresh = true,
+    )
+
+    private suspend fun syncStepsInternal(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Boolean,
+        instanceUuidOverride: String?,
+        forceRefresh: Boolean,
     ): List<CascadeStep> {
         val client = connectionStore.activeClient()
         if (client == null) {
@@ -420,20 +451,30 @@ public class AntigravityCoreCoordinator(
             return cached
         }
         chatStore.setActiveCascade(cascadeId)
-        val steps = chatStore.syncSteps(
-            client = client,
-            cascadeId = cascadeId,
-            knownStepCount = knownStepCount,
-            isCloud = isCloud,
-            instanceUuidOverride = instanceUuidOverride,
-        )
-        conversationSyncStore.applyHydratedStepsMetadata(
-            host = connectionStore.state.value.activeHost,
-            cascadeId = cascadeId,
-            steps = steps,
-            persist = true,
-        )
-        return steps
+        val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+        val effectiveKnownCount = maxOf(knownStepCount, summary?.stepCount ?: 0)
+        activeForegroundSyncCount.update { it + 1 }
+        return try {
+            val steps = chatStore.syncSteps(
+                client = client,
+                cascadeId = cascadeId,
+                knownStepCount = effectiveKnownCount,
+                isCloud = isCloud,
+                instanceUuidOverride = instanceUuidOverride,
+                summaryStatus = summary?.status,
+                summaryUpdatedAtEpochMs = summary?.updatedAtEpochMs ?: 0L,
+                forceRefresh = forceRefresh,
+            )
+            conversationSyncStore.applyHydratedStepsMetadata(
+                host = connectionStore.state.value.activeHost,
+                cascadeId = cascadeId,
+                steps = steps,
+                persist = true,
+            )
+            steps
+        } finally {
+            activeForegroundSyncCount.update { (it - 1).coerceAtLeast(0) }
+        }
     }
 
     /**
@@ -539,7 +580,17 @@ public class AntigravityCoreCoordinator(
                 }
             }
             for (cid in priorityCascadeIds) addIfEligible(cid)
-            // 1. Prioritize all non-archived unresolved-title conversations in expanded projects first
+            // 1. Prioritize recent conversations in expanded projects so tapping them opens on Frame 0
+            val recentToWarm = sync.summaries.filter { s ->
+                !s.isArchived &&
+                    s.projectSlug !in collapsedIds &&
+                    existingStepsById[s.cascadeId].isNullOrEmpty() &&
+                    isSummaryHostReachable(s, conn)
+            }
+            for (s in recentToWarm.take(MAX_RECENT_STEP_PRELOAD_COUNT)) {
+                addIfEligible(s.cascadeId)
+            }
+            // 2. Hydrate remaining unresolved-title conversations in expanded projects
             val unresolvedExpanded = sync.summaries.filter { s ->
                 !s.isArchived && s.needsTitleHydration &&
                     s.cascadeId !in sync.settledEmptyTitleCascadeIds &&
@@ -549,7 +600,7 @@ public class AntigravityCoreCoordinator(
             for (s in unresolvedExpanded.take(MAX_BACKGROUND_HYDRATE_COUNT)) {
                 addIfEligible(s.cascadeId)
             }
-            // 2. Also hydrate unresolved-title conversations in collapsed projects so expanding is instant
+            // 3. Lastly hydrate unresolved-title conversations in collapsed projects
             val unresolvedCollapsed = sync.summaries.filter { s ->
                 !s.isArchived && s.needsTitleHydration &&
                     s.cascadeId !in sync.settledEmptyTitleCascadeIds &&
@@ -557,16 +608,6 @@ public class AntigravityCoreCoordinator(
                     isSummaryHostReachable(s, conn)
             }
             for (s in unresolvedCollapsed.take(MAX_BACKGROUND_HYDRATE_COUNT)) {
-                addIfEligible(s.cascadeId)
-            }
-            // 3. Preload steps for top recent conversations across expanded projects so entry is instant
-            val recentToWarm = sync.summaries.filter { s ->
-                !s.isArchived &&
-                    s.projectSlug !in collapsedIds &&
-                    existingStepsById[s.cascadeId].isNullOrEmpty() &&
-                    isSummaryHostReachable(s, conn)
-            }
-            for (s in recentToWarm.take(MAX_RECENT_STEP_PRELOAD_COUNT)) {
                 addIfEligible(s.cascadeId)
             }
         }
@@ -618,12 +659,19 @@ public class AntigravityCoreCoordinator(
             repeat(maxConcurrency) {
                 launch {
                     while (isActive) {
+                        if (activeForegroundSyncCount.value > 0) {
+                            activeForegroundSyncCount.first { it == 0 }
+                        }
                         val nextId = preloadMutex.withLock {
                             if (preloadQueue.isEmpty()) null else preloadQueue.removeFirst()
                         } ?: break
                         val liveConn = connectionStore.state.value
                         if (!liveConn.isConnected || liveConn.isNetworkingSuspended || !liveConn.isDeviceNetworkReachable) {
                             break
+                        }
+                        if (activeForegroundSyncCount.value > 0) {
+                            preloadMutex.withLock { preloadQueue.addFirst(nextId) }
+                            continue
                         }
                         preloadSingleConversation(nextId)
                     }

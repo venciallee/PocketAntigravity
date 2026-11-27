@@ -21,10 +21,13 @@ import dev.antigravity.shared.protocol.InteractionBuilder
 import dev.antigravity.shared.protocol.ProtocolCompatibilityEngine
 import dev.antigravity.shared.protocol.currentTimeMillis
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.Throws
@@ -86,9 +89,17 @@ public class CascadeChatDomainStore(
 
     public var isVerificationMode: Boolean = false
 
+    private data class SyncedTrajectoryMarker(
+        val stepCount: Int,
+        val summaryUpdatedAtEpochMs: Long,
+    )
+
     private val markdownCache = linkedMapOf<String, List<MarkdownBlock>>()
     private val outboxMutex = Mutex()
     private val inFlightOutboxIds = mutableSetOf<String>()
+    private val fetchMutex = Mutex()
+    private val inFlightStepFetches = linkedMapOf<String, CompletableDeferred<List<CascadeStep>>>()
+    private val syncedMarkersByCascadeId = MutableStateFlow<Map<String, SyncedTrajectoryMarker>>(emptyMap())
 
     public fun setActiveCascade(cascadeId: String) {
         _state.update { it.copy(activeCascadeId = cascadeId, stepLoadErrorText = null) }
@@ -263,6 +274,7 @@ public class CascadeChatDomainStore(
         instanceUuidOverride: String? = null,
     ) {
         val targetCascadeId = cascadeId.ifBlank { _state.value.activeCascadeId }
+        invalidateFreshness(targetCascadeId)
         val previousSteps = _state.value.stepsByCascadeId[targetCascadeId].orEmpty()
         val truncated = previousSteps.filter { it.stepIndex <= stepIndex }
         putSteps(targetCascadeId, truncated)
@@ -335,6 +347,73 @@ public class CascadeChatDomainStore(
         return loaded
     }
 
+    public fun invalidateFreshness(cascadeId: String) {
+        if (cascadeId.isEmpty()) return
+        syncedMarkersByCascadeId.update { prev ->
+            if (cascadeId in prev) prev - cascadeId else prev
+        }
+    }
+
+    private suspend fun executeCoalescedStepFetch(
+        cascadeId: String,
+        forceNewRequest: Boolean = false,
+        fetcher: suspend () -> List<CascadeStep>,
+    ): List<CascadeStep> {
+        if (!forceNewRequest) {
+            val existingDeferred = fetchMutex.withLock { inFlightStepFetches[cascadeId] }
+            if (existingDeferred != null) {
+                return try {
+                    existingDeferred.await()
+                } catch (e: CancellationException) {
+                    if (!currentCoroutineContext().isActive) throw e
+                    // Background owner was cancelled while foreground is still waiting: run our own fetch.
+                    executeCoalescedStepFetch(cascadeId = cascadeId, forceNewRequest = true, fetcher = fetcher)
+                }
+            }
+        }
+        val ownedDeferred = CompletableDeferred<List<CascadeStep>>()
+        fetchMutex.withLock {
+            if (!forceNewRequest) {
+                val raced = inFlightStepFetches[cascadeId]
+                if (raced != null) {
+                    return@withLock raced
+                }
+            }
+            inFlightStepFetches[cascadeId] = ownedDeferred
+            null
+        }?.let { raced ->
+            return try {
+                raced.await()
+            } catch (e: CancellationException) {
+                if (!currentCoroutineContext().isActive) throw e
+                executeCoalescedStepFetch(cascadeId = cascadeId, forceNewRequest = true, fetcher = fetcher)
+            }
+        }
+        return try {
+            val result = fetcher()
+            ownedDeferred.complete(result)
+            result
+        } catch (e: Throwable) {
+            ownedDeferred.completeExceptionally(e)
+            throw e
+        } finally {
+            fetchMutex.withLock {
+                if (inFlightStepFetches[cascadeId] === ownedDeferred) {
+                    inFlightStepFetches.remove(cascadeId)
+                }
+            }
+        }
+    }
+
+    private fun hasActiveOrPendingSteps(steps: List<CascadeStep>): Boolean =
+        steps.any {
+            it.status == CortexStepStatus.IN_PROGRESS ||
+                it.status == CortexStepStatus.PENDING ||
+                it.status == CortexStepStatus.WAITING ||
+                it.status == CortexStepStatus.BLOCKED ||
+                it.isQueuedInOutbox
+        }
+
     /**
      * Preloads and caches trajectory steps for [cascadeId] in the background WITHOUT mutating
      * `activeCascadeId`, `isLoadingSteps`, or `stepLoadErrorText`.
@@ -363,18 +442,24 @@ public class CascadeChatDomainStore(
                 return diskSteps
             }
         }
-        val remoteSteps = client.fetchAllTrajectorySteps(
-            cascadeId = cascadeId,
-            knownStepCount = knownStepCount,
-            isCloud = isCloud,
-            instanceUuidOverride = instanceUuidOverride,
-        )
+        val baselineSteps = inMemory.ifEmpty { diskSteps }
+        val remoteSteps = executeCoalescedStepFetch(cascadeId = cascadeId, forceNewRequest = false) {
+            client.fetchAllTrajectorySteps(
+                cascadeId = cascadeId,
+                knownStepCount = knownStepCount,
+                isCloud = isCloud,
+                instanceUuidOverride = instanceUuidOverride,
+                existingSteps = if (requireRemoteRefresh) emptyList() else baselineSteps,
+            )
+        }
         if (remoteSteps.isNotEmpty()) {
-            putSteps(cascadeId, remoteSteps)
-            projectionStorage.saveSteps(cascadeId, remoteSteps)
+            if (remoteSteps != baselineSteps) {
+                putSteps(cascadeId, remoteSteps)
+                projectionStorage.saveSteps(cascadeId, remoteSteps)
+            }
             return remoteSteps
         }
-        return inMemory.ifEmpty { diskSteps }
+        return baselineSteps
     }
 
     public fun clearStepLoadError() {
@@ -392,12 +477,17 @@ public class CascadeChatDomainStore(
         knownStepCount: Int = 0,
         isCloud: Boolean = false,
         instanceUuidOverride: String? = null,
+        summaryStatus: CortexStepStatus? = null,
+        summaryUpdatedAtEpochMs: Long = 0L,
+        forceRefresh: Boolean = false,
     ): List<CascadeStep> {
         if (cascadeId.isEmpty()) return emptyList()
-        if (_state.value.stepsByCascadeId[cascadeId].isNullOrEmpty()) {
+        var existingSteps = _state.value.stepsByCascadeId[cascadeId].orEmpty()
+        if (existingSteps.isEmpty()) {
             val cached = projectionStorage.loadSteps(cascadeId)
             if (cached.isNotEmpty()) {
                 putSteps(cascadeId, cached)
+                existingSteps = cached
             } else {
                 _state.update {
                     if (it.activeCascadeId == cascadeId) {
@@ -408,16 +498,70 @@ public class CascadeChatDomainStore(
                 }
             }
         }
+
+        // Idle cached fast-path (0 RTT): if the conversation is terminal/idle and cached steps
+        // already satisfy `knownStepCount` with no pending/in-progress/waiting steps, render
+        // immediately without issuing a redundant full-history RPC on re-entry.
+        val isExplicitTerminalSummary = summaryStatus == CortexStepStatus.DONE ||
+            summaryStatus == CortexStepStatus.ERROR ||
+            summaryStatus == CortexStepStatus.CANCELLED
+        val isActiveSummary = summaryStatus == CortexStepStatus.IN_PROGRESS ||
+            summaryStatus == CortexStepStatus.PENDING ||
+            summaryStatus == CortexStepStatus.WAITING ||
+            summaryStatus == CortexStepStatus.BLOCKED
+        val marker = syncedMarkersByCascadeId.value[cascadeId]
+        val canSkipIdleRefresh = isExplicitTerminalSummary ||
+            (marker != null && !isActiveSummary && summaryStatus != null)
+        if (!forceRefresh &&
+            existingSteps.isNotEmpty() &&
+            canSkipIdleRefresh &&
+            knownStepCount > 0 &&
+            existingSteps.size >= knownStepCount &&
+            !hasActiveOrPendingSteps(existingSteps)
+        ) {
+            val updatedAtUnchanged = marker == null ||
+                summaryUpdatedAtEpochMs <= 0L ||
+                marker.summaryUpdatedAtEpochMs >= summaryUpdatedAtEpochMs
+            if (updatedAtUnchanged) {
+                val nextMarker = SyncedTrajectoryMarker(
+                    stepCount = maxOf(knownStepCount, existingSteps.size),
+                    summaryUpdatedAtEpochMs = maxOf(marker?.summaryUpdatedAtEpochMs ?: 0L, summaryUpdatedAtEpochMs),
+                )
+                syncedMarkersByCascadeId.update { it + (cascadeId to nextMarker) }
+                _state.update {
+                    if (it.activeCascadeId == cascadeId) {
+                        it.copy(isLoadingSteps = false, stepLoadErrorText = null)
+                    } else {
+                        it
+                    }
+                }
+                return existingSteps
+            }
+        }
+
         return try {
-            val remoteSteps = client.fetchAllTrajectorySteps(
+            val remoteSteps = executeCoalescedStepFetch(
                 cascadeId = cascadeId,
-                knownStepCount = knownStepCount,
-                isCloud = isCloud,
-                instanceUuidOverride = instanceUuidOverride,
-            )
+                forceNewRequest = forceRefresh,
+            ) {
+                client.fetchAllTrajectorySteps(
+                    cascadeId = cascadeId,
+                    knownStepCount = knownStepCount,
+                    isCloud = isCloud,
+                    instanceUuidOverride = instanceUuidOverride,
+                    existingSteps = if (forceRefresh) emptyList() else existingSteps,
+                )
+            }
             if (remoteSteps.isNotEmpty()) {
-                putSteps(cascadeId, remoteSteps)
-                projectionStorage.saveSteps(cascadeId, remoteSteps)
+                if (remoteSteps != existingSteps) {
+                    putSteps(cascadeId, remoteSteps)
+                    projectionStorage.saveSteps(cascadeId, remoteSteps)
+                }
+                val nextMarker = SyncedTrajectoryMarker(
+                    stepCount = maxOf(knownStepCount, remoteSteps.size),
+                    summaryUpdatedAtEpochMs = summaryUpdatedAtEpochMs,
+                )
+                syncedMarkersByCascadeId.update { it + (cascadeId to nextMarker) }
             }
             _state.update {
                 if (it.activeCascadeId == cascadeId) {
@@ -502,6 +646,7 @@ public class CascadeChatDomainStore(
         }
 
         var targetCascadeId = cascadeId.ifBlank { _state.value.activeCascadeId }
+        invalidateFreshness(targetCascadeId)
         val existingSteps = _state.value.stepsByCascadeId[targetCascadeId].orEmpty()
         val nextStepIndex = (existingSteps.maxOfOrNull { it.stepIndex } ?: -1) + 1
         val isOfflineVerification = client == null && isVerificationMode
@@ -620,6 +765,7 @@ public class CascadeChatDomainStore(
         stepOverride: CascadeStep? = null,
     ): CascadeUserInteractionPayload {
         val targetCascadeId = cascadeId.ifBlank { _state.value.activeCascadeId }
+        invalidateFreshness(targetCascadeId)
         val currentSteps = _state.value.stepsByCascadeId[targetCascadeId].orEmpty()
         val targetStep = stepOverride ?: currentSteps.firstOrNull { it.stepIndex == stepIndex }
             ?: throw AntigravityRpcError.InteractionRejected("Step $stepIndex not found in $targetCascadeId")
@@ -670,6 +816,7 @@ public class CascadeChatDomainStore(
         cascadeId: String,
         instanceUuidOverride: String? = null,
     ) {
+        invalidateFreshness(cascadeId)
         val currentSteps = _state.value.stepsByCascadeId[cascadeId].orEmpty()
         if (currentSteps.isNotEmpty()) {
             val updated = currentSteps.map { step ->
@@ -742,6 +889,7 @@ public class CascadeChatDomainStore(
 
     public fun clear() {
         markdownCache.clear()
+        syncedMarkersByCascadeId.value = emptyMap()
         _state.value = CascadeChatState()
     }
 

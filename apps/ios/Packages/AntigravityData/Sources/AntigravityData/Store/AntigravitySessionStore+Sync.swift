@@ -747,6 +747,7 @@ extension AntigravitySessionStore {
         originHostName: String? = nil
     ) {
         var changedIds = Set<String>()
+        var activeChatNeedsStepSync = false
         let existingCloudProjects = projects.filter { $0.runtime == .cloud }
         let cloudProjById: [String: ProjectWorkspace] = Dictionary(
             existingCloudProjects.map { cp in (cp.cloudProjectId ?? cp.id, cp) },
@@ -812,8 +813,14 @@ extension AntigravitySessionStore {
                     let latestViewed = [existing.lastUserViewTime, decoded.lastUserViewTime].compactMap { $0 }.max()
                     merged.lastUserViewTime = latestViewed
 
-                    let hasNewActivity = merged.stepCount > prevStepCount
-                        || decoded.updatedAt.timeIntervalSince(existing.updatedAt) > 0.5
+                    let stepCountAdvanced = merged.stepCount > prevStepCount
+                    let statusChanged = merged.status != existing.status
+                    let timestampAdvanced = decoded.updatedAt.timeIntervalSince(existing.updatedAt) > 0.5
+                    let isActivelyRunningOrWaiting = merged.status == .inProgress
+                        || merged.status == .pending
+                        || merged.status == .waiting
+                        || merged.status == .blocked
+                    let hasNewActivity = stepCountAdvanced || timestampAdvanced
                     if hasNewActivity {
                         if activeRoute != .cascadeChat(cid) {
                             merged.isUnread = (merged.status != .inProgress && merged.status != .pending)
@@ -842,6 +849,9 @@ extension AntigravitySessionStore {
                         isUnread: merged.isUnread
                     )
                     summaries[idx] = merged
+                    if cid == activeCascadeId && (stepCountAdvanced || statusChanged || (timestampAdvanced && isActivelyRunningOrWaiting)) {
+                        activeChatNeedsStepSync = true
+                    }
                 } else {
                     var fresh = decoded
                     if let localViewed = locallyViewedAtByCascadeId[cid], fresh.updatedAt <= localViewed {
@@ -853,6 +863,9 @@ extension AntigravitySessionStore {
                         )
                     }
                     summaries.insert(fresh, at: 0)
+                    if cid == activeCascadeId {
+                        activeChatNeedsStepSync = true
+                    }
                 }
             }
 
@@ -894,6 +907,9 @@ extension AntigravitySessionStore {
 
         if let cid = event["cascadeId"]?.stringValue {
             changedIds.insert(cid)
+            if cid == activeCascadeId {
+                activeChatNeedsStepSync = true
+            }
             let statusRaw = event["status"]?.stringValue ?? "CORTEX_STEP_STATUS_IN_PROGRESS"
             let newStatus = CortexStepStatus.from(jsonName: statusRaw)
             let stepCount = event["stepCount"]?.intValue
@@ -922,8 +938,12 @@ extension AntigravitySessionStore {
             connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
         }
 
-        if !activeCascadeId.isEmpty && changedIds.contains(activeCascadeId) {
-            syncStepsForCascade(activeCascadeId, pollUntilIdle: activeRoute == .cascadeChat(activeCascadeId))
+        if !activeCascadeId.isEmpty && activeChatNeedsStepSync {
+            syncStepsForCascade(
+                activeCascadeId,
+                pollUntilIdle: activeRoute == .cascadeChat(activeCascadeId),
+                forceRefresh: true
+            )
         }
 
         if !isVerificationMode && (!changedIds.isEmpty || !decodedBatch.deletes.isEmpty) {
@@ -1000,13 +1020,62 @@ extension AntigravitySessionStore {
         return (currentStatus, false)
     }
 
+    /// Returns `true` when an in-flight foreground step synchronization task is already running for `cascadeId`.
+    public func hasActiveStepSync(for cascadeId: String) -> Bool {
+        !cascadeId.isEmpty && stepPollingTask != nil && activeStepSyncCascadeId == cascadeId
+    }
+
+    internal func isIdleCachedTrajectoryFresh(
+        cascadeId: String,
+        cachedSteps: [CascadeStep],
+        summary: CascadeSummary?
+    ) -> Bool {
+        guard !cachedSteps.isEmpty, let summary else { return false }
+        guard !summary.needsTitleHydration else { return false }
+        let knownCount = summary.stepCount
+        guard knownCount > 0, cachedSteps.count >= knownCount else { return false }
+        let hasActiveSteps = cachedSteps.contains {
+            $0.status == .inProgress
+                || $0.status == .pending
+                || $0.status == .waiting
+                || $0.status == .blocked
+                || $0.isQueuedInOutbox
+        }
+        guard !hasActiveSteps else { return false }
+
+        let isExplicitTerminal = summary.status == .done
+            || summary.status == .error
+            || summary.status == .cancelled
+        let isActiveSummary = summary.status == .inProgress
+            || summary.status == .pending
+            || summary.status == .waiting
+            || summary.status == .blocked
+        let marker = syncedStepsMarkerByCascadeId[cascadeId]
+        let canSkip = isExplicitTerminal || (marker != nil && !isActiveSummary)
+        guard canSkip else { return false }
+        if let marker {
+            return marker.updatedAt >= summary.updatedAt && marker.stepCount >= knownCount
+        }
+        return true
+    }
+
     /// Synchronizes `GetCascadeTrajectorySteps` (local-default Binary Protobuf + targeted JSON repair + runtime JSON ceiling learning) for `cascadeId`.
     /// Polls adaptively ONLY while an agent turn is actively streaming (`500ms` LAN / `1.0s` Relay; slowed in Low Power Mode).
     /// When the conversation is idle and the push stream is healthy, stops polling completely (0 idle RPCs) and relies
     /// on `JetboxSubscribeToSummaries` to wake step sync on demand.
-    public func syncStepsForCascade(_ cascadeId: String, pollUntilIdle: Bool = true) {
+    public func syncStepsForCascade(_ cascadeId: String, pollUntilIdle: Bool = true, forceRefresh: Bool = false) {
+        if !forceRefresh,
+           !cascadeId.isEmpty,
+           stepPollingTask != nil,
+           activeStepSyncCascadeId == cascadeId,
+           (!pollUntilIdle || activeStepSyncPollsUntilIdle) {
+            return
+        }
+
         stepPollingTask?.cancel()
         stepPollingTask = nil
+        activeStepSyncCascadeId = nil
+        activeStepSyncPollsUntilIdle = false
         stepSyncGeneration &+= 1
         let generation = stepSyncGeneration
         guard !isNetworkingSuspended else { return }
@@ -1039,7 +1108,7 @@ extension AntigravitySessionStore {
 
         // Confirmed-offline peer Mac (while another Mac is online), iPhone no-network, or pre-handshake cold start:
         // serve persisted steps immediately from disk without issuing cross-host failover RPCs against another online Mac.
-        guard isDeviceNetworkReachable, !isConfirmedOfflinePeerHost, let client = rpcClient else {
+        guard isDeviceNetworkReachable, !isConfirmedOfflinePeerHost, (kmpEngine != nil || rpcClient != nil) else {
             let isActivelyConnecting = !isConfirmedOfflinePeerHost
                 && !isLiveBackendConnected
                 && (isConnectingToBackend || connectionLifecyclePhase == .connecting)
@@ -1047,10 +1116,14 @@ extension AntigravitySessionStore {
             let shouldNoteUncachedOffline = isKnownOfflineLocal && !isBrandNewEmptySession && !isActivelyConnecting
             if (stepsByCascadeId[cascadeId] ?? []).isEmpty {
                 isLoadingSteps = isActivelyConnecting && !isBrandNewEmptySession
+                activeStepSyncCascadeId = cascadeId
+                activeStepSyncPollsUntilIdle = pollUntilIdle
                 stepPollingTask = Task { [weak self] in
                     defer {
                         if let self, self.stepSyncGeneration == generation {
                             self.stepPollingTask = nil
+                            self.activeStepSyncCascadeId = nil
+                            self.activeStepSyncPollsUntilIdle = false
                         }
                     }
                     let cached = await storeRef.loadProjectedSteps(cascadeId: cascadeId)
@@ -1088,14 +1161,22 @@ extension AntigravitySessionStore {
             isLoadingSteps = false
         }
 
+        let clientRef = rpcClient
+        activeStepSyncCascadeId = cascadeId
+        activeStepSyncPollsUntilIdle = pollUntilIdle
+        activeForegroundStepSyncCount += 1
         stepPollingTask = Task { [weak self] in
             defer {
-                if let self,
-                   self.stepSyncGeneration == generation {
-                    if self.activeCascadeId == cascadeId {
-                        self.isLoadingSteps = false
+                if let self {
+                    self.activeForegroundStepSyncCount = max(0, self.activeForegroundStepSyncCount - 1)
+                    if self.stepSyncGeneration == generation {
+                        if self.activeCascadeId == cascadeId {
+                            self.isLoadingSteps = false
+                        }
+                        self.stepPollingTask = nil
+                        self.activeStepSyncCascadeId = nil
+                        self.activeStepSyncPollsUntilIdle = false
                     }
-                    self.stepPollingTask = nil
                 }
             }
             if (self?.stepsByCascadeId[cascadeId] ?? []).isEmpty {
@@ -1106,6 +1187,65 @@ extension AntigravitySessionStore {
                     self.applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: cached, persist: false)
                     if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
                         self.isLoadingSteps = false
+                    }
+                }
+            }
+
+            // 0-RTT idle cached fast-path: if cached steps already match a settled terminal summary
+            // with no active/pending/waiting/queued steps, render immediately with zero network RTTs.
+            if let self, !forceRefresh {
+                let cachedNow = self.stepsByCascadeId[cascadeId] ?? []
+                let currentSummary = self.summaries.first(where: { $0.cascadeId == cascadeId })
+                let withinOptimistic = (self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
+                if !withinOptimistic,
+                   self.isIdleCachedTrajectoryFresh(
+                       cascadeId: cascadeId,
+                       cachedSteps: cachedNow,
+                       summary: currentSummary
+                   ) {
+                    if let currentSummary {
+                        self.syncedStepsMarkerByCascadeId[cascadeId] = (
+                            stepCount: max(currentSummary.stepCount, cachedNow.count),
+                            updatedAt: currentSummary.updatedAt
+                        )
+                    }
+                    if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
+                        self.isLoadingSteps = false
+                        self.stepLoadErrorText = nil
+                    }
+                    return
+                }
+            }
+
+            // Coalesce onto an already in-flight background preload for the same conversation instead of firing a duplicate RPC.
+            if let self, !forceRefresh, let inFlightPreload = self.inFlightPreloadTasksByCascadeId[cascadeId] {
+                let preloadedSteps = await inFlightPreload.value
+                guard !Task.isCancelled, self.stepSyncGeneration == generation else { return }
+                if !preloadedSteps.isEmpty {
+                    if (self.stepsByCascadeId[cascadeId] ?? []) != preloadedSteps {
+                        self.stepsByCascadeId[cascadeId] = preloadedSteps
+                        self.harvestEmbedResources(from: preloadedSteps)
+                    }
+                    self.applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: preloadedSteps, persist: false)
+                    if self.activeCascadeId == cascadeId {
+                        self.isLoadingSteps = false
+                        self.stepLoadErrorText = nil
+                    }
+                    let refreshedSummary = self.summaries.first(where: { $0.cascadeId == cascadeId })
+                    let withinOptimistic = (self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
+                    if !withinOptimistic,
+                       self.isIdleCachedTrajectoryFresh(
+                           cascadeId: cascadeId,
+                           cachedSteps: preloadedSteps,
+                           summary: refreshedSummary
+                       ) {
+                        if let refreshedSummary {
+                            self.syncedStepsMarkerByCascadeId[cascadeId] = (
+                                stepCount: max(refreshedSummary.stepCount, preloadedSteps.count),
+                                updatedAt: refreshedSummary.updatedAt
+                            )
+                        }
+                        return
                     }
                 }
             }
@@ -1139,27 +1279,41 @@ extension AntigravitySessionStore {
                 let originUuid = summaryMeta?.originInstanceUuid
                 let isEmptyNewSessionNow = self.locallyCreatedEmptyCascadeIds.contains(cascadeId)
                     && !(self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
+                let existingStepsSnapshot = self.stepsByCascadeId[cascadeId] ?? []
+                let useForceOnThisAttempt = forceRefresh && attempts == 1
                 var stillActive = false
                 do {
                     let remoteSteps: [CascadeStep]
                     if let engine = self.kmpEngine {
-                        remoteSteps = try await engine.syncSteps(
+                        if useForceOnThisAttempt {
+                            remoteSteps = try await engine.forceSyncSteps(
+                                cascadeId: cascadeId,
+                                knownStepCount: knownCount,
+                                isCloud: summaryIsCloud,
+                                instanceUuidOverride: originUuid
+                            )
+                        } else {
+                            remoteSteps = try await engine.syncSteps(
+                                cascadeId: cascadeId,
+                                knownStepCount: knownCount,
+                                isCloud: summaryIsCloud,
+                                instanceUuidOverride: originUuid
+                            )
+                        }
+                    } else if let clientRef {
+                        remoteSteps = try await clientRef.fetchAllTrajectorySteps(
                             cascadeId: cascadeId,
                             knownStepCount: knownCount,
                             isCloud: summaryIsCloud,
-                            instanceUuidOverride: originUuid
+                            instanceUuidOverride: originUuid,
+                            existingSteps: useForceOnThisAttempt ? [] : existingStepsSnapshot
                         )
                     } else {
-                        remoteSteps = try await client.fetchAllTrajectorySteps(
-                            cascadeId: cascadeId,
-                            knownStepCount: knownCount,
-                            isCloud: summaryIsCloud,
-                            instanceUuidOverride: originUuid
-                        )
+                        break
                     }
                     let liveRelaySnapshot: (instances: [RelayInstanceInfo], active: RelayInstanceInfo?)? =
-                        (self.activeHost.channel == .cloudRelay)
-                            ? await client.currentRelayInstancesSnapshot()
+                        (self.activeHost.channel == .cloudRelay && clientRef != nil)
+                            ? await clientRef?.currentRelayInstancesSnapshot()
                             : nil
                     guard !Task.isCancelled, !self.isNetworkingSuspended else { return }
 
@@ -1193,9 +1347,12 @@ extension AntigravitySessionStore {
                     let withinOptimisticWindow = (self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
                     if !remoteSteps.isEmpty {
                         self.locallyCreatedEmptyCascadeIds.remove(cascadeId)
-                        self.stepsByCascadeId[cascadeId] = remoteSteps
-                        self.harvestEmbedResources(from: remoteSteps)
-                        await storeRef.saveProjectedSteps(remoteSteps, for: cascadeId)
+                        let stepsChanged = (self.stepsByCascadeId[cascadeId] ?? []) != remoteSteps
+                        if stepsChanged {
+                            self.stepsByCascadeId[cascadeId] = remoteSteps
+                            self.harvestEmbedResources(from: remoteSteps)
+                            await storeRef.saveProjectedSteps(remoteSteps, for: cascadeId)
+                        }
                         if !self.syncedConfigCascadeIds.contains(cascadeId),
                            let latestCfgStep = remoteSteps.last(where: {
                                $0.type == .userInput && ($0.recordedExecutionMode != nil || $0.recordedModelId != nil)
@@ -1237,6 +1394,10 @@ extension AntigravitySessionStore {
                                 status: self.summaries[sumIdx].status,
                                 stepCount: self.summaries[sumIdx].stepCount,
                                 isUnread: self.summaries[sumIdx].isUnread
+                            )
+                            self.syncedStepsMarkerByCascadeId[cascadeId] = (
+                                stepCount: self.summaries[sumIdx].stepCount,
+                                updatedAt: self.summaries[sumIdx].updatedAt
                             )
                             if summaryDidMutate {
                                 self.scheduleDebouncedHostProjectionPersist(for: self.summaries[sumIdx])
@@ -1430,6 +1591,10 @@ extension AntigravitySessionStore {
         conversationPreloadTask = nil
         conversationPreloadQueue.removeAll()
         hydratingCascadeIds.removeAll()
+        for task in inFlightPreloadTasksByCascadeId.values {
+            task.cancel()
+        }
+        inFlightPreloadTasksByCascadeId.removeAll()
     }
 
     /// Prioritizes preloading a conversation as soon as its row scrolls into view in the sidebar or project list.
@@ -1446,8 +1611,8 @@ extension AntigravitySessionStore {
         scheduleConversationPreload(priorityCascadeIds: [cascadeId])
     }
 
-    /// Schedules bounded-concurrency background preloading of unhydrated conversation titles and
-    /// top recent conversations' steps so sidebar rows resolve cleanly and entering cached chats is instant.
+    /// Schedules bounded-concurrency background preloading of top recent conversations' steps and
+    /// unhydrated conversation titles so opening recent chats is instant and sidebar rows resolve cleanly.
     public func scheduleConversationPreload(priorityCascadeIds: [String] = []) {
         guard !isVerificationMode, !isNetworkingSuspended, isDeviceNetworkReachable else { return }
         guard isLiveBackendConnected || (hasPairedBackend && activeHost.isOnline) else { return }
@@ -1473,7 +1638,18 @@ extension AntigravitySessionStore {
             appendCandidate(cid)
         }
 
-        // 1. Prioritize all unhydrated titles in expanded projects first
+        // 1. Preload steps for top recent conversations in expanded projects FIRST so tapping recent chats opens on Frame 0
+        let recentUncached = summaries.filter { s in
+            !s.isArchived
+                && !collapsedIds.contains(s.projectSlug)
+                && (stepsByCascadeId[s.cascadeId] ?? []).isEmpty
+                && isSummaryHostOnline(s)
+        }
+        for s in recentUncached.prefix(maxRecentStepPreloadCount) {
+            appendCandidate(s.cascadeId)
+        }
+
+        // 2. Hydrate remaining unhydrated titles in expanded projects
         let unresolvedExpanded = summaries.filter { s in
             !s.isArchived && s.needsTitleHydration
                 && !settledEmptyTitleCascadeIds.contains(s.cascadeId)
@@ -1484,7 +1660,7 @@ extension AntigravitySessionStore {
             appendCandidate(s.cascadeId)
         }
 
-        // 2. Also hydrate unhydrated titles in collapsed projects so expanding them is instant
+        // 3. Hydrate unhydrated titles in collapsed projects last so they never starve recent active chats
         let unresolvedCollapsed = summaries.filter { s in
             !s.isArchived && s.needsTitleHydration
                 && !settledEmptyTitleCascadeIds.contains(s.cascadeId)
@@ -1492,17 +1668,6 @@ extension AntigravitySessionStore {
                 && isSummaryHostOnline(s)
         }
         for s in unresolvedCollapsed.prefix(maxBackgroundHydrateCount) {
-            appendCandidate(s.cascadeId)
-        }
-
-        // 3. Preload steps for top recent conversations in expanded projects so opening them renders on Frame 0
-        let recentUncached = summaries.filter { s in
-            !s.isArchived
-                && !collapsedIds.contains(s.projectSlug)
-                && (stepsByCascadeId[s.cascadeId] ?? []).isEmpty
-                && isSummaryHostOnline(s)
-        }
-        for s in recentUncached.prefix(maxRecentStepPreloadCount) {
             appendCandidate(s.cascadeId)
         }
 
@@ -1531,6 +1696,19 @@ extension AntigravitySessionStore {
                 for _ in 0..<maxConcurrency {
                     group.addTask { [weak self] in
                         while !Task.isCancelled {
+                            // Yield immediately whenever foreground conversation loading is active so
+                            // background preload RPCs never contend with user-initiated chat opens.
+                            var isForegroundBusy = await MainActor.run {
+                                (self?.activeForegroundStepSyncCount ?? 0) > 0
+                            }
+                            while isForegroundBusy && !Task.isCancelled {
+                                try? await Task.sleep(nanoseconds: 120_000_000)
+                                isForegroundBusy = await MainActor.run {
+                                    (self?.activeForegroundStepSyncCount ?? 0) > 0
+                                }
+                            }
+                            if Task.isCancelled { break }
+
                             let nextId: String? = await MainActor.run {
                                 guard let self,
                                       self.hostSwitchGeneration == generation,
@@ -1613,44 +1791,62 @@ extension AntigravitySessionStore {
             return false
         }()
 
-        do {
-            let remoteSteps: [CascadeStep]
-            if let engine = kmpEngine {
-                remoteSteps = try await engine.preloadSteps(
-                    cascadeId: cascadeId,
-                    knownStepCount: latestSummary.stepCount,
-                    isCloud: summaryIsCloud,
-                    instanceUuidOverride: latestSummary.originInstanceUuid,
-                    requireRemoteRefresh: shouldMarkHydrating
-                )
-            } else if let client = rpcClient {
-                remoteSteps = try await client.fetchAllTrajectorySteps(
-                    cascadeId: cascadeId,
-                    knownStepCount: latestSummary.stepCount,
-                    isCloud: summaryIsCloud,
-                    instanceUuidOverride: latestSummary.originInstanceUuid
-                )
-            } else {
-                return
-            }
-            guard !Task.isCancelled, hostSwitchGeneration == expectedGeneration, !isNetworkingSuspended else { return }
+        let engineRef = kmpEngine
+        let clientRef = rpcClient
+        let knownStepCount = latestSummary.stepCount
+        let originUuid = latestSummary.originInstanceUuid
+        let baselineSteps = stepsByCascadeId[cascadeId] ?? []
 
-            if !remoteSteps.isEmpty {
-                locallyCreatedEmptyCascadeIds.remove(cascadeId)
+        let fetchTask = Task<[CascadeStep], Never> {
+            do {
+                if let engineRef {
+                    return try await engineRef.preloadSteps(
+                        cascadeId: cascadeId,
+                        knownStepCount: knownStepCount,
+                        isCloud: summaryIsCloud,
+                        instanceUuidOverride: originUuid,
+                        requireRemoteRefresh: shouldMarkHydrating
+                    )
+                } else if let clientRef {
+                    return try await clientRef.fetchAllTrajectorySteps(
+                        cascadeId: cascadeId,
+                        knownStepCount: knownStepCount,
+                        isCloud: summaryIsCloud,
+                        instanceUuidOverride: originUuid,
+                        existingSteps: shouldMarkHydrating ? [] : baselineSteps
+                    )
+                }
+            } catch {
+                return []
+            }
+            return []
+        }
+        inFlightPreloadTasksByCascadeId[cascadeId] = fetchTask
+        let remoteSteps = await fetchTask.value
+        if inFlightPreloadTasksByCascadeId[cascadeId] == fetchTask {
+            inFlightPreloadTasksByCascadeId.removeValue(forKey: cascadeId)
+        }
+        guard !Task.isCancelled, hostSwitchGeneration == expectedGeneration, !isNetworkingSuspended else { return }
+
+        if !remoteSteps.isEmpty {
+            locallyCreatedEmptyCascadeIds.remove(cascadeId)
+            if (stepsByCascadeId[cascadeId] ?? []) != remoteSteps {
                 stepsByCascadeId[cascadeId] = remoteSteps
                 harvestEmbedResources(from: remoteSteps)
                 await storeRef.saveProjectedSteps(remoteSteps, for: cascadeId)
-                applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: remoteSteps, persist: true)
-                if summaries.first(where: { $0.cascadeId == cascadeId })?.needsTitleHydration == true {
+            }
+            applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: remoteSteps, persist: true)
+            if let updatedSummary = summaries.first(where: { $0.cascadeId == cascadeId }) {
+                syncedStepsMarkerByCascadeId[cascadeId] = (
+                    stepCount: max(updatedSummary.stepCount, remoteSteps.count),
+                    updatedAt: updatedSummary.updatedAt
+                )
+                if updatedSummary.needsTitleHydration {
                     settledEmptyTitleCascadeIds.insert(cascadeId)
                 }
-            } else if shouldMarkHydrating {
-                settledEmptyTitleCascadeIds.insert(cascadeId)
             }
-        } catch {
-            if !Task.isCancelled && shouldMarkHydrating {
-                settledEmptyTitleCascadeIds.insert(cascadeId)
-            }
+        } else if shouldMarkHydrating {
+            settledEmptyTitleCascadeIds.insert(cascadeId)
         }
     }
 }

@@ -715,6 +715,64 @@ final class KmpEnginePortTests: XCTestCase {
             XCTAssertFalse(text.contains("HTTP 400"), "Raw HTTP 400 leaked into UI error: \(text)")
         }
     }
+
+    @MainActor
+    func testSyncStepsCoalescesDuplicateCallsSkipsFreshIdleCacheAndSupportsForceRefresh() async throws {
+        let engine = SlowStepKmpEngineDouble()
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+        let connected = await store.connectDirectLAN(
+            endpointURLString: "http://127.0.0.1:18789",
+            csrfToken: "csrf-coalesce-test",
+            hostName: "Coalesce-MacBook"
+        )
+        XCTAssertTrue(connected)
+
+        // 1. Trigger selectCascade + immediate duplicate syncStepsForCascade (as SwiftUI .task would) -> must coalesce to 1 RPC!
+        store.selectCascade("kmp-coalesce-1")
+        XCTAssertTrue(store.hasActiveStepSync(for: "kmp-coalesce-1"))
+        store.syncStepsForCascade("kmp-coalesce-1", pollUntilIdle: true)
+
+        for _ in 0..<40 where (store.stepsByCascadeId["kmp-coalesce-1"]?.count ?? 0) < 2 {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let callsAfterFirstOpen = await engine.syncStepsCalls.count
+        XCTAssertEqual(callsAfterFirstOpen, 1, "Duplicate syncStepsForCascade while already in-flight must coalesce into 1 RPC")
+        XCTAssertEqual(store.stepsByCascadeId["kmp-coalesce-1"]?.count, 2)
+
+        // 2. Display items memoize and stay accurate on step mutation
+        let itemsBefore = store.displayItems
+        XCTAssertEqual(itemsBefore.count, 2)
+        let itemsCached = store.displayItems
+        XCTAssertEqual(itemsCached.count, 2)
+
+        // 3. Re-entering settled idle conversation with matching stepCount uses 0-RTT idle cache fast-path
+        store.syncStepsForCascade("kmp-coalesce-1", pollUntilIdle: false)
+        try? await Task.sleep(nanoseconds: 80_000_000)
+        let callsAfterIdleReentry = await engine.syncStepsCalls.count
+        XCTAssertEqual(callsAfterIdleReentry, 1, "Idle terminal cached conversation must skip redundant RPC on re-entry")
+
+        // 4. Explicit forceRefresh bypasses 0-RTT cache and routes through forceSyncSteps
+        store.syncStepsForCascade("kmp-coalesce-1", pollUntilIdle: false, forceRefresh: true)
+        for _ in 0..<40 where (await engine.forceSyncStepsCalls.count) < 1 {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let forcedCalls = await engine.forceSyncStepsCalls.count
+        XCTAssertEqual(forcedCalls, 1, "forceRefresh: true must bypass idle cache and invoke forceSyncSteps")
+
+        // 5. Mutating stepsByCascadeId invalidates cached displayItems immediately
+        var updated = store.stepsByCascadeId["kmp-coalesce-1"] ?? []
+        updated.append(
+            CascadeStep(
+                cascadeId: "kmp-coalesce-1",
+                stepIndex: 2,
+                type: .plannerResponse,
+                status: .done,
+                plannerResponse: PlannerResponsePayload(response: "Follow-up")
+            )
+        )
+        store.stepsByCascadeId["kmp-coalesce-1"] = updated
+        XCTAssertEqual(store.displayItems.count, 3)
+    }
 }
 
 private actor UnregisteredRelayKmpEngineDouble: AntigravityKmpEnginePort {
@@ -1308,6 +1366,136 @@ private actor StreamingKmpEngineDouble: AntigravityKmpEnginePort {
     func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
     func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
     nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { hub.makeStream() }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
+}
+
+private actor SlowStepKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "SlowStepKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=SlowStepKmpEngineDouble" }
+
+    var syncStepsCalls: [String] = []
+    var forceSyncStepsCalls: [String] = []
+
+    func connectDirectLan(
+        endpointURLString: String,
+        csrfToken: String,
+        certSHA256: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(
+            latencyMs: 10,
+            workspaces: [WorkspaceInfo(workspaceUri: "file:///Users/dev/code/app", displayName: "app", activeBranch: "main")],
+            summaries: [
+                CascadeSummary(
+                    cascadeId: "kmp-coalesce-1",
+                    title: "Settled Idle Chat",
+                    projectSlug: "app",
+                    workspaceUri: "file:///Users/dev/code/app",
+                    status: .done,
+                    stepCount: 2,
+                    updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    isUnread: false
+                )
+            ],
+            resolvedHostname: hostName,
+            isSelectedHostOnline: true
+        )
+    }
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(latencyMs: 10, workspaces: [], summaries: [], isSelectedHostOnline: true)
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        HostReachabilityProbeResult(latencyMs: 10, isSelectedHostOnline: true)
+    }
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult {
+        KmpFederatedSyncResult(workspaces: [], summaries: [], latencyMs: 10)
+    }
+
+    func syncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        syncStepsCalls.append(cascadeId)
+        try? await Task.sleep(nanoseconds: 90_000_000)
+        return [
+            CascadeStep(cascadeId: cascadeId, stepIndex: 0, type: .userInput, status: .done, userInput: "Hello"),
+            CascadeStep(cascadeId: cascadeId, stepIndex: 1, type: .plannerResponse, status: .done, plannerResponse: PlannerResponsePayload(response: "World"))
+        ]
+    }
+
+    func forceSyncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        forceSyncStepsCalls.append(cascadeId)
+        return [
+            CascadeStep(cascadeId: cascadeId, stepIndex: 0, type: .userInput, status: .done, userInput: "Hello"),
+            CascadeStep(cascadeId: cascadeId, stepIndex: 1, type: .plannerResponse, status: .done, plannerResponse: PlannerResponsePayload(response: "Force Refreshed"))
+        ]
+    }
+
+    func startConversation(
+        workspaceUri: String,
+        initialPrompt: String,
+        modelId: String,
+        cloudProjectId: String?,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> String { "cid-coalesce-created" }
+
+    func sendMessage(
+        cascadeId: String,
+        message: String,
+        workspaceUri: String,
+        attachments: [ComposerAttachmentChip],
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode,
+        agentPersona: String,
+        isCloud: Bool,
+        cloudProjectId: String?,
+        permissionPreset: AgentPermissionPreset?,
+        instanceUuidOverride: String?,
+        isOptimisticDraft: Bool
+    ) async throws -> KmpSendMessageResult {
+        KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: true, queuedInOutbox: false)
+    }
+
+    func resolveWaitingInteraction(
+        step: CascadeStep,
+        decision: InteractionDecision,
+        workspaceUri: String?,
+        instanceUuidOverride: String?
+    ) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { AsyncStream { $0.finish() } }
     nonisolated func onBackground() {}
     func onForeground() async {}
     func disconnectAndClearCredentials() async {}

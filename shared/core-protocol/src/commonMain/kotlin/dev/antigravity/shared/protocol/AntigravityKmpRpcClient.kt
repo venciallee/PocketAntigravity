@@ -50,13 +50,16 @@ import io.ktor.http.ContentType
 import io.ktor.http.content.ByteArrayContent
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -277,6 +280,10 @@ public class AntigravityKmpRpcClient(
     private var cachedDefaultUpstreamModel: String? = null
     private val wokenInstanceCascadeKeys = mutableSetOf<String>()
     private val capabilityProfilesByHost = linkedMapOf<String, HostCapabilityProfile>()
+    private val repairedStepCache = linkedMapOf<String, CascadeStep>()
+    private val attemptedRepairStepKeys = linkedSetOf<String>()
+    private val learnedWireStepTypeByHost = linkedMapOf<String, CortexStepType>()
+    private val stepOffsetIgnoredHosts = mutableSetOf<String>()
 
     private enum class CloudTrajectoryBackendField(val jsonKey: String?) {
         BACKEND("backend"),
@@ -2312,6 +2319,7 @@ public class AntigravityKmpRpcClient(
     }
 
     private class SnapshotCompleteSignal : Exception()
+    private class SnapshotSettleCancel : CancellationException("stream snapshot settled")
 
     private suspend fun getAllCascadeTrajectoriesCloud(instanceUuidOverride: String?): List<CascadeSummary> {
         val candidatePayloads = listOf(
@@ -2619,6 +2627,50 @@ public class AntigravityKmpRpcClient(
         )
     }
 
+    private fun isHousekeepingStepType(type: CortexStepType): Boolean = when (type) {
+        CortexStepType.CHECKPOINT,
+        CortexStepType.EPHEMERAL_MESSAGE,
+        CortexStepType.CODE_ACKNOWLEDGEMENT,
+        CortexStepType.COMMAND_STATUS,
+        CortexStepType.KNOWLEDGE_ARTIFACTS,
+        -> true
+        else -> false
+    }
+
+    private fun mergeRepairedStep(current: CascadeStep, matched: CascadeStep): CascadeStep {
+        var updated = current
+        if (current.type == CortexStepType.UNSPECIFIED && !current.rawTypeName.isNullOrBlank()) {
+            if (matched.type != CortexStepType.UNSPECIFIED ||
+                matched.plannerResponse != null ||
+                matched.requestedInteraction != null ||
+                !matched.fallbackSummary.isNullOrBlank() ||
+                (!matched.rawTypeName.isNullOrBlank() && matched.rawTypeName != current.rawTypeName)
+            ) {
+                updated = if (matched.fallbackSummary.isNullOrBlank() && !current.fallbackSummary.isNullOrBlank()) {
+                    matched.copy(fallbackSummary = current.fallbackSummary)
+                } else {
+                    matched
+                }
+            }
+        }
+
+        val recoveredInteraction = matched.requestedInteraction
+        if (recoveredInteraction != null &&
+            !recoveredInteraction.isUnrecognizedWireMember &&
+            !recoveredInteraction.rawMemberKey.isNullOrEmpty()
+        ) {
+            val mergedInteraction = if (recoveredInteraction.rawSummary.isNullOrBlank() &&
+                !current.requestedInteraction?.rawSummary.isNullOrBlank()
+            ) {
+                recoveredInteraction.copy(rawSummary = current.requestedInteraction?.rawSummary)
+            } else {
+                recoveredInteraction
+            }
+            updated = updated.copy(requestedInteraction = mergedInteraction)
+        }
+        return updated
+    }
+
     internal suspend fun repairUnrecognizedWireStepsIfNeeded(
         steps: List<CascadeStep>,
         cascadeId: String,
@@ -2636,67 +2688,216 @@ public class AntigravityKmpRpcClient(
         }
         if (targetIndices.isEmpty()) return steps
 
+        val hostKey = stateMutex.withLock { hostCapabilityKey(instanceUuidOverride) }
         val repaired = steps.toMutableList()
-        for (idx in targetIndices.take(4)) {
+        val fetchedJsonByStepIndex = linkedMapOf<Int, CascadeStep>()
+        var networkProbes = 0
+
+        for (idx in targetIndices) {
             val current = repaired[idx]
             val stepIndex = current.stepIndex
-            val reqBody = buildJsonObject {
-                put("cascadeId", cascadeId)
-                put("stepOffset", stepIndex)
-                if (cascadeId.startsWith("v1/")) {
-                    put("backend", "BACKEND_TYPE_REMOTE_AICODE")
-                }
-            }
-            val jsonResp = runCatching {
-                callUnaryJson(
-                    method = "GetCascadeTrajectorySteps",
-                    body = reqBody,
-                    instanceUuidOverride = instanceUuidOverride,
-                    allowCrossHostFailover = allowCrossHostFailover,
+            val needsInteractionRepair =
+                (current.status == CortexStepStatus.WAITING || current.status == CortexStepStatus.BLOCKED) &&
+                    current.requestedInteraction?.isUnrecognizedWireMember == true
+            val cacheKey = "$hostKey|$cascadeId|$stepIndex"
+            val wireTypeKey = current.rawTypeName?.let { "$hostKey|$it" }
+
+            // 1. Check per-step repair cache & learned housekeeping wire types (0 RPCs)
+            val (cachedStep, learnedType, alreadyAttempted) = stateMutex.withLock {
+                Triple(
+                    repairedStepCache[cacheKey],
+                    wireTypeKey?.let { learnedWireStepTypeByHost[it] },
+                    cacheKey in attemptedRepairStepKeys,
                 )
-            }.getOrNull() ?: continue
-
-            val rawSteps = jsonResp["steps"] as? JsonArray ?: continue
-            if (rawSteps.isEmpty()) continue
-
-            val decodedSlice = rawSteps.mapIndexedNotNull { offset, item ->
-                JsonStepAndSummaryDecoder.decodeJsonStep(item, cascadeId, stepIndex + offset)
             }
-            val matched = decodedSlice.firstOrNull { it.stepIndex == stepIndex } ?: continue
+            if (cachedStep != null && (!needsInteractionRepair || cachedStep.requestedInteraction?.isUnrecognizedWireMember != true)) {
+                repaired[idx] = mergeRepairedStep(current, cachedStep)
+                continue
+            }
+            if (!needsInteractionRepair && learnedType != null && isHousekeepingStepType(learnedType)) {
+                repaired[idx] = current.copy(type = learnedType, rawTypeName = null)
+                continue
+            }
+            if (!needsInteractionRepair && alreadyAttempted) {
+                continue
+            }
 
-            var updated = current
-            if (current.type == CortexStepType.UNSPECIFIED && !current.rawTypeName.isNullOrBlank()) {
-                if (matched.type != CortexStepType.UNSPECIFIED ||
-                    matched.plannerResponse != null ||
-                    matched.requestedInteraction != null ||
-                    !matched.fallbackSummary.isNullOrBlank() ||
-                    (!matched.rawTypeName.isNullOrBlank() && matched.rawTypeName != current.rawTypeName)
-                ) {
-                    updated = if (matched.fallbackSummary.isNullOrBlank() && !current.fallbackSummary.isNullOrBlank()) {
-                        matched.copy(fallbackSummary = current.fallbackSummary)
-                    } else {
-                        matched
+            // 2. Reuse any step already returned by an earlier tail-slice JSON probe in this pass (0 extra RPCs)
+            var matched = fetchedJsonByStepIndex[stepIndex]
+            if (matched == null) {
+                if (!needsInteractionRepair && networkProbes >= 2) continue
+                if (networkProbes >= 4) break
+                networkProbes += 1
+
+                val reqBody = buildJsonObject {
+                    put("cascadeId", cascadeId)
+                    put("stepOffset", stepIndex)
+                    if (cascadeId.startsWith("v1/")) {
+                        put("backend", "BACKEND_TYPE_REMOTE_AICODE")
                     }
                 }
+                val jsonResp = try {
+                    callUnaryJson(
+                        method = "GetCascadeTrajectorySteps",
+                        body = reqBody,
+                        instanceUuidOverride = instanceUuidOverride,
+                        allowCrossHostFailover = allowCrossHostFailover,
+                        perCallTimeoutMs = 4_000L,
+                    )
+                } catch (e: AntigravityRpcError.Unauthorized) {
+                    throw e
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    stateMutex.withLock {
+                        if (attemptedRepairStepKeys.size >= 1024) {
+                            attemptedRepairStepKeys.firstOrNull()?.let { attemptedRepairStepKeys.remove(it) }
+                        }
+                        attemptedRepairStepKeys.add(cacheKey)
+                    }
+                    // Abort remaining repair probes immediately on payload-limit or timeout errors
+                    val isHeavyFailure = isJsonPayloadLimitError(e) ||
+                        (e is AntigravityRpcError.HttpError && e.statusCode in setOf(502, 503, 504))
+                    if (isHeavyFailure && !needsInteractionRepair) break
+                    continue
+                }
+
+                val rawSteps = jsonResp["steps"] as? JsonArray
+                if (!rawSteps.isNullOrEmpty()) {
+                    rawSteps.forEachIndexed { offset, item ->
+                        JsonStepAndSummaryDecoder.decodeJsonStep(item, cascadeId, stepIndex + offset)?.let { dec ->
+                            fetchedJsonByStepIndex[dec.stepIndex] = dec
+                        }
+                    }
+                }
+                matched = fetchedJsonByStepIndex[stepIndex]
             }
 
-            val recoveredInteraction = matched.requestedInteraction
-            if (recoveredInteraction != null &&
-                !recoveredInteraction.isUnrecognizedWireMember &&
-                !recoveredInteraction.rawMemberKey.isNullOrEmpty()
-            ) {
-                val mergedInteraction = if (recoveredInteraction.rawSummary.isNullOrBlank() &&
-                    !current.requestedInteraction?.rawSummary.isNullOrBlank()
-                ) {
-                    recoveredInteraction.copy(rawSummary = current.requestedInteraction?.rawSummary)
-                } else {
-                    recoveredInteraction
+            if (matched == null) {
+                if (!needsInteractionRepair) {
+                    stateMutex.withLock {
+                        if (attemptedRepairStepKeys.size >= 1024) {
+                            attemptedRepairStepKeys.firstOrNull()?.let { attemptedRepairStepKeys.remove(it) }
+                        }
+                        attemptedRepairStepKeys.add(cacheKey)
+                    }
                 }
-                updated = updated.copy(requestedInteraction = mergedInteraction)
+                continue
             }
+
+            val updated = mergeRepairedStep(current, matched)
             repaired[idx] = updated
+            stateMutex.withLock {
+                if (repairedStepCache.size >= 512) {
+                    repairedStepCache.keys.firstOrNull()?.let { repairedStepCache.remove(it) }
+                }
+                repairedStepCache[cacheKey] = updated
+                if (attemptedRepairStepKeys.size >= 1024) {
+                    attemptedRepairStepKeys.firstOrNull()?.let { attemptedRepairStepKeys.remove(it) }
+                }
+                attemptedRepairStepKeys.add(cacheKey)
+                if (wireTypeKey != null &&
+                    current.type == CortexStepType.UNSPECIFIED &&
+                    matched.type != CortexStepType.UNSPECIFIED
+                ) {
+                    learnedWireStepTypeByHost[wireTypeKey] = matched.type
+                }
+            }
         }
         return repaired
+    }
+
+    private fun isStepAnchorMatch(cached: CascadeStep, remote: CascadeStep): Boolean {
+        val typeMatches = cached.type == remote.type ||
+            (cached.type == CortexStepType.UNSPECIFIED && cached.rawTypeName != null && cached.rawTypeName == remote.rawTypeName)
+        if (!typeMatches) return false
+        if (cached.createdAtEpochMs > 0L && remote.createdAtEpochMs > 0L) {
+            val deltaMs = kotlin.math.abs(cached.createdAtEpochMs - remote.createdAtEpochMs)
+            if (deltaMs <= 2_000L) return true
+            return false
+        }
+        return when (cached.type) {
+            CortexStepType.USER_INPUT ->
+                cached.userInput == remote.userInput
+            CortexStepType.VIEW_FILE, CortexStepType.LIST_DIRECTORY, CortexStepType.VIEW_CONTENT_CHUNK ->
+                cached.viewFile?.fileUri == remote.viewFile?.fileUri
+            CortexStepType.CODE_ACTION ->
+                cached.codeAction?.targetFileUri == remote.codeAction?.targetFileUri
+            CortexStepType.RUN_COMMAND ->
+                cached.runCommand?.commandLine == remote.runCommand?.commandLine
+            CortexStepType.SEARCH ->
+                cached.search?.query == remote.search?.query
+            CortexStepType.TASK_BOUNDARY ->
+                cached.taskBoundary?.taskName == remote.taskBoundary?.taskName
+            CortexStepType.PLANNER_RESPONSE, CortexStepType.NOTIFY_USER -> {
+                val cachedResp = cached.plannerResponse?.response.orEmpty()
+                val remoteResp = remote.plannerResponse?.response.orEmpty()
+                cachedResp.isEmpty() || remoteResp.startsWith(cachedResp.take(24))
+            }
+            else -> true
+        }
+    }
+
+    private suspend fun tryFetchIncrementalBinaryDelta(
+        cascadeId: String,
+        existingSteps: List<CascadeStep>,
+        knownStepCount: Int,
+        targetUuid: String?,
+    ): List<CascadeStep>? {
+        if (existingSteps.size < 2) return null
+        if (knownStepCount > 0 && knownStepCount < existingSteps.size) return null
+        if (existingSteps.first().stepIndex != 0 || existingSteps.last().stepIndex != existingSteps.size - 1) {
+            return null
+        }
+        if (isBinaryProtobufStepsUnsupported(targetUuid)) return null
+        val hostKey = stateMutex.withLock { hostCapabilityKey(targetUuid) }
+        val offsetIgnored = stateMutex.withLock { hostKey in stepOffsetIgnoredHosts }
+        if (offsetIgnored) return null
+
+        val deltaOffset = existingSteps.size - 1
+        val deltaSteps = try {
+            fetchTrajectoryStepsProtobuf(
+                cascadeId = cascadeId,
+                startIndex = deltaOffset,
+                endIndex = knownStepCount,
+                instanceUuidOverride = targetUuid,
+                allowCrossHostFailover = false,
+            )
+        } catch (e: AntigravityRpcError.Unauthorized) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (isBinaryProtobufUnsupportedError(e)) {
+                recordBinaryProtobufStepsUnsupported(targetUuid)
+            }
+            return null
+        }
+        if (deltaSteps.isEmpty()) return null
+
+        val firstDelta = deltaSteps.first()
+        val anchorStep = existingSteps[deltaOffset]
+        val matchesAnchor = isStepAnchorMatch(anchorStep, firstDelta)
+        val looksLikeFullUnfilteredResponse = deltaSteps.size >= existingSteps.size &&
+            isStepAnchorMatch(existingSteps.first(), firstDelta) &&
+            (!matchesAnchor || (knownStepCount > 0 && deltaOffset + deltaSteps.size > knownStepCount + 1))
+
+        if (looksLikeFullUnfilteredResponse) {
+            stateMutex.withLock { stepOffsetIgnoredHosts.add(hostKey) }
+            return deltaSteps.mapIndexed { idx, step ->
+                if (step.stepIndex == idx) step else step.copy(stepIndex = idx)
+            }
+        }
+        if (!matchesAnchor) {
+            return null
+        }
+
+        val merged = ArrayList<CascadeStep>(deltaOffset + deltaSteps.size)
+        for (i in 0 until deltaOffset) {
+            merged.add(existingSteps[i])
+        }
+        merged.addAll(deltaSteps)
+        return merged
     }
 
     public suspend fun fetchAllTrajectorySteps(
@@ -2704,6 +2905,7 @@ public class AntigravityKmpRpcClient(
         knownStepCount: Int = 0,
         isCloud: Boolean = false,
         instanceUuidOverride: String? = null,
+        existingSteps: List<CascadeStep> = emptyList(),
     ): List<CascadeStep> {
         val isRemoteCloud = isRemoteCloudCascade(cascadeId, isCloud)
         val primaryTarget = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
@@ -2714,6 +2916,27 @@ public class AntigravityKmpRpcClient(
 
         var primaryError: Throwable? = null
         if (channel != RemoteConnectionChannel.CLOUD_RELAY || primaryTarget != null) {
+            if (!isRemoteCloud && existingSteps.size >= 2) {
+                try {
+                    val incremental = tryFetchIncrementalBinaryDelta(
+                        cascadeId = cascadeId,
+                        existingSteps = existingSteps,
+                        knownStepCount = knownStepCount,
+                        targetUuid = primaryTarget,
+                    )
+                    if (!incremental.isNullOrEmpty()) {
+                        val wakeKey = "${primaryTarget ?: "direct"}|$cascadeId"
+                        stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                        return incremental
+                    }
+                } catch (e: AntigravityRpcError.Unauthorized) {
+                    throw e
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    // Fall through to full fetch below
+                }
+            }
             try {
                 val steps = fetchStepsFromSingleInstance(cascadeId, knownStepCount, isRemoteCloud, primaryTarget)
                 if (steps.isNotEmpty()) return steps
@@ -2983,42 +3206,61 @@ public class AntigravityKmpRpcClient(
             )
         }
 
+        val settleWindowMs = minOf(350L, maxOf(100L, timeoutMs / 4))
         var lastError: Throwable? = null
         for (variant in payloadVariants) {
             val stepsByIndex = linkedMapOf<Int, CascadeStep>()
             var reportedTotalLength: Int? = null
             var sawMainTrajectory = false
+            var settleJob: Job? = null
             try {
                 withSafeTimeoutOrNull(timeoutMs) {
-                    subscribeEnvelopeStream(
-                        method = "StreamAgentStateUpdates",
-                        body = variant,
-                        instanceUuidOverride = targetUuid,
-                        allowCrossHostFailover = isRemoteCloud,
-                    ).collect { frameObj ->
-                        val decoded = JsonStepAndSummaryDecoder.decodeAgentStateStepsUpdate(
-                            obj = frameObj,
-                            cascadeId = cascadeId,
-                        )
-                        if (decoded.hasMainTrajectoryUpdate) {
-                            sawMainTrajectory = true
+                    coroutineScope {
+                        var collectorJob: Job? = null
+                        collectorJob = launch {
+                            subscribeEnvelopeStream(
+                                method = "StreamAgentStateUpdates",
+                                body = variant,
+                                instanceUuidOverride = targetUuid,
+                                allowCrossHostFailover = isRemoteCloud,
+                            ).collect { frameObj ->
+                                val decoded = JsonStepAndSummaryDecoder.decodeAgentStateStepsUpdate(
+                                    obj = frameObj,
+                                    cascadeId = cascadeId,
+                                )
+                                if (decoded.hasMainTrajectoryUpdate) {
+                                    sawMainTrajectory = true
+                                }
+                                if (decoded.totalLength != null) {
+                                    reportedTotalLength = decoded.totalLength
+                                }
+                                for (step in decoded.steps) {
+                                    stepsByIndex[step.stepIndex] = step
+                                }
+                                val totalLen = reportedTotalLength
+                                if (totalLen != null && totalLen >= 0) {
+                                    stepsByIndex.keys.removeAll { it >= totalLen }
+                                }
+                                if (stepsByIndex.isNotEmpty() && (totalLen == null || stepsByIndex.size >= totalLen)) {
+                                    settleJob?.cancel()
+                                    throw SnapshotCompleteSignal()
+                                }
+                                if (sawMainTrajectory && totalLen == 0) {
+                                    settleJob?.cancel()
+                                    throw SnapshotCompleteSignal()
+                                }
+                                if (stepsByIndex.isNotEmpty() || sawMainTrajectory) {
+                                    settleJob?.cancel()
+                                    val targetCollector = collectorJob
+                                    settleJob = launch {
+                                        delay(settleWindowMs)
+                                        targetCollector?.cancel(SnapshotSettleCancel())
+                                    }
+                                }
+                            }
                         }
-                        if (decoded.totalLength != null) {
-                            reportedTotalLength = decoded.totalLength
-                        }
-                        for (step in decoded.steps) {
-                            stepsByIndex[step.stepIndex] = step
-                        }
-                        val totalLen = reportedTotalLength
-                        if (totalLen != null && totalLen >= 0) {
-                            stepsByIndex.keys.removeAll { it >= totalLen }
-                        }
-                        if (stepsByIndex.isNotEmpty() && (totalLen == null || stepsByIndex.size >= totalLen)) {
-                            throw SnapshotCompleteSignal()
-                        }
-                        if (sawMainTrajectory && totalLen == 0) {
-                            throw SnapshotCompleteSignal()
-                        }
+                        collectorJob.join()
+                        settleJob?.cancel()
                     }
                 }
                 if (stepsByIndex.isNotEmpty() || (sawMainTrajectory && reportedTotalLength == 0)) {
@@ -3053,6 +3295,8 @@ public class AntigravityKmpRpcClient(
                 if (!shouldTryNext) {
                     break
                 }
+            } finally {
+                settleJob?.cancel()
             }
         }
         lastError?.let { throw it }

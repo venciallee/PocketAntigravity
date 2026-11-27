@@ -1366,6 +1366,202 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(steps[1].stepIndex, 1)
         XCTAssertEqual(steps[1].plannerResponse?.response, "Recovered via StreamAgentStateUpdates")
     }
+
+    // MARK: - 11. Fast Conversation Load Optimizations (Repair Reuse/Cache, Incremental Binary Delta, Relay Gzip)
+
+    func testSwiftSingleSliceJsonRepairReusesTailAndCachesSubsequentLoads() async throws {
+        var binaryPayload = Data()
+        func appendStep(_ bytes: Data) {
+            binaryPayload.append(contentsOf: ProtobufStepCodec.encodeVarint((1 << 3) | 2))
+            binaryPayload.append(contentsOf: ProtobufStepCodec.encodeVarint(UInt64(bytes.count)))
+            binaryPayload.append(bytes)
+        }
+        func makeVarintField(_ field: UInt64, _ val: UInt64) -> Data {
+            var d = Data()
+            d.append(contentsOf: ProtobufStepCodec.encodeVarint((field << 3) | 0))
+            d.append(contentsOf: ProtobufStepCodec.encodeVarint(val))
+            return d
+        }
+        func makeLdField(_ field: UInt64, _ payload: Data) -> Data {
+            var d = Data()
+            d.append(contentsOf: ProtobufStepCodec.encodeVarint((field << 3) | 2))
+            d.append(contentsOf: ProtobufStepCodec.encodeVarint(UInt64(payload.count)))
+            d.append(payload)
+            return d
+        }
+
+        appendStep(makeVarintField(1, 14) + makeVarintField(4, 3) + makeLdField(19, makeLdField(1, Data("Open dashboard".utf8))))
+        appendStep(makeVarintField(1, 991) + makeVarintField(4, 3) + makeLdField(91, Data("future-1".utf8)))
+        appendStep(makeVarintField(1, 992) + makeVarintField(4, 3) + makeLdField(92, Data("future-2".utf8)))
+
+        let probe = CompatTrajectoryProbeState()
+        let frozenBinary = binaryPayload
+
+        let session = makeMockSession { req in
+            let ct = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if ct.contains("application/proto") {
+                probe.recordProto()
+                let resp = HTTPURLResponse(
+                    url: req.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/proto"]
+                )!
+                return (resp, frozenBinary)
+            } else {
+                let body = CompatMockURLProtocol.readBody(from: req)
+                let obj = (try? JSONDecoder().decode([String: JSONValue].self, from: body)) ?? [:]
+                let offset = obj["stepOffset"]?.intValue ?? 0
+                probe.recordJSON(stepOffset: offset)
+                let stepsJson = """
+                {"steps":[
+                    {"type":"CORTEX_STEP_TYPE_FUTURE_WIDGET_A","status":"CORTEX_STEP_STATUS_DONE","futureWidgetA":{"summary":"Swift Widget A"}},
+                    {"type":"CORTEX_STEP_TYPE_FUTURE_WIDGET_B","status":"CORTEX_STEP_STATUS_DONE","futureWidgetB":{"summary":"Swift Widget B"}}
+                ]}
+                """
+                let resp = HTTPURLResponse(
+                    url: req.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (resp, Data(stepsJson.utf8))
+            }
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "swift-repair-reuse",
+            hostname: "Swift Reuse Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18802")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+
+        let first = try await client.fetchAllTrajectorySteps(cascadeId: "cas-swift-reuse", knownStepCount: 3)
+        XCTAssertEqual(first.count, 3)
+        XCTAssertEqual(first[1].fallbackSummary, "Swift Widget A")
+        XCTAssertEqual(first[2].fallbackSummary, "Swift Widget B")
+        XCTAssertEqual(probe.protoCount(), 1)
+        XCTAssertEqual(probe.jsonCount(), 1, "Single tail-slice JSON probe must repair both unrecognized steps in 1 RTT")
+
+        probe.resetCounts()
+        let second = try await client.fetchAllTrajectorySteps(cascadeId: "cas-swift-reuse", knownStepCount: 3)
+        XCTAssertEqual(second.count, 3)
+        XCTAssertEqual(second[1].fallbackSummary, "Swift Widget A")
+        XCTAssertEqual(second[2].fallbackSummary, "Swift Widget B")
+        XCTAssertEqual(probe.protoCount(), 1)
+        XCTAssertEqual(probe.jsonCount(), 0, "Cached repaired steps must emit 0 JSON repair RPCs on repeat loads")
+    }
+
+    func testSwiftIncrementalBinaryDeltaSyncMergesTailSteps() async throws {
+        func makeSlice(_ range: Range<Int>) -> Data {
+            var out = Data()
+            for i in range {
+                var step = Data()
+                if i % 2 == 0 {
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint((1 << 3) | 0))
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint(14))
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint((4 << 3) | 0))
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint(3))
+                    let txt = Data("User #\(i)".utf8)
+                    var inner = Data()
+                    inner.append(contentsOf: ProtobufStepCodec.encodeVarint((1 << 3) | 2))
+                    inner.append(contentsOf: ProtobufStepCodec.encodeVarint(UInt64(txt.count)))
+                    inner.append(txt)
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint((19 << 3) | 2))
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint(UInt64(inner.count)))
+                    step.append(inner)
+                } else {
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint((1 << 3) | 0))
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint(15))
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint((4 << 3) | 0))
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint(3))
+                    let txt = Data("Answer #\(i)".utf8)
+                    var inner = Data()
+                    inner.append(contentsOf: ProtobufStepCodec.encodeVarint((1 << 3) | 2))
+                    inner.append(contentsOf: ProtobufStepCodec.encodeVarint(UInt64(txt.count)))
+                    inner.append(txt)
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint((20 << 3) | 2))
+                    step.append(contentsOf: ProtobufStepCodec.encodeVarint(UInt64(inner.count)))
+                    step.append(inner)
+                }
+                out.append(contentsOf: ProtobufStepCodec.encodeVarint((1 << 3) | 2))
+                out.append(contentsOf: ProtobufStepCodec.encodeVarint(UInt64(step.count)))
+                out.append(step)
+            }
+            return out
+        }
+
+        func decodeOffset(_ body: Data) -> Int {
+            var pos = 0
+            while pos < body.count {
+                guard let tag = ProtobufStepCodec.readVarint(from: body, offset: &pos) else { break }
+                let field = tag >> 3
+                let wire = tag & 0x07
+                if wire == 0 {
+                    guard let val = ProtobufStepCodec.readVarint(from: body, offset: &pos) else { break }
+                    if field == 2 { return Int(val) }
+                } else if wire == 2 {
+                    guard let len = ProtobufStepCodec.readVarint(from: body, offset: &pos) else { break }
+                    pos += Int(len)
+                } else {
+                    break
+                }
+            }
+            return 0
+        }
+
+        let probe = CompatTrajectoryProbeState()
+        let session = makeMockSession { req in
+            let body = CompatMockURLProtocol.readBody(from: req)
+            let offset = decodeOffset(body)
+            probe.recordProto()
+            probe.recordJSON(stepOffset: offset)
+            let resp = HTTPURLResponse(
+                url: req.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/proto"]
+            )!
+            return (resp, makeSlice(offset..<6))
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "swift-delta-mac",
+            hostname: "Swift Delta Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18803")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+        let initialFour = ProtobufStepCodec.decodeStepsResponse(makeSlice(0..<4), cascadeId: "cas-swift-delta")
+        XCTAssertEqual(initialFour.count, 4)
+
+        let merged = try await client.fetchAllTrajectorySteps(
+            cascadeId: "cas-swift-delta",
+            knownStepCount: 6,
+            existingSteps: initialFour
+        )
+        XCTAssertEqual(merged.count, 6)
+        XCTAssertEqual(probe.protoCount(), 1)
+        XCTAssertEqual(probe.lastJsonStepOffset(), 3)
+        XCTAssertEqual(merged[0].userInput, "User #0")
+        XCTAssertEqual(merged[4].userInput, "User #4")
+        XCTAssertEqual(merged[5].plannerResponse?.response, "Answer #5")
+    }
+
+    func testCloudRelayProxyRequestIncludesGzipAndProtoAcceptHeaders() throws {
+        let encoded = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
+            targetInstanceUuid: "uuid-test",
+            rpcPath: "/exa.language_server_pb.LanguageServerService/GetCascadeTrajectorySteps",
+            payload: Data([0x0A, 0x01, 0x61]),
+            contentType: "application/proto"
+        )
+        let text = String(data: encoded, encoding: .utf8) ?? ""
+        XCTAssertTrue(text.contains("[\"accept-encoding\",\"gzip\"]"), "Missing gzip accept-encoding header: \(text)")
+        XCTAssertTrue(text.contains("[\"accept\",\"application/proto\"]"), "Missing application/proto accept header: \(text)")
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers

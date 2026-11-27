@@ -1201,6 +1201,15 @@ extension AntigravitySessionStore {
         summaryPollingTask = nil
         stepPollingTask?.cancel()
         stepPollingTask = nil
+        activeStepSyncCascadeId = nil
+        activeStepSyncPollsUntilIdle = false
+        activeForegroundStepSyncCount = 0
+        for task in inFlightPreloadTasksByCascadeId.values {
+            task.cancel()
+        }
+        inFlightPreloadTasksByCascadeId.removeAll()
+        syncedStepsMarkerByCascadeId.removeAll()
+        displayItemsCacheByCascadeId.removeAll()
         networkMonitor.stop()
         hasPairedBackend = false
         isLiveBackendConnected = false

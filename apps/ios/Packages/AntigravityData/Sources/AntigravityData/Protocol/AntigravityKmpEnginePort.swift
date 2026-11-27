@@ -100,6 +100,13 @@ public protocol AntigravityKmpEnginePort: Sendable {
         instanceUuidOverride: String?
     ) async throws -> [CascadeStep]
 
+    func forceSyncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep]
+
     func preloadSteps(
         cascadeId: String,
         knownStepCount: Int,
@@ -175,6 +182,20 @@ public extension AntigravityKmpEnginePort {
         verifyEndToEnd: Bool
     ) async throws -> HostReachabilityProbeResult {
         try await probeHostReachability(allowCrossHostFallback: allowCrossHostFallback)
+    }
+
+    func forceSyncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        try await syncSteps(
+            cascadeId: cascadeId,
+            knownStepCount: knownStepCount,
+            isCloud: isCloud,
+            instanceUuidOverride: instanceUuidOverride
+        )
     }
 
     func preloadSteps(

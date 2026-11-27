@@ -214,6 +214,99 @@ extension AntigravityRPCClient {
         )
     }
 
+    private static func isStepAnchorMatch(cached: CascadeStep, remote: CascadeStep) -> Bool {
+        let typeMatches = cached.type == remote.type
+            || (cached.type == .unspecified && cached.rawTypeName != nil && cached.rawTypeName == remote.rawTypeName)
+        guard typeMatches else { return false }
+        let cachedTs = cached.createdAt.timeIntervalSince1970
+        let remoteTs = remote.createdAt.timeIntervalSince1970
+        if cachedTs > 1_000_000_000 && remoteTs > 1_000_000_000 {
+            if abs(cachedTs - remoteTs) <= 2.0 {
+                return true
+            }
+        }
+        switch cached.type {
+        case .userInput:
+            return cached.userInput == remote.userInput
+        case .viewFile, .listDirectory, .viewContentChunk:
+            return cached.viewFile?.fileUri == remote.viewFile?.fileUri
+        case .codeAction:
+            return cached.codeAction?.targetFileUri == remote.codeAction?.targetFileUri
+        case .runCommand:
+            return cached.runCommand?.commandLine == remote.runCommand?.commandLine
+        case .search:
+            return cached.search?.query == remote.search?.query
+        case .taskBoundary:
+            return cached.taskBoundary?.taskName == remote.taskBoundary?.taskName
+        case .plannerResponse, .notifyUser:
+            let cachedResp = cached.plannerResponse?.response ?? ""
+            let remoteResp = remote.plannerResponse?.response ?? ""
+            return cachedResp.isEmpty || remoteResp.hasPrefix(String(cachedResp.prefix(24)))
+        default:
+            return true
+        }
+    }
+
+    private func tryFetchIncrementalBinaryDelta(
+        cascadeId: String,
+        existingSteps: [CascadeStep],
+        knownStepCount: Int,
+        targetUuid: String?
+    ) async throws -> [CascadeStep]? {
+        guard existingSteps.count >= 2 else { return nil }
+        if knownStepCount > 0 && knownStepCount < existingSteps.count { return nil }
+        guard existingSteps.first?.stepIndex == 0,
+              existingSteps.last?.stepIndex == existingSteps.count - 1 else {
+            return nil
+        }
+        guard !isBinaryProtobufStepsUnsupported(for: targetUuid) else { return nil }
+        let hostKey = capabilityHostKey(for: targetUuid)
+        guard !stepOffsetIgnoredHosts.contains(hostKey) else { return nil }
+
+        let deltaOffset = existingSteps.count - 1
+        let deltaSteps: [CascadeStep]
+        do {
+            deltaSteps = try await fetchTrajectoryStepsProtobuf(
+                cascadeId: cascadeId,
+                startIndex: deltaOffset,
+                endIndex: knownStepCount,
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: false
+            )
+        } catch let AntigravityRPCError.unauthorized(msg) {
+            throw AntigravityRPCError.unauthorized(msg)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if Self.isBinaryProtobufUnsupportedError(error) {
+                recordBinaryProtobufStepsUnsupported(for: targetUuid)
+            }
+            return nil
+        }
+        guard let firstDelta = deltaSteps.first else { return nil }
+
+        let anchorStep = existingSteps[deltaOffset]
+        let matchesAnchor = Self.isStepAnchorMatch(cached: anchorStep, remote: firstDelta)
+        let looksLikeFullUnfilteredResponse = deltaSteps.count >= existingSteps.count
+            && Self.isStepAnchorMatch(cached: existingSteps[0], remote: firstDelta)
+            && (!matchesAnchor || (knownStepCount > 0 && deltaOffset + deltaSteps.count > knownStepCount + 1))
+
+        if looksLikeFullUnfilteredResponse {
+            stepOffsetIgnoredHosts.insert(hostKey)
+            return deltaSteps.enumerated().map { idx, step in
+                if step.stepIndex == idx { return step }
+                var copy = step
+                copy.stepIndex = idx
+                return copy
+            }
+        }
+        guard matchesAnchor else { return nil }
+
+        var merged = Array(existingSteps.prefix(deltaOffset))
+        merged.append(contentsOf: deltaSteps)
+        return merged
+    }
+
     /// Fetches the complete trajectory for a live or historical session using upstream `GetCascadeTrajectorySteps`,
     /// waking dormant trajectories via `LoadTrajectory`, falling back to `GetCascadeTrajectory` / Binary Protobuf,
     /// and failing over across reachable Cloud Relay instances when a conversation lives in a peer window.
@@ -221,7 +314,8 @@ extension AntigravityRPCClient {
         cascadeId: String,
         knownStepCount: Int = 0,
         isCloud: Bool = false,
-        instanceUuidOverride: String? = nil
+        instanceUuidOverride: String? = nil,
+        existingSteps: [CascadeStep] = []
     ) async throws -> [CascadeStep] {
         let isRemoteCloud = Self.isRemoteCloudCascade(cascadeId: cascadeId, isCloud: isCloud)
         let primaryTarget: String? = {
@@ -236,6 +330,26 @@ extension AntigravityRPCClient {
 
         var primaryError: Error? = nil
         if channel != .cloudRelay || primaryTarget != nil {
+            if !isRemoteCloud && existingSteps.count >= 2 {
+                do {
+                    if let incremental = try await tryFetchIncrementalBinaryDelta(
+                        cascadeId: cascadeId,
+                        existingSteps: existingSteps,
+                        knownStepCount: knownStepCount,
+                        targetUuid: primaryTarget
+                    ), !incremental.isEmpty {
+                        let wakeKey = "\(primaryTarget ?? "direct")|\(cascadeId)"
+                        wokenInstanceCascadeKeys.insert(wakeKey)
+                        return incremental
+                    }
+                } catch let AntigravityRPCError.unauthorized(msg) {
+                    throw AntigravityRPCError.unauthorized(msg)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Fall through to full fetch below
+                }
+            }
             do {
                 let steps = try await fetchStepsFromSingleInstance(
                     cascadeId: cascadeId,
@@ -596,8 +710,9 @@ extension AntigravityRPCClient {
             var stepsByIndex: [Int: CascadeStep] = [:]
             var reportedTotalLength: Int? = nil
             var sawMainTrajectory: Bool = false
+            private var settleTask: Task<Void, Never>? = nil
 
-            func apply(_ update: AgentStateStepsUpdate) -> Bool {
+            func apply(_ update: AgentStateStepsUpdate) -> (completeNow: Bool, hasPartialData: Bool) {
                 lock.lock()
                 defer { lock.unlock() }
                 if update.hasMainTrajectoryUpdate {
@@ -614,11 +729,31 @@ extension AntigravityRPCClient {
                 }
                 if !stepsByIndex.isEmpty {
                     if let total = reportedTotalLength {
-                        return stepsByIndex.count >= total
+                        return (stepsByIndex.count >= total, true)
                     }
-                    return true
+                    return (true, true)
                 }
-                return sawMainTrajectory && reportedTotalLength == 0
+                let emptyComplete = sawMainTrajectory && reportedTotalLength == 0
+                return (emptyComplete, sawMainTrajectory)
+            }
+
+            func armSettleTimer(delaySeconds: TimeInterval, onSettle: @escaping @Sendable () -> Void) {
+                lock.lock()
+                settleTask?.cancel()
+                let nanos = UInt64(max(0.1, delaySeconds) * 1_000_000_000)
+                settleTask = Task {
+                    try? await Task.sleep(nanoseconds: nanos)
+                    guard !Task.isCancelled else { return }
+                    onSettle()
+                }
+                lock.unlock()
+            }
+
+            func cancelSettleTimer() {
+                lock.lock()
+                settleTask?.cancel()
+                settleTask = nil
+                lock.unlock()
             }
 
             func snapshot() -> (steps: [CascadeStep], sawMainTrajectory: Bool, reportedTotalLength: Int?) {
@@ -630,14 +765,43 @@ extension AntigravityRPCClient {
         }
 
         let state = SnapshotState()
+        let settleDelaySeconds = min(0.35, max(0.1, timeoutSeconds / 4.0))
+        final class ReaderCancelBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var cancelAction: (@Sendable () -> Void)? = nil
+
+            func set(_ action: @escaping @Sendable () -> Void) {
+                lock.lock()
+                cancelAction = action
+                lock.unlock()
+            }
+
+            func cancel() {
+                lock.lock()
+                let action = cancelAction
+                lock.unlock()
+                action?()
+            }
+        }
+        let cancelBox = ReaderCancelBox()
         let readerTask = Task<Void, Error> {
             for try await frameObj in stream {
                 if Task.isCancelled { break }
                 let decoded = Self.decodeAgentStateStepsUpdate(frameObj, cascadeId: cascadeId)
-                if state.apply(decoded) {
+                let outcome = state.apply(decoded)
+                if outcome.completeNow {
+                    state.cancelSettleTimer()
                     break
                 }
+                if outcome.hasPartialData {
+                    state.armSettleTimer(delaySeconds: settleDelaySeconds) {
+                        cancelBox.cancel()
+                    }
+                }
             }
+        }
+        cancelBox.set {
+            readerTask.cancel()
         }
 
         let timeoutTask = Task {
@@ -646,6 +810,7 @@ extension AntigravityRPCClient {
         }
 
         defer {
+            state.cancelSettleTimer()
             timeoutTask.cancel()
             readerTask.cancel()
         }
@@ -1186,11 +1351,67 @@ extension AntigravityRPCClient {
         )
     }
 
+    private static func isHousekeepingStepType(_ type: CortexStepType) -> Bool {
+        switch type {
+        case .checkpoint, .ephemeralMessage, .codeAcknowledgement, .commandStatus, .knowledgeArtifacts:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func mergeRepairedStep(current: CascadeStep, matched: CascadeStep) -> CascadeStep {
+        var updated = current
+        if current.type == .unspecified && current.rawTypeName != nil {
+            if matched.type != .unspecified
+                || matched.plannerResponse != nil
+                || matched.requestedInteraction != nil
+                || (matched.fallbackSummary?.isEmpty == false)
+                || (matched.rawTypeName?.isEmpty == false && matched.rawTypeName != current.rawTypeName) {
+                var next = matched
+                if (next.fallbackSummary?.isEmpty ?? true), let existingFallback = current.fallbackSummary, !existingFallback.isEmpty {
+                    next.fallbackSummary = existingFallback
+                }
+                updated = next
+            }
+        }
+        if let recoveredInteraction = matched.requestedInteraction,
+           !recoveredInteraction.isUnrecognizedWireMember,
+           (recoveredInteraction.rawMemberKey?.isEmpty == false || recoveredInteraction.kind != .approvalInteraction) {
+            var mergedInteraction = recoveredInteraction
+            if (mergedInteraction.rawSummary?.isEmpty ?? true),
+               let existingSummary = current.requestedInteraction?.rawSummary,
+               !existingSummary.isEmpty {
+                mergedInteraction.rawSummary = existingSummary
+            }
+            updated.requestedInteraction = mergedInteraction
+        }
+        return updated
+    }
+
+    private func cacheRepairedStep(_ step: CascadeStep, forKey key: String) {
+        if repairedStepCache[key] == nil {
+            repairedStepCacheOrder.append(key)
+        }
+        repairedStepCache[key] = step
+        while repairedStepCacheOrder.count > 512 {
+            let evicted = repairedStepCacheOrder.removeFirst()
+            repairedStepCache.removeValue(forKey: evicted)
+        }
+    }
+
+    private func markRepairAttempted(forKey key: String) {
+        if attemptedRepairStepKeys.count >= 1024 {
+            attemptedRepairStepKeys.removeAll(keepingCapacity: true)
+        }
+        attemptedRepairStepKeys.insert(key)
+    }
+
     /// Forward-compatibility repair: if a Binary Protobuf trajectory contains either:
     /// 1. A `WAITING` step whose `RequestedInteraction` used a brand-new wire field number unknown to this build, OR
     /// 2. An unrecognized future `CortexStepType` (`.unspecified` with a non-nil `rawTypeName`),
-    /// issues targeted JSON `GetCascadeTrajectorySteps(stepOffset:)` probes to recover exact JSON field names,
-    /// `rawMemberKey`, and rich step content without forcing the whole trajectory onto JSON.
+    /// issues targeted JSON `GetCascadeTrajectorySteps(stepOffset:)` probes (reusing any tail slice already
+    /// fetched in the same pass and caching repaired steps + learned housekeeping wire types per host).
     internal func repairUnrecognizedWireInteractionsIfNeeded(
         _ steps: [CascadeStep],
         cascadeId: String,
@@ -1206,48 +1427,96 @@ extension AntigravityRPCClient {
         }
         guard !targets.isEmpty else { return steps }
 
+        let hostKey = capabilityHostKey(for: instanceUuidOverride)
         var repaired = steps
-        for idx in targets.prefix(4) {
+        var fetchedJsonByStepIndex: [Int: CascadeStep] = [:]
+        var networkProbes = 0
+
+        for idx in targets {
             let current = repaired[idx]
             let stepIndex = current.stepIndex
-            var reqBody: [String: JSONValue] = [
-                "cascadeId": .string(cascadeId),
-                "stepOffset": .int(stepIndex)
-            ]
-            if cascadeId.hasPrefix("v1/") {
-                reqBody["backend"] = .string("BACKEND_TYPE_REMOTE_AICODE")
-            }
-            guard let jsonResp = try? await callUnaryJSON(
-                method: "GetCascadeTrajectorySteps",
-                body: reqBody,
-                instanceUuidOverride: instanceUuidOverride,
-                allowCrossHostFailover: allowCrossHostFailover,
-                timeoutInterval: 5.0
-            ),
-            let rawSteps = jsonResp["steps"]?.arrayValue,
-            !rawSteps.isEmpty else {
+            let needsInteractionRepair = current.isWaitingForUser
+                && current.requestedInteraction?.isUnrecognizedWireMember == true
+            let cacheKey = "\(hostKey)|\(cascadeId)|\(stepIndex)"
+            let wireTypeKey = current.rawTypeName.map { "\(hostKey)|\($0)" }
+
+            if let cached = repairedStepCache[cacheKey],
+               (!needsInteractionRepair || cached.requestedInteraction?.isUnrecognizedWireMember != true) {
+                repaired[idx] = Self.mergeRepairedStep(current: current, matched: cached)
                 continue
             }
-            let decodedSlice = rawSteps.enumerated().compactMap { offset, item in
-                Self.decodeJSONStep(item, cascadeId: cascadeId, fallbackIndex: stepIndex + offset)
-            }
-            guard let matched = decodedSlice.first(where: { $0.stepIndex == stepIndex }) else {
+            if !needsInteractionRepair,
+               let wireTypeKey,
+               let learnedType = learnedWireStepTypeByHost[wireTypeKey],
+               Self.isHousekeepingStepType(learnedType) {
+                var normalized = current
+                normalized.type = learnedType
+                normalized.rawTypeName = nil
+                repaired[idx] = normalized
                 continue
             }
-            if current.type == .unspecified && current.rawTypeName != nil {
-                if matched.type != .unspecified
-                    || matched.plannerResponse != nil
-                    || matched.requestedInteraction != nil
-                    || (matched.fallbackSummary?.isEmpty == false)
-                    || (matched.rawTypeName?.isEmpty == false && matched.rawTypeName != current.rawTypeName) {
-                    repaired[idx] = matched
+            if !needsInteractionRepair && attemptedRepairStepKeys.contains(cacheKey) {
+                continue
+            }
+
+            var matched = fetchedJsonByStepIndex[stepIndex]
+            if matched == nil {
+                if !needsInteractionRepair && networkProbes >= 2 { continue }
+                if networkProbes >= 4 { break }
+                networkProbes += 1
+
+                var reqBody: [String: JSONValue] = [
+                    "cascadeId": .string(cascadeId),
+                    "stepOffset": .int(stepIndex)
+                ]
+                if cascadeId.hasPrefix("v1/") {
+                    reqBody["backend"] = .string("BACKEND_TYPE_REMOTE_AICODE")
+                }
+                do {
+                    let jsonResp = try await callUnaryJSON(
+                        method: "GetCascadeTrajectorySteps",
+                        body: reqBody,
+                        instanceUuidOverride: instanceUuidOverride,
+                        allowCrossHostFailover: allowCrossHostFailover,
+                        timeoutInterval: 4.0
+                    )
+                    if let rawSteps = jsonResp["steps"]?.arrayValue, !rawSteps.isEmpty {
+                        for (offset, item) in rawSteps.enumerated() {
+                            if let dec = Self.decodeJSONStep(item, cascadeId: cascadeId, fallbackIndex: stepIndex + offset) {
+                                fetchedJsonByStepIndex[dec.stepIndex] = dec
+                            }
+                        }
+                    }
+                    matched = fetchedJsonByStepIndex[stepIndex]
+                } catch {
+                    markRepairAttempted(forKey: cacheKey)
+                    let isHeavyFailure: Bool = {
+                        if Self.isJsonPayloadLimitError(error) { return true }
+                        if case let AntigravityRPCError.httpError(code, _) = error {
+                            return code == 502 || code == 503 || code == 504
+                        }
+                        return false
+                    }()
+                    if isHeavyFailure && !needsInteractionRepair { break }
                     continue
                 }
             }
-            if let recoveredInteraction = matched.requestedInteraction,
-               !recoveredInteraction.isUnrecognizedWireMember,
-               (recoveredInteraction.rawMemberKey?.isEmpty == false || recoveredInteraction.kind != .approvalInteraction) {
-                repaired[idx].requestedInteraction = recoveredInteraction
+
+            guard let resolvedMatch = matched else {
+                if !needsInteractionRepair {
+                    markRepairAttempted(forKey: cacheKey)
+                }
+                continue
+            }
+
+            let updated = Self.mergeRepairedStep(current: current, matched: resolvedMatch)
+            repaired[idx] = updated
+            cacheRepairedStep(updated, forKey: cacheKey)
+            markRepairAttempted(forKey: cacheKey)
+            if let wireTypeKey,
+               current.type == .unspecified,
+               resolvedMatch.type != .unspecified {
+                learnedWireStepTypeByHost[wireTypeKey] = resolvedMatch.type
             }
         }
         return repaired

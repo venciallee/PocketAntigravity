@@ -9,6 +9,7 @@ public struct CascadeChatViewController: View {
     @Bindable public var store: AntigravitySessionStore
     public var onBack: (() -> Void)?
     @State private var isTurnStopped: Bool = false
+    @State private var visibleTailLimit: Int = 60
 
     public init(
         store: AntigravitySessionStore,
@@ -114,6 +115,12 @@ public struct CascadeChatViewController: View {
     }
 
     public var body: some View {
+        let allDisplayItems = store.displayItems
+        let hiddenPrefixCount = max(0, allDisplayItems.count - visibleTailLimit)
+        let renderedItems = hiddenPrefixCount > 0
+            ? Array(allDisplayItems.suffix(visibleTailLimit))
+            : allDisplayItems
+
         VStack(spacing: 0) {
             chatTopNavigationBar
 
@@ -130,13 +137,38 @@ public struct CascadeChatViewController: View {
                                     .frame(height: 1)
                                     .id("chat-bottom-anchor")
                             }
-                        } else if store.displayItems.isEmpty {
+                        } else if allDisplayItems.isEmpty {
                             VStack(alignment: .leading, spacing: 9) {
                                 emptyOrLoadingSessionCard
                             }
                         } else {
                             LazyVStack(alignment: .leading, spacing: 9) {
-                                ForEach(store.displayItems) { item in
+                                if hiddenPrefixCount > 0 {
+                                    Button {
+                                        visibleTailLimit += 80
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "clock.arrow.circlepath")
+                                                .font(.system(size: 12.5, weight: .semibold))
+                                            Text(lang.t("Load earlier messages (\(hiddenPrefixCount) hidden)", "加载更早消息（已折叠 \(hiddenPrefixCount) 条）"))
+                                                .font(.system(size: 12.5, weight: .semibold))
+                                        }
+                                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .frame(maxWidth: .infinity)
+                                        .background(AntigravityTheme.surfaceCard)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier("btn-load-earlier-messages")
+                                }
+
+                                ForEach(renderedItems) { item in
                                     switch item {
                                     case .single(let step):
                                         CascadeStepCellView(store: store, step: step)
@@ -196,6 +228,7 @@ public struct CascadeChatViewController: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                 }
+                .defaultScrollAnchor(isStaticESDDFixtureView ? nil : .bottom)
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {
                     if isStaticESDDFixtureView {
@@ -205,11 +238,9 @@ public struct CascadeChatViewController: View {
                         }
                         return
                     }
-                    guard !store.displayItems.isEmpty else { return }
+                    guard !allDisplayItems.isEmpty else { return }
                     if let waiting = store.pendingWaitingStep {
                         scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
-                    } else {
-                        scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
                     }
                 }
                 .onChange(of: streamingFollowSignature) { _, _ in
@@ -224,7 +255,7 @@ public struct CascadeChatViewController: View {
                     }
                 }
 
-                if !store.displayItems.isEmpty, let errText = store.stepLoadErrorText {
+                if !allDisplayItems.isEmpty, let errText = store.stepLoadErrorText {
                     HStack(spacing: 8) {
                         Circle()
                             .fill(AntigravityTheme.statusError)
@@ -283,9 +314,11 @@ public struct CascadeChatViewController: View {
         }
         .task(id: store.activeCascadeId) {
             isTurnStopped = false
-            if (store.hasPairedBackend || store.isLiveBackendConnected) && !store.activeCascadeId.isEmpty {
+            visibleTailLimit = 60
+            if (store.hasPairedBackend || store.isLiveBackendConnected)
+                && !store.activeCascadeId.isEmpty
+                && !store.hasActiveStepSync(for: store.activeCascadeId) {
                 store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
-                await store.loadLiveArtifactsAndDiffs(for: store.activeCascadeId)
             }
         }
     }
@@ -425,14 +458,14 @@ public struct CascadeChatViewController: View {
                                     forceFullSync: true
                                 )
                                 if hostReachable {
-                                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
                                 }
                             } else {
                                 await store.reconnectNow(userInitiated: true)
                             }
                         }
                     } else {
-                        store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                        store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
                     }
                 } label: {
                     Text(lang.t("Retry", "重试"))
@@ -689,7 +722,7 @@ public struct CascadeChatViewController: View {
                     Label(lang.t("Permissions", "权限设置"), systemImage: "shield.lefthalf.filled")
                 }
                 Button(lang.t("Refresh Trajectory Steps", "刷新执行轨迹")) {
-                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
                 }
             } label: {
                 Image(systemName: "ellipsis")
