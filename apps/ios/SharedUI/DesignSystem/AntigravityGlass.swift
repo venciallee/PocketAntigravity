@@ -175,3 +175,100 @@ public struct AntigravityRunningArcIndicatorView: View {
     }
 }
 
+/// Minimal open-arc rotating spinner matching the official Antigravity mobile history loading pill.
+public struct AntigravityThinSpinnerView: View {
+    public var isAnimated: Bool
+    public var size: CGFloat
+    public var lineWidth: CGFloat
+    public var tint: Color
+
+    public init(
+        isAnimated: Bool = true,
+        size: CGFloat = 13.5,
+        lineWidth: CGFloat = 1.6,
+        tint: Color = AntigravityTheme.inkSecondary
+    ) {
+        self.isAnimated = isAnimated
+        self.size = size
+        self.lineWidth = lineWidth
+        self.tint = tint
+    }
+
+    public var body: some View {
+        if isAnimated {
+            TimelineView(.periodic(from: .now, by: 0.025)) { context in
+                let angle = (context.date.timeIntervalSinceReferenceDate * 380.0)
+                    .truncatingRemainder(dividingBy: 360.0)
+                spinnerArc(angleDegrees: angle - 90.0)
+            }
+        } else {
+            spinnerArc(angleDegrees: -90.0)
+        }
+    }
+
+    private func spinnerArc(angleDegrees: Double) -> some View {
+        Circle()
+            .trim(from: 0.0, to: 0.68)
+            .stroke(
+                tint,
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+            )
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(angleDegrees))
+    }
+}
+
+/// Floating top-center capsule pill overlaid over the chat viewport while loading historical or older messages.
+public struct AntigravityFloatingLoadingPill: View {
+    @Environment(\.colorScheme) private var colorScheme
+    public var title: String
+    public var isAnimated: Bool
+
+    public init(
+        title: String,
+        isAnimated: Bool = true
+    ) {
+        self.title = title
+        self.isAnimated = isAnimated
+    }
+
+    public var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let fill = colorScheme == .dark
+            ? AntigravityTheme.surfacePill.opacity(0.96)
+            : AntigravityTheme.surfaceCard.opacity(0.97)
+        let stroke = colorScheme == .dark
+            ? Color.white.opacity(0.12)
+            : Color.black.opacity(0.10)
+        let shadowColor = colorScheme == .dark
+            ? Color.black.opacity(0.36)
+            : Color.black.opacity(0.10)
+
+        HStack(spacing: 8) {
+            AntigravityThinSpinnerView(
+                isAnimated: isAnimated,
+                size: 13.5,
+                lineWidth: 1.6,
+                tint: AntigravityTheme.inkSecondary
+            )
+            Text(title)
+                .font(.system(size: 13.5, weight: .medium))
+                .foregroundStyle(AntigravityTheme.inkLabel.opacity(0.86))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(shape.fill(fill))
+        .overlay(shape.strokeBorder(stroke, lineWidth: 1))
+        .shadow(
+            color: shadowColor,
+            radius: colorScheme == .dark ? 10 : 8,
+            x: 0,
+            y: colorScheme == .dark ? 4 : 3
+        )
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+
