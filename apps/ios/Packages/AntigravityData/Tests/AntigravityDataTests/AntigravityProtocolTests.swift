@@ -4805,9 +4805,11 @@ final class AntigravityProtocolTests: XCTestCase {
         let sessionConfig = URLSessionConfiguration.ephemeral
         sessionConfig.protocolClasses = [MockRelayURLProtocol.self]
         let mockSession = URLSession(configuration: sessionConfig)
-        defer { mockSession.invalidateAndCancel() }
 
         let store = AntigravitySessionStore.makeLiveStore()
+        defer {
+            store.suspendNetworkingForBackground()
+        }
         store.hasPairedBackend = true
         store.isLiveBackendConnected = true
         store.isDeviceNetworkReachable = true
@@ -4861,6 +4863,7 @@ final class AntigravityProtocolTests: XCTestCase {
         // 4. Calling syncStepsForCascade with empty steps must force refresh rather than stalling
         store.syncStepsForCascade(cid, pollUntilIdle: true)
         XCTAssertTrue(store.isLoadingSteps, "Re-entering must keep step loading alive when steps are empty")
+        store.suspendNetworkingForBackground()
     }
 }
 
