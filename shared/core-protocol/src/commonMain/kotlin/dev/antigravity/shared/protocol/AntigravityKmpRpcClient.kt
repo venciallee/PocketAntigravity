@@ -2669,7 +2669,9 @@ public class AntigravityKmpRpcClient(
                     step.requestedInteraction?.isUnrecognizedWireMember == true
             val needsStepTypeRepair =
                 step.type == CortexStepType.UNSPECIFIED && !step.rawTypeName.isNullOrBlank()
-            needsInteractionRepair || needsStepTypeRepair
+            val needsErrorRepair =
+                step.type == CortexStepType.ERROR_MESSAGE && step.errorMessage?.message.isNullOrBlank()
+            needsInteractionRepair || needsStepTypeRepair || needsErrorRepair
         }
         if (targetIndices.isEmpty()) return steps
 
@@ -2705,6 +2707,7 @@ public class AntigravityKmpRpcClient(
             if (current.type == CortexStepType.UNSPECIFIED && !current.rawTypeName.isNullOrBlank()) {
                 if (matched.type != CortexStepType.UNSPECIFIED ||
                     matched.plannerResponse != null ||
+                    matched.errorMessage != null ||
                     matched.requestedInteraction != null ||
                     !matched.fallbackSummary.isNullOrBlank() ||
                     (!matched.rawTypeName.isNullOrBlank() && matched.rawTypeName != current.rawTypeName)
@@ -2715,6 +2718,11 @@ public class AntigravityKmpRpcClient(
                         matched
                     }
                 }
+            } else if (current.type == CortexStepType.ERROR_MESSAGE &&
+                current.errorMessage?.message.isNullOrBlank() &&
+                !matched.errorMessage?.message.isNullOrBlank()
+            ) {
+                updated = matched
             }
 
             val recoveredInteraction = matched.requestedInteraction

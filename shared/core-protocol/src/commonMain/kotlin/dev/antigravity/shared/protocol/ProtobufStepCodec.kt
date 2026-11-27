@@ -9,6 +9,7 @@ import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.CortexStepType
 import dev.antigravity.shared.model.DownloadUrlInteractionSpec
 import dev.antigravity.shared.model.DynamicWorkflowPayload
+import dev.antigravity.shared.model.ErrorMessagePayload
 import dev.antigravity.shared.model.ExecuteUrlInteractionSpec
 import dev.antigravity.shared.model.FilePermissionInteractionSpec
 import dev.antigravity.shared.model.McpToolCallPayload
@@ -235,6 +236,7 @@ public object ProtobufStepCodec {
         var codeActionPayload: CodeActionPayload? = null
         var viewFilePayload: ViewFilePayload? = null
         var searchPayload: SearchPayload? = null
+        var errorMessagePayload: ErrorMessagePayload? = null
         var requestedInteraction: RequestedInteraction? = null
         var subagentPayload: SubagentPayload? = null
         var dynamicWorkflowPayload: DynamicWorkflowPayload? = null
@@ -348,13 +350,9 @@ public object ProtobufStepCodec {
                 }
                 fieldNumber == 24 && wireType == 2 -> {
                     readLengthDelimited(data, cursor)?.let { nested ->
-                        val errMsg = nonEmpty(extractStringField(nested, 1))
-                            ?: nonEmpty(extractNestedStringField(nested, 1, 1))
-                        if (errMsg != null) {
-                            plannerPayload = PlannerResponsePayload(response = "⚠️ $errMsg")
-                            stepType = CortexStepType.PLANNER_RESPONSE
-                            stepStatus = CortexStepStatus.ERROR
-                        }
+                        errorMessagePayload = decodeErrorMessage(nested)
+                        stepType = CortexStepType.ERROR_MESSAGE
+                        stepStatus = CortexStepStatus.ERROR
                     }
                 }
                 fieldNumber == 28 && wireType == 2 -> {
@@ -470,8 +468,7 @@ public object ProtobufStepCodec {
                 else -> {
                     if (wireType == 2 && fieldNumber >= 10 && fallbackSummary == null) {
                         val nested = readLengthDelimited(data, cursor) ?: break
-                        val extracted = nonEmpty(extractStringField(nested, 1))
-                            ?: nonEmpty(extractStringField(nested, 2))
+                        val extracted = extractReadableSummaryFromUnknownSubmessage(nested)
                         if (extracted != null) {
                             fallbackSummary = extracted.take(240)
                         }
@@ -482,7 +479,7 @@ public object ProtobufStepCodec {
             }
         }
 
-        if (rawType == 17 && plannerPayload == null) {
+        if (rawType == 17 && errorMessagePayload == null && plannerPayload == null) {
             stepType = CortexStepType.GENERATE_IMAGE
         }
         if ((stepType == CortexStepType.PLANNER_RESPONSE || stepType == CortexStepType.NOTIFY_USER) &&
@@ -513,6 +510,7 @@ public object ProtobufStepCodec {
             codeAction = codeActionPayload,
             viewFile = viewFilePayload,
             search = searchPayload,
+            errorMessage = errorMessagePayload,
             requestedInteraction = requestedInteraction,
             recordedExecutionMode = recordedMode,
             recordedModelId = recordedModelId,
@@ -780,6 +778,98 @@ public object ProtobufStepCodec {
 
     private fun nonEmpty(value: String?): String? =
         value?.takeIf { it.trim().isNotEmpty() }
+
+    private fun decodeErrorMessage(data: ByteArray): ErrorMessagePayload {
+        val field1 = extractMessageField(data, 1)
+        if (field1 != null && field1.isNotEmpty()) {
+            val nestedStrings = extractOrderedReadableStrings(field1)
+            if (nestedStrings.isNotEmpty()) {
+                val primary = nestedStrings.first()
+                val detail = nestedStrings.drop(1).firstOrNull { it != primary }
+                return ErrorMessagePayload(message = primary, detail = detail)
+            }
+            val direct = nonEmpty(field1.decodeToString())
+            if (direct != null && isHumanReadableText(direct)) {
+                return ErrorMessagePayload(message = direct)
+            }
+        }
+        val topStrings = extractOrderedReadableStrings(data)
+        if (topStrings.isNotEmpty()) {
+            val primary = topStrings.first()
+            val detail = topStrings.drop(1).firstOrNull { it != primary }
+            return ErrorMessagePayload(message = primary, detail = detail)
+        }
+        val fallback = extractReadableSummaryFromUnknownSubmessage(data).orEmpty()
+        return ErrorMessagePayload(message = fallback)
+    }
+
+    /**
+     * Parses [data] strictly as a protobuf submessage and returns ordered human-readable strings
+     * from length-delimited fields (1..12). Returns an empty list if [data] is not valid protobuf wire data.
+     */
+    private fun extractOrderedReadableStrings(data: ByteArray): List<String> {
+        if (data.isEmpty() || data.size > 65_536) return emptyList()
+        val cursor = Cursor()
+        val found = mutableListOf<Pair<Int, String>>()
+        while (cursor.offset < data.size) {
+            val tag = readVarint(data, cursor) ?: return emptyList()
+            val fieldNumber = (tag shr 3).toInt()
+            val wireType = (tag and 0x07UL).toInt()
+            if (fieldNumber <= 0 || fieldNumber > 536_870_911) return emptyList()
+            when (wireType) {
+                0 -> readVarint(data, cursor) ?: return emptyList()
+                1 -> {
+                    if (cursor.offset + 8 > data.size) return emptyList()
+                    cursor.offset += 8
+                }
+                2 -> {
+                    val bytes = readLengthDelimited(data, cursor) ?: return emptyList()
+                    if (fieldNumber in 1..12 && bytes.isNotEmpty()) {
+                        val candidate = nonEmpty(bytes.decodeToString())
+                        if (candidate != null && isHumanReadableText(candidate)) {
+                            found.add(fieldNumber to candidate)
+                        }
+                    }
+                }
+                5 -> {
+                    if (cursor.offset + 4 > data.size) return emptyList()
+                    cursor.offset += 4
+                }
+                else -> return emptyList()
+            }
+        }
+        return found.sortedBy { it.first }.map { it.second }.distinct()
+    }
+
+    private fun extractReadableSummaryFromUnknownSubmessage(data: ByteArray, depth: Int = 1): String? {
+        if (data.isEmpty() || data.size > 65_536) return null
+        for (field in 1..8) {
+            val bytes = extractMessageField(data, field) ?: continue
+            val candidate = nonEmpty(bytes.decodeToString())
+            if (candidate != null && isHumanReadableText(candidate)) {
+                return candidate.take(240)
+            }
+            if (depth > 0) {
+                extractReadableSummaryFromUnknownSubmessage(bytes, depth - 1)?.let { return it }
+            }
+        }
+        val direct = nonEmpty(data.decodeToString())
+        if (direct != null && isHumanReadableText(direct)) {
+            return direct.take(240)
+        }
+        return null
+    }
+
+    private fun isHumanReadableText(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.length < 2) return false
+        for (ch in trimmed) {
+            val code = ch.code
+            if (code < 0x20 && ch != '\n' && ch != '\r' && ch != '\t') return false
+            if (code == 0x7F || code == 0xFFFD) return false
+        }
+        return true
+    }
 
     private fun looksLikeArtifactDocument(content: String, uri: String): Boolean {
         val trimmed = content.trim()

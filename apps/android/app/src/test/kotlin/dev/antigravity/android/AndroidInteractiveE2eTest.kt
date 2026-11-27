@@ -1117,6 +1117,67 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
+    fun atc31_errorMessageStepAndLegacyCachedErrorRenderDedicatedErrorCardNotUnknownFallback() {
+        val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
+        coordinator.chatStore.injectDebugSteps(
+            listOf(
+                CascadeStep(
+                    cascadeId = "cas-rate-limiter",
+                    stepIndex = 101,
+                    type = CortexStepType.ERROR_MESSAGE,
+                    status = CortexStepStatus.ERROR,
+                    errorMessage = dev.antigravity.shared.model.ErrorMessagePayload(
+                        message = "Model quota reached for Gemini 4 Neon.",
+                        detail = "rpc error: code = ResourceExhausted",
+                        errorCode = "HTTP 429",
+                    ),
+                ),
+                CascadeStep(
+                    cascadeId = "cas-rate-limiter",
+                    stepIndex = 102,
+                    type = CortexStepType.UNSPECIFIED,
+                    status = CortexStepStatus.DONE,
+                    rawTypeName = "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+                ),
+            )
+        )
+
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = EsddVerifySceneCase.CHAT_AND_COMPOSER,
+            )
+        }
+
+        val listExists = composeRule.onAllNodesWithTag("chat-steps-list").fetchSemanticsNodes().isNotEmpty()
+        if (listExists) {
+            composeRule.onNodeWithTag("chat-steps-list").performScrollToNode(hasTestTag("step-error-101"))
+        }
+        composeRule.onNodeWithTag("step-error-101").assertIsDisplayed()
+        composeRule.onNodeWithText("Model quota reached for Gemini 4 Neon.", substring = true, useUnmergedTree = true)
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("HTTP 429", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithTag("card-forward-step-101").fetchSemanticsNodes().size)
+
+        // Expand technical details
+        composeRule.onNodeWithText("Show details", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithText("rpc error: code = ResourceExhausted", substring = true, useUnmergedTree = true)
+            .assertIsDisplayed()
+
+        // Legacy cached UNSPECIFIED + rawTypeName = CORTEX_STEP_TYPE_ERROR_MESSAGE renders ErrorMessageStepCard too
+        if (listExists) {
+            composeRule.onNodeWithTag("chat-steps-list").performScrollToNode(hasTestTag("step-error-102"))
+        }
+        composeRule.onNodeWithTag("step-error-102").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "Antigravity Desktop encountered an error while processing this turn.",
+            substring = true,
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        assertEquals(0, composeRule.onAllNodesWithTag("card-forward-step-102").fetchSemanticsNodes().size)
+    }
+
+    @Test
     fun atc32_localProjectAutoPermissionModeAndRemoteIsolation() {
         val coordinator = AntigravityCoreCoordinator.createEsddVerificationCoordinator()
         composeRule.setContent {
