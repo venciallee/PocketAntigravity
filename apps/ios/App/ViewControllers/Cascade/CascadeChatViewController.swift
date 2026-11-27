@@ -500,22 +500,7 @@ public struct CascadeChatViewController: View {
         } else {
             let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
             let isOfflinePaired = store.hasPairedBackend && !isActiveSessionHostOnline
-            let isBrandNewEmpty: Bool = {
-                if activePendingDraft != nil || store.activeCascadeId.isEmpty {
-                    return true
-                }
-                if store.activeCascadeId.hasPrefix("cas-")
-                    && !AntigravitySessionStore.esddFixtureCascadeIds.contains(store.activeCascadeId) {
-                    return true
-                }
-                if store.isLocallyCreatedEmptyCascade(store.activeCascadeId) {
-                    return true
-                }
-                if let summary = store.activeSummary {
-                    return summary.stepCount == 0 && summary.needsTitleHydration && store.activeSteps.isEmpty
-                }
-                return store.activeSteps.isEmpty
-            }()
+            let isBrandNewEmpty = activePendingDraft != nil || store.isBrandNewEmptyCascade(store.activeCascadeId)
             if isNoInternet || isOfflinePaired {
                 if !isBrandNewEmpty && store.activeSteps.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {

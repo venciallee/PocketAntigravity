@@ -85,6 +85,25 @@ extension AntigravitySessionStore {
         locallyCreatedEmptyCascadeIds.contains(cascadeId)
     }
 
+    /// Returns `true` when `cascadeId` is a brand-new local/unsynced empty conversation (rather than an
+    /// existing historical conversation whose steps failed or returned empty).
+    public func isBrandNewEmptyCascade(_ cascadeId: String) -> Bool {
+        if cascadeId.isEmpty {
+            return true
+        }
+        if cascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(cascadeId) {
+            return true
+        }
+        if locallyCreatedEmptyCascadeIds.contains(cascadeId) {
+            return true
+        }
+        let stepsEmpty = (stepsByCascadeId[cascadeId] ?? []).isEmpty
+        if let summary = summaries.first(where: { $0.cascadeId == cascadeId }) {
+            return summary.stepCount == 0 && summary.needsTitleHydration && stepsEmpty
+        }
+        return stepsEmpty
+    }
+
     /// True while a scoped conversation/workspace refresh is in flight for the currently selected host scope.
     public var isRefreshingSelectedHost: Bool {
         if refreshingHostScopeKeys.contains(selectedHostScope.id) {
