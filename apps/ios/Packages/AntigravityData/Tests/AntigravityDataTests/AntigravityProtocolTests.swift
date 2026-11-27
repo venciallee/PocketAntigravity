@@ -4565,11 +4565,26 @@ final class AntigravityProtocolTests: XCTestCase {
 
     @MainActor
     func testTC25_ActiveChatStepSyncForegroundAndReentryRecovery() async {
-        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        let store = AntigravitySessionStore.makeLiveStore()
         store.hasPairedBackend = true
         store.isLiveBackendConnected = true
         store.isDeviceNetworkReachable = true
         store.isNetworkingSuspended = false
+        store.activeHost = RemoteHostInstance(
+            instanceId: "rec-uuid-1",
+            hostname: "Antigravity",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/rec-uuid-1")!,
+            isOnline: true
+        )
+        store.rpcClient = AntigravityRPCClient(
+            host: store.activeHost,
+            sessionCookie: "SAPISID=test",
+            authUser: "0",
+            resolvedInstanceUuid: "rec-uuid-1",
+            relayApiKey: "AIzaSyTestKey0000000000000000000000000",
+            urlSession: URLSession.shared
+        )
 
         let cid = "cas-sync-recovery"
         let summary = CascadeSummary(
