@@ -1145,31 +1145,44 @@ extension AntigravitySessionStore {
         }
 
         let initialSummary = summaries.first(where: { $0.cascadeId == cascadeId })
+        let initialSummaryIsCloud = initialSummary.map { isSummaryCloudRuntime($0) }
+            ?? AntigravityCloudDetector.isCloudWorkspaceURI("", cascadeId: cascadeId)
         let withinInitialOptimisticSend = (optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
         let isBrandNewEmptySession = locallyCreatedEmptyCascadeIds.contains(cascadeId)
             && !withinInitialOptimisticSend
         let summaryHostOnline = isSummaryHostOnline(initialSummary)
         let isKnownOfflineLocal = hasPairedBackend
             && !summaryHostOnline
-            && (initialSummary?.isCloud != true)
+            && !initialSummaryIsCloud
+        let isKnownOfflineCloud = hasPairedBackend
+            && !summaryHostOnline
+            && initialSummaryIsCloud
+        let isKnownOfflineTarget = isKnownOfflineLocal || isKnownOfflineCloud
         let isConfirmedOfflinePeerHost = isKnownOfflineLocal && isLiveBackendConnected
+        let isActivelyConnectingNow = !isConfirmedOfflinePeerHost
+            && !isLiveBackendConnected
+            && (isConnectingToBackend || connectionLifecyclePhase == .connecting)
+        // Before the initial handshake finishes (`rpcClient == nil && !isLiveBackendConnected`),
+        // `kmpEngine` may already be instantiated while its internal `activeClient()` is still `null`.
+        // Treat pre-handshake cold starts as connecting/cached-only so we never clear `isLoadingSteps`
+        // with a fake empty `[]` return before the network connection finishes.
+        let hasReadyRemoteClient = rpcClient != nil || (kmpEngine != nil && isLiveBackendConnected)
         let storeRef = projectionStore
 
-        if isBrandNewEmptySession && isKnownOfflineLocal {
+        if isBrandNewEmptySession && isKnownOfflineTarget {
             isLoadingSteps = false
             return
         }
 
         // Confirmed-offline peer Mac (while another Mac is online), iPhone no-network, or pre-handshake cold start:
         // serve persisted steps immediately from disk without issuing cross-host failover RPCs against another online Mac.
-        guard isDeviceNetworkReachable, !isConfirmedOfflinePeerHost, (kmpEngine != nil || rpcClient != nil) else {
-            let isActivelyConnecting = !isConfirmedOfflinePeerHost
-                && !isLiveBackendConnected
-                && (isConnectingToBackend || connectionLifecyclePhase == .connecting)
+        guard isDeviceNetworkReachable, !isConfirmedOfflinePeerHost, hasReadyRemoteClient else {
             let offlineHostLabel = initialSummary?.originHostName ?? activeHost.hostname
-            let shouldNoteUncachedOffline = isKnownOfflineLocal && !isBrandNewEmptySession && !isActivelyConnecting
+            let shouldNoteUncachedOffline = (!isDeviceNetworkReachable || isKnownOfflineTarget)
+                && !isBrandNewEmptySession
+                && !isActivelyConnectingNow
             if (stepsByCascadeId[cascadeId] ?? []).isEmpty {
-                isLoadingSteps = isActivelyConnecting && !isBrandNewEmptySession
+                isLoadingSteps = isActivelyConnectingNow && !isBrandNewEmptySession
                 activeStepSyncCascadeId = cascadeId
                 activeStepSyncPollsUntilIdle = pollUntilIdle
                 stepPollingTask = Task { [weak self] in
@@ -1194,7 +1207,13 @@ extension AntigravitySessionStore {
                         }
                     } else if shouldNoteUncachedOffline && self.activeCascadeId == cascadeId {
                         self.isLoadingSteps = false
-                        self.stepLoadErrorText = "\(offlineHostLabel) is currently offline and this conversation has not been cached on this device yet."
+                        if !self.isDeviceNetworkReachable {
+                            self.stepLoadErrorText = "No internet connection and this conversation has not been cached on this device yet."
+                        } else if isKnownOfflineCloud {
+                            self.stepLoadErrorText = "All paired Antigravity Desktop hosts are currently offline and this conversation has not been cached on this device yet."
+                        } else {
+                            self.stepLoadErrorText = "\(offlineHostLabel) is currently offline and this conversation has not been cached on this device yet."
+                        }
                     } else {
                         let stillConnecting = !self.isLiveBackendConnected
                             && (self.isConnectingToBackend || self.connectionLifecyclePhase == .connecting)
@@ -1347,26 +1366,16 @@ extension AntigravitySessionStore {
                 guard let self, !self.isNetworkingSuspended, self.isDeviceNetworkReachable else { break }
                 attempts += 1
                 let summaryMeta = self.summaries.first(where: { $0.cascadeId == cascadeId })
+                let summaryIsCloud = summaryMeta.map { self.isSummaryCloudRuntime($0) }
+                    ?? AntigravityCloudDetector.isCloudWorkspaceURI("", cascadeId: cascadeId)
                 if let summaryMeta,
-                   !summaryMeta.isCloud,
+                   !summaryIsCloud,
                    self.hasPairedBackend,
                    self.isLiveBackendConnected,
                    !self.isSummaryHostOnline(summaryMeta) {
                     break
                 }
                 let knownCount = summaryMeta?.stepCount ?? 0
-                let summaryIsCloud: Bool = {
-                    if summaryMeta?.isCloud == true
-                        || AntigravityCloudDetector.isCloudWorkspaceURI("", cascadeId: cascadeId) {
-                        return true
-                    }
-                    if let slug = summaryMeta?.projectSlug,
-                       let matchedProject = self.projects.first(where: { $0.id == slug || $0.name == slug }),
-                       matchedProject.runtime == .cloud {
-                        return true
-                    }
-                    return false
-                }()
                 let originUuid = summaryMeta?.originInstanceUuid
                 let isEmptyNewSessionNow = self.locallyCreatedEmptyCascadeIds.contains(cascadeId)
                     && !(self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
@@ -1450,7 +1459,10 @@ extension AntigravitySessionStore {
                             || originUuid?.isEmpty == true
                             || originUuid == self.activeHost.instanceId
                     )
-                    if belongsToActiveHost && self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
+                    if belongsToActiveHost
+                        && self.hasPairedBackend
+                        && (!remoteSteps.isEmpty || self.rpcClient != nil)
+                        && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
                         self.markBackendReconnected()
                     }
                     self.stepLoadErrorText = nil

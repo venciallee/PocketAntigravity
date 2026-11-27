@@ -2503,7 +2503,9 @@ extension AntigravitySessionStore {
         }
 
         startSummarySubscriptionStream()
-        if hostOnline && !activeCascadeId.isEmpty && activeRoute == .cascadeChat(activeCascadeId) {
+        let canSyncActiveChat = hostOnline
+            || (isActiveSessionCloud && availableRelayInstances.contains(where: \.status.isReachable))
+        if canSyncActiveChat && !activeCascadeId.isEmpty && activeRoute == .cascadeChat(activeCascadeId) {
             syncStepsForCascade(
                 activeCascadeId,
                 pollUntilIdle: true

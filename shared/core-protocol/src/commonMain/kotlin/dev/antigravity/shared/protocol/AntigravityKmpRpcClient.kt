@@ -3619,16 +3619,19 @@ public class AntigravityKmpRpcClient(
                         cascadeId = cascadeId,
                         isRemoteCloud = true,
                         targetUuid = targetUuid,
-                        timeoutMs = 5_000L,
+                        knownStepCount = knownStepCount,
+                        timeoutMs = 8_000L,
                         onPartialSteps = onPartialSteps,
                     )
                 ) {
                     is AgentStateStreamOutcome.Snapshot -> {
-                        stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                        return SingleInstanceFetchOutcome(
-                            steps = streamOutcome.steps,
-                            authoritativeEmpty = streamOutcome.authoritativeEmpty,
-                        )
+                        if (streamOutcome.steps.isNotEmpty() || streamOutcome.authoritativeEmpty) {
+                            stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                            return SingleInstanceFetchOutcome(
+                                steps = streamOutcome.steps,
+                                authoritativeEmpty = streamOutcome.authoritativeEmpty,
+                            )
+                        }
                     }
                     is AgentStateStreamOutcome.Unsupported -> Unit
                     is AgentStateStreamOutcome.NoData -> {
@@ -3800,16 +3803,19 @@ public class AntigravityKmpRpcClient(
                             cascadeId = cascadeId,
                             isRemoteCloud = false,
                             targetUuid = targetUuid,
+                            knownStepCount = knownStepCount,
                             timeoutMs = 3_500L,
                             onPartialSteps = onPartialSteps,
                         )
                     ) {
                         is AgentStateStreamOutcome.Snapshot -> {
-                            stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                            return SingleInstanceFetchOutcome(
-                                steps = streamOutcome.steps,
-                                authoritativeEmpty = streamOutcome.authoritativeEmpty,
-                            )
+                            if (streamOutcome.steps.isNotEmpty() || streamOutcome.authoritativeEmpty) {
+                                stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                                return SingleInstanceFetchOutcome(
+                                    steps = streamOutcome.steps,
+                                    authoritativeEmpty = streamOutcome.authoritativeEmpty,
+                                )
+                            }
                         }
                         else -> Unit
                     }
@@ -3827,6 +3833,7 @@ public class AntigravityKmpRpcClient(
         // for Cloud fallback or local sessions, skipping duplicate `LoadTrajectory` / Binary Protobuf calls
         // that Path 1 already executed.
         var adaptiveError: Throwable? = null
+        var didWakeViaLoadTrajectory = false
         val adaptiveSteps = try {
             fetchStepsViaAdaptiveJson(
                 cascadeId = cascadeId,
@@ -3838,6 +3845,7 @@ public class AntigravityKmpRpcClient(
                 alreadyAttemptedWake = didAttemptWake,
                 alreadyAttemptedProtobuf = didAttemptProtobuf,
                 allowNonCriticalRepair = allowNonCriticalRepair,
+                onLoadTrajectorySucceeded = { didWakeViaLoadTrajectory = true },
             )
         } catch (e: AntigravityRpcError.Unauthorized) {
             throw e
@@ -3852,25 +3860,34 @@ public class AntigravityKmpRpcClient(
             return SingleInstanceFetchOutcome(adaptiveSteps)
         }
 
-        // Path 3 (Local Antigravity 2.x Fallback): If local checkpoint RPCs failed (`not_found`)
-        // or returned empty and `StreamAgentStateUpdates` was not attempted yet, query it before failing.
-        if (!isRemoteCloud && !didAttemptAgentStream && (adaptiveError != null || knownStepCount > 0)) {
+        // Path 3 (Antigravity 2.x Stream Fallback & Post-Wake Cloud Retry):
+        // - For local chats: if checkpoint RPCs failed (`not_found`) or returned empty on a session
+        //   with live un-checkpointed turns or SQLite-backed state, fall back to `StreamAgentStateUpdates`.
+        // - For dormant Cloud chats: if `LoadTrajectory` just succeeded in waking the conversation into
+        //   daemon memory during Path 2 while legacy unary RPCs still returned empty/404, retry
+        //   `StreamAgentStateUpdates` now that the trajectory is warm.
+        val shouldRetryAgentStateStream = (!isRemoteCloud && !didAttemptAgentStream && (adaptiveError != null || knownStepCount > 0)) ||
+            (isRemoteCloud && didWakeViaLoadTrajectory)
+        if (shouldRetryAgentStateStream) {
             try {
                 when (
                     val streamOutcome = fetchStepsViaAgentStateStream(
                         cascadeId = cascadeId,
-                        isRemoteCloud = false,
+                        isRemoteCloud = isRemoteCloud,
                         targetUuid = targetUuid,
-                        timeoutMs = 3_500L,
+                        knownStepCount = knownStepCount,
+                        timeoutMs = if (isRemoteCloud) 5_000L else 4_000L,
                         onPartialSteps = onPartialSteps,
                     )
                 ) {
                     is AgentStateStreamOutcome.Snapshot -> {
-                        stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                        return SingleInstanceFetchOutcome(
-                            steps = streamOutcome.steps,
-                            authoritativeEmpty = streamOutcome.authoritativeEmpty,
-                        )
+                        if (streamOutcome.steps.isNotEmpty() || streamOutcome.authoritativeEmpty) {
+                            stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                            return SingleInstanceFetchOutcome(
+                                steps = streamOutcome.steps,
+                                authoritativeEmpty = streamOutcome.authoritativeEmpty,
+                            )
+                        }
                     }
                     else -> Unit
                 }
@@ -4026,7 +4043,8 @@ public class AntigravityKmpRpcClient(
         cascadeId: String,
         isRemoteCloud: Boolean,
         targetUuid: String?,
-        timeoutMs: Long = 5_000L,
+        knownStepCount: Int = 0,
+        timeoutMs: Long = 8_000L,
         onPartialSteps: (suspend (List<CascadeStep>) -> Unit)? = null,
     ): AgentStateStreamOutcome {
         val profile = stateMutex.withLock {
@@ -4053,11 +4071,33 @@ public class AntigravityKmpRpcClient(
                     put("backend", "BACKEND_TYPE_REMOTE_AICODE")
                 }
             )
+        } else if (isRemoteCloud && "backendType" !in strippedFields) {
+            payloadVariants.add(
+                buildJsonObject {
+                    put("conversationId", cascadeId)
+                    put("subscriberId", "pocket-${randomUuidV4()}")
+                    put("backendType", "BACKEND_TYPE_REMOTE_AICODE")
+                }
+            )
         }
 
-        val settleWindowMs = minOf(180L, maxOf(80L, timeoutMs / 8))
+        val partialStepsSettleWindowMs = if (isRemoteCloud) {
+            minOf(1_200L, maxOf(250L, timeoutMs / 4))
+        } else {
+            minOf(180L, maxOf(80L, timeoutMs / 8))
+        }
+        val emptyZeroGraceWindowMs = if (isRemoteCloud) {
+            minOf(1_500L, maxOf(250L, timeoutMs / 4))
+        } else {
+            minOf(600L, maxOf(150L, timeoutMs / 4))
+        }
         var lastError: Throwable? = null
-        for (variant in payloadVariants) {
+        var variantIndex = 0
+        var appendedBackendTypeFallback = false
+        while (variantIndex < payloadVariants.size) {
+            val variant = payloadVariants[variantIndex]
+            val isLastVariant = variantIndex == payloadVariants.lastIndex
+            variantIndex += 1
             val stepsByIndex = linkedMapOf<Int, CascadeStep>()
             var reportedTotalLength: Int? = null
             var sawMainTrajectory = false
@@ -4095,25 +4135,38 @@ public class AntigravityKmpRpcClient(
                                     settleJob?.cancel()
                                     throw SnapshotCompleteSignal()
                                 }
-                                if (sawMainTrajectory && totalLen == 0) {
-                                    settleJob?.cancel()
-                                    throw SnapshotCompleteSignal()
-                                }
-                                if (onPartialSteps != null && stepsByIndex.isNotEmpty()) {
-                                    val nowMs = currentTimeMillis()
-                                    if (lastPartialEmitMs == 0L || (nowMs - lastPartialEmitMs) >= 60L) {
-                                        lastPartialEmitMs = nowMs
-                                        onPartialSteps(stepsByIndex.values.sortedBy { it.stepIndex })
+                                if (stepsByIndex.isNotEmpty()) {
+                                    if (onPartialSteps != null) {
+                                        val nowMs = currentTimeMillis()
+                                        if (lastPartialEmitMs == 0L || (nowMs - lastPartialEmitMs) >= 60L) {
+                                            lastPartialEmitMs = nowMs
+                                            onPartialSteps(stepsByIndex.values.sortedBy { it.stepIndex })
+                                        }
                                     }
-                                }
-                                if (stepsByIndex.isNotEmpty() || sawMainTrajectory) {
+                                    // Partial sparse snapshot received; wait briefly for remaining frames before settling.
                                     settleJob?.cancel()
                                     val targetCollector = collectorJob
                                     settleJob = launch {
-                                        delay(settleWindowMs)
+                                        delay(partialStepsSettleWindowMs)
                                         targetCollector?.cancel(SnapshotSettleCancel())
                                     }
+                                } else if (sawMainTrajectory && totalLen == 0) {
+                                    if (!isRemoteCloud && knownStepCount == 0) {
+                                        settleJob?.cancel()
+                                        throw SnapshotCompleteSignal()
+                                    }
+                                    // Cloud/historical trajectories often emit an initial `totalLength: 0` stub frame
+                                    // before remote steps hydrate; allow a bounded grace window for Frame 2.
+                                    if (settleJob == null || settleJob?.isActive != true) {
+                                        val targetCollector = collectorJob
+                                        settleJob = launch {
+                                            delay(emptyZeroGraceWindowMs)
+                                            targetCollector?.cancel(SnapshotSettleCancel())
+                                        }
+                                    }
                                 }
+                                // Never arm a short kill timer when `stepsByIndex` is still empty and `totalLen != 0`
+                                // (metadata-only Frame 1 on Cloud Relay frequently precedes steps by >350ms).
                             }
                         }
                         collectorJob.join()
@@ -4126,21 +4179,30 @@ public class AntigravityKmpRpcClient(
                     return AgentStateStreamOutcome.Snapshot(stepsByIndex.values.sortedBy { it.stepIndex })
                 }
                 if (sawMainTrajectory && reportedTotalLength == 0) {
-                    mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
-                    return AgentStateStreamOutcome.Snapshot(emptyList(), authoritativeEmpty = true)
+                    if (!isRemoteCloud || isLastVariant) {
+                        mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
+                        return AgentStateStreamOutcome.Snapshot(
+                            steps = emptyList(),
+                            authoritativeEmpty = knownStepCount == 0,
+                        )
+                    }
+                    // Cloud Variant #1 emitted an empty `totalLength: 0` stub: probe Variant #2 (`backend: BACKEND_TYPE_REMOTE_AICODE`).
+                    continue
                 }
                 // Do not burn a second full timeout on Variant #2 when Variant #1 already timed out
-                // or closed cleanly with zero error (only retry Variant #2 on explicit 400/not_found).
+                // or closed cleanly with zero error (only retry Variant #2 on explicit 400/not_found or Cloud stub).
                 if (timedOut || lastError == null) {
                     break
                 }
             } catch (_: SnapshotCompleteSignal) {
                 mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
                 val sorted = stepsByIndex.values.sortedBy { it.stepIndex }
-                return AgentStateStreamOutcome.Snapshot(
-                    steps = sorted,
-                    authoritativeEmpty = sorted.isEmpty() && sawMainTrajectory && reportedTotalLength == 0,
-                )
+                if (sorted.isNotEmpty() || !isRemoteCloud || isLastVariant) {
+                    return AgentStateStreamOutcome.Snapshot(
+                        steps = sorted,
+                        authoritativeEmpty = sorted.isEmpty() && sawMainTrajectory && reportedTotalLength == 0 && knownStepCount == 0,
+                    )
+                }
             } catch (e: AntigravityRpcError.Unauthorized) {
                 throw e
             } catch (e: CancellationException) {
@@ -4150,17 +4212,33 @@ public class AntigravityKmpRpcClient(
                     mutateCapabilityProfile(targetUuid) { it.recordMethodUnsupported("StreamAgentStateUpdates") }
                     return AgentStateStreamOutcome.Unsupported
                 }
+                var unknownField: String? = null
                 if (e is AntigravityRpcError.HttpError) {
-                    ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body)?.let { unknownField ->
+                    unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body)
+                    unknownField?.let { field ->
                         mutateCapabilityProfile(targetUuid) {
-                            it.recordStrippedField(unknownField, forMethod = "StreamAgentStateUpdates")
+                            it.recordStrippedField(field, forMethod = "StreamAgentStateUpdates")
                         }
                     }
+                }
+                if (isRemoteCloud &&
+                    unknownField.equals("backend", ignoreCase = true) &&
+                    !appendedBackendTypeFallback &&
+                    "backendType" !in strippedFields
+                ) {
+                    appendedBackendTypeFallback = true
+                    payloadVariants.add(
+                        buildJsonObject {
+                            put("conversationId", cascadeId)
+                            put("subscriberId", "pocket-${randomUuidV4()}")
+                            put("backendType", "BACKEND_TYPE_REMOTE_AICODE")
+                        }
+                    )
                 }
                 lastError = e
                 val shouldTryNext = e is AntigravityRpcError.HttpError && (
                     e.statusCode == 400 ||
-                        ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body) != null ||
+                        unknownField != null ||
                         ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(e.statusCode, e.body)
                     )
                 if (!shouldTryNext) {
@@ -4183,6 +4261,7 @@ public class AntigravityKmpRpcClient(
         alreadyAttemptedWake: Boolean = false,
         alreadyAttemptedProtobuf: Boolean = false,
         allowNonCriticalRepair: Boolean = true,
+        onLoadTrajectorySucceeded: () -> Unit = {},
     ): List<CascadeStep> {
         var lastError: Throwable? = initialError
         val learnedCeiling = learnedJsonStepCeiling(targetUuid)
@@ -4269,14 +4348,17 @@ public class AntigravityKmpRpcClient(
             ProtocolCompatibilityEngine.isTrajectoryNotFoundError(lastError!!)
         if (!skipRedundantLocalStepsProbe) {
             try {
-                firstResp = callUnaryJson(
+                val resp = callUnaryJson(
                     method = "GetCascadeTrajectorySteps",
                     body = reqBody,
                     instanceUuidOverride = targetUuid,
                     allowCrossHostFailover = isRemoteCloud,
                     allowStripUnknownFields = !isRemoteCloud,
                 )
-                lastError = null
+                firstResp = resp
+                if ((resp["steps"] as? JsonArray)?.isNotEmpty() == true) {
+                    lastError = null
+                }
             } catch (e: AntigravityRpcError.Unauthorized) {
                 throw e
             } catch (e: CancellationException) {
@@ -4334,6 +4416,7 @@ public class AntigravityKmpRpcClient(
         } else if (!alreadyAttemptedWake && (firstResp == null || knownStepCount > 0 || !alreadyWoken)) {
             try {
                 loadTrajectory(cascadeId, isRemoteCloud, targetUuid)
+                onLoadTrajectorySucceeded()
             } catch (e: AntigravityRpcError.Unauthorized) {
                 throw e
             } catch (e: CancellationException) {
@@ -4356,7 +4439,6 @@ public class AntigravityKmpRpcClient(
                         allowCrossHostFailover = isRemoteCloud,
                         allowStripUnknownFields = !isRemoteCloud,
                     )
-                    lastError = null
                     val retryCount = (retryResp["steps"] as? JsonArray)?.size ?: knownStepCount
                     val retryCeiling = extractJsonTruncationCeiling(retryResp, fallbackStepCount = retryCount)
                     if (retryCeiling != null) {
@@ -4365,12 +4447,24 @@ public class AntigravityKmpRpcClient(
                     val candidateSteps = (retryResp["steps"] as? JsonArray)?.toList().orEmpty()
                     if (candidateSteps.isNotEmpty()) {
                         rawSteps = candidateSteps
+                        lastError = null
                         activeCloudField = variant
                         stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
                         variant?.let { recordPreferredCloudBackendField("GetCascadeTrajectorySteps", targetUuid, it) }
                         break
-                    } else if (!isRemoteCloud) {
-                        break
+                    } else {
+                        val onlyUnknownFieldError = initialError == null &&
+                            knownStepCount == 0 &&
+                            lastError is AntigravityRpcError.HttpError &&
+                            ProtocolCompatibilityEngine.extractUnknownProtoFieldName(
+                                (lastError as AntigravityRpcError.HttpError).body
+                            ) != null
+                        if (onlyUnknownFieldError) {
+                            lastError = null
+                        }
+                        if (!isRemoteCloud) {
+                            break
+                        }
                     }
                 } catch (e: AntigravityRpcError.Unauthorized) {
                     throw e

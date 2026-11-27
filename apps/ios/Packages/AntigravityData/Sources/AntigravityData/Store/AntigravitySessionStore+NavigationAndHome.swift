@@ -72,7 +72,7 @@ extension AntigravitySessionStore {
     public func isSummaryHostOnline(_ summary: CascadeSummary?) -> Bool {
         guard hasPairedBackend else { return true }
         guard isDeviceNetworkReachable else { return false }
-        if summary?.isCloud == true {
+        if let summary, isSummaryCloudRuntime(summary) {
             if activeHost.channel == .cloudRelay && !availableRelayInstances.isEmpty {
                 return availableRelayInstances.contains(where: \.status.isReachable)
             }
@@ -82,6 +82,30 @@ extension AntigravitySessionStore {
             instanceId: summary?.originInstanceUuid,
             hostname: summary?.originHostName
         )
+    }
+
+    /// Returns `true` when `cascadeId` was newly created locally in this session and has not synced server steps yet.
+    public func isLocallyCreatedEmptyCascade(_ cascadeId: String) -> Bool {
+        locallyCreatedEmptyCascadeIds.contains(cascadeId)
+    }
+
+    /// Returns `true` when `cascadeId` is a brand-new local/unsynced empty conversation (rather than an
+    /// existing historical conversation whose steps failed or returned empty).
+    public func isBrandNewEmptyCascade(_ cascadeId: String) -> Bool {
+        if cascadeId.isEmpty {
+            return true
+        }
+        if cascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(cascadeId) {
+            return true
+        }
+        if locallyCreatedEmptyCascadeIds.contains(cascadeId) {
+            return true
+        }
+        let stepsEmpty = (stepsByCascadeId[cascadeId] ?? []).isEmpty
+        if let summary = summaries.first(where: { $0.cascadeId == cascadeId }) {
+            return summary.stepCount == 0 && summary.needsTitleHydration && stepsEmpty
+        }
+        return stepsEmpty
     }
 
     /// True while a scoped conversation/workspace refresh is in flight for the currently selected host scope.
