@@ -481,24 +481,34 @@ public object JsonStepAndSummaryDecoder {
         cascadeId: String,
         nowEpochMs: Long = currentTimeMillis(),
     ): AgentStateStepsUpdate {
-        val updateObj = obj.obj("update") ?: obj
+        val updateObj = obj.obj("update")
+            ?: obj.obj("agentStateUpdate")
+            ?: obj.obj("agent_state_update")
+            ?: obj.obj("stateUpdate")
+            ?: obj.obj("state_update")
+            ?: obj
         val runStatus = nonEmpty(updateObj.str("status"))
             ?: nonEmpty(updateObj.str("executableStatus"))
             ?: nonEmpty(updateObj.str("executable_status"))
 
         val mainTraj = updateObj.obj("mainTrajectoryUpdate")
             ?: updateObj.obj("main_trajectory_update")
+            ?: updateObj.obj("mainTrajectory")
+            ?: updateObj.obj("main_trajectory")
         val stepsUpdate = mainTraj?.obj("stepsUpdate")
             ?: mainTraj?.obj("steps_update")
             ?: updateObj.obj("stepsUpdate")
             ?: updateObj.obj("steps_update")
+        val nestedTraj = mainTraj?.obj("trajectory") ?: updateObj.obj("trajectory")
 
         val hasMainTrajectoryUpdate = mainTraj != null || stepsUpdate != null ||
-            updateObj.obj("trajectory") != null || updateObj.arr("steps") != null
+            nestedTraj != null || updateObj.arr("steps") != null
 
         val rawSteps = stepsUpdate?.arr("steps")
+            ?: stepsUpdate?.arr("stepUpdates")
+            ?: stepsUpdate?.arr("step_updates")
+            ?: nestedTraj?.arr("steps")
             ?: mainTraj?.arr("steps")
-            ?: updateObj.obj("trajectory")?.arr("steps")
             ?: updateObj.arr("steps")
             ?: JsonArray(emptyList())
 
@@ -509,15 +519,26 @@ public object JsonStepAndSummaryDecoder {
             }
             .orEmpty()
 
+        val baseOffset = stepsUpdate?.int("offset")
+            ?: stepsUpdate?.int("startIndex")
+            ?: stepsUpdate?.int("start_index")
+            ?: stepsUpdate?.int("stepOffset")
+            ?: stepsUpdate?.int("step_offset")
+            ?: 0
+
         val totalLength = stepsUpdate?.int("totalLength")
             ?: stepsUpdate?.int("total_length")
             ?: mainTraj?.int("totalLength")
             ?: mainTraj?.int("total_length")
+            ?: nestedTraj?.int("totalLength")
+            ?: nestedTraj?.int("total_length")
+            ?: updateObj.int("totalLength")
+            ?: updateObj.int("total_length")
 
         val decoded = ArrayList<CascadeStep>(rawSteps.size)
         val useExplicitIndices = indices.isNotEmpty() && indices.size == rawSteps.size
         rawSteps.forEachIndexed { idx, stepEl ->
-            val targetIdx = if (useExplicitIndices) indices[idx] else idx
+            val targetIdx = if (useExplicitIndices) indices[idx] else (baseOffset + idx)
             decodeJsonStep(
                 element = stepEl,
                 cascadeId = cascadeId,
@@ -560,24 +581,30 @@ public object JsonStepAndSummaryDecoder {
         nowEpochMs: Long = currentTimeMillis(),
     ): CascadeStep? {
         val obj = element as? JsonObject ?: return null
-        val stepIndex = obj.int("stepIndex") ?: fallbackIndex
+        val stepIndex = obj.int("stepIndex") ?: obj.int("step_index") ?: fallbackIndex
         val rawTypePrim = obj["type"] as? JsonPrimitive
         var stepType = resolveStepType(rawTypePrim)
         var stepStatus = resolveStepStatus(obj["status"])
 
-        var userText: String? = nonEmpty(obj.str("userInput"))
-        val mentions = obj.arr("attachedMentions")
+        var userText: String? = nonEmpty(obj.str("userInput")) ?: nonEmpty(obj.str("user_input"))
+        val mentions = (obj.arr("attachedMentions") ?: obj.arr("attached_mentions"))
             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
             ?.toMutableList()
             ?: mutableListOf()
         var recordedMode: CascadeExecutionMode? = null
         var recordedModelId: String? = null
 
-        obj.obj("userInput")?.let { uiObj ->
+        (obj.obj("userInput") ?: obj.obj("user_input"))?.let { uiObj ->
             val itemsJoined = uiObj.arr("items")
-                ?.mapNotNull { (it as? JsonObject)?.str("text")?.let(::nonEmpty) }
+                ?.mapNotNull { el ->
+                    val itemObj = el as? JsonObject ?: return@mapNotNull null
+                    nonEmpty(itemObj.str("text"))
+                        ?: nonEmpty(itemObj.obj("item")?.str("text"))
+                        ?: nonEmpty(itemObj.obj("chunk")?.str("text"))
+                }
                 ?.joinToString("\n")
             userText = nonEmpty(uiObj.str("userResponse"))
+                ?: nonEmpty(uiObj.str("user_response"))
                 ?: nonEmpty(uiObj.str("query"))
                 ?: nonEmpty(uiObj.str("text"))
                 ?: nonEmpty(uiObj.str("prompt"))
@@ -591,7 +618,7 @@ public object JsonStepAndSummaryDecoder {
                     if (label != null) {
                         if (label !in mentions) mentions.add(label)
                     } else {
-                        val absUri = nonEmpty(fileObj.str("absoluteUri"))
+                        val absUri = nonEmpty(fileObj.str("absoluteUri")) ?: nonEmpty(fileObj.str("absolute_uri"))
                         if (absUri != null) {
                             val base = ResolvedEmbedResource.normalizePath(absUri).trimEnd('/').substringAfterLast('/')
                             val chip = if (base.startsWith("@")) base else "@$base"
@@ -604,19 +631,21 @@ public object JsonStepAndSummaryDecoder {
                 val mediaObj = mediaEl as? JsonObject ?: return@forEachIndexed
                 val desc = nonEmpty(mediaObj.str("description"))
                     ?: nonEmpty(mediaObj.str("uri"))?.substringAfterLast('/')
-                    ?: if (mediaObj.str("mimeType").orEmpty().startsWith("image/")) "image-${idx + 1}" else "media-${idx + 1}"
+                    ?: if ((mediaObj.str("mimeType") ?: mediaObj.str("mime_type")).orEmpty().startsWith("image/")) "image-${idx + 1}" else "media-${idx + 1}"
                 if (desc !in mentions) mentions.add(desc)
             }
 
-            val userCfg = uiObj.obj("userConfig") ?: uiObj.obj("lastUserConfig")
-            userCfg?.obj("plannerConfig")?.let { plannerCfg ->
-                plannerCfg.obj("conversational")?.bool("agenticMode")?.let { agentic ->
+            val userCfg = uiObj.obj("userConfig") ?: uiObj.obj("user_config") ?: uiObj.obj("lastUserConfig") ?: uiObj.obj("last_user_config")
+            (userCfg?.obj("plannerConfig") ?: userCfg?.obj("planner_config"))?.let { plannerCfg ->
+                (plannerCfg.obj("conversational")?.bool("agenticMode")
+                    ?: plannerCfg.obj("conversational")?.bool("agentic_mode"))?.let { agentic ->
                     recordedMode = if (agentic) CascadeExecutionMode.PLANNING else CascadeExecutionMode.FAST
                 }
-                val reqModelObj = plannerCfg.obj("requestedModel")
+                val reqModelObj = plannerCfg.obj("requestedModel") ?: plannerCfg.obj("requested_model")
                 val candModel = nonEmpty(reqModelObj?.str("model"))
                     ?: nonEmpty(reqModelObj?.str("alias"))
                     ?: nonEmpty(plannerCfg.str("planModel"))
+                    ?: nonEmpty(plannerCfg.str("plan_model"))
                 if (candModel != null && candModel != "MODEL_UNSPECIFIED") {
                     recordedModelId = candModel
                 }
@@ -627,17 +656,24 @@ public object JsonStepAndSummaryDecoder {
         }
 
         var plannerPayload: PlannerResponsePayload? = null
-        val pr = obj.obj("plannerResponse")
-        val nu = obj.obj("notifyUser")
+        val pr = obj.obj("plannerResponse") ?: obj.obj("planner_response")
+        val nu = obj.obj("notifyUser") ?: obj.obj("notify_user")
         if (pr != null) {
             val text = nonEmpty(pr.str("modifiedResponse"))
+                ?: nonEmpty(pr.str("modified_response"))
                 ?: nonEmpty(pr.str("response"))
                 ?: nonEmpty(pr.str("text"))
                 ?: nonEmpty(pr.str("content"))
                 ?: nonEmpty(pr.str("message"))
                 ?: ""
             val thinking = nonEmpty(pr.str("thinking"))
-            val duration = parseDurationSeconds(pr["thinkingDurationSeconds"] ?: pr["thinkingDuration"])
+                ?: nonEmpty(pr.str("thought"))
+            val duration = parseDurationSeconds(
+                pr["thinkingDurationSeconds"]
+                    ?: pr["thinking_duration_seconds"]
+                    ?: pr["thinkingDuration"]
+                    ?: pr["thinking_duration"],
+            )
             if (text.isNotEmpty() || thinking != null ||
                 stepStatus == CortexStepStatus.IN_PROGRESS || stepStatus == CortexStepStatus.PENDING
             ) {
@@ -650,9 +686,14 @@ public object JsonStepAndSummaryDecoder {
             }
         } else if (nu != null) {
             val notifyText = nonEmpty(nu.str("notificationContent"))
+                ?: nonEmpty(nu.str("notification_content"))
                 ?: nonEmpty(nu.str("message"))
                 ?: nonEmpty(nu.str("reviewContent"))
-            val paths = (nu.arr("pathsToReview") ?: nu.arr("reviewAbsoluteUris"))
+                ?: nonEmpty(nu.str("review_content"))
+            val paths = (nu.arr("pathsToReview")
+                ?: nu.arr("paths_to_review")
+                ?: nu.arr("reviewAbsoluteUris")
+                ?: nu.arr("review_absolute_uris"))
                 ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                 ?: emptyList()
             if (notifyText != null || paths.isNotEmpty()) {
