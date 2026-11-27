@@ -1064,6 +1064,16 @@ fun AgentsHomeScreen(
 
                                     Spacer(modifier = Modifier.weight(1f))
 
+                                    val homeVoiceContextHint = remember(draftText, scopedSummaries) {
+                                        buildList {
+                                            draftText.trim().takeIf { it.isNotEmpty() }?.let(::add)
+                                            scopedSummaries.take(3)
+                                                .map { it.title.trim() }
+                                                .filter { it.isNotEmpty() && it != "New Conversation" }
+                                                .forEach(::add)
+                                        }.joinToString(" ").ifBlank { null }
+                                    }
+
                                     var homeVoiceMenuExpanded by remember { mutableStateOf(false) }
                                     Box {
                                         Box(
@@ -1075,6 +1085,7 @@ fun AgentsHomeScreen(
                                                         voiceController.toggleRecording(
                                                             existingDraft = draftText,
                                                             appLanguage = lang,
+                                                            contextTextHint = homeVoiceContextHint,
                                                         ) { updated ->
                                                             draftText = updated
                                                         }
@@ -1105,6 +1116,7 @@ fun AgentsHomeScreen(
                                                     language = chosen,
                                                     appLanguage = lang,
                                                     existingDraft = draftText,
+                                                    contextTextHint = homeVoiceContextHint,
                                                     onDraftUpdated = { draftText = it },
                                                 )
                                             },
