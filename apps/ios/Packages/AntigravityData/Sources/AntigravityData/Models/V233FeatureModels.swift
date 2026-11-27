@@ -1285,8 +1285,12 @@ public enum VoiceLocaleResolver {
             }
         }
 
-        // Pass 1: exact normalized BCP-47 match in candidate priority order.
-        for candidate in candidates {
+        // Match each candidate in priority order:
+        // 1. Exact normalized BCP-47 match immediately wins.
+        // 2. Once all explicit regional variants for a language have been checked without an exact match,
+        //    match any supported locale sharing that primary language (e.g. `ja-US` -> `ja-JP`)
+        //    before falling through to lower-priority languages such as the `en-US` safety net.
+        for (index, candidate) in candidates.enumerated() {
             let norm = candidate
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: "_", with: "-")
@@ -1294,12 +1298,12 @@ public enum VoiceLocaleResolver {
             if let exact = normalizedToOriginal[norm] {
                 return exact
             }
-        }
-
-        // Pass 2: primary language code match (e.g. `ja-US` -> `ja-JP`).
-        for candidate in candidates {
             guard let targetLang = primaryLanguageCode(candidate) else { continue }
-            if let matched = orderedEntries.first(where: { primaryLanguageCode($0.norm) == targetLang })?.original {
+            let hasLaterSameLanguage = candidates.dropFirst(index + 1).contains { later in
+                primaryLanguageCode(later) == targetLang
+            }
+            if !hasLaterSameLanguage,
+               let matched = orderedEntries.first(where: { primaryLanguageCode($0.norm) == targetLang })?.original {
                 return matched
             }
         }

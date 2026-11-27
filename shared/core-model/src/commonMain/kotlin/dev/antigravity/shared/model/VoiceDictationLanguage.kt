@@ -199,20 +199,27 @@ public object VoiceLocaleResolver {
             }
         }
 
-        // Pass 1: exact normalized BCP-47 match in candidate priority order.
-        for (candidate in candidates) {
+        // Match each candidate in priority order:
+        // 1. Exact normalized BCP-47 match immediately wins.
+        // 2. Once all explicit regional variants for a language have been checked without an exact match,
+        //    match any supported locale sharing that primary language (e.g. `ja-US` -> `ja-JP`)
+        //    before falling through to lower-priority languages such as the `en-US` safety net.
+        for (index in candidates.indices) {
+            val candidate = candidates[index]
             val norm = candidate.trim().replace('_', '-').lowercase()
             val exact = normalizedToOriginal[norm]
             if (exact != null) return exact
-        }
 
-        // Pass 2: primary language code match (e.g. `ja-US` -> `ja-JP`).
-        for (candidate in candidates) {
             val targetLang = primaryLanguageCode(candidate) ?: continue
-            val matched = normalizedToOriginal.entries.firstOrNull { (normKey, _) ->
-                primaryLanguageCode(normKey) == targetLang
-            }?.value
-            if (matched != null) return matched
+            val hasLaterSameLanguage = (index + 1 until candidates.size).any { laterIdx ->
+                primaryLanguageCode(candidates[laterIdx]) == targetLang
+            }
+            if (!hasLaterSameLanguage) {
+                val matched = normalizedToOriginal.entries.firstOrNull { (normKey, _) ->
+                    primaryLanguageCode(normKey) == targetLang
+                }?.value
+                if (matched != null) return matched
+            }
         }
 
         return null
