@@ -683,7 +683,6 @@ public struct CascadeChatViewController: View {
                 .padding(.top, 12)
                 .accessibilityIdentifier("chat-empty-ready-card")
             }
-            }
         }
     }
 
