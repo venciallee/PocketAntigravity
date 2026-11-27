@@ -30,6 +30,7 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.headersOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -42,6 +43,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CoreDomainStoreTest {
@@ -1058,5 +1061,266 @@ class CoreDomainStoreTest {
             assertFalse((outcome.errorMessage ?: "").contains("type.googleapis.com"), "Raw @type leaked: ${outcome.errorMessage}")
             coordinator.close()
         }
+    }
+
+    @Test
+    fun testSendMessageAutoRecoversEvictedZeroServerTurnCascadeAndMigratesState() = runTest {
+        withContext(Dispatchers.Default) {
+            val evictedId = "v1/evicted-zero-turn-chat"
+            val freshId = "v1/recovered-fresh-01"
+            var startCalls = 0
+            val sentToIds = mutableListOf<String>()
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val body = (request.body as? ByteArrayContent)?.bytes()?.decodeToString().orEmpty()
+                when {
+                    path.endsWith("/StartCascade") -> {
+                        startCalls += 1
+                        respond(
+                            content = """{"cascadeId":"$freshId"}""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    }
+                    path.endsWith("/SendUserCascadeMessage") -> {
+                        val cid = Regex("\"cascadeId\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1).orEmpty()
+                        sentToIds.add(cid)
+                        if (cid == freshId) {
+                            respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                        } else {
+                            respond(
+                                content = """{"code":"not_found","message":"session not found"}""",
+                                status = HttpStatusCode.NotFound,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                            )
+                        }
+                    }
+                    path.endsWith("/LoadTrajectory") -> respond(
+                        content = """{"code":"not_found","message":"session not found"}""",
+                        status = HttpStatusCode.NotFound,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                    else -> respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = InMemoryPreferencesStore(),
+                projectionStorage = InMemoryProjectionStorage(),
+                autoPreloadConversations = false,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+            coordinator.connectDirectLan(
+                endpointUrlString = "http://127.0.0.1:18991",
+                csrfToken = "csrf-ok",
+                hostName = "Test Mac",
+                startSummaryStream = false,
+            )
+
+            // Seed conversation matching user's screenshot: only 1 prior USER_INPUT bubble, 0 assistant/tool steps
+            coordinator.conversationSyncStore.upsertSummary(
+                CascadeSummary(
+                    cascadeId = evictedId,
+                    title = "介绍下这个仓库",
+                    projectSlug = "slardar_app_ai",
+                    workspaceUri = "cloud://slardar_app_ai",
+                    branchName = "feat/support_slardar_pc",
+                    status = CortexStepStatus.DONE,
+                    stepCount = 1,
+                    isCloud = true,
+                    cloudProjectId = "cp-slardar",
+                    originHostName = "Antigravity",
+                ),
+            )
+            coordinator.chatStore.seedFixtureSteps(
+                stepsByCascade = mapOf(
+                    evictedId to listOf(
+                        CascadeStep(
+                            cascadeId = evictedId,
+                            stepIndex = 0,
+                            type = CortexStepType.USER_INPUT,
+                            status = CortexStepStatus.DONE,
+                            userInput = "介绍下这个仓库",
+                        ),
+                    ),
+                ),
+                questions = emptyList(),
+            )
+            coordinator.chatStore.setActiveCascade(evictedId)
+
+            val outcome = coordinator.sendMessage(
+                cascadeId = evictedId,
+                message = "Who is the most violent",
+                workspaceUri = "cloud://slardar_app_ai",
+                isCloud = true,
+                cloudProjectId = "cp-slardar",
+                isOptimisticDraft = false,
+            )
+
+            assertTrue(outcome.dispatchedLive, "Expected evicted zero-server-turn chat to auto-recover live")
+            assertEquals(freshId, outcome.resolvedCascadeId)
+            assertEquals(1, startCalls, "Expected exactly 1 recovery StartCascade call")
+            assertTrue(freshId in sentToIds)
+            assertEquals(freshId, coordinator.chatState.value.activeCascadeId)
+            assertEquals(2, coordinator.chatState.value.stepsByCascadeId[freshId]?.size)
+            assertTrue(coordinator.syncState.value.summaries.any { it.cascadeId == freshId })
+            assertNull(coordinator.chatState.value.stepLoadErrorText)
+            coordinator.close()
+        }
+    }
+
+    @Test
+    fun testSendMessageOnMultiTurnConversationDoesNotForkOnNotFoundAndSupportsCleanRetry() = runTest {
+        withContext(Dispatchers.Default) {
+            val existingId = "v1/multi-turn-chat"
+            var startCalls = 0
+            var failSend = true
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/StartCascade") -> {
+                        startCalls += 1
+                        respond("""{"cascadeId":"v1/should-not-fork"}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    }
+                    path.endsWith("/SendUserCascadeMessage") -> {
+                        if (failSend) {
+                            respond(
+                                content = """{"code":"not_found","message":"session not found"}""",
+                                status = HttpStatusCode.NotFound,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                            )
+                        } else {
+                            respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                        }
+                    }
+                    path.endsWith("/LoadTrajectory") -> respond(
+                        content = """{"code":"not_found","message":"session not found"}""",
+                        status = HttpStatusCode.NotFound,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                    else -> respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = InMemoryPreferencesStore(),
+                projectionStorage = InMemoryProjectionStorage(),
+                autoPreloadConversations = false,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+            coordinator.connectDirectLan(
+                endpointUrlString = "http://127.0.0.1:18992",
+                csrfToken = "csrf-ok",
+                hostName = "Test Mac",
+                startSummaryStream = false,
+            )
+            coordinator.conversationSyncStore.upsertSummary(
+                CascadeSummary(
+                    cascadeId = existingId,
+                    title = "Multi-turn thread",
+                    projectSlug = "slardar_app_ai",
+                    workspaceUri = "cloud://slardar_app_ai",
+                    status = CortexStepStatus.DONE,
+                    stepCount = 2,
+                    isCloud = true,
+                ),
+            )
+            coordinator.chatStore.seedFixtureSteps(
+                stepsByCascade = mapOf(
+                    existingId to listOf(
+                        CascadeStep(cascadeId = existingId, stepIndex = 0, type = CortexStepType.USER_INPUT, status = CortexStepStatus.DONE, userInput = "Hi"),
+                        CascadeStep(cascadeId = existingId, stepIndex = 1, type = CortexStepType.PLANNER_RESPONSE, status = CortexStepStatus.DONE),
+                    ),
+                ),
+                questions = emptyList(),
+            )
+            coordinator.chatStore.setActiveCascade(existingId)
+
+            val firstOutcome = coordinator.sendMessage(
+                cascadeId = existingId,
+                message = "Follow up question",
+                workspaceUri = "cloud://slardar_app_ai",
+                isCloud = true,
+            )
+            assertFalse(firstOutcome.dispatchedLive)
+            assertFalse(firstOutcome.queuedInOutbox)
+            assertEquals(0, startCalls, "Must NOT silently fork a multi-turn conversation via StartCascade")
+            val errBanner = coordinator.chatState.value.stepLoadErrorText.orEmpty()
+            assertTrue(errBanner.contains("This conversation was not found on this host"), "Unexpected banner: $errBanner")
+            assertFalse(errBanner.contains("HTTP 500"), "Must not wrap error in HTTP 500: $errBanner")
+            assertNotNull(coordinator.chatState.value.lastFailedSendByCascadeId[existingId])
+
+            // Retry once backend accepts send: error clears and user bubble is NOT duplicated
+            failSend = false
+            val retryOutcome = coordinator.retryLastFailedMessage(existingId)
+            assertNotNull(retryOutcome)
+            assertTrue(retryOutcome.dispatchedLive)
+            assertNull(coordinator.chatState.value.stepLoadErrorText)
+            assertNull(coordinator.chatState.value.lastFailedSendByCascadeId[existingId])
+            val steps = coordinator.chatState.value.stepsByCascadeId[existingId].orEmpty()
+            assertEquals(1, steps.count { it.userInput == "Follow up question" }, "Retry must not duplicate failed user bubble")
+            coordinator.close()
+        }
+    }
+
+    @Test
+    fun testCreateLocalDraftConversationPreservesCloudAndProjectMetadata() {
+        val coordinator = AntigravityCoreCoordinator(
+            preferencesStore = InMemoryPreferencesStore(),
+            projectionStorage = InMemoryProjectionStorage(),
+            autoPreloadConversations = false,
+        )
+        coordinator.workspaceStore.seedFixture(
+            projects = listOf(
+                ProjectWorkspace(
+                    id = "slardar_app_ai",
+                    name = "slardar_app_ai",
+                    pathDisplay = "Antigravity Cloud",
+                    workspaceUri = "cloud://slardar_app_ai",
+                    runtime = ProjectRuntimeTarget.CLOUD,
+                    hostName = "Antigravity",
+                    activeBranch = "feat/support_slardar_pc",
+                    cloudProjectId = "cp-slardar",
+                ),
+            ),
+            automations = emptyList(),
+            availableRepos = emptyList(),
+            contextCandidates = emptyList(),
+        )
+        val draftId = coordinator.createLocalDraftConversation(
+            projectSlug = "slardar_app_ai",
+            title = "介绍下这个仓库",
+        )
+        val summary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == draftId }
+        assertNotNull(summary)
+        assertTrue(summary.isCloud)
+        assertEquals("cp-slardar", summary.cloudProjectId)
+        assertEquals("Antigravity", summary.originHostName)
+        assertEquals("feat/support_slardar_pc", summary.branchName)
+        coordinator.close()
     }
 }

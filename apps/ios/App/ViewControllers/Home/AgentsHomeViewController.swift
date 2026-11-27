@@ -777,7 +777,8 @@ public struct AgentsHomeViewController: View {
                         slug,
                         title: cleanTitle.isEmpty ? fallbackTitle : cleanTitle,
                         initialPrompt: promptText,
-                        initialAttachments: attachments
+                        initialAttachments: attachments,
+                        isCloudOverride: isCloudTargetSelected
                     )
                 }
             )

@@ -276,6 +276,7 @@ public class AntigravityKmpRpcClient(
     private var cachedValidUpstreamModels: Set<String>? = null
     private var cachedDefaultUpstreamModel: String? = null
     private val wokenInstanceCascadeKeys = mutableSetOf<String>()
+    private val pinnedInstanceByCascadeId = linkedMapOf<String, String>()
     private val capabilityProfilesByHost = linkedMapOf<String, HostCapabilityProfile>()
 
     private enum class CloudTrajectoryBackendField(val jsonKey: String?) {
@@ -285,6 +286,46 @@ public class AntigravityKmpRpcClient(
     }
 
     private val preferredCloudBackendFieldByHostAndMethod = linkedMapOf<String, CloudTrajectoryBackendField>()
+
+    private suspend fun recordPinnedInstanceForCascade(cascadeId: String, instanceUuid: String?) {
+        val cid = cascadeId.trim()
+        val uuid = instanceUuid?.trim().orEmpty()
+        if (cid.isEmpty() || uuid.isEmpty()) return
+        stateMutex.withLock {
+            pinnedInstanceByCascadeId[cid] = uuid
+            if (pinnedInstanceByCascadeId.size > 256) {
+                val oldest = pinnedInstanceByCascadeId.keys.firstOrNull()
+                if (oldest != null) pinnedInstanceByCascadeId.remove(oldest)
+            }
+        }
+    }
+
+    private suspend fun pinnedInstanceForCascade(cascadeId: String): String? {
+        val cid = cascadeId.trim()
+        if (cid.isEmpty()) return null
+        return stateMutex.withLock {
+            val pinned = pinnedInstanceByCascadeId[cid]?.takeIf { it.isNotBlank() } ?: return@withLock null
+            if (cachedRelayInstances.isEmpty() || cachedRelayInstances.any { it.uuid == pinned && it.status.isReachable }) {
+                pinned
+            } else {
+                null
+            }
+        }
+    }
+
+    private fun extractServerCascadeId(res: JsonObject): String? {
+        val directKeys = listOf("cascadeId", "conversationId", "trajectoryId")
+        for (key in directKeys) {
+            (res[key] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        for (nestedKey in listOf("cascade", "conversation", "trajectory")) {
+            val nested = res[nestedKey] as? JsonObject ?: continue
+            for (key in directKeys) {
+                (nested[key] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+            }
+        }
+        return null
+    }
 
     @kotlin.concurrent.Volatile
     private var handshakeStartMs: Long = currentTimeMillis()
@@ -1369,7 +1410,7 @@ public class AntigravityKmpRpcClient(
             body
         }
 
-        for (attempt in 1..4) {
+        for (attempt in 1..8) {
             val bodyBytes = workingBody.toString().encodeToByteArray()
             val response = httpClient.post(url) {
                 header("Connect-Protocol-Version", "1")
@@ -1398,7 +1439,7 @@ public class AntigravityKmpRpcClient(
             }
             if (statusCode !in 200..299) {
                 val errText = rawBytes.decodeToString()
-                if (allowStripUnknownFields && statusCode == 400 && attempt < 4) {
+                if (allowStripUnknownFields && statusCode == 400 && attempt < 8) {
                     val healed = attemptSelfHealingDowngrade(errText, method, workingBody, instanceUuidOverride)
                     if (healed != null) {
                         workingBody = healed
@@ -1447,11 +1488,12 @@ public class AntigravityKmpRpcClient(
         } else {
             sanitized
         }
+        val requestCascadeId = (body["cascadeId"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
 
-        for (attempt in 1..4) {
+        for (attempt in 1..8) {
             val encodedPayload = workingBody.toString().encodeToByteArray()
-            val (rawRespBytes, respHeaders) = try {
-                callCloudRelayProxyCommand(
+            val (decodedProxy, actualTargetUuid) = try {
+                callCloudRelayProxyCommandWithTarget(
                     method = method,
                     payload = encodedPayload,
                     contentType = "application/json",
@@ -1462,7 +1504,7 @@ public class AntigravityKmpRpcClient(
             } catch (err: Throwable) {
                 if (err is AntigravityRpcError.HttpError &&
                     allowStripUnknownFields &&
-                    attempt < 4 &&
+                    attempt < 8 &&
                     (err.statusCode == 400 ||
                         ProtocolCompatibilityEngine.extractUnknownProtoFieldName(err.body) != null ||
                         ProtocolCompatibilityEngine.extractInvalidEnumValue(err.body) != null)
@@ -1480,9 +1522,14 @@ public class AntigravityKmpRpcClient(
                 }
                 throw err
             }
+            val rawRespBytes = decodedProxy.payload
+            val respHeaders = decodedProxy.headers
             val respData = unwrapConnectFramedPayloadIfNeeded(rawRespBytes)
             if (respData.isEmpty()) {
-                observeResponseMetadata(respHeaders, null, method, instanceUuidOverride)
+                observeResponseMetadata(respHeaders, null, method, actualTargetUuid)
+                if (requestCascadeId.isNotEmpty() && method != "StartCascade") {
+                    recordPinnedInstanceForCascade(requestCascadeId, actualTargetUuid)
+                }
                 return JsonObject(emptyMap())
             }
 
@@ -1493,8 +1540,8 @@ public class AntigravityKmpRpcClient(
                 val message = (decoded["message"] as? JsonPrimitive)?.contentOrNull
                 if (code != null && message != null && decoded.size <= 3) {
                     val combinedError = "$code: $message"
-                    if (allowStripUnknownFields && attempt < 4) {
-                        val healed = attemptSelfHealingDowngrade(combinedError, method, workingBody, instanceUuidOverride)
+                    if (allowStripUnknownFields && attempt < 8) {
+                        val healed = attemptSelfHealingDowngrade(combinedError, method, workingBody, actualTargetUuid)
                         if (healed != null) {
                             workingBody = healed
                             continue
@@ -1506,15 +1553,23 @@ public class AntigravityKmpRpcClient(
                         else -> 400
                     }
                     if (statusCode == 501 && HostCapability.shouldNegativeCacheOnUnimplemented(method)) {
-                        mutateCapabilityProfile(instanceUuidOverride) { it.recordMethodUnsupported(method) }
+                        mutateCapabilityProfile(actualTargetUuid) { it.recordMethodUnsupported(method) }
                     }
                     throw AntigravityRpcError.HttpError(statusCode, combinedError)
                 }
-                observeResponseMetadata(respHeaders, decoded, method, instanceUuidOverride)
+                observeResponseMetadata(respHeaders, decoded, method, actualTargetUuid)
+                val pinCascadeId = if (method == "StartCascade") {
+                    extractServerCascadeId(decoded).orEmpty()
+                } else {
+                    requestCascadeId
+                }
+                if (pinCascadeId.isNotEmpty()) {
+                    recordPinnedInstanceForCascade(pinCascadeId, actualTargetUuid)
+                }
                 return decoded
             }
-            if (allowStripUnknownFields && attempt < 4) {
-                val healed = attemptSelfHealingDowngrade(respText, method, workingBody, instanceUuidOverride)
+            if (allowStripUnknownFields && attempt < 8) {
+                val healed = attemptSelfHealingDowngrade(respText, method, workingBody, actualTargetUuid)
                 if (healed != null) {
                     workingBody = healed
                     continue
@@ -1522,7 +1577,7 @@ public class AntigravityKmpRpcClient(
             }
             if (ProtocolCompatibilityEngine.isMethodUnimplementedResponse(400, respText)) {
                 if (HostCapability.shouldNegativeCacheOnUnimplemented(method)) {
-                    mutateCapabilityProfile(instanceUuidOverride) { it.recordMethodUnsupported(method) }
+                    mutateCapabilityProfile(actualTargetUuid) { it.recordMethodUnsupported(method) }
                 }
                 throw AntigravityRpcError.HttpError(501, respText)
             }
@@ -1570,7 +1625,25 @@ public class AntigravityKmpRpcClient(
         allowCrossHostFailover: Boolean = false,
         perCallTimeoutMs: Long? = null,
         ignoreCachedOfflineStatus: Boolean = false,
-    ): DecodedProxyCommandResponse {
+    ): DecodedProxyCommandResponse = callCloudRelayProxyCommandWithTarget(
+        method = method,
+        payload = payload,
+        contentType = contentType,
+        instanceUuidOverride = instanceUuidOverride,
+        allowCrossHostFailover = allowCrossHostFailover,
+        perCallTimeoutMs = perCallTimeoutMs,
+        ignoreCachedOfflineStatus = ignoreCachedOfflineStatus,
+    ).first
+
+    private suspend fun callCloudRelayProxyCommandWithTarget(
+        method: String,
+        payload: ByteArray,
+        contentType: String,
+        instanceUuidOverride: String? = null,
+        allowCrossHostFailover: Boolean = false,
+        perCallTimeoutMs: Long? = null,
+        ignoreCachedOfflineStatus: Boolean = false,
+    ): Pair<DecodedProxyCommandResponse, String> {
         val needsResolve = !ignoreCachedOfflineStatus && stateMutex.withLock { instanceUuidOverride == null && resolvedInstanceUuidState == null }
         if (needsResolve) {
             resolveCloudRelayInstance(allowCrossHostFallback = allowCrossHostFailover)
@@ -1594,7 +1667,7 @@ public class AntigravityKmpRpcClient(
         val url = "$relayOrigin${SapisidHashGenerator.API_SERVICE_PREFIX}/ProxyCommand?\$unique=$method"
         val effectiveTimeoutMs = perCallTimeoutMs ?: 12_000L
 
-        suspend fun sendOnce(targetUuid: String, authUserOverride: String? = null): DecodedProxyCommandResponse {
+        suspend fun sendOnce(targetUuid: String, authUserOverride: String? = null): Pair<DecodedProxyCommandResponse, String> {
             val activeAuth = authUserOverride ?: currentAuthUser()
 
             suspend fun postWithKey(apiKey: String?, timeoutMs: Long = effectiveTimeoutMs): Pair<HttpResponse, ByteArray> {
@@ -1682,13 +1755,14 @@ public class AntigravityKmpRpcClient(
                 )
             }
             if (code !in 200..299) throw AntigravityRpcError.HttpError(code, unwrapErrorBodyText(rawBytes, respHeaders))
-            return CloudRelayJspbCodec.decodeProxyCommandResponse(rawBytes, respHeaders)
+            return CloudRelayJspbCodec.decodeProxyCommandResponse(rawBytes, respHeaders) to targetUuid
         }
 
         return try {
             sendOnce(initialTargetUuid)
         } catch (e: AntigravityRpcError.Unauthorized) {
-            if (perCallTimeoutMs != null || ignoreCachedOfflineStatus) throw e
+            val isShortBoundedProbe = perCallTimeoutMs != null && perCallTimeoutMs <= 10_000L
+            if (isShortBoundedProbe || ignoreCachedOfflineStatus) throw e
             val prevAuth = currentAuthUser()
             val resolved = runCatching {
                 withSafeTimeoutOrNull(6_000L) {
@@ -1712,7 +1786,8 @@ public class AntigravityKmpRpcClient(
                 markRelayInstancesDisconnected(setOf(initialTargetUuid))
             }
             if (ignoreCachedOfflineStatus) throw e
-            if (perCallTimeoutMs != null && !isInstanceUnregistered) throw e
+            val isShortBoundedProbe = perCallTimeoutMs != null && perCallTimeoutMs <= 10_000L
+            if (isShortBoundedProbe && !isInstanceUnregistered) throw e
             val isHttp404 = e is AntigravityRpcError.HttpError && e.statusCode == 404
             val isTrajectoryNotFound = ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)
             val shouldFailover = !isTrajectoryNotFound && (
@@ -1782,13 +1857,15 @@ public class AntigravityKmpRpcClient(
             "StartCascade" -> buildJsonObject {
                 put("metadata", desktopMetadata)
                 put("source", "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT")
-                (body["cascadeId"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { put("cascadeId", it) }
                 (body["backend"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { put("backend", it) }
+                (body["backendType"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { put("backendType", it) }
                 body["projectEnvConfig"]?.let { put("projectEnvConfig", it) }
                     ?: body["workspaceUris"]?.let { put("workspaceUris", it) }
             }
             "SendUserCascadeMessage" -> buildJsonObject {
                 put("cascadeId", body["cascadeId"] ?: JsonPrimitive(""))
+                (body["backend"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { put("backend", it) }
+                (body["backendType"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { put("backendType", it) }
                 val rawItems = (body["items"] as? JsonArray) ?: buildJsonArray {
                     val fallbackText = (body["userResponse"] as? JsonPrimitive)?.contentOrNull
                     if (!fallbackText.isNullOrEmpty()) add(buildJsonObject { put("text", fallbackText) })
@@ -2714,8 +2791,13 @@ public class AntigravityKmpRpcClient(
         instanceUuidOverride: String? = null,
     ): List<CascadeStep> {
         val isRemoteCloud = isRemoteCloudCascade(cascadeId, isCloud)
+        val pinnedTarget = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            pinnedInstanceForCascade(cascadeId)
+        } else {
+            null
+        }
         val primaryTarget = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
-            selectReachableRelayUuid(instanceUuidOverride, allowCrossHostFailover = isRemoteCloud)
+            selectReachableRelayUuid(pinnedTarget ?: instanceUuidOverride, allowCrossHostFailover = isRemoteCloud)
         } else {
             instanceUuidOverride
         }
@@ -2724,7 +2806,10 @@ public class AntigravityKmpRpcClient(
         if (channel != RemoteConnectionChannel.CLOUD_RELAY || primaryTarget != null) {
             try {
                 val steps = fetchStepsFromSingleInstance(cascadeId, knownStepCount, isRemoteCloud, primaryTarget)
-                if (steps.isNotEmpty()) return steps
+                if (steps.isNotEmpty()) {
+                    recordPinnedInstanceForCascade(cascadeId, primaryTarget)
+                    return steps
+                }
             } catch (e: AntigravityRpcError.Unauthorized) {
                 throw e
             } catch (e: CancellationException) {
@@ -2752,6 +2837,7 @@ public class AntigravityKmpRpcClient(
                     try {
                         val peerSteps = fetchStepsFromSingleInstance(cascadeId, knownStepCount, isRemoteCloud, peer.uuid)
                         if (peerSteps.isNotEmpty()) {
+                            recordPinnedInstanceForCascade(cascadeId, peer.uuid)
                             if (instanceUuidOverride == null && !isRemoteCloud) {
                                 stateMutex.withLock { resolvedInstanceUuidState = peer.uuid }
                             }
@@ -3505,21 +3591,25 @@ public class AntigravityKmpRpcClient(
     ): String {
         val protoModel = JsonStepAndSummaryDecoder.normalizeProtoModelEnum(modelId)
         val clientCid = randomUuidV4()
-        val body = buildJsonObject {
-            put("cascadeId", clientCid)
+        val isCloudRequest = isCloud || !cloudProjectId.isNullOrEmpty()
+
+        fun buildStartBody(cloudField: CloudTrajectoryBackendField?): JsonObject = buildJsonObject {
+            if (channel != RemoteConnectionChannel.CLOUD_RELAY) {
+                put("cascadeId", clientCid)
+            }
             put("metadata", buildJsonObject {
                 put("ideName", "antigravity-kmp")
                 put("ideVersion", "2.33.0")
             })
             put("modelId", protoModel)
             if (!cloudProjectId.isNullOrEmpty()) {
-                put("backend", "BACKEND_TYPE_REMOTE_AICODE")
+                cloudField?.jsonKey?.let { put(it, "BACKEND_TYPE_REMOTE_AICODE") }
                 put("projectEnvConfig", buildJsonObject {
                     put("projectId", cloudProjectId)
                     put("defaultProjectEnvironment", JsonObject(emptyMap()))
                 })
             } else if (isCloud) {
-                put("backend", "BACKEND_TYPE_REMOTE_AICODE")
+                cloudField?.jsonKey?.let { put(it, "BACKEND_TYPE_REMOTE_AICODE") }
             } else if (workspaceUri.isNotEmpty() && !AntigravityCloudDetector.isGenericContainerUri(workspaceUri)) {
                 put("workspaceUris", buildJsonArray { add(JsonPrimitive(workspaceUri)) })
             }
@@ -3527,13 +3617,74 @@ public class AntigravityKmpRpcClient(
                 put("initialUserInput", initialPrompt)
             }
         }
-        val res = callUnaryJson(
-            method = "StartCascade",
-            body = body,
-            instanceUuidOverride = instanceUuidOverride,
-            allowCrossHostFailover = isCloud || !cloudProjectId.isNullOrEmpty(),
-        )
-        return (res["cascadeId"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: clientCid
+
+        val candidates: List<CloudTrajectoryBackendField?> = if (isCloudRequest) {
+            orderedCloudBackendFields("StartCascade", instanceUuidOverride)
+        } else {
+            listOf(null)
+        }
+
+        var lastError: Throwable? = null
+        var res: JsonObject? = null
+        for (variant in candidates) {
+            try {
+                res = callUnaryJson(
+                    method = "StartCascade",
+                    body = buildStartBody(variant),
+                    instanceUuidOverride = instanceUuidOverride,
+                    allowCrossHostFailover = isCloudRequest,
+                    allowStripUnknownFields = !isCloudRequest || variant == null || variant == CloudTrajectoryBackendField.NONE,
+                    perCallTimeoutMs = 45_000L,
+                )
+                if (variant != null) {
+                    recordPreferredCloudBackendField("StartCascade", instanceUuidOverride, variant)
+                }
+                break
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AntigravityRpcError.HttpError) {
+                lastError = e
+                val unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body)
+                if (unknownField != null) {
+                    mutateCapabilityProfile(instanceUuidOverride) { p ->
+                        p.recordStrippedField(unknownField, forMethod = "StartCascade")
+                    }
+                    // If the unknown field is `backend` or `backendType`, let the outer loop try the
+                    // alternate Cloud backend field (`backendType` / bare). If it's another field such as
+                    // `projectEnvConfig`, retry immediately with self-healing enabled on the same variant.
+                    val isBackendKey = unknownField.equals("backend", ignoreCase = true) ||
+                        unknownField.equals("backendType", ignoreCase = true)
+                    if (isBackendKey && variant != null && variant != CloudTrajectoryBackendField.NONE) {
+                        continue
+                    }
+                    if (!isBackendKey && isCloudRequest && variant != null && variant != CloudTrajectoryBackendField.NONE) {
+                        res = callUnaryJson(
+                            method = "StartCascade",
+                            body = buildStartBody(variant),
+                            instanceUuidOverride = instanceUuidOverride,
+                            allowCrossHostFailover = true,
+                            allowStripUnknownFields = true,
+                            perCallTimeoutMs = 45_000L,
+                        )
+                        recordPreferredCloudBackendField("StartCascade", instanceUuidOverride, variant)
+                        break
+                    }
+                }
+                throw e
+            }
+        }
+
+        val responseObj = res ?: throw (lastError ?: AntigravityRpcError.HttpError(502, "StartCascade failed"))
+        val returnedId = extractServerCascadeId(responseObj)
+        if (!returnedId.isNullOrEmpty()) {
+            return returnedId
+        }
+        if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            throw AntigravityRpcError.HttpError(502, "StartCascade did not return a conversation ID")
+        }
+        return clientCid
     }
 
     public suspend fun sendUserCascadeMessage(
@@ -3549,7 +3700,7 @@ public class AntigravityKmpRpcClient(
         instanceUuidOverride: String? = null,
         isModelAlias: Boolean = false,
     ) {
-        val isRemoteCloud = isCloud || cascadeId.startsWith("v1/")
+        val isRemoteCloud = isRemoteCloudCascade(cascadeId, isCloud)
         val protoModel = JsonStepAndSummaryDecoder.normalizeProtoModelEnum(modelId)
         val effectivePermission = permissionPreset?.takeIf { it != AgentPermissionPreset.INHERIT_GLOBAL }
             ?: AgentPermissionPreset.defaultPreset(isRemote = isRemoteCloud)
@@ -3672,7 +3823,7 @@ public class AntigravityKmpRpcClient(
             }
         }
 
-        val body = buildJsonObject {
+        val baseBody = buildJsonObject {
             put("cascadeId", cascadeId)
             put("items", items)
             if (mediaEntries.isNotEmpty()) {
@@ -3693,18 +3844,197 @@ public class AntigravityKmpRpcClient(
             })
         }
 
-        callUnaryJson(
-            method = "SendUserCascadeMessage",
-            body = body,
-            instanceUuidOverride = instanceUuidOverride,
+        suspend fun sendToSingleInstance(
+            targetUuid: String?,
+            allowCrossHostFailover: Boolean,
+        ) {
+            try {
+                callUnaryJson(
+                    method = "SendUserCascadeMessage",
+                    body = baseBody,
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = allowCrossHostFailover,
+                    perCallTimeoutMs = 60_000L,
+                )
+                return
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (!ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
+                    throw e
+                }
+                // Wake dormant disk/remote trajectory into language_server memory before retrying SendUserCascadeMessage.
+                try {
+                    loadTrajectory(cascadeId, isCloud = isRemoteCloud, instanceUuidOverride = targetUuid)
+                } catch (wakeErr: AntigravityRpcError.Unauthorized) {
+                    throw wakeErr
+                } catch (wakeErr: CancellationException) {
+                    throw wakeErr
+                } catch (_: Throwable) {
+                    // Best-effort wake; still retry SendUserCascadeMessage (and Cloud backend variants below).
+                }
+
+                var retryError: Throwable? = null
+                try {
+                    callUnaryJson(
+                        method = "SendUserCascadeMessage",
+                        body = baseBody,
+                        instanceUuidOverride = targetUuid,
+                        allowCrossHostFailover = allowCrossHostFailover,
+                        perCallTimeoutMs = 60_000L,
+                    )
+                    return
+                } catch (re: AntigravityRpcError.Unauthorized) {
+                    throw re
+                } catch (re: CancellationException) {
+                    throw re
+                } catch (re: Throwable) {
+                    if (!ProtocolCompatibilityEngine.isTrajectoryNotFoundError(re)) {
+                        throw re
+                    }
+                    retryError = re
+                }
+
+                // For Cloud cascades that still return `not_found` after LoadTrajectory, try explicit
+                // `backend` / `backendType` routing hints if the host supports them.
+                if (isRemoteCloud) {
+                    val cloudVariants = orderedCloudBackendFields("SendUserCascadeMessage", targetUuid)
+                        .filter { it.jsonKey != null }
+                    for (variant in cloudVariants) {
+                        val key = variant.jsonKey ?: continue
+                        val taggedBody = JsonObject(baseBody.toMutableMap().apply {
+                            put(key, JsonPrimitive("BACKEND_TYPE_REMOTE_AICODE"))
+                        })
+                        try {
+                            callUnaryJson(
+                                method = "SendUserCascadeMessage",
+                                body = taggedBody,
+                                instanceUuidOverride = targetUuid,
+                                allowCrossHostFailover = allowCrossHostFailover,
+                                allowStripUnknownFields = false,
+                                perCallTimeoutMs = 60_000L,
+                            )
+                            recordPreferredCloudBackendField("SendUserCascadeMessage", targetUuid, variant)
+                            return
+                        } catch (ve: AntigravityRpcError.Unauthorized) {
+                            throw ve
+                        } catch (ve: CancellationException) {
+                            throw ve
+                        } catch (ve: AntigravityRpcError.HttpError) {
+                            val unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(ve.body)
+                            if (unknownField != null) {
+                                mutateCapabilityProfile(targetUuid) { p ->
+                                    p.recordStrippedField(unknownField, forMethod = "SendUserCascadeMessage")
+                                }
+                            }
+                            if (unknownField != null || ve.statusCode == 400 || ProtocolCompatibilityEngine.isTrajectoryNotFoundError(ve)) {
+                                continue
+                            }
+                            throw ve
+                        }
+                    }
+                }
+                throw retryError ?: e
+            }
+        }
+
+        if (channel != RemoteConnectionChannel.CLOUD_RELAY) {
+            sendToSingleInstance(instanceUuidOverride, allowCrossHostFailover = false)
+            return
+        }
+
+        val pinnedTarget = pinnedInstanceForCascade(cascadeId)
+        val primaryTarget = selectReachableRelayUuid(
+            preferred = pinnedTarget ?: instanceUuidOverride,
             allowCrossHostFailover = isRemoteCloud,
         )
+        var primaryError: Throwable? = null
+        if (primaryTarget != null) {
+            try {
+                sendToSingleInstance(primaryTarget, allowCrossHostFailover = isRemoteCloud)
+                return
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (!ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
+                    throw e
+                }
+                primaryError = e
+            }
+        } else {
+            // Let `sendToSingleInstance` surface the standard offline / failover error when no cached target is online.
+            sendToSingleInstance(instanceUuidOverride, allowCrossHostFailover = isRemoteCloud)
+            return
+        }
+
+        // Primary instance confirmed `not_found` (never executed the turn). Probe reachable peer
+        // instances — all reachable peers for Cloud cascades, or same-host-family peers (e.g. another
+        // Antigravity window / restarted language_server on the same machine) for local cascades.
+        val probedUuids = mutableSetOf(primaryTarget)
+
+        suspend fun probePeers(instances: List<RelayInstanceInfo>): Boolean {
+            val seedUuid = primaryTarget.ifEmpty { instanceUuidOverride ?: currentResolvedInstanceUuid().orEmpty() }
+            val familySeed = instances.firstOrNull { it.uuid == seedUuid }?.name.orEmpty()
+            val peers = instances.filter { inst ->
+                inst.status.isReachable && inst.uuid !in probedUuids &&
+                    (isRemoteCloud || (familySeed.isNotEmpty() && inst.sameHostFamily(familySeed)))
+            }
+            for (peer in peers) {
+                probedUuids.add(peer.uuid)
+                try {
+                    sendToSingleInstance(peer.uuid, allowCrossHostFailover = false)
+                    recordPinnedInstanceForCascade(cascadeId, peer.uuid)
+                    if (instanceUuidOverride == null && !isRemoteCloud) {
+                        stateMutex.withLock { resolvedInstanceUuidState = peer.uuid }
+                    }
+                    return true
+                } catch (e: AntigravityRpcError.Unauthorized) {
+                    throw e
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    if (!ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
+                        throw e
+                    }
+                }
+            }
+            return false
+        }
+
+        val cachedInstances = currentCachedRelayInstances()
+        if (cachedInstances.isNotEmpty() && probePeers(cachedInstances)) {
+            return
+        }
+
+        val refreshed = runCatching {
+            withSafeTimeoutOrNull(4_000L) { listRelayInstances(timeoutMs = 3_500L) }
+        }.getOrNull().orEmpty()
+        if (refreshed.isNotEmpty()) {
+            stateMutex.withLock {
+                cachedRelayInstances = refreshed
+                recordRelayInstanceVersionsLocked(refreshed)
+            }
+            if (probePeers(refreshed)) {
+                return
+            }
+        }
+
+        throw primaryError
     }
 
     public suspend fun handleCascadeUserInteraction(
         payload: CascadeUserInteractionPayload,
         instanceUuidOverride: String? = null,
     ) {
+        val effectiveInstanceUuid = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            pinnedInstanceForCascade(payload.cascadeId) ?: instanceUuidOverride
+        } else {
+            instanceUuidOverride
+        }
         val rc = payload.runCommand
         val perm = payload.permission
         val fp = payload.filePermission
@@ -3764,7 +4094,7 @@ public class AntigravityKmpRpcClient(
             callUnaryJson(
                 method = "HandleCascadeUserInteraction",
                 body = buildJsonObject { put("interaction", interactionObj) },
-                instanceUuidOverride = instanceUuidOverride,
+                instanceUuidOverride = effectiveInstanceUuid,
             )
         } catch (e: AntigravityRpcError.HttpError) {
             val lowerBody = e.body.lowercase()
@@ -3812,7 +4142,7 @@ public class AntigravityKmpRpcClient(
             callUnaryJson(
                 method = "HandleCascadeUserInteraction",
                 body = buildJsonObject { put("interaction", fallbackObj) },
-                instanceUuidOverride = instanceUuidOverride,
+                instanceUuidOverride = effectiveInstanceUuid,
             )
         }
     }
@@ -3821,10 +4151,15 @@ public class AntigravityKmpRpcClient(
         cascadeId: String,
         instanceUuidOverride: String? = null,
     ) {
+        val effectiveInstanceUuid = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            pinnedInstanceForCascade(cascadeId) ?: instanceUuidOverride
+        } else {
+            instanceUuidOverride
+        }
         callUnaryJson(
             method = "CancelCascadeInvocation",
             body = buildJsonObject { put("cascadeId", cascadeId) },
-            instanceUuidOverride = instanceUuidOverride,
+            instanceUuidOverride = effectiveInstanceUuid,
         )
     }
 

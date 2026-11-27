@@ -532,10 +532,15 @@ public enum ProtocolCompatibilityEngine: Sendable {
     /// as opposed to an unimplemented RPC method or an offline host.
     public static func isTrajectoryNotFoundResponse(statusCode: Int, body: String) -> Bool {
         let lower = body.lowercased()
+        let isAuthSessionError = lower.contains("google sign-in session")
+            || lower.contains("auth session")
+            || lower.contains("login session")
         if lower.contains("trajectory not found")
             || lower.contains("cascade not found")
             || lower.contains("conversation not found")
-            || lower.contains("unknown cascade") {
+            || lower.contains("unknown cascade")
+            || (lower.contains("agent state") && lower.contains("not found"))
+            || (!isAuthSessionError && lower.contains("session not found")) {
             return true
         }
         return statusCode == 404
@@ -661,11 +666,21 @@ public enum ProtocolCompatibilityEngine: Sendable {
         return cleaned
     }
 
+    private static func isAlreadyFormattedUserFacingMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("Antigravity Desktop is offline")
+            || trimmed.hasPrefix("Conversation history could not be found on this host")
+            || trimmed.hasPrefix("This conversation was not found on this host")
+    }
+
     /// Formats an RPC/transport failure cleanly for UI presentation (never doubling `HTTP 404: HTTP 404:`
     /// or leaking raw Boq JSON-array brackets like `[5,"not_found: ..."]`).
     public static func formatUserFacingRpcError(_ error: Error) -> String {
         if case let AntigravityRPCError.httpError(code, body) = error {
             let detail = unwrapErrorDetail(from: body, statusCode: code)
+            if isAlreadyFormattedUserFacingMessage(detail) {
+                return detail
+            }
             if isInstanceNotRegisteredResponse(statusCode: code, body: body) {
                 return "Antigravity Desktop is offline or unregistered on Cloud Relay. Ensure Antigravity Desktop is open with Remote Control enabled."
             }
@@ -674,6 +689,28 @@ public enum ProtocolCompatibilityEngine: Sendable {
                     return "Conversation history could not be found on this host (\(detail)). Try Retry or open it once on Antigravity Desktop."
                 }
                 return "Conversation history could not be found on this host. Try Retry or open it once on Antigravity Desktop."
+            }
+            return detail.isEmpty ? "HTTP \(code)" : "HTTP \(code): \(detail)"
+        }
+        return error.localizedDescription
+    }
+
+    /// Formats a message-send failure cleanly for UI presentation without conflating send failures
+    /// with history-loading errors or double-wrapping already formatted errors.
+    public static func formatUserFacingSendError(_ error: Error) -> String {
+        if case let AntigravityRPCError.httpError(code, body) = error {
+            let detail = unwrapErrorDetail(from: body, statusCode: code)
+            if isAlreadyFormattedUserFacingMessage(detail) {
+                return detail
+            }
+            if isInstanceNotRegisteredResponse(statusCode: code, body: body) {
+                return "Antigravity Desktop is offline or unregistered on Cloud Relay. Ensure Antigravity Desktop is open with Remote Control enabled."
+            }
+            if isTrajectoryNotFoundResponse(statusCode: code, body: body) {
+                if !detail.isEmpty {
+                    return "This conversation was not found on this host (\(detail)). Tap Retry or start a new chat."
+                }
+                return "This conversation was not found on this host. Tap Retry or start a new chat."
             }
             return detail.isEmpty ? "HTTP \(code)" : "HTTP \(code): \(detail)"
         }

@@ -21,14 +21,35 @@ import dev.antigravity.shared.protocol.InteractionBuilder
 import dev.antigravity.shared.protocol.ProtocolCompatibilityEngine
 import dev.antigravity.shared.protocol.currentTimeMillis
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlin.Throws
 import kotlin.random.Random
+
+public data class FailedSendRequest(
+    public val cascadeId: String,
+    public val stepIndex: Int,
+    public val message: String,
+    public val workspaceUri: String = "",
+    public val attachments: List<ComposerAttachmentChip> = emptyList(),
+    public val modelId: String = "MODEL_PLACEHOLDER_M37",
+    public val effort: ThinkingEffortLevel = ThinkingEffortLevel.HIGH,
+    public val mode: CascadeExecutionMode = CascadeExecutionMode.PLANNING,
+    public val agentPersona: String = "Default",
+    public val isCloud: Boolean = false,
+    public val cloudProjectId: String? = null,
+    public val permissionPreset: AgentPermissionPreset? = null,
+    public val instanceUuidOverride: String? = null,
+    public val isOptimisticDraft: Boolean = false,
+    public val isModelAlias: Boolean = false,
+)
 
 public data class CascadeChatState(
     public val activeCascadeId: String = "",
@@ -43,6 +64,7 @@ public data class CascadeChatState(
     public val expandedThinkingStepIds: Set<String> = emptySet(),
     public val expandedEvidenceGroupIds: Set<String> = emptySet(),
     public val draftInputText: String = "",
+    public val lastFailedSendByCascadeId: Map<String, FailedSendRequest> = emptyMap(),
 ) {
     public val activeSteps: List<CascadeStep>
         get() = stepsByCascadeId[activeCascadeId].orEmpty()
@@ -52,6 +74,9 @@ public data class CascadeChatState(
 
     public val activeDisplayItems: List<CascadeDisplayItem>
         get() = displayItemsByCascadeId[activeCascadeId].orEmpty()
+
+    public val activeFailedSend: FailedSendRequest?
+        get() = lastFailedSendByCascadeId[activeCascadeId]
 }
 
 public data class SendMessageOutcome(
@@ -503,6 +528,8 @@ public class CascadeChatDomainStore(
 
         var targetCascadeId = cascadeId.ifBlank { _state.value.activeCascadeId }
         val existingSteps = _state.value.stepsByCascadeId[targetCascadeId].orEmpty()
+        val hasNoPriorServerTurns = existingSteps.isEmpty() ||
+            existingSteps.all { it.type == CortexStepType.USER_INPUT }
         val nextStepIndex = (existingSteps.maxOfOrNull { it.stepIndex } ?: -1) + 1
         val isOfflineVerification = client == null && isVerificationMode
         val optimisticStep = CascadeStep(
@@ -519,7 +546,13 @@ public class CascadeChatDomainStore(
         )
         val updatedSteps = existingSteps + optimisticStep
         putSteps(targetCascadeId, updatedSteps)
-        _state.update { it.copy(draftInputText = "") }
+        _state.update { prev ->
+            prev.copy(
+                draftInputText = "",
+                stepLoadErrorText = if (prev.activeCascadeId == targetCascadeId) null else prev.stepLoadErrorText,
+                lastFailedSendByCascadeId = prev.lastFailedSendByCascadeId - targetCascadeId,
+            )
+        }
         projectionStorage.saveSteps(targetCascadeId, updatedSteps)
 
         if (isOfflineVerification) {
@@ -543,8 +576,10 @@ public class CascadeChatDomainStore(
         projectionStorage.enqueueOutbox(outboxEntry)
         refreshOutboxCount()
 
+        var didCallStartCascade = false
         return try {
             if (targetCascadeId.isEmpty() || isOptimisticDraft) {
+                didCallStartCascade = true
                 val createdId = client.startCascade(
                     workspaceUri = workspaceUri,
                     initialPrompt = "",
@@ -559,28 +594,72 @@ public class CascadeChatDomainStore(
                 }
             }
 
-            client.sendUserCascadeMessage(
-                cascadeId = targetCascadeId,
-                message = effectiveMessage,
-                attachments = attachments,
-                modelId = modelId,
-                effort = effort,
-                mode = mode,
-                agentPersona = agentPersona,
-                isCloud = isCloud,
-                permissionPreset = permissionPreset,
-                instanceUuidOverride = instanceUuidOverride,
-                isModelAlias = isModelAlias,
-            )
+            suspend fun dispatchSend(cid: String) {
+                client.sendUserCascadeMessage(
+                    cascadeId = cid,
+                    message = effectiveMessage,
+                    attachments = attachments,
+                    modelId = modelId,
+                    effort = effort,
+                    mode = mode,
+                    agentPersona = agentPersona,
+                    isCloud = isCloud,
+                    permissionPreset = permissionPreset,
+                    instanceUuidOverride = instanceUuidOverride,
+                    isModelAlias = isModelAlias,
+                )
+            }
+
+            try {
+                dispatchSend(targetCascadeId)
+            } catch (sendErr: CancellationException) {
+                throw sendErr
+            } catch (sendErr: Throwable) {
+                if (!ProtocolCompatibilityEngine.isTrajectoryNotFoundError(sendErr)) {
+                    throw sendErr
+                }
+                if (didCallStartCascade) {
+                    // Brief settle delay in case the newly allocated cascade executor is still registering
+                    delay(350L)
+                    dispatchSend(targetCascadeId)
+                } else if (hasNoPriorServerTurns) {
+                    // Conversation had 0 server-persisted assistant/tool turns (evicted empty draft or prior first-send
+                    // failure): allocate a fresh server cascade transparently and deliver the user's message.
+                    didCallStartCascade = true
+                    val freshId = client.startCascade(
+                        workspaceUri = workspaceUri,
+                        initialPrompt = "",
+                        modelId = modelId,
+                        cloudProjectId = cloudProjectId,
+                        isCloud = isCloud,
+                        instanceUuidOverride = instanceUuidOverride,
+                    )
+                    if (freshId.isNotEmpty() && freshId != targetCascadeId) {
+                        migrateLocalSteps(targetCascadeId, freshId)
+                        targetCascadeId = freshId
+                    }
+                    dispatchSend(targetCascadeId)
+                } else {
+                    throw sendErr
+                }
+            }
 
             projectionStorage.removeOutbox(outboxEntry.id)
             markStepQueued(targetCascadeId, nextStepIndex, queued = false)
             refreshOutboxCount()
+            _state.update { prev ->
+                prev.copy(
+                    stepLoadErrorText = if (prev.activeCascadeId == targetCascadeId) null else prev.stepLoadErrorText,
+                    lastFailedSendByCascadeId = prev.lastFailedSendByCascadeId - targetCascadeId,
+                )
+            }
             SendMessageOutcome(targetCascadeId, dispatchedLive = true, queuedInOutbox = false)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             val isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)
             val isOffline = isTransportOfflineError(e)
-            val formattedError = ProtocolCompatibilityEngine.formatUserFacingRpcError(e)
+            val formattedError = ProtocolCompatibilityEngine.formatUserFacingSendError(e)
             if (isOffline) {
                 markStepQueued(targetCascadeId, nextStepIndex, queued = true)
                 refreshOutboxCount()
@@ -595,7 +674,29 @@ public class CascadeChatDomainStore(
             } else {
                 projectionStorage.removeOutbox(outboxEntry.id)
                 refreshOutboxCount()
-                _state.update { it.copy(stepLoadErrorText = "Failed to send message: $formattedError") }
+                val failedRequest = FailedSendRequest(
+                    cascadeId = targetCascadeId,
+                    stepIndex = nextStepIndex,
+                    message = effectiveMessage,
+                    workspaceUri = workspaceUri,
+                    attachments = attachments,
+                    modelId = modelId,
+                    effort = effort,
+                    mode = mode,
+                    agentPersona = agentPersona,
+                    isCloud = isCloud,
+                    cloudProjectId = cloudProjectId,
+                    permissionPreset = permissionPreset,
+                    instanceUuidOverride = instanceUuidOverride,
+                    isOptimisticDraft = isOptimisticDraft && !didCallStartCascade,
+                    isModelAlias = isModelAlias,
+                )
+                _state.update { prev ->
+                    prev.copy(
+                        stepLoadErrorText = "Failed to send message: $formattedError",
+                        lastFailedSendByCascadeId = prev.lastFailedSendByCascadeId + (targetCascadeId to failedRequest),
+                    )
+                }
                 SendMessageOutcome(
                     resolvedCascadeId = targetCascadeId,
                     dispatchedLive = false,
@@ -605,8 +706,59 @@ public class CascadeChatDomainStore(
                 )
             }
         } finally {
-            outboxMutex.withLock { inFlightOutboxIds.remove(outboxEntry.id) }
+            withContext(NonCancellable) {
+                outboxMutex.withLock { inFlightOutboxIds.remove(outboxEntry.id) }
+            }
         }
+    }
+
+    @Throws(Throwable::class)
+    public suspend fun retryLastFailedSend(
+        client: AntigravityKmpRpcClient?,
+        cascadeId: String,
+        isDeviceNetworkReachable: Boolean = true,
+        isVerificationMode: Boolean = this.isVerificationMode,
+    ): SendMessageOutcome? {
+        val targetCascadeId = cascadeId.ifBlank { _state.value.activeCascadeId }
+        val failed = _state.value.lastFailedSendByCascadeId[targetCascadeId] ?: return null
+        val currentSteps = _state.value.stepsByCascadeId[targetCascadeId].orEmpty()
+        val dedupedSteps = if (currentSteps.lastOrNull()?.let {
+                it.stepIndex == failed.stepIndex &&
+                    it.type == CortexStepType.USER_INPUT &&
+                    it.userInput == failed.message
+            } == true
+        ) {
+            currentSteps.dropLast(1)
+        } else {
+            currentSteps
+        }
+        putSteps(targetCascadeId, dedupedSteps)
+        projectionStorage.saveSteps(targetCascadeId, dedupedSteps)
+        _state.update { prev ->
+            prev.copy(
+                stepLoadErrorText = if (prev.activeCascadeId == targetCascadeId) null else prev.stepLoadErrorText,
+                lastFailedSendByCascadeId = prev.lastFailedSendByCascadeId - targetCascadeId,
+            )
+        }
+        return sendMessage(
+            client = client,
+            cascadeId = targetCascadeId,
+            message = failed.message,
+            workspaceUri = failed.workspaceUri,
+            attachments = failed.attachments,
+            modelId = failed.modelId,
+            effort = failed.effort,
+            mode = failed.mode,
+            agentPersona = failed.agentPersona,
+            isCloud = failed.isCloud,
+            cloudProjectId = failed.cloudProjectId,
+            permissionPreset = failed.permissionPreset,
+            instanceUuidOverride = failed.instanceUuidOverride,
+            isDeviceNetworkReachable = isDeviceNetworkReachable,
+            isOptimisticDraft = failed.isOptimisticDraft,
+            isVerificationMode = isVerificationMode,
+            isModelAlias = failed.isModelAlias,
+        )
     }
 
     @Throws(Throwable::class)
@@ -767,10 +919,14 @@ public class CascadeChatDomainStore(
                 remove(oldId)
                 put(newId, display)
             }
+            val nextFailed = prev.lastFailedSendByCascadeId.toMutableMap().apply {
+                remove(oldId)?.let { put(newId, it.copy(cascadeId = newId, isOptimisticDraft = false)) }
+            }
             prev.copy(
                 activeCascadeId = if (prev.activeCascadeId == oldId || prev.activeCascadeId.isEmpty()) newId else prev.activeCascadeId,
                 stepsByCascadeId = nextSteps,
                 displayItemsByCascadeId = nextDisplay,
+                lastFailedSendByCascadeId = nextFailed,
             )
         }
         projectionStorage.saveSteps(newId, existing)

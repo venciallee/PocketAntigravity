@@ -1475,6 +1475,192 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(steps[1].stepIndex, 1)
         XCTAssertEqual(steps[1].plannerResponse?.response, "Recovered via StreamAgentStateUpdates")
     }
+
+    func testSendUserCascadeMessageWakesDormantTrajectoryAndProbesCloudRelayPeer() async throws {
+        let primaryUuid = "inst-primary-swift-1"
+        let peerUuid = "inst-peer-swift-2"
+        let cloudCascadeId = "v1/cloud-peer-pinned-swift"
+        let state = CompatSendRecoveryProbeState()
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(primaryUuid)\",[\"MacBook Pro\",\"2.34.0\",true],1,[1740000000,0]],[\"\(peerUuid)\",[\"Studio Relay\",\"2.34.0\",true],1,[1740000001,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+                let targetUuid = arr.count > 0 ? (arr[0].stringValue ?? "") : ""
+                let rpcPath = arr.count > 1 ? (arr[1].stringValue ?? "") : ""
+                let method = rpcPath.split(separator: "/").last.map(String.init) ?? ""
+                let b64Payload = arr.count > 2 ? (arr[2].stringValue ?? "") : ""
+                let innerData = CloudRelayJSPBCodec.decodeBase64Flexible(b64Payload) ?? Data()
+                let innerObj = (try? JSONDecoder().decode([String: JSONValue].self, from: innerData)) ?? [:]
+                let cid = innerObj["cascadeId"]?.stringValue ?? ""
+
+                if method == "LoadTrajectory" {
+                    if targetUuid == peerUuid {
+                        state.markWoken(cid)
+                        let okB64 = Data("{}".utf8).base64EncodedString()
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                    } else {
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[5,\"not_found: session not found\"]".utf8))
+                    }
+                }
+                if method == "SendUserCascadeMessage" {
+                    state.recordSendTarget(targetUuid)
+                    if targetUuid == peerUuid && state.isWoken(cid) {
+                        let okB64 = Data("{}".utf8).base64EncodedString()
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                    } else {
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[5,\"not_found: trajectory not found\"]".utf8))
+                    }
+                }
+                if method == "CancelCascadeInvocation" {
+                    state.recordCancelTarget(targetUuid)
+                    let okB64 = Data("{}".utf8).base64EncodedString()
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: primaryUuid,
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(primaryUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        try await client.sendUserCascadeMessage(
+            cascadeId: cloudCascadeId,
+            message: "First message",
+            isCloud: true
+        )
+        XCTAssertTrue(state.sendTargets().contains(peerUuid))
+
+        state.clearTargets()
+        try await client.sendUserCascadeMessage(
+            cascadeId: cloudCascadeId,
+            message: "Second message",
+            isCloud: true
+        )
+        try await client.cancelCascadeInvocation(cascadeId: cloudCascadeId)
+        XCTAssertEqual(state.sendTargets(), [peerUuid], "Subsequent send should route directly to pinned peer")
+        XCTAssertEqual(state.cancelTargets(), [peerUuid], "Cancel should route directly to pinned peer")
+    }
+
+    func testStartCascadeOverCloudRelayOmitsClientIdAndNegotiatesBackendType() async throws {
+        let instanceUuid = "inst-cloud-start-swift"
+        let state = CompatCloudWakeProbeState()
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.34.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+                let rpcPath = arr.count > 1 ? (arr[1].stringValue ?? "") : ""
+                let method = rpcPath.split(separator: "/").last.map(String.init) ?? ""
+                let b64Payload = arr.count > 2 ? (arr[2].stringValue ?? "") : ""
+                let innerData = CloudRelayJSPBCodec.decodeBase64Flexible(b64Payload) ?? Data()
+                let innerObj = (try? JSONDecoder().decode([String: JSONValue].self, from: innerData)) ?? [:]
+
+                if method == "StartCascade" {
+                    state.recordLoadPayload(innerObj)
+                    if innerObj["backend"] != nil {
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 400, httpVersion: "HTTP/1.1", headerFields: nil)!
+                        return (resp, Data("[3,\"invalid_argument: unknown field \\\"backend\\\"\"]".utf8))
+                    }
+                    let okB64 = Data("{\"cascadeId\":\"v1/cloud-minted-swift\"}".utf8).base64EncodedString()
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                    return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: instanceUuid,
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let minted = try await client.startCascade(
+            workspaceUri: "cloud://slardar_app_ai",
+            cloudProjectId: "cp-slardar",
+            isCloud: true
+        )
+        XCTAssertEqual(minted, "v1/cloud-minted-swift")
+        let payloads = state.loadPayloads()
+        XCTAssertFalse(payloads.isEmpty)
+        XCTAssertTrue(payloads.allSatisfy { $0["cascadeId"] == nil }, "Cloud Relay StartCascade must not send client-invented cascadeId")
+        XCTAssertEqual(payloads.last?["backendType"]?.stringValue, "BACKEND_TYPE_REMOTE_AICODE")
+    }
+
+    func testSendErrorFormattingRecognizesSessionNotFoundAndIsIdempotent() {
+        XCTAssertTrue(
+            ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(
+                statusCode: 404,
+                body: "{\"code\":\"not_found\",\"message\":\"session not found\"}"
+            )
+        )
+        XCTAssertTrue(
+            ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(
+                statusCode: 404,
+                body: "agent state for cas-123 not found"
+            )
+        )
+        XCTAssertFalse(
+            ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(
+                statusCode: 401,
+                body: "Google sign-in session not found"
+            )
+        )
+
+        let err = AntigravityRPCError.httpError(
+            statusCode: 404,
+            body: "[5,\"not_found: session not found\"]"
+        )
+        let formatted = ProtocolCompatibilityEngine.formatUserFacingSendError(err)
+        XCTAssertTrue(formatted.contains("This conversation was not found on this host"))
+        XCTAssertTrue(formatted.contains("session not found"))
+        XCTAssertTrue(formatted.contains("Tap Retry or start a new chat."))
+
+        let reWrapped = ProtocolCompatibilityEngine.formatUserFacingRpcError(
+            AntigravityRPCError.httpError(statusCode: 500, body: formatted)
+        )
+        XCTAssertEqual(reWrapped, formatted)
+        XCTAssertFalse(reWrapped.contains("HTTP 500"))
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers
@@ -1659,5 +1845,55 @@ private final class CompatCloudWakeProbeState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         recordedLoadPayloads.removeAll()
+    }
+}
+
+private final class CompatSendRecoveryProbeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var wokenCascadeIds = Set<String>()
+    private var recordedSendTargets: [String] = []
+    private var recordedCancelTargets: [String] = []
+
+    func markWoken(_ cascadeId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        wokenCascadeIds.insert(cascadeId)
+    }
+
+    func isWoken(_ cascadeId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return wokenCascadeIds.contains(cascadeId)
+    }
+
+    func recordSendTarget(_ uuid: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedSendTargets.append(uuid)
+    }
+
+    func recordCancelTarget(_ uuid: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedCancelTargets.append(uuid)
+    }
+
+    func sendTargets() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedSendTargets
+    }
+
+    func cancelTargets() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedCancelTargets
+    }
+
+    func clearTargets() {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedSendTargets.removeAll()
+        recordedCancelTargets.removeAll()
     }
 }

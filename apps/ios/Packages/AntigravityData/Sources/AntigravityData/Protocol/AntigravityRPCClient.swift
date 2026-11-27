@@ -31,6 +31,7 @@ public actor AntigravityRPCClient {
     internal var cachedLocalProjectIdByName: [String: String] = [:]
     internal var lastLocalProjectFetchAt: Date? = nil
     internal var wokenInstanceCascadeKeys: Set<String> = []
+    internal var pinnedInstanceByCascadeId: [String: String] = [:]
     internal var cachedValidUpstreamModels: Set<String>?
     internal var cachedDefaultUpstreamModel: String?
     internal var capabilityProfilesByHost: [String: HostCapabilityProfile] = [:]
@@ -46,6 +47,47 @@ public actor AntigravityRPCClient {
     }
 
     internal var preferredCloudBackendFieldByHostAndMethod: [String: CloudTrajectoryBackendField] = [:]
+
+    internal func recordPinnedInstance(for cascadeId: String, instanceUuid: String?) {
+        let cid = cascadeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let uuid = instanceUuid?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !cid.isEmpty, !uuid.isEmpty else { return }
+        pinnedInstanceByCascadeId[cid] = uuid
+        if pinnedInstanceByCascadeId.count > 256, let oldestKey = pinnedInstanceByCascadeId.keys.first {
+            pinnedInstanceByCascadeId.removeValue(forKey: oldestKey)
+        }
+    }
+
+    internal func pinnedInstance(for cascadeId: String) -> String? {
+        let cid = cascadeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cid.isEmpty,
+              let pinned = pinnedInstanceByCascadeId[cid],
+              !pinned.isEmpty else {
+            return nil
+        }
+        if cachedRelayInstances.isEmpty || cachedRelayInstances.contains(where: { $0.uuid == pinned && $0.status.isReachable }) {
+            return pinned
+        }
+        return nil
+    }
+
+    internal static func extractServerCascadeId(from response: [String: JSONValue]) -> String? {
+        let directKeys = ["cascadeId", "conversationId", "trajectoryId"]
+        for key in directKeys {
+            if let val = nonEmptyString(response[key]?.stringValue) {
+                return val
+            }
+        }
+        for nestedKey in ["cascade", "conversation", "trajectory"] {
+            guard let nested = response[nestedKey]?.objectValue else { continue }
+            for key in directKeys {
+                if let val = nonEmptyString(nested[key]?.stringValue) {
+                    return val
+                }
+            }
+        }
+        return nil
+    }
     internal let urlSession: URLSession
     internal let streamingURLSession: URLSession
     internal let handshakeDiagBox: HandshakeDiagnosticBox
@@ -698,7 +740,7 @@ public actor AntigravityRPCClient {
             )
             : body
 
-        for attempt in 1...4 {
+        for attempt in 1...8 {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -729,7 +771,7 @@ public actor AntigravityRPCClient {
             }
             guard (200..<300).contains(http.statusCode) else {
                 let text = String(data: data, encoding: .utf8) ?? ""
-                if allowStripUnknownFields, http.statusCode == 400, attempt < 4,
+                if allowStripUnknownFields, http.statusCode == 400, attempt < 8,
                    attemptSelfHealingDowngrade(
                        for: text,
                        method: method,
@@ -800,13 +842,15 @@ public actor AntigravityRPCClient {
                 profile: profile
             )
             : sanitized
+        let requestCascadeId = body["cascadeId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        for attempt in 1...4 {
+        for attempt in 1...8 {
             let encodedPayload = workingBody.isEmpty ? Data("{}".utf8) : try JSONEncoder().encode(workingBody)
             let rawRespData: Data
             let respHeaders: [String: String]
+            let actualTargetUuid: String
             do {
-                let res = try await callCloudRelayProxyCommand(
+                let res = try await callCloudRelayProxyCommandWithTarget(
                     method: method,
                     payload: encodedPayload,
                     contentType: "application/json",
@@ -816,9 +860,10 @@ public actor AntigravityRPCClient {
                 )
                 rawRespData = res.payload
                 respHeaders = res.headers
+                actualTargetUuid = res.targetUuid
             } catch let err {
                 if case let AntigravityRPCError.httpError(statusCode, errBody) = err,
-                   allowStripUnknownFields, attempt < 4,
+                   allowStripUnknownFields, attempt < 8,
                    (statusCode == 400
                        || ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: errBody) != nil
                        || ProtocolCompatibilityEngine.extractInvalidEnumValue(from: errBody) != nil),
@@ -844,8 +889,11 @@ public actor AntigravityRPCClient {
                     headers: respHeaders,
                     body: nil,
                     method: method,
-                    instanceUuidOverride: instanceUuidOverride
+                    instanceUuidOverride: actualTargetUuid
                 )
+                if !requestCascadeId.isEmpty && method != "StartCascade" {
+                    recordPinnedInstance(for: requestCascadeId, instanceUuid: actualTargetUuid)
+                }
                 return [:]
             }
             if let decoded = try? JSONDecoder().decode([String: JSONValue].self, from: respData) {
@@ -853,12 +901,12 @@ public actor AntigravityRPCClient {
                    let message = decoded["message"]?.stringValue,
                    decoded.count <= 3 {
                     let combinedError = "\(code): \(message)"
-                    if allowStripUnknownFields, attempt < 4,
+                    if allowStripUnknownFields, attempt < 8,
                        attemptSelfHealingDowngrade(
                            for: combinedError,
                            method: method,
                            body: &workingBody,
-                           instanceUuidOverride: instanceUuidOverride
+                           instanceUuidOverride: actualTargetUuid
                        ) {
                         continue
                     }
@@ -872,7 +920,7 @@ public actor AntigravityRPCClient {
                     }
                     if statusCode == 501,
                        HostCapability.shouldNegativeCacheOnUnimplemented(method) {
-                        mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                        mutateCapabilityProfile(for: actualTargetUuid) { p in
                             p.recordMethodUnsupported(method)
                         }
                     }
@@ -882,23 +930,29 @@ public actor AntigravityRPCClient {
                     headers: respHeaders,
                     body: decoded,
                     method: method,
-                    instanceUuidOverride: instanceUuidOverride
+                    instanceUuidOverride: actualTargetUuid
                 )
+                let pinCascadeId = (method == "StartCascade")
+                    ? (Self.extractServerCascadeId(from: decoded) ?? "")
+                    : requestCascadeId
+                if !pinCascadeId.isEmpty {
+                    recordPinnedInstance(for: pinCascadeId, instanceUuid: actualTargetUuid)
+                }
                 return decoded
             }
             let rawText = String(data: respData, encoding: .utf8) ?? ""
-            if allowStripUnknownFields, attempt < 4,
+            if allowStripUnknownFields, attempt < 8,
                attemptSelfHealingDowngrade(
                    for: rawText,
                    method: method,
                    body: &workingBody,
-                   instanceUuidOverride: instanceUuidOverride
+                   instanceUuidOverride: actualTargetUuid
                ) {
                 continue
             }
             if ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: rawText) {
                 if HostCapability.shouldNegativeCacheOnUnimplemented(method) {
-                    mutateCapabilityProfile(for: instanceUuidOverride) { p in
+                    mutateCapabilityProfile(for: actualTargetUuid) { p in
                         p.recordMethodUnsupported(method)
                     }
                 }
@@ -979,6 +1033,27 @@ public actor AntigravityRPCClient {
         timeoutInterval: TimeInterval? = nil,
         ignoreCachedOfflineStatus: Bool = false
     ) async throws -> (payload: Data, headers: [String: String]) {
+        let res = try await callCloudRelayProxyCommandWithTarget(
+            method: method,
+            payload: payload,
+            contentType: contentType,
+            instanceUuidOverride: instanceUuidOverride,
+            allowCrossHostFailover: allowCrossHostFailover,
+            timeoutInterval: timeoutInterval,
+            ignoreCachedOfflineStatus: ignoreCachedOfflineStatus
+        )
+        return (res.payload, res.headers)
+    }
+
+    internal func callCloudRelayProxyCommandWithTarget(
+        method: String,
+        payload: Data,
+        contentType: String,
+        instanceUuidOverride: String? = nil,
+        allowCrossHostFailover: Bool = false,
+        timeoutInterval: TimeInterval? = nil,
+        ignoreCachedOfflineStatus: Bool = false
+    ) async throws -> (payload: Data, headers: [String: String], targetUuid: String) {
         if !ignoreCachedOfflineStatus && instanceUuidOverride == nil && resolvedInstanceUuid == nil {
             _ = try await resolveCloudRelayInstance(
                 preferredIdentifier: targetInstanceIdentifier,
@@ -1025,7 +1100,7 @@ public actor AntigravityRPCClient {
             to targetUuid: String,
             authUserOverride: String? = nil,
             didRetryInvalidApiKey: Bool = false
-        ) async throws -> (payload: Data, headers: [String: String]) {
+        ) async throws -> (payload: Data, headers: [String: String], targetUuid: String) {
             let activeApiKey = await resolveRelayApiKey()
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -1076,10 +1151,11 @@ public actor AntigravityRPCClient {
                 let text = String(data: data, encoding: .utf8) ?? ""
                 throw AntigravityRPCError.httpError(statusCode: http.statusCode, body: text)
             }
-            return try CloudRelayJSPBCodec.decodeProxyCommandResponse(
+            let decoded = try CloudRelayJSPBCodec.decodeProxyCommandResponse(
                 data,
                 responseHeaders: http.allHeaderFields
             )
+            return (decoded.payload, decoded.headers, targetUuid)
         }
 
         do {
@@ -1188,11 +1264,11 @@ public actor AntigravityRPCClient {
                 "metadata": desktopMetadata,
                 "source": .string("CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT")
             ]
-            if let cid = body["cascadeId"]?.stringValue, !cid.isEmpty {
-                clean["cascadeId"] = .string(cid)
-            }
             if let backend = body["backend"]?.stringValue, !backend.isEmpty {
                 clean["backend"] = .string(backend)
+            }
+            if let backendType = body["backendType"]?.stringValue, !backendType.isEmpty {
+                clean["backendType"] = .string(backendType)
             }
             if let projEnv = body["projectEnvConfig"] {
                 clean["projectEnvConfig"] = projEnv
@@ -1237,6 +1313,12 @@ public actor AntigravityRPCClient {
                 "items": .array(cleanItems),
                 "metadata": desktopMetadata
             ]
+            if let backend = body["backend"]?.stringValue, !backend.isEmpty {
+                clean["backend"] = .string(backend)
+            }
+            if let backendType = body["backendType"]?.stringValue, !backendType.isEmpty {
+                clean["backendType"] = .string(backendType)
+            }
 
             if let rawMedia = body["media"]?.arrayValue, !rawMedia.isEmpty {
                 var cleanMedia: [JSONValue] = []

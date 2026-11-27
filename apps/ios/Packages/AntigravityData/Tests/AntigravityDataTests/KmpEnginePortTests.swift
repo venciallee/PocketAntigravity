@@ -715,6 +715,100 @@ final class KmpEnginePortTests: XCTestCase {
             XCTAssertFalse(text.contains("HTTP 400"), "Raw HTTP 400 leaked into UI error: \(text)")
         }
     }
+
+    @MainActor
+    func testKmpSendFailureAvoidsDoubleFormattingMigratesRecoveredIdAndRetriesCleanly() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ag-send-retry-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        let projectionStore = LocalProjectionStore(storageDirectory: tempRoot)
+
+        let engine = SendRecoveryKmpEngineDouble()
+        let store = AntigravitySessionStore.makeLiveStore(
+            projectionStore: projectionStore,
+            secretStore: InMemorySecretStore(),
+            preferencesStore: InMemoryPreferencesStore(),
+            kmpEngine: engine
+        )
+        _ = await store.connectCloudRelay(
+            relayURLString: "https://antigravity.google.com/r/host-recovery",
+            sessionCookie: "SAPISID=test; SID=test",
+            hostName: "MacBook Pro"
+        )
+
+        let originalId = "v1/evicted-cloud-session"
+        store.summaries = [
+            CascadeSummary(
+                cascadeId: originalId,
+                title: "介绍下这个仓库",
+                projectSlug: "slardar_app_ai",
+                workspaceUri: "cloud://slardar_app_ai",
+                branchName: "feat/support_slardar_pc",
+                status: .done,
+                stepCount: 1,
+                isCloud: true,
+                cloudProjectId: "cp-slardar",
+                originHostName: "Antigravity"
+            )
+        ]
+        store.stepsByCascadeId[originalId] = [
+            CascadeStep(cascadeId: originalId, stepIndex: 0, type: .userInput, status: .done, userInput: "介绍下这个仓库")
+        ]
+        store.activeCascadeId = originalId
+        store.activeRoute = .cascadeChat(originalId)
+
+        // 1. First send fails via KMP outcome with formatted user-facing message -> MUST NOT get wrapped in "HTTP 500:"
+        await engine.setNextResult(
+            KmpSendMessageResult(
+                resolvedCascadeId: originalId,
+                dispatchedLive: false,
+                queuedInOutbox: false,
+                errorMessage: "This conversation was not found on this host (session not found). Tap Retry or start a new chat."
+            )
+        )
+        store.composerDraftText = "Who is the most violent"
+        store.sendCurrentDraft()
+
+        for _ in 0..<40 {
+            if store.stepLoadErrorText != nil { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let errText = try XCTUnwrap(store.stepLoadErrorText)
+        XCTAssertTrue(errText.contains("This conversation was not found on this host (session not found)"))
+        XCTAssertFalse(errText.contains("HTTP 500"), "Pre-formatted KMP send error must never be double-wrapped with HTTP 500: \(errText)")
+        XCTAssertNotNil(store.activeFailedSend)
+
+        // 2. User starts typing a new draft, then taps Retry; KMP recovers with a fresh server cascadeId
+        let recoveredId = "v1/recovered-cloud-session-2"
+        await engine.setNextResult(
+            KmpSendMessageResult(
+                resolvedCascadeId: recoveredId,
+                dispatchedLive: true,
+                queuedInOutbox: false
+            )
+        )
+        store.composerDraftText = "Keep my draft!"
+        store.retryLastFailedSend()
+
+        // Preserves user's unrelated composer draft immediately
+        XCTAssertEqual(store.composerDraftText, "Keep my draft!")
+
+        for _ in 0..<40 {
+            if store.activeCascadeId == recoveredId { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertEqual(store.activeCascadeId, recoveredId, "Non-optimistic recovered cascadeId must migrate activeCascadeId")
+        XCTAssertEqual(store.activeRoute, .cascadeChat(recoveredId))
+        XCTAssertTrue(store.summaries.contains(where: { $0.cascadeId == recoveredId }))
+        XCTAssertNil(store.stepLoadErrorText)
+        XCTAssertNil(store.activeFailedSend)
+        let migratedSteps = store.stepsByCascadeId[recoveredId] ?? []
+        XCTAssertEqual(
+            migratedSteps.filter { $0.userInput == "Who is the most violent" }.count,
+            1,
+            "Retrying a failed send must not duplicate the user bubble"
+        )
+    }
 }
 
 private actor UnregisteredRelayKmpEngineDouble: AntigravityKmpEnginePort {
@@ -1308,6 +1402,121 @@ private actor StreamingKmpEngineDouble: AntigravityKmpEnginePort {
     func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
     func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
     nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { hub.makeStream() }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
+}
+
+private actor SendRecoveryKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "SendRecoveryKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=SendRecoveryKmpEngineDouble" }
+
+    private var nextResult: KmpSendMessageResult?
+
+    func setNextResult(_ result: KmpSendMessageResult) {
+        self.nextResult = result
+    }
+
+    func connectDirectLan(
+        endpointURLString: String,
+        csrfToken: String,
+        certSHA256: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(latencyMs: 10, workspaces: [], summaries: [], isSelectedHostOnline: true)
+    }
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(
+            latencyMs: 10,
+            workspaces: [],
+            summaries: [],
+            resolvedHostname: hostName,
+            resolvedInstanceUuid: "host-recovery",
+            availableRelayInstances: [
+                RelayInstanceInfo(uuid: "host-recovery", name: hostName, status: .connected)
+            ],
+            isSelectedHostOnline: true,
+            succeededInstanceUuids: ["host-recovery"],
+            initialSyncCompleted: true
+        )
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        HostReachabilityProbeResult(latencyMs: 10, isSelectedHostOnline: true)
+    }
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult {
+        KmpFederatedSyncResult(workspaces: [], summaries: [], latencyMs: 10)
+    }
+
+    func syncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        []
+    }
+
+    func startConversation(
+        workspaceUri: String,
+        initialPrompt: String,
+        modelId: String,
+        cloudProjectId: String?,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> String {
+        "v1/start-created"
+    }
+
+    func sendMessage(
+        cascadeId: String,
+        message: String,
+        workspaceUri: String,
+        attachments: [ComposerAttachmentChip],
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode,
+        agentPersona: String,
+        isCloud: Bool,
+        cloudProjectId: String?,
+        permissionPreset: AgentPermissionPreset?,
+        instanceUuidOverride: String?,
+        isOptimisticDraft: Bool
+    ) async throws -> KmpSendMessageResult {
+        if let configured = nextResult {
+            return configured
+        }
+        return KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: true, queuedInOutbox: false)
+    }
+
+    func resolveWaitingInteraction(
+        step: CascadeStep,
+        decision: InteractionDecision,
+        workspaceUri: String?,
+        instanceUuidOverride: String?
+    ) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { AsyncStream { _ in } }
     nonisolated func onBackground() {}
     func onForeground() async {}
     func disconnectAndClearCredentials() async {}

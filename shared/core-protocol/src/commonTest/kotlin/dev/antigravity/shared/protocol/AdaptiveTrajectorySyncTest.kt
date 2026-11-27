@@ -985,4 +985,283 @@ class AdaptiveTrajectorySyncTest {
         assertEquals(5, decoded.steps[1].stepIndex)
         assertEquals("Fifth step answer", decoded.steps[1].plannerResponse?.response)
     }
+
+    @Test
+    fun testSendUserCascadeMessageWakesDormantTrajectoryOnSessionNotFound() = runTest {
+        withContext(Dispatchers.Default) {
+            val wokenIds = mutableSetOf<String>()
+            var sendAttempts = 0
+            var loadCalls = 0
+            val json = Json { ignoreUnknownKeys = true }
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+                val reqObj = runCatching { json.parseToJsonElement(bytes.decodeToString()) as JsonObject }.getOrNull()
+                val cid = (reqObj?.get("cascadeId") as? JsonPrimitive)?.contentOrNull.orEmpty()
+                when {
+                    path.endsWith("/LoadTrajectory") -> {
+                        loadCalls += 1
+                        wokenIds.add(cid)
+                        respond(
+                            content = "{}",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    }
+                    path.endsWith("/SendUserCascadeMessage") -> {
+                        sendAttempts += 1
+                        if (cid in wokenIds) {
+                            respond(
+                                content = "{}",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                            )
+                        } else {
+                            respond(
+                                content = """{"code":"not_found","message":"session not found"}""",
+                                status = HttpStatusCode.NotFound,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                            )
+                        }
+                    }
+                    else -> respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = testHost("mac-wake-send"),
+                csrfToken = "test-csrf",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            client.sendUserCascadeMessage(
+                cascadeId = "cas-dormant-send",
+                message = "Who is the most violent",
+            )
+            assertEquals(1, loadCalls, "Expected LoadTrajectory wake call on session not found")
+            assertEquals(2, sendAttempts, "Expected retry after LoadTrajectory wake")
+        }
+    }
+
+    @Test
+    fun testSendUserCascadeMessageOverCloudRelayProbesPeerInstanceAndPinsTarget() = runTest {
+        withContext(Dispatchers.Default) {
+            val primaryUuid = "inst-primary-aaaa"
+            val peerUuid = "inst-peer-bbbb"
+            val cloudCascadeId = "v1/cloud-peer-pinned"
+            val wokenOnPeer = mutableSetOf<String>()
+            val sendTargets = mutableListOf<String>()
+            val cancelTargets = mutableListOf<String>()
+            val json = Json { ignoreUnknownKeys = true }
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$primaryUuid",["MacBook Pro","2.34.0",true],1,[1740000000,0]],["$peerUuid",["Studio Cloud Relay","2.34.0",true],1,[1740000001,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/ProxyCommand") -> {
+                        val (targetUuid, rpcPath, payloadText) = decodeProxyCommandInner(bytes.decodeToString())
+                        val method = rpcPath.substringAfterLast('/')
+                        val reqObj = json.parseToJsonElement(payloadText) as JsonObject
+                        val cid = (reqObj["cascadeId"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                        when (method) {
+                            "LoadTrajectory" -> {
+                                if (targetUuid == peerUuid) {
+                                    wokenOnPeer.add(cid)
+                                    respond(
+                                        content = encodeJspbProxyResponse("{}"),
+                                        status = HttpStatusCode.OK,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                } else {
+                                    respond(
+                                        content = """[5,"not_found: session not found"]""",
+                                        status = HttpStatusCode.NotFound,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                }
+                            }
+                            "SendUserCascadeMessage" -> {
+                                sendTargets.add(targetUuid)
+                                if (targetUuid == peerUuid && cid in wokenOnPeer) {
+                                    respond(
+                                        content = encodeJspbProxyResponse("{}"),
+                                        status = HttpStatusCode.OK,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                } else {
+                                    respond(
+                                        content = """[5,"not_found: trajectory not found"]""",
+                                        status = HttpStatusCode.NotFound,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                }
+                            }
+                            "CancelCascadeInvocation" -> {
+                                cancelTargets.add(targetUuid)
+                                respond(
+                                    content = encodeJspbProxyResponse("{}"),
+                                    status = HttpStatusCode.OK,
+                                    headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                )
+                            }
+                            else -> respond(
+                                content = encodeJspbProxyResponse("{}"),
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = primaryUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$primaryUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            // First send hits primary -> not_found -> wakes/probes peer -> succeeds & pins peerUuid
+            client.sendUserCascadeMessage(
+                cascadeId = cloudCascadeId,
+                message = "First message",
+                isCloud = true,
+            )
+            assertTrue(peerUuid in sendTargets, "Expected peer relay instance to handle Cloud send")
+
+            // Subsequent send & cancel should route directly to pinned peerUuid without hitting primary
+            sendTargets.clear()
+            client.sendUserCascadeMessage(
+                cascadeId = cloudCascadeId,
+                message = "Second message",
+                isCloud = true,
+            )
+            client.cancelCascadeInvocation(cloudCascadeId)
+            assertEquals(listOf(peerUuid), sendTargets, "Subsequent send must use pinned peer instance directly")
+            assertEquals(listOf(peerUuid), cancelTargets, "Cancel must use pinned peer instance directly")
+        }
+    }
+
+    @Test
+    fun testStartCascadeOverCloudRelayOmitsClientIdAndNegotiatesBackendType() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-cloud-start-01"
+            val startPayloads = mutableListOf<JsonObject>()
+            val json = Json { ignoreUnknownKeys = true }
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.34.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/ProxyCommand") -> {
+                        val (_, rpcPath, payloadText) = decodeProxyCommandInner(bytes.decodeToString())
+                        val method = rpcPath.substringAfterLast('/')
+                        val reqObj = json.parseToJsonElement(payloadText) as JsonObject
+                        if (method == "StartCascade") {
+                            startPayloads.add(reqObj)
+                            if ("backend" in reqObj) {
+                                respond(
+                                    content = """[3,"invalid_argument: unknown field \"backend\""]""",
+                                    status = HttpStatusCode.BadRequest,
+                                    headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                )
+                            } else {
+                                respond(
+                                    content = encodeJspbProxyResponse("""{"cascadeId":"v1/cloud-minted-99"}"""),
+                                    status = HttpStatusCode.OK,
+                                    headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                )
+                            }
+                        } else {
+                            respond(
+                                content = encodeJspbProxyResponse("{}"),
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val minted = client.startCascade(
+                workspaceUri = "cloud://slardar_app_ai",
+                isCloud = true,
+                cloudProjectId = "cp-slardar",
+            )
+            assertEquals("v1/cloud-minted-99", minted)
+            assertTrue(startPayloads.isNotEmpty())
+            assertTrue(startPayloads.none { "cascadeId" in it }, "Cloud Relay StartCascade must not send client-invented cascadeId")
+            assertEquals("BACKEND_TYPE_REMOTE_AICODE", (startPayloads.last()["backendType"] as? JsonPrimitive)?.contentOrNull)
+        }
+    }
+
+    @Test
+    fun testSendErrorFormattingRecognizesSessionNotFoundAndIsIdempotent() {
+        assertTrue(
+            ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(
+                404,
+                """{"code":"not_found","message":"session not found"}""",
+            ),
+        )
+        assertTrue(
+            ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(
+                404,
+                "agent state for cas-123 not found",
+            ),
+        )
+        assertFalse(
+            ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(
+                401,
+                "Google sign-in session not found",
+            ),
+        )
+
+        val err = AntigravityRpcError.HttpError(
+            statusCode = 404,
+            body = """[5,"not_found: session not found"]""",
+        )
+        val formatted = ProtocolCompatibilityEngine.formatUserFacingSendError(err)
+        assertTrue(formatted.contains("This conversation was not found on this host"))
+        assertTrue(formatted.contains("session not found"))
+        assertTrue(formatted.contains("Tap Retry or start a new chat."))
+
+        // Re-formatting an already formatted user-facing message must NOT add "HTTP 500:" prefix
+        val reWrapped = ProtocolCompatibilityEngine.formatUserFacingRpcError(
+            AntigravityRpcError.HttpError(500, formatted),
+        )
+        assertEquals(formatted, reWrapped)
+        assertFalse(reWrapped.contains("HTTP 500"))
+    }
 }

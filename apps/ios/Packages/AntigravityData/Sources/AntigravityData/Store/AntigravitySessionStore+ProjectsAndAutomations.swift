@@ -83,7 +83,8 @@ extension AntigravitySessionStore {
         _ projectSlug: String,
         title: String = "New Conversation",
         initialPrompt: String? = nil,
-        initialAttachments: [ComposerAttachmentChip] = []
+        initialAttachments: [ComposerAttachmentChip] = [],
+        isCloudOverride: Bool? = nil
     ) -> String {
         discardPendingDraftConversation()
         let hasInitialPayload = (initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
@@ -118,9 +119,11 @@ extension AntigravitySessionStore {
             return projects.first(where: { $0.name == trimmedSlug })
         }()
         let isUnassigned = (project?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(trimmedSlug)
-        let isCloudProj = (project?.runtime == .cloud)
+        let isCloudProj = isCloudOverride ?? (
+            (project?.runtime == .cloud)
             || trimmedSlug.lowercased().hasPrefix("cloud:")
             || (project == nil && selectedHostScope == .antigravityCloud)
+        )
         let effectiveSlug: String = {
             if let project { return project.id }
             if isUnassigned {

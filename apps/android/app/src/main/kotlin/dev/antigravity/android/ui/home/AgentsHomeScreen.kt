@@ -291,6 +291,11 @@ fun AgentsHomeScreen(
             workspaceUri = selectedProject?.workspaceUri.orEmpty(),
             projectSlug = selectedProject?.id.orEmpty(),
             title = titleCandidate,
+            isCloud = cloudModeEnabled,
+            cloudProjectId = selectedProject?.cloudProjectId,
+            originInstanceUuid = selectedProject?.originInstanceUuid,
+            originHostName = if (cloudModeEnabled) "Antigravity" else selectedProject?.hostName,
+            branchName = selectedProject?.activeBranch,
         )
         scope.launch {
             runCatching {

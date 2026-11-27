@@ -1176,4 +1176,75 @@ class AndroidInteractiveE2eTest {
         ).assertIsDisplayed()
         assertEquals(0, composeRule.onAllNodesWithTag("card-forward-step-102").fetchSemanticsNodes().size)
     }
+
+    @Test
+    fun testInlineSendErrorBannerShowsRetryAndDismissActions() {
+        val coordinator = AntigravityCoreCoordinator(
+            preferencesStore = dev.antigravity.shared.platform.InMemoryPreferencesStore(),
+            projectionStorage = dev.antigravity.shared.domain.InMemoryProjectionStorage(),
+            autoPreloadConversations = false,
+        )
+        coordinator.isVerificationMode = false
+        val cid = "v1/cloud-error-banner-test"
+        coordinator.conversationSyncStore.upsertSummary(
+            dev.antigravity.shared.model.CascadeSummary(
+                cascadeId = cid,
+                title = "介绍下这个仓库",
+                projectSlug = "slardar_app_ai",
+                workspaceUri = "cloud://slardar_app_ai",
+                status = CortexStepStatus.DONE,
+                stepCount = 1,
+                isCloud = true,
+                originHostName = "Antigravity",
+            ),
+        )
+        coordinator.chatStore.seedFixtureSteps(
+            stepsByCascade = mapOf(
+                cid to listOf(
+                    dev.antigravity.shared.model.CascadeStep(
+                        cascadeId = cid,
+                        stepIndex = 0,
+                        type = dev.antigravity.shared.model.CortexStepType.USER_INPUT,
+                        status = CortexStepStatus.DONE,
+                        userInput = "介绍下这个仓库",
+                    ),
+                ),
+            ),
+            questions = emptyList(),
+        )
+        coordinator.chatStore.setActiveCascade(cid)
+        coordinator.chatStore.setStepLoadError(
+            "Failed to send message: This conversation was not found on this host (session not found). Tap Retry or start a new chat.",
+        )
+
+        var retryCount = 0
+        composeRule.setContent {
+            dev.antigravity.android.core.ui.theme.AntigravityTheme {
+                dev.antigravity.android.ui.chat.CascadeChatScreen(
+                    coordinator = coordinator,
+                    onBack = {},
+                    onOpenDiffReview = {},
+                    onOpenPlanReview = {},
+                    onOpenAddContext = {},
+                    onOpenModelAndMode = {},
+                    onOpenOverview = {},
+                    onOpenSideQuestion = {},
+                    onOpenSwarmBoard = {},
+                    onOpenVoiceMode = {},
+                    onBiometricPrompt = { _, _ -> },
+                    onRetryLoadSteps = { retryCount += 1 },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("chat-step-load-error-banner").assertIsDisplayed()
+        composeRule.onNodeWithTag("chat-inline-error-retry").assertIsDisplayed()
+        composeRule.onNodeWithTag("chat-inline-error-dismiss").assertIsDisplayed()
+        composeRule.onNodeWithText("session not found", substring = true, useUnmergedTree = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("chat-inline-error-retry").performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, retryCount)
+        assertEquals(0, composeRule.onAllNodesWithTag("chat-step-load-error-banner").fetchSemanticsNodes().size)
+    }
 }
