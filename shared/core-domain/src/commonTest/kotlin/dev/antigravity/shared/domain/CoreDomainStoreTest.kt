@@ -1632,6 +1632,76 @@ class CoreDomainStoreTest {
     }
 
     @Test
+    fun testActiveChatStepSyncEmptyFallbackAndForegroundRecovery() = runTest {
+        val cid = "cas-kmp-recovery"
+        val host = RemoteHostInstance(
+            instanceId = "mac-test",
+            hostname = "MacBook-Pro",
+            channel = RemoteConnectionChannel.DIRECT_HOST,
+            endpointUrl = "https://127.0.0.1:42100",
+            isOnline = true,
+        )
+        val engine = MockEngine { request ->
+            val ct = request.body.contentType?.toString() ?: request.headers[HttpHeaders.ContentType].orEmpty()
+            if (ct.contains("application/proto")) {
+                respond(
+                    content = ByteArray(0),
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/proto"),
+                )
+            } else {
+                respond(
+                    content = """{"steps":[]}""",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            }
+        }
+        val client = AntigravityKmpRpcClient(
+            host = host,
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(engine),
+        )
+
+        // 1. Verify CascadeChatDomainStore sets fallback error when remoteSteps is empty and knownStepCount > 0
+        val chatStore = CascadeChatDomainStore(projectionStorage = InMemoryProjectionStorage())
+        chatStore.setActiveCascade(cid)
+        val steps = chatStore.syncSteps(
+            client = client,
+            cascadeId = cid,
+            knownStepCount = 4,
+            isCloud = false,
+        )
+        assertTrue(steps.isEmpty())
+        assertFalse(chatStore.state.value.isLoadingSteps)
+        assertEquals("Could not load trajectory steps. Tap retry to reload.", chatStore.state.value.stepLoadErrorText)
+
+        // 2. Verify coordinator onForeground preserves active cascade state and triggers foreground refresh
+        val coordinator = AntigravityCoreCoordinator(
+            preferencesStore = InMemoryPreferencesStore(),
+            projectionStorage = InMemoryProjectionStorage(),
+            autoPreloadConversations = false,
+        )
+        coordinator.conversationSyncStore.upsertSummary(
+            CascadeSummary(
+                cascadeId = cid,
+                title = "Xcode签名丢失原因分析",
+                projectSlug = "venciallee/PocketAntigravity",
+                workspaceUri = "cloud://venciallee/PocketAntigravity",
+                status = CortexStepStatus.DONE,
+                stepCount = 4,
+                updatedAtEpochMs = 1000L,
+                originHostName = "Antigravity",
+                isCloud = true,
+            )
+        )
+        coordinator.chatStore.setActiveCascade(cid)
+        coordinator.onForeground()
+        assertEquals(cid, coordinator.chatStore.state.value.activeCascadeId)
+        coordinator.close()
+    }
+
+    @Test
     fun testHistoryLoadingFlagTracksStaleCacheBackfillAndClearsOnConversationSwitch() = runTest {
         val storage = InMemoryProjectionStorage()
         val store = CascadeChatDomainStore(projectionStorage = storage)

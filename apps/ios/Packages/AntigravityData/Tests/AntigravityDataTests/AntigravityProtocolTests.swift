@@ -4789,6 +4789,82 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertTrue(store.isLocalHostOnline(instanceId: miniUuid, hostname: "mac-mini"))
         XCTAssertTrue(store.isLocalHostOnline(instanceId: slowPeerUuid, hostname: "Venciallee"))
     }
+
+    @MainActor
+    func testTC25_ActiveChatStepSyncForegroundAndReentryRecovery() async {
+        MockRelayURLProtocol.state.setResponder { urlString, _, _ in
+            if urlString.contains("/ProxyCommand") || urlString.contains("GetCascadeTrajectorySteps") {
+                let inner = Data("{\"steps\":[]}".utf8).base64EncodedString()
+                let jspb = ")]}'\n[\"\(inner)\",[[\"content-type\",\"application/json\"]]]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(jspb.utf8))
+            }
+            return (200, [:], Data())
+        }
+        defer { MockRelayURLProtocol.state.setResponder(nil) }
+
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: sessionConfig)
+
+        let store = AntigravitySessionStore.makeLiveStore()
+        defer {
+            store.suspendNetworkingForBackground()
+        }
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.isDeviceNetworkReachable = true
+        store.isNetworkingSuspended = false
+        store.activeHost = RemoteHostInstance(
+            instanceId: "rec-uuid-1",
+            hostname: "Antigravity",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/rec-uuid-1")!,
+            isOnline: true
+        )
+        store.rpcClient = AntigravityRPCClient(
+            host: store.activeHost,
+            sessionCookie: "SAPISID=test",
+            authUser: "0",
+            resolvedInstanceUuid: "rec-uuid-1",
+            relayApiKey: "AIzaSyTestKey0000000000000000000000000",
+            urlSession: mockSession
+        )
+
+        let cid = "cid-sync-recovery"
+        let summary = CascadeSummary(
+            cascadeId: cid,
+            title: "Recovery Test Chat",
+            projectSlug: "ledger-svc",
+            workspaceUri: "cloud://ledger-svc",
+            status: .done,
+            stepCount: 5,
+            isCloud: true,
+            originInstanceUuid: "rec-uuid-1",
+            originHostName: "Antigravity"
+        )
+        store.summaries = [summary]
+        store.activeCascadeId = cid
+        store.activeRoute = .cascadeChat(cid)
+        store.stepsByCascadeId.removeValue(forKey: cid)
+
+        // 1. Entering a conversation with empty steps sets isLoadingSteps = true
+        store.syncStepsForCascade(cid, pollUntilIdle: true)
+        XCTAssertTrue(store.isLoadingSteps, "Entering unhydrated conversation must display loading indicator")
+
+        // 2. Backgrounding suspends networking and stops polling task
+        store.suspendNetworkingForBackground()
+        XCTAssertTrue(store.isNetworkingSuspended)
+
+        // 3. Foregrounding while viewing cascadeChat must immediately restart step sync and mark isLoadingSteps
+        await store.resumeNetworkingFromForeground()
+        XCTAssertFalse(store.isNetworkingSuspended)
+        XCTAssertTrue(store.isLoadingSteps, "Resuming from background while in chat must immediately restore step loading")
+
+        // 4. Calling syncStepsForCascade with empty steps must force refresh rather than stalling
+        store.syncStepsForCascade(cid, pollUntilIdle: true)
+        XCTAssertTrue(store.isLoadingSteps, "Re-entering must keep step loading alive when steps are empty")
+        store.suspendNetworkingForBackground()
+    }
 }
 
 private final class AtomicTestInt: @unchecked Sendable {

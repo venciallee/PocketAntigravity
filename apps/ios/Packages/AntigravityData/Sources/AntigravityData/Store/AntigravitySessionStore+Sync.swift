@@ -1096,10 +1096,14 @@ extension AntigravitySessionStore {
         forceRefresh: Bool = false,
         cancelInFlight: Bool = true
     ) {
+        let isLocallyEmpty = (stepsByCascadeId[cascadeId] ?? []).isEmpty
         if !cascadeId.isEmpty,
            stepPollingTask != nil,
            activeStepSyncCascadeId == cascadeId {
             if !forceRefresh {
+                if isLocallyEmpty && !locallyCreatedEmptyCascadeIds.contains(cascadeId) {
+                    isLoadingSteps = true
+                }
                 if pollUntilIdle {
                     activeStepSyncPollsUntilIdle = true
                 }
@@ -1111,6 +1115,9 @@ extension AntigravitySessionStore {
                 // (e.g. KMP `applyHydratedStepsMetadata` emitting right before returning steps).
                 // Record a deferred re-check once the active iteration finishes.
                 pendingStreamResyncCascadeId = cascadeId
+                if isLocallyEmpty && !locallyCreatedEmptyCascadeIds.contains(cascadeId) {
+                    isLoadingSteps = true
+                }
                 if pollUntilIdle {
                     activeStepSyncPollsUntilIdle = true
                 }
@@ -1553,6 +1560,12 @@ extension AntigravitySessionStore {
                         if !stillActive && !isEmptyNewSessionNow && summaryMeta?.needsTitleHydration == true {
                             self.hydratingCascadeIds.remove(cascadeId)
                             self.settledEmptyTitleCascadeIds.insert(cascadeId)
+                        }
+                        if (self.stepsByCascadeId[cascadeId] ?? []).isEmpty
+                            && knownCount > 0
+                            && !isEmptyNewSessionNow
+                            && !stillActive {
+                            self.stepLoadErrorText = "Could not load trajectory steps. Tap Retry to reload."
                         }
                     }
                     if belongsToActiveHost {

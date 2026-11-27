@@ -316,6 +316,12 @@ public struct CascadeChatViewController: View {
                             }
                             return
                         }
+                        if (store.hasPairedBackend || store.isLiveBackendConnected)
+                            && !store.activeCascadeId.isEmpty
+                            && (store.stepsByCascadeId[store.activeCascadeId] ?? []).isEmpty
+                            && !store.isBrandNewEmptyCascade(store.activeCascadeId) {
+                            store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
+                        }
                         guard !allDisplayItems.isEmpty else { return }
                         if let waiting = store.pendingWaitingStep {
                             scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
@@ -432,9 +438,13 @@ public struct CascadeChatViewController: View {
             hasSettledInitialScroll = false
             visibleTailLimit = 60
             if (store.hasPairedBackend || store.isLiveBackendConnected)
-                && !store.activeCascadeId.isEmpty
-                && !store.hasActiveStepSync(for: store.activeCascadeId) {
-                store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                && !store.activeCascadeId.isEmpty {
+                if (store.stepsByCascadeId[store.activeCascadeId] ?? []).isEmpty
+                    && !store.isLocallyCreatedEmptyCascade(store.activeCascadeId) {
+                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
+                } else if !store.hasActiveStepSync(for: store.activeCascadeId) {
+                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                }
             }
             if shouldAnimateLive {
                 try? await Task.sleep(for: .milliseconds(350))
@@ -563,8 +573,9 @@ public struct CascadeChatViewController: View {
             .padding(.top, 12)
         } else {
             let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
-            let isOfflinePaired = store.hasPairedBackend && !isActiveSessionHostOnline
+            let isOfflinePaired = (!isActiveSessionCloud && store.hasPairedBackend && !isActiveSessionHostOnline)
             let isBrandNewEmpty = activePendingDraft != nil || store.isBrandNewEmptyCascade(store.activeCascadeId)
+            let knownStepCount = store.activeSummary?.stepCount ?? 0
             if isNoInternet || isOfflinePaired {
                 if !isBrandNewEmpty && store.activeSteps.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -701,6 +712,34 @@ public struct CascadeChatViewController: View {
                 .padding(.top, 12)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-empty-history-card")
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                        Text(lang.t("Conversation Ready", "会话已就绪"))
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                    }
+                    Text(lang.t(
+                        "Type a message below to start collaborating with Antigravity on \(effectiveHeaderHostLabel).",
+                        "在下方输入消息，即可开始与 \(effectiveHeaderHostLabel) 上的 Antigravity 协作。"
+                    ))
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                        .lineSpacing(2)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AntigravityTheme.surfaceCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.top, 12)
+                .accessibilityIdentifier("chat-empty-ready-card")
             }
         }
     }

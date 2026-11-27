@@ -55,6 +55,7 @@ import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
@@ -677,6 +678,7 @@ fun CascadeChatScreen(
                             activeSummary.stepCount == 0 &&
                             activeSummary.needsTitleHydration &&
                             chatState.activeSteps.isEmpty())
+                    val knownStepCount = activeSummary?.stepCount ?: 0
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -835,6 +837,108 @@ fun CascadeChatScreen(
                                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                                         )
                                     }
+                                }
+                            }
+                        } else if (knownStepCount > 0) {
+                            AntigravitySurfaceCard(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp)
+                                    .testTag("chat-unhydrated-history-card"),
+                                contentPadding = PaddingValues(18.dp),
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Refresh,
+                                            contentDescription = null,
+                                            tint = colors.accentPeriwinkle,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Text(
+                                            text = tr("Conversation history not loaded", "未加载会话记录"),
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = colors.inkReading,
+                                        )
+                                    }
+                                    Text(
+                                        text = tr(
+                                            "This conversation has $knownStepCount steps on $effectiveHeaderHostLabel. Tap below to sync them.",
+                                            "此会话在 $effectiveHeaderHostLabel 上包含 $knownStepCount 个步骤。点击下方重新同步。",
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colors.inkSecondary,
+                                    )
+                                    FilledTonalButton(
+                                        onClick = {
+                                            coordinator.chatStore.clearStepLoadError()
+                                            onRetryLoadSteps()
+                                        },
+                                        colors = ButtonDefaults.filledTonalButtonColors(
+                                            containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
+                                            contentColor = colors.accentPeriwinkle,
+                                        ),
+                                        modifier = Modifier.testTag("chat-btn-load-unhydrated-history"),
+                                    ) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Refresh,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                            Text(
+                                                text = tr("Load History", "加载历史记录"),
+                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            AntigravitySurfaceCard(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp)
+                                    .testTag("chat-empty-ready-card"),
+                                contentPadding = PaddingValues(18.dp),
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.AutoAwesome,
+                                            contentDescription = null,
+                                            tint = colors.accentPeriwinkle,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Text(
+                                            text = tr("Conversation Ready", "会话已就绪"),
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = colors.inkReading,
+                                        )
+                                    }
+                                    Text(
+                                        text = tr(
+                                            "Type a message below to start collaborating with Antigravity on $effectiveHeaderHostLabel.",
+                                            "在下方输入消息，即可开始与 $effectiveHeaderHostLabel 上的 Antigravity 协作。",
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colors.inkSecondary,
+                                    )
                                 }
                             }
                         }

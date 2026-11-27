@@ -1335,6 +1335,16 @@ extension AntigravitySessionStore {
         let wasSuspended = isNetworkingSuspended
         isNetworkingSuspended = false
         startNetworkPathMonitoringIfNeeded()
+
+        // If user was actively viewing a conversation, resume step sync immediately in parallel
+        // so loading or live updates resume on Frame 0 without blocking behind full workspace sync.
+        if case .cascadeChat(let cid) = activeRoute, !cid.isEmpty {
+            if (stepsByCascadeId[cid] ?? []).isEmpty && !locallyCreatedEmptyCascadeIds.contains(cid) {
+                isLoadingSteps = true
+            }
+            syncStepsForCascade(cid, pollUntilIdle: true, forceRefresh: (stepsByCascadeId[cid] ?? []).isEmpty)
+        }
+
         await kmpEngine?.onForeground()
         if kmpEngine != nil && (hasPairedBackend || isLiveBackendConnected) {
             startKmpSummarySubscriptionIfNeeded()
@@ -1345,6 +1355,9 @@ extension AntigravitySessionStore {
 
         if rpcClient == nil {
             _ = await restoreSavedBackendSession()
+            if case .cascadeChat(let cid) = activeRoute, !cid.isEmpty {
+                syncStepsForCascade(cid, pollUntilIdle: true)
+            }
             return
         }
 

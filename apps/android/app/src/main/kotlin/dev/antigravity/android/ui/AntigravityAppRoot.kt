@@ -280,9 +280,10 @@ fun AntigravityAppRoot(
         lastHandledStepRetryNonce = stepSyncRetryNonce
         val summary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == cid }
         val resolvedIsCloud = isCloudConversation(cid, summary)
+        val hasExistingSteps = !chatState.stepsByCascadeId[cid].isNullOrEmpty()
         runCatching {
-            if (isManualRetry) {
-                if (!connectionState.isConnected && !hasAnyReachableRelayHost && connectionState.hasPairedBackend) {
+            if (isManualRetry || !hasExistingSteps) {
+                if (isManualRetry && !connectionState.isConnected && !hasAnyReachableRelayHost && connectionState.hasPairedBackend) {
                     runCatching { coordinator.reconnectNow() }
                 }
                 coordinator.forceSyncSteps(

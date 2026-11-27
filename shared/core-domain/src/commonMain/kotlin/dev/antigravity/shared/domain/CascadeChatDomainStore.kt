@@ -710,7 +710,12 @@ public class CascadeChatDomainStore(
             }
             _state.update {
                 if (it.activeCascadeId == cascadeId && activeSyncGenerationByCascadeId.value[cascadeId] == generation) {
-                    it.copy(isLoadingSteps = false, stepLoadErrorText = null)
+                    val fallbackError = if (remoteSteps.isEmpty() && knownStepCount > 0 && it.stepsByCascadeId[cascadeId].isNullOrEmpty()) {
+                        "Could not load trajectory steps. Tap retry to reload."
+                    } else {
+                        null
+                    }
+                    it.copy(isLoadingSteps = false, stepLoadErrorText = fallbackError)
                 } else {
                     it
                 }
