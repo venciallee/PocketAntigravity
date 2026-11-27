@@ -293,6 +293,7 @@ public class AntigravityCoreCoordinator(
         workspaceUri: String = "",
         projectSlug: String = "",
         title: String = "New Conversation",
+        isCloud: Boolean = false,
     ): String {
         val draftId = "cascade-new-${dev.antigravity.shared.protocol.currentTimeMillis()}"
         val activeHost = connectionStore.state.value.activeHost
@@ -313,14 +314,54 @@ public class AntigravityCoreCoordinator(
                 currentStepIndex = 0,
                 totalSteps = 0,
                 statusSubtitle = "New conversation",
-                originInstanceUuid = activeHost?.instanceId,
-                originHostName = activeHost?.hostname,
+                isCloud = isCloud,
+                originInstanceUuid = if (isCloud) null else activeHost?.instanceId,
+                originHostName = if (isCloud) "Antigravity" else activeHost?.hostname,
                 updatedAtEpochMs = dev.antigravity.shared.protocol.currentTimeMillis(),
                 hasResolvedTitle = true,
             ),
         )
         chatStore.setActiveCascade(draftId)
         return draftId
+    }
+
+    /**
+     * Determines accurately whether a conversation targets Antigravity Cloud vs a paired local Mac/PC,
+     * preventing same-name Cloud projects from hijacking concrete local `file://` workspaces.
+     */
+    public fun isSummaryCloudRuntime(cascadeId: String, summary: CascadeSummary?): Boolean {
+        if (summary?.isCloud == true) return true
+        val uri = summary?.workspaceUri.orEmpty()
+        if (AntigravityCloudDetector.isCloudWorkspaceUri(uri, cascadeId = cascadeId)) {
+            return true
+        }
+        if (uri.startsWith("file://") && !AntigravityCloudDetector.isPlaygroundScratchUri(uri)) {
+            return false
+        }
+        if (summary == null) return false
+        val allProjects = (workspaceStore.state.value.projects + conversationSyncStore.state.value.projects)
+            .distinctBy { it.id }
+        val cpid = summary.cloudProjectId
+        if (!cpid.isNullOrBlank()) {
+            allProjects.firstOrNull { it.cloudProjectId == cpid || it.id == cpid }?.let {
+                return it.runtime == ProjectRuntimeTarget.CLOUD
+            }
+        }
+        if (uri.isNotBlank()) {
+            allProjects.firstOrNull { it.workspaceUri.equals(uri, ignoreCase = true) }?.let {
+                return it.runtime == ProjectRuntimeTarget.CLOUD
+            }
+        }
+        if (summary.projectSlug.isNotBlank()) {
+            val slugMatches = allProjects.filter {
+                it.id == summary.projectSlug || it.name.equals(summary.projectSlug, ignoreCase = true)
+            }
+            if (slugMatches.size == 1) {
+                return slugMatches[0].runtime == ProjectRuntimeTarget.CLOUD
+            }
+            return false
+        }
+        return false
     }
 
     @Throws(Throwable::class)

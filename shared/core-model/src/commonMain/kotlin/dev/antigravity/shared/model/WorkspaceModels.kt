@@ -901,6 +901,13 @@ public enum class AgentPermissionPreset(
     public val usesTerminalSandbox: Boolean
         get() = this == DEFAULT_POLICY || this == AUTO
 
+    /** Resolves concrete preset for the target runtime (`Auto` is local-only; `Inherit Global` resolves to runtime default). */
+    public fun resolveForRuntime(isRemote: Boolean): AgentPermissionPreset = when {
+        this == INHERIT_GLOBAL -> defaultPreset(isRemote = isRemote)
+        isRemote && this == AUTO -> DEFAULT_POLICY
+        else -> this
+    }
+
     public companion object {
         /** Alias for [DEFAULT_POLICY] matching desktop & v2.33 sandboxed default terminology. */
         public val DEFAULT_SANDBOXED: AgentPermissionPreset
@@ -914,7 +921,7 @@ public enum class AgentPermissionPreset(
             }
 
         public fun availablePresets(isRemote: Boolean): List<AgentPermissionPreset> =
-            if (isRemote) listOf(REQUEST_REVIEW, TURBO)
+            if (isRemote) listOf(REQUEST_REVIEW, DEFAULT_POLICY, TURBO)
             else listOf(REQUEST_REVIEW, DEFAULT_POLICY, AUTO, TURBO)
 
         public fun defaultPreset(isRemote: Boolean): AgentPermissionPreset =

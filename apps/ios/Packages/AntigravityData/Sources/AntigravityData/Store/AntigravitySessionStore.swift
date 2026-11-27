@@ -163,42 +163,93 @@ public final class AntigravitySessionStore {
     internal var hasModifiedLanguageInSession: Bool = false
     internal var hasModifiedDisplayOptionsInSession: Bool = false
 
+    /// Determines accurately whether a conversation summary targets Antigravity Cloud vs a paired local Mac/PC,
+    /// without letting a same-name Cloud project or stale Home selection hijack a local workspace.
+    public func isSummaryCloudRuntime(_ summary: CascadeSummary) -> Bool {
+        if summary.isCloud { return true }
+        if AntigravityCloudDetector.isCloudWorkspaceURI(summary.workspaceUri, cascadeId: summary.cascadeId) {
+            return true
+        }
+        if summary.workspaceUri.hasPrefix("file://")
+            && !AntigravityCloudDetector.isPlaygroundScratchURI(summary.workspaceUri) {
+            return false
+        }
+        if let cpid = summary.cloudProjectId, !cpid.isEmpty,
+           let matchedCloud = projects.first(where: { $0.cloudProjectId == cpid || $0.id == cpid }) {
+            return matchedCloud.runtime == .cloud
+        }
+        if !summary.workspaceUri.isEmpty,
+           let matchedUri = projects.first(where: {
+               $0.workspaceUri.caseInsensitiveCompare(summary.workspaceUri) == .orderedSame
+           }) {
+            return matchedUri.runtime == .cloud
+        }
+        if !summary.projectSlug.isEmpty {
+            let slugMatches = projects.filter { $0.id == summary.projectSlug || $0.name == summary.projectSlug }
+            if slugMatches.count == 1 {
+                return slugMatches[0].runtime == .cloud
+            }
+            return false
+        }
+        return false
+    }
+
+    /// `true` when the currently selected Home project / host scope targets Antigravity Cloud.
+    public var isHomeSelectedProjectCloud: Bool {
+        if let proj = selectedProject, !proj.isNoProject {
+            return proj.runtime == .cloud
+        }
+        if selectedHostScope == .antigravityCloud {
+            return true
+        }
+        if case .localHost = selectedHostScope {
+            return false
+        }
+        return selectedWorkspaceUri.hasPrefix("cloud://")
+    }
+
     /// `true` when the active conversation or selected project targets Antigravity Cloud / Remote Agents.
     public var isActiveSessionCloud: Bool {
         if let draft = pendingDraftConversation, activeCascadeId.isEmpty {
             return draft.isCloud
         }
-        if activeSummary?.isCloud == true { return true }
-        if activeCascadeId.hasPrefix("v1/") { return true }
-        if let slug = activeSummary?.projectSlug,
-           let proj = projects.first(where: { $0.id == slug || $0.name == slug }),
-           proj.runtime == .cloud {
+        if let summary = activeSummary {
+            return isSummaryCloudRuntime(summary)
+        }
+        if activeCascadeId.hasPrefix("v1/") {
             return true
         }
-        if selectedProject?.runtime == .cloud { return true }
-        if selectedWorkspaceUri.hasPrefix("cloud://") { return true }
-        return false
+        return isHomeSelectedProjectCloud
+    }
+
+    /// Returns the concrete permission preset for the specified runtime (`Auto` is supported on local projects).
+    public func permissionPreset(isRemote: Bool) -> AgentPermissionPreset {
+        (isRemote ? remotePermissionPreset : localPermissionPreset).resolvedForRuntime(isRemote: isRemote)
     }
 
     /// Active permission preset for the current session runtime (`Remote Permissions` vs local `Permissions`).
     public var activePermissionPreset: AgentPermissionPreset {
-        get { isActiveSessionCloud ? remotePermissionPreset : localPermissionPreset }
+        get { permissionPreset(isRemote: isActiveSessionCloud) }
         set { setActivePermissionPreset(newValue) }
     }
 
     public func setActivePermissionPreset(_ preset: AgentPermissionPreset, isRemoteOverride: Bool? = nil) {
         let isRemote = isRemoteOverride ?? isActiveSessionCloud
+        let resolved = preset.resolvedForRuntime(isRemote: isRemote)
+        if !activeCascadeId.isEmpty && isRemote == isActiveSessionCloud {
+            conversationPermissionPresets.removeValue(forKey: activeCascadeId)
+        }
         if isRemote {
-            remotePermissionPreset = preset
+            remotePermissionPreset = resolved
             if !isVerificationMode {
-                preferencesStore.set(preset.rawValue, forKey: Self.remotePermissionDefaultsKey)
+                preferencesStore.set(resolved.rawValue, forKey: Self.remotePermissionDefaultsKey)
             }
         } else {
-            localPermissionPreset = preset
-            appearancePreferences.globalPermissionPreset = preset
-            appearancePreferences.terminalSandboxEnabled = preset.usesTerminalSandbox
+            localPermissionPreset = resolved
+            appearancePreferences.globalPermissionPreset = resolved
+            appearancePreferences.terminalSandboxEnabled = resolved.usesTerminalSandbox
             if !isVerificationMode {
-                preferencesStore.set(preset.rawValue, forKey: Self.localPermissionDefaultsKey)
+                preferencesStore.set(resolved.rawValue, forKey: Self.localPermissionDefaultsKey)
                 saveAppearancePreferences()
             }
         }

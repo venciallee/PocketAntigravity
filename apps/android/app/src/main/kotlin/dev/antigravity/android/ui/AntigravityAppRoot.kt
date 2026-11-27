@@ -75,7 +75,6 @@ import dev.antigravity.android.ui.review.ImplementationPlanReviewScreen
 import dev.antigravity.android.ui.review.TurnDiffReviewScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.domain.EsddVerificationFixtures
-import dev.antigravity.shared.model.AntigravityCloudDetector
 import dev.antigravity.shared.model.AppAppearanceMode
 import dev.antigravity.shared.model.AppThemePreset
 import dev.antigravity.shared.model.CascadeSummary
@@ -95,7 +94,7 @@ private sealed interface AppRoute {
     data class AutomationDetail(val automationId: String) : AppRoute
     data class AutomationEdit(val automationId: String) : AppRoute
     data class CascadeChat(val cascadeId: String) : AppRoute
-    data object PermissionsPreset : AppRoute
+    data class PermissionsPreset(val isRemote: Boolean = false) : AppRoute
     data object AddContext : AppRoute
     data class SlashMenu(val includeSideQuestionPreview: Boolean = false) : AppRoute
     data object ModelAndMode : AppRoute
@@ -241,20 +240,8 @@ fun AntigravityAppRoot(
         }
     }
 
-    fun isCloudConversation(cascadeId: String, summary: CascadeSummary?): Boolean {
-        if (summary?.isCloud == true) return true
-        if (AntigravityCloudDetector.isCloudWorkspaceUri(summary?.workspaceUri.orEmpty(), cascadeId = cascadeId)) {
-            return true
-        }
-        val matchedProject = summary?.let { item ->
-            workspaceState.projects.firstOrNull { proj ->
-                (!item.cloudProjectId.isNullOrBlank() && (proj.cloudProjectId == item.cloudProjectId || proj.id == item.cloudProjectId)) ||
-                    (item.workspaceUri.isNotBlank() && proj.workspaceUri == item.workspaceUri) ||
-                    (item.projectSlug.isNotBlank() && proj.name.equals(item.projectSlug, ignoreCase = true))
-            }
-        }
-        return matchedProject?.runtime == ProjectRuntimeTarget.CLOUD
-    }
+    fun isCloudConversation(cascadeId: String, summary: CascadeSummary?): Boolean =
+        coordinator.isSummaryCloudRuntime(cascadeId, summary)
 
     val activeChatRouteId = (currentRoute as? AppRoute.CascadeChat)?.cascadeId
     val activeChatSummary = remember(activeChatRouteId, syncState.summaries) {
@@ -328,6 +315,7 @@ fun AntigravityAppRoot(
         val draftId = coordinator.createLocalDraftConversation(
             workspaceUri = matchedProject?.workspaceUri.orEmpty(),
             projectSlug = matchedProject?.id ?: projectId,
+            isCloud = matchedProject?.runtime == ProjectRuntimeTarget.CLOUD,
         )
         navigateTo(AppRoute.CascadeChat(draftId))
     }
@@ -356,7 +344,7 @@ fun AntigravityAppRoot(
             is AppRoute.ContextMenu,
             AppRoute.CreateProject,
             is AppRoute.Automations,
-            AppRoute.PermissionsPreset,
+            is AppRoute.PermissionsPreset,
             AppRoute.AddContext,
             is AppRoute.SlashMenu,
             AppRoute.ModelAndMode,
@@ -525,7 +513,9 @@ fun AntigravityAppRoot(
                             onOpenConversation = { cascadeId -> openConversation(cascadeId) },
                             onOpenAddContext = { navigateTo(AppRoute.AddContext) },
                             onOpenModelPicker = { navigateTo(AppRoute.ModelAndMode) },
-                            onOpenPermissionsPreset = { navigateTo(AppRoute.PermissionsPreset) },
+                            onOpenPermissionsPreset = { isRemote ->
+                                navigateTo(AppRoute.PermissionsPreset(isRemote = isRemote))
+                            },
                             onOpenSlashMenu = { navigateTo(AppRoute.SlashMenu(includeSideQuestionPreview = false)) },
                             onOpenVoiceMode = {
                                 val targetCascade = coordinator.chatState.value.activeCascadeId
@@ -668,6 +658,7 @@ fun AntigravityAppRoot(
                                         coordinator = coordinator,
                                         onDismiss = { activeChatOverlay = ChatOverlaySheet.NONE },
                                         onOpenSettings = { navigateTo(AppRoute.Settings) },
+                                        isRemote = isCloudConversation(route.cascadeId, activeChatSummary),
                                         showHomeBackdrop = false,
                                     )
                                 }
@@ -717,11 +708,12 @@ fun AntigravityAppRoot(
                         }
                     }
 
-                    AppRoute.PermissionsPreset -> {
+                    is AppRoute.PermissionsPreset -> {
                         PermissionsPresetOverlayScreen(
                             coordinator = coordinator,
                             onDismiss = { navigateTo(AppRoute.NewConversationHome) },
                             onOpenSettings = { navigateTo(AppRoute.Settings) },
+                            isRemote = route.isRemote,
                             showHomeBackdrop = true,
                         )
                     }
@@ -1030,7 +1022,7 @@ private fun routeForVerifyScene(scene: EsddVerifySceneCase): AppRoute = when (sc
     EsddVerifySceneCase.AUTOMATION_DETAIL -> AppRoute.AutomationDetail("auto-nightly-audit")
     EsddVerifySceneCase.AUTOMATION_EDIT -> AppRoute.AutomationEdit("auto-nightly-audit")
     EsddVerifySceneCase.CHAT_AND_COMPOSER -> AppRoute.CascadeChat("cas-rate-limiter")
-    EsddVerifySceneCase.PERMISSIONS_PRESET -> AppRoute.PermissionsPreset
+    EsddVerifySceneCase.PERMISSIONS_PRESET -> AppRoute.PermissionsPreset(isRemote = false)
     EsddVerifySceneCase.ADD_CONTEXT -> AppRoute.AddContext
     EsddVerifySceneCase.SLASH_MENU -> AppRoute.SlashMenu(includeSideQuestionPreview = true)
     EsddVerifySceneCase.MODEL_AND_MODE -> AppRoute.ModelAndMode

@@ -44,12 +44,18 @@ public data class SettingsState(
         aiCreditOveragesEnabled = false,
     ),
     public val activePermissionPreset: AgentPermissionPreset = AgentPermissionPreset.DEFAULT_POLICY,
+    public val localPermissionPreset: AgentPermissionPreset = AgentPermissionPreset.DEFAULT_POLICY,
+    public val remotePermissionPreset: AgentPermissionPreset = AgentPermissionPreset.TURBO,
     public val permissionRules: List<PermissionRuleEntry> = emptyList(),
     public val customizations: CustomizationsCatalog = CustomizationsCatalog.defaultCatalog,
     public val appearance: AppAppearancePreferences = AppAppearancePreferences(),
     public val isRefreshingModels: Boolean = false,
     public val lastCapabilityError: String? = null,
 ) {
+    /** Effective runtime-scoped permission preset (`Auto` is supported for local projects; remote defaults to `Turbo`). */
+    public fun permissionPresetFor(isRemote: Boolean): AgentPermissionPreset =
+        (if (isRemote) remotePermissionPreset else localPermissionPreset).resolveForRuntime(isRemote = isRemote)
+
     public val selectedModel: CascadeModelConfig?
         get() = models.firstOrNull { it.containsModelId(selectedModelId) }
             ?: if (selectedModelId == "MODEL_GOOGLE_GEMINI_3_1_PRO") {
@@ -83,11 +89,21 @@ public class SettingsAndCustomizationStore(
 ) {
     public var persistPreferences: Boolean = true
 
-    private val _state = MutableStateFlow(
-        SettingsState(
-            appearance = loadPersistedAppearance(preferencesStore),
-        ),
-    )
+    private val _state: MutableStateFlow<SettingsState> = run {
+        val loadedAppearance = loadPersistedAppearance(preferencesStore)
+        val loadedLocalPreset = loadPersistedLocalPermissionPreset(preferencesStore, loadedAppearance)
+        val loadedRemotePreset = loadPersistedRemotePermissionPreset(preferencesStore)
+        MutableStateFlow(
+            SettingsState(
+                activePermissionPreset = loadedLocalPreset,
+                localPermissionPreset = loadedLocalPreset,
+                remotePermissionPreset = loadedRemotePreset,
+                appearance = loadedAppearance.copy(
+                    globalPermissionPreset = loadedLocalPreset,
+                ),
+            ),
+        )
+    }
     public val state: StateFlow<SettingsState> = _state.asStateFlow()
 
     @Throws(Throwable::class)
@@ -207,25 +223,81 @@ public class SettingsAndCustomizationStore(
         _state.update { it.copy(selectedAgentPersona = persona) }
     }
 
+    public fun selectPermissionPreset(
+        preset: AgentPermissionPreset,
+        isRemote: Boolean = false,
+    ) {
+        val resolved = preset.resolveForRuntime(isRemote = isRemote)
+        if (isRemote) {
+            _state.update { prev ->
+                prev.copy(
+                    remotePermissionPreset = resolved,
+                    lastCapabilityError = null,
+                )
+            }
+            if (persistPreferences) {
+                preferencesStore.putString(KEY_REMOTE_PERMISSION_PRESET, resolved.rawValue)
+            }
+        } else {
+            var updatedAppearance: AppAppearancePreferences? = null
+            _state.update { prev ->
+                val nextAppearance = prev.appearance.copy(
+                    globalPermissionPreset = resolved,
+                )
+                updatedAppearance = nextAppearance
+                prev.copy(
+                    activePermissionPreset = resolved,
+                    localPermissionPreset = resolved,
+                    appearance = nextAppearance,
+                    lastCapabilityError = null,
+                )
+            }
+            if (persistPreferences) {
+                preferencesStore.putString(KEY_LOCAL_PERMISSION_PRESET, resolved.rawValue)
+                updatedAppearance?.let(::persistAppearanceIfEnabled)
+            }
+        }
+    }
+
+    @Throws(Throwable::class)
     public suspend fun setPermissionPreset(
         client: AntigravityKmpRpcClient?,
         cascadeId: String,
         preset: AgentPermissionPreset,
     ) {
-        val previousPreset = _state.value.activePermissionPreset
+        val previousState = _state.value
+        val resolved = preset.resolveForRuntime(isRemote = false)
         _state.update {
             it.copy(
-                activePermissionPreset = preset,
+                activePermissionPreset = resolved,
+                localPermissionPreset = resolved,
+                appearance = it.appearance.copy(
+                    globalPermissionPreset = resolved,
+                ),
                 lastCapabilityError = null,
             )
         }
+        var rolledBack = false
         performLiveCapabilityWrite(
             client = client,
             capability = HostCapability.PERMISSION_PRESET,
             onUnsupported = ::recordCapabilityError,
-            rollback = { _state.update { it.copy(activePermissionPreset = previousPreset) } },
+            rollback = {
+                rolledBack = true
+                _state.update {
+                    it.copy(
+                        activePermissionPreset = previousState.activePermissionPreset,
+                        localPermissionPreset = previousState.localPermissionPreset,
+                        appearance = previousState.appearance,
+                    )
+                }
+            },
         ) { rpc ->
-            rpc.setConversationPermissionPreset(cascadeId = cascadeId, preset = preset)
+            rpc.setConversationPermissionPreset(cascadeId = cascadeId, preset = resolved)
+        }
+        if (!rolledBack && persistPreferences) {
+            preferencesStore.putString(KEY_LOCAL_PERMISSION_PRESET, resolved.rawValue)
+            persistAppearanceIfEnabled(_state.value.appearance)
         }
     }
 
@@ -393,10 +465,39 @@ public class SettingsAndCustomizationStore(
     public companion object {
         public const val KEY_APP_LANGUAGE: String = "antigravity.kmp.appLanguage.v1"
         public const val KEY_APPEARANCE_PREFERENCES: String = "antigravity.kmp.appearancePreferences.v1"
+        public const val KEY_LOCAL_PERMISSION_PRESET: String = "antigravity.kmp.permissionPreset.local.v1"
+        public const val KEY_REMOTE_PERMISSION_PRESET: String = "antigravity.kmp.permissionPreset.remote.v1"
 
         private val persistenceJson: Json = Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
+        }
+
+        private fun loadPersistedLocalPermissionPreset(
+            preferencesStore: KeyValuePreferencesStore,
+            appearance: AppAppearancePreferences,
+        ): AgentPermissionPreset {
+            val savedRaw = preferencesStore.getString(KEY_LOCAL_PERMISSION_PRESET)
+            if (!savedRaw.isNullOrBlank()) {
+                val parsed = AgentPermissionPreset.fromRaw(savedRaw)
+                if (parsed != null && parsed != AgentPermissionPreset.INHERIT_GLOBAL) {
+                    return parsed.resolveForRuntime(isRemote = false)
+                }
+            }
+            return appearance.globalPermissionPreset.resolveForRuntime(isRemote = false)
+        }
+
+        private fun loadPersistedRemotePermissionPreset(
+            preferencesStore: KeyValuePreferencesStore,
+        ): AgentPermissionPreset {
+            val savedRaw = preferencesStore.getString(KEY_REMOTE_PERMISSION_PRESET)
+            if (!savedRaw.isNullOrBlank()) {
+                val parsed = AgentPermissionPreset.fromRaw(savedRaw)
+                if (parsed != null && parsed != AgentPermissionPreset.INHERIT_GLOBAL) {
+                    return parsed.resolveForRuntime(isRemote = true)
+                }
+            }
+            return AgentPermissionPreset.defaultPreset(isRemote = true)
         }
 
         private fun loadPersistedAppearance(preferencesStore: KeyValuePreferencesStore): AppAppearancePreferences {

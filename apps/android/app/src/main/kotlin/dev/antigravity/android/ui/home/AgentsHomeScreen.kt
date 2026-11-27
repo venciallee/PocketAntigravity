@@ -122,7 +122,7 @@ fun AgentsHomeScreen(
     onOpenConversation: (String) -> Unit,
     onOpenAddContext: () -> Unit = {},
     onOpenModelPicker: () -> Unit = {},
-    onOpenPermissionsPreset: () -> Unit = {},
+    onOpenPermissionsPreset: (Boolean) -> Unit = {},
     onOpenSlashMenu: () -> Unit = {},
     onOpenVoiceMode: () -> Unit = {},
     onOpenReSignIn: () -> Unit = {},
@@ -261,7 +261,8 @@ fun AgentsHomeScreen(
 
     val voiceController = rememberVoiceDictationController()
     val selectedModelName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
-    val permissionLabel = settingsState.activePermissionPreset.localizedTitle(lang)
+    val activePermissionPreset = settingsState.permissionPresetFor(isRemote = cloudModeEnabled)
+    val permissionLabel = activePermissionPreset.localizedTitle(lang)
 
     fun submitHomePrompt() {
         voiceController.stopRecording()
@@ -279,7 +280,8 @@ fun AgentsHomeScreen(
                     effort = settingsState.selectedEffort,
                     mode = settingsState.selectedMode,
                     agentPersona = settingsState.selectedAgentPersona,
-                    permissionPreset = settingsState.activePermissionPreset,
+                    isCloud = cloudModeEnabled,
+                    permissionPreset = activePermissionPreset,
                     isOptimisticDraft = false,
                 )
             }
@@ -293,6 +295,7 @@ fun AgentsHomeScreen(
             workspaceUri = selectedProject?.workspaceUri.orEmpty(),
             projectSlug = selectedProject?.id.orEmpty(),
             title = titleCandidate,
+            isCloud = cloudModeEnabled,
         )
         scope.launch {
             runCatching {
@@ -307,7 +310,7 @@ fun AgentsHomeScreen(
                     agentPersona = settingsState.selectedAgentPersona,
                     isCloud = cloudModeEnabled,
                     cloudProjectId = selectedProject?.cloudProjectId,
-                    permissionPreset = settingsState.activePermissionPreset,
+                    permissionPreset = activePermissionPreset,
                     instanceUuidOverride = selectedProject?.originInstanceUuid,
                     isOptimisticDraft = true,
                 )
@@ -948,7 +951,7 @@ fun AgentsHomeScreen(
 
                                     // Permissions preset pill (`🛡 Default ⌄`)
                                     Surface(
-                                        onClick = onOpenPermissionsPreset,
+                                        onClick = { onOpenPermissionsPreset(cloudModeEnabled) },
                                         modifier = Modifier.testTag("btn-permissions-preset"),
                                         shape = RoundedCornerShape(10.dp),
                                         color = if (highlightPermissionsPill) colors.surfaceActiveTab else Color.Transparent,

@@ -50,11 +50,14 @@ public struct CascadeChatViewController: View {
                 return nil
             }
             return store.projects.first(where: { $0.id == draft.projectSlug })
+                ?? store.projects.first(where: { $0.name == draft.projectSlug && ($0.runtime == .cloud) == draft.isCloud })
                 ?? store.projects.first(where: { $0.name == draft.projectSlug })
         }
-        if let slug = store.activeSummary?.projectSlug {
-            return store.projects.first(where: { $0.id == slug })
-                ?? store.projects.first(where: { $0.name == slug })
+        if let summary = store.activeSummary {
+            let summaryIsCloud = store.isSummaryCloudRuntime(summary)
+            return store.projects.first(where: { $0.id == summary.projectSlug })
+                ?? store.projects.first(where: { $0.name == summary.projectSlug && ($0.runtime == .cloud) == summaryIsCloud })
+                ?? store.projects.first(where: { $0.name == summary.projectSlug })
         }
         return store.selectedProject
     }
@@ -63,7 +66,10 @@ public struct CascadeChatViewController: View {
         if let draft = activePendingDraft {
             return draft.isCloud
         }
-        return store.activeSummary?.isCloud == true || activeProjectWorkspace?.runtime == .cloud
+        if let summary = store.activeSummary {
+            return store.isSummaryCloudRuntime(summary)
+        }
+        return store.isActiveSessionCloud
     }
 
     private var isActiveSessionHostOnline: Bool {
@@ -270,7 +276,10 @@ public struct CascadeChatViewController: View {
             }
 
             // Pinned Composer Card
-            ChatComposerView(store: store)
+            ChatComposerView(
+                store: store,
+                isRemoteSessionOverride: isActiveSessionCloud
+            )
                 .padding(.horizontal, 12)
                 .padding(.top, 4)
                 .padding(.bottom, 8)

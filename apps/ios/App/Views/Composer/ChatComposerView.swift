@@ -44,6 +44,7 @@ public struct ChatComposerView: View {
     @Bindable public var store: AntigravitySessionStore
     public var placeholderOverride: String?
     public var isHomeComposer: Bool
+    public var isRemoteSessionOverride: Bool?
     public var onSubmitDraft: ((String) -> Void)?
     @FocusState private var isInputFocused: Bool
 
@@ -64,11 +65,13 @@ public struct ChatComposerView: View {
         store: AntigravitySessionStore,
         placeholderOverride: String? = nil,
         isHomeComposer: Bool = false,
+        isRemoteSessionOverride: Bool? = nil,
         onSubmitDraft: ((String) -> Void)? = nil
     ) {
         self.store = store
         self.placeholderOverride = placeholderOverride
         self.isHomeComposer = isHomeComposer
+        self.isRemoteSessionOverride = isRemoteSessionOverride
         self.onSubmitDraft = onSubmitDraft
         if isHomeComposer || !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected {
             self._attachedChipLabels = State(initialValue: isHomeComposer ? [] : store.composerAttachments.map(\.label))
@@ -159,8 +162,22 @@ public struct ChatComposerView: View {
         return (name, effortLabel)
     }
 
+    private var resolvedIsRemoteSession: Bool {
+        isRemoteSessionOverride ?? store.isActiveSessionCloud
+    }
+
+    private var resolvedPermissionPreset: AgentPermissionPreset {
+        if isHomeComposer {
+            return store.permissionPreset(isRemote: resolvedIsRemoteSession)
+        }
+        return store.effectivePermissionPreset(
+            for: store.activeCascadeId,
+            isRemoteOverride: resolvedIsRemoteSession
+        )
+    }
+
     private var permissionShortLabel: String {
-        switch store.activePermissionPreset {
+        switch resolvedPermissionPreset {
         case .requestReview: return lang.t("Ask", "询问")
         case .defaultPolicy: return lang.t("Default", "默认")
         case .auto: return lang.t("Auto", "自动")
@@ -633,11 +650,12 @@ public struct ChatComposerView: View {
             case .permissions:
                 PermissionsSheetView(
                     store: store,
+                    isRemoteOverride: resolvedIsRemoteSession,
                     onDismiss: {
                         activeModalSheet = nil
                     }
                 )
-                .presentationDetents([.height(store.isActiveSessionCloud ? 356 : 428), .large])
+                .presentationDetents([.height(resolvedIsRemoteSession ? 356 : 428), .large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
                 .presentationBackground(PermissionsSheetView.sheetSurfaceColor)
@@ -815,7 +833,7 @@ public struct ChatComposerView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(lang.t("Permissions \(store.activePermissionPreset.localizedTitle(for: lang))", "权限 \(store.activePermissionPreset.localizedTitle(for: lang))"))
+            .accessibilityLabel(lang.t("Permissions \(resolvedPermissionPreset.localizedTitle(for: lang))", "权限 \(resolvedPermissionPreset.localizedTitle(for: lang))"))
             .accessibilityIdentifier("composer-pill-permissions")
 
             // 4. Speech-to-Text Dictation Button (`mic`, long-press to switch language)
