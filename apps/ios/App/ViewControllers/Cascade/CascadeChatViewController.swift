@@ -10,6 +10,9 @@ public struct CascadeChatViewController: View {
     public var onBack: (() -> Void)?
     @State private var isTurnStopped: Bool = false
     @State private var visibleTailLimit: Int = 60
+    @State private var isLoadingOlderMessages: Bool = false
+    @State private var hasSettledInitialScroll: Bool = false
+    @State private var olderMessagesLoadTask: Task<Void, Never>?
 
     public init(
         store: AntigravitySessionStore,
@@ -120,12 +123,75 @@ public struct CascadeChatViewController: View {
         return (store.activeSteps.count &* 1_000_003) &+ (proseLen &* 31) &+ (thoughtLen &* 7) &+ statusRaw &+ (waitingIdx &* 97)
     }
 
+    private var isShowingHistoryLoadPill: Bool {
+        guard activePendingDraft == nil, !isStaticESDDFixtureView else { return false }
+        guard store.hasPairedBackend || store.isLiveBackendConnected else { return false }
+        if store.displayItems.isEmpty {
+            return store.isLoadingSteps
+                || (!store.isLiveBackendConnected && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting))
+        }
+        return store.isLoadingSteps && !store.isCascadeStreaming
+    }
+
+    private var floatingHistoryLoadingPillState: (title: String, accessibilityId: String)? {
+        if isLoadingOlderMessages {
+            return (
+                lang.t("Loading older messages...", "正在加载更早消息..."),
+                "chat-loading-older-pill"
+            )
+        }
+        guard isShowingHistoryLoadPill else { return nil }
+        if !store.isLiveBackendConnected && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting) {
+            let cleanHost = effectiveHeaderHostLabel
+                .replacingOccurrences(of: "Connecting · ", with: "")
+                .replacingOccurrences(of: "连接中 · ", with: "")
+            return (
+                lang.t("Connecting to \(cleanHost)...", "正在连接 \(cleanHost)..."),
+                "chat-loading-steps"
+            )
+        }
+        return (
+            lang.t("Loading older messages...", "正在加载历史消息..."),
+            "chat-loading-steps"
+        )
+    }
+
+    @MainActor
+    private func loadOlderMessages(scrollProxy: ScrollViewProxy, anchorItemId: String?) {
+        guard !isLoadingOlderMessages else { return }
+        let hiddenCount = max(0, store.displayItems.count - visibleTailLimit)
+        guard hiddenCount > 0 else { return }
+
+        isLoadingOlderMessages = true
+        olderMessagesLoadTask?.cancel()
+        olderMessagesLoadTask = Task { @MainActor in
+            if shouldAnimateLive {
+                try? await Task.sleep(for: .milliseconds(280))
+            }
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                visibleTailLimit += 60
+            }
+            if let anchorItemId {
+                DispatchQueue.main.async {
+                    scrollProxy.scrollTo(anchorItemId, anchor: .top)
+                }
+            }
+            isLoadingOlderMessages = false
+        }
+    }
+
     public var body: some View {
         let allDisplayItems = store.displayItems
-        let hiddenPrefixCount = max(0, allDisplayItems.count - visibleTailLimit)
+        let hiddenPrefixCount = (store.isVerificationMode && !store.isLiveBackendConnected)
+            ? 0
+            : max(0, allDisplayItems.count - visibleTailLimit)
         let renderedItems = hiddenPrefixCount > 0
             ? Array(allDisplayItems.suffix(visibleTailLimit))
             : allDisplayItems
+        let floatingPill = floatingHistoryLoadingPillState
 
         VStack(spacing: 0) {
             chatTopNavigationBar
@@ -134,132 +200,146 @@ public struct CascadeChatViewController: View {
                 .overlay(AntigravityTheme.subtleDivider)
 
             ScrollViewReader { scrollProxy in
-                ScrollView {
-                    Group {
-                        if isStaticESDDFixtureView {
-                            VStack(alignment: .leading, spacing: 9) {
-                                staticRateLimiterShowcaseBody
-                                Color.clear
-                                    .frame(height: 1)
-                                    .id("chat-bottom-anchor")
-                            }
-                        } else if allDisplayItems.isEmpty {
-                            VStack(alignment: .leading, spacing: 9) {
-                                emptyOrLoadingSessionCard
-                            }
-                        } else {
-                            LazyVStack(alignment: .leading, spacing: 9) {
-                                if hiddenPrefixCount > 0 {
-                                    Button {
-                                        visibleTailLimit += 80
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "clock.arrow.circlepath")
-                                                .font(.system(size: 12.5, weight: .semibold))
-                                            Text(lang.t("Load earlier messages (\(hiddenPrefixCount) hidden)", "加载更早消息（已折叠 \(hiddenPrefixCount) 条）"))
-                                                .font(.system(size: 12.5, weight: .semibold))
+                ZStack(alignment: .top) {
+                    ScrollView {
+                        Group {
+                            if isStaticESDDFixtureView {
+                                VStack(alignment: .leading, spacing: 9) {
+                                    staticRateLimiterShowcaseBody
+                                    Color.clear
+                                        .frame(height: 1)
+                                        .id("chat-bottom-anchor")
+                                }
+                            } else if allDisplayItems.isEmpty {
+                                VStack(alignment: .leading, spacing: 9) {
+                                    emptyOrLoadingSessionCard
+                                }
+                            } else {
+                                LazyVStack(alignment: .leading, spacing: 9) {
+                                    if hiddenPrefixCount > 0 {
+                                        Button {
+                                            loadOlderMessages(
+                                                scrollProxy: scrollProxy,
+                                                anchorItemId: renderedItems.first?.id
+                                            )
+                                        } label: {
+                                            Color.clear
+                                                .frame(maxWidth: .infinity)
+                                                .frame(height: 12)
+                                                .contentShape(Rectangle())
                                         }
-                                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel(lang.t("Load earlier messages", "加载更早消息"))
+                                        .accessibilityIdentifier("btn-load-earlier-messages")
+                                        .onAppear {
+                                            if hasSettledInitialScroll && !isLoadingOlderMessages {
+                                                loadOlderMessages(
+                                                    scrollProxy: scrollProxy,
+                                                    anchorItemId: renderedItems.first?.id
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    ForEach(renderedItems) { item in
+                                        switch item {
+                                        case .single(let step):
+                                            CascadeStepCellView(store: store, step: step)
+                                                .contextMenu {
+                                                    if let text = step.plannerResponse?.response ?? step.userInput, !text.isEmpty {
+                                                        Button {
+                                                            store.composerDraftText += (store.composerDraftText.isEmpty ? "" : "\n") + "> \(String(text.prefix(240)))\n"
+                                                        } label: {
+                                                            Label(lang.t("Quote in Reply", "引用回复"), systemImage: "text.quote")
+                                                        }
+                                                    }
+                                                    Button(role: .destructive) {
+                                                        store.revertConversationToStep(step.stepIndex)
+                                                    } label: {
+                                                        Label(lang.t("Revert to This Step", "回退到此步骤"), systemImage: "arrow.uturn.backward")
+                                                    }
+                                                }
+                                        case .evidenceGroup(let groupId, let groupedSteps):
+                                            CascadeEvidenceGroupCardView(
+                                                store: store,
+                                                groupId: groupId,
+                                                steps: groupedSteps
+                                            )
+                                        }
+                                    }
+
+                                    if store.isCascadeStreaming {
+                                        HStack(spacing: 10) {
+                                            AntigravityFourDotLoadingView(
+                                                isAnimated: shouldAnimateLive,
+                                                dotSize: 4.5,
+                                                spacing: 3.5,
+                                                tint: AntigravityTheme.accentPeriwinkle
+                                            )
+                                            Text(lang.t("Agent is thinking and executing steps...", "Agent 正在思考并执行步骤..."))
+                                                .font(.system(size: 13.5, weight: .medium))
+                                                .foregroundStyle(AntigravityTheme.inkSecondary)
+                                            Spacer()
+                                        }
                                         .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 10)
                                         .background(AntigravityTheme.surfaceCard)
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                                 .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                                         )
                                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        .accessibilityIdentifier("chat-inline-four-dot-loading")
                                     }
-                                    .buttonStyle(.plain)
-                                    .accessibilityIdentifier("btn-load-earlier-messages")
-                                }
 
-                                ForEach(renderedItems) { item in
-                                    switch item {
-                                    case .single(let step):
-                                        CascadeStepCellView(store: store, step: step)
-                                            .contextMenu {
-                                                if let text = step.plannerResponse?.response ?? step.userInput, !text.isEmpty {
-                                                    Button {
-                                                        store.composerDraftText += (store.composerDraftText.isEmpty ? "" : "\n") + "> \(String(text.prefix(240)))\n"
-                                                    } label: {
-                                                        Label(lang.t("Quote in Reply", "引用回复"), systemImage: "text.quote")
-                                                    }
-                                                }
-                                                Button(role: .destructive) {
-                                                    store.revertConversationToStep(step.stepIndex)
-                                                } label: {
-                                                    Label(lang.t("Revert to This Step", "回退到此步骤"), systemImage: "arrow.uturn.backward")
-                                                }
-                                            }
-                                    case .evidenceGroup(let groupId, let groupedSteps):
-                                        CascadeEvidenceGroupCardView(
-                                            store: store,
-                                            groupId: groupId,
-                                            steps: groupedSteps
-                                        )
-                                    }
+                                    Color.clear
+                                        .frame(height: 1)
+                                        .id("chat-bottom-anchor")
                                 }
-
-                                if store.isCascadeStreaming {
-                                    HStack(spacing: 10) {
-                                        AntigravityFourDotLoadingView(
-                                            isAnimated: shouldAnimateLive,
-                                            dotSize: 4.5,
-                                            spacing: 3.5,
-                                            tint: AntigravityTheme.accentPeriwinkle
-                                        )
-                                        Text(lang.t("Agent is thinking and executing steps...", "Agent 正在思考并执行步骤..."))
-                                            .font(.system(size: 13.5, weight: .medium))
-                                            .foregroundStyle(AntigravityTheme.inkSecondary)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 10)
-                                    .background(AntigravityTheme.surfaceCard)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
-                                    )
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .accessibilityIdentifier("chat-inline-four-dot-loading")
-                                }
-
-                                Color.clear
-                                    .frame(height: 1)
-                                    .id("chat-bottom-anchor")
                             }
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                }
-                .defaultScrollAnchor(isStaticESDDFixtureView ? nil : .bottom)
-                .scrollDismissesKeyboard(.interactively)
-                .onAppear {
-                    if isStaticESDDFixtureView {
-                        scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
-                        DispatchQueue.main.async {
+                    .defaultScrollAnchor((isStaticESDDFixtureView || allDisplayItems.isEmpty) ? nil : .bottom)
+                    .scrollDismissesKeyboard(.interactively)
+                    .onAppear {
+                        if isStaticESDDFixtureView {
+                            scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                            DispatchQueue.main.async {
+                                scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
+                            }
+                            return
+                        }
+                        guard !allDisplayItems.isEmpty else { return }
+                        if let waiting = store.pendingWaitingStep {
+                            scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: streamingFollowSignature) { _, _ in
+                        guard !isStaticESDDFixtureView, store.isAutoScrollPinnedToBottom else { return }
+                        withAnimation(.easeOut(duration: 0.2)) {
                             scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
                         }
-                        return
                     }
-                    guard !allDisplayItems.isEmpty else { return }
-                    if let waiting = store.pendingWaitingStep {
-                        scrollProxy.scrollTo(scrollTargetId(forStepIndex: waiting.stepIndex), anchor: .bottom)
+                    .onChange(of: store.isCascadeStreaming) { wasStreaming, nowStreaming in
+                        if wasStreaming && !nowStreaming {
+                            store.flushNextQueuedMessageIfIdle()
+                        }
+                    }
+
+                    if let floatingPill {
+                        AntigravityFloatingLoadingPill(
+                            title: floatingPill.title,
+                            isAnimated: shouldAnimateLive
+                        )
+                        .padding(.top, 10)
+                        .allowsHitTesting(false)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .accessibilityIdentifier(floatingPill.accessibilityId)
                     }
                 }
-                .onChange(of: streamingFollowSignature) { _, _ in
-                    guard !isStaticESDDFixtureView, store.isAutoScrollPinnedToBottom else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
-                    }
-                }
-                .onChange(of: store.isCascadeStreaming) { wasStreaming, nowStreaming in
-                    if wasStreaming && !nowStreaming {
-                        store.flushNextQueuedMessageIfIdle()
-                    }
-                }
+                .animation(.easeOut(duration: 0.2), value: floatingPill?.title)
 
                 if !allDisplayItems.isEmpty, let errText = store.stepLoadErrorText {
                     HStack(alignment: .center, spacing: 8) {
@@ -341,12 +421,27 @@ public struct CascadeChatViewController: View {
         }
         .task(id: store.activeCascadeId) {
             isTurnStopped = false
+            olderMessagesLoadTask?.cancel()
+            olderMessagesLoadTask = nil
+            isLoadingOlderMessages = false
+            hasSettledInitialScroll = false
             visibleTailLimit = 60
             if (store.hasPairedBackend || store.isLiveBackendConnected)
                 && !store.activeCascadeId.isEmpty
                 && !store.hasActiveStepSync(for: store.activeCascadeId) {
                 store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
             }
+            if shouldAnimateLive {
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+            if !Task.isCancelled {
+                hasSettledInitialScroll = true
+            }
+        }
+        .onDisappear {
+            olderMessagesLoadTask?.cancel()
+            olderMessagesLoadTask = nil
+            isLoadingOlderMessages = false
         }
     }
 
@@ -420,43 +515,8 @@ public struct CascadeChatViewController: View {
             .padding(.top, 12)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat-pending-draft-card")
-        } else if (store.hasPairedBackend || store.isLiveBackendConnected)
-            && (store.isLoadingSteps
-                || (!store.isLiveBackendConnected && (store.isConnectingToBackend || store.connectionLifecyclePhase == .connecting))) {
-            let cleanHost = effectiveHeaderHostLabel
-                .replacingOccurrences(of: "Connecting · ", with: "")
-                .replacingOccurrences(of: "连接中 · ", with: "")
-            HStack(spacing: 12) {
-                AntigravityFourDotLoadingView(
-                    isAnimated: shouldAnimateLive,
-                    dotSize: 4.5,
-                    spacing: 3.5,
-                    tint: AntigravityTheme.accentPeriwinkle
-                )
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(lang.t("Loading conversation history...", "正在加载对话记录..."))
-                        .font(.system(size: 14.5, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.inkReading)
-                    Text(
-                        (!store.isLiveBackendConnected && store.isConnectingToBackend)
-                            ? lang.t("Connecting to \(cleanHost)...", "正在连接 \(cleanHost)...")
-                            : lang.t("Syncing trajectory steps from \(effectiveHeaderHostLabel)", "正在从 \(effectiveHeaderHostLabel) 同步执行轨迹")
-                    )
-                        .font(.system(size: 13))
-                        .foregroundStyle(AntigravityTheme.inkSecondary)
-                }
-                Spacer()
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AntigravityTheme.surfaceCard)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .padding(.top, 12)
-            .accessibilityIdentifier("chat-loading-steps")
+        } else if isShowingHistoryLoadPill {
+            EmptyView()
         } else if (store.hasPairedBackend || store.isLiveBackendConnected), let err = store.stepLoadErrorText {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
