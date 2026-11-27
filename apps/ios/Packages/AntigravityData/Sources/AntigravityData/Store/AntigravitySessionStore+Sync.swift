@@ -1078,12 +1078,17 @@ extension AntigravitySessionStore {
     /// When the conversation is idle and the push stream is healthy, stops polling completely (0 idle RPCs) and relies
     /// on `JetboxSubscribeToSummaries` to wake step sync on demand.
     public func syncStepsForCascade(_ cascadeId: String, pollUntilIdle: Bool = true, forceRefresh: Bool = false) {
+        let isLocallyEmpty = (stepsByCascadeId[cascadeId] ?? []).isEmpty
         if !forceRefresh,
            !cascadeId.isEmpty,
-           stepPollingTask != nil,
+           let currentTask = stepPollingTask,
+           !currentTask.isCancelled,
            activeStepSyncCascadeId == cascadeId {
             if pollUntilIdle {
                 activeStepSyncPollsUntilIdle = true
+            }
+            if isLocallyEmpty && !locallyCreatedEmptyCascadeIds.contains(cascadeId) {
+                isLoadingSteps = true
             }
             return
         }
@@ -1433,6 +1438,12 @@ extension AntigravitySessionStore {
                         if !stillActive && !isEmptyNewSessionNow && summaryMeta?.needsTitleHydration == true {
                             self.hydratingCascadeIds.remove(cascadeId)
                             self.settledEmptyTitleCascadeIds.insert(cascadeId)
+                        }
+                        if (self.stepsByCascadeId[cascadeId] ?? []).isEmpty
+                            && knownCount > 0
+                            && !isEmptyNewSessionNow
+                            && !stillActive {
+                            self.stepLoadErrorText = "Could not load trajectory steps. Tap Retry to reload."
                         }
                     }
                     if belongsToActiveHost {

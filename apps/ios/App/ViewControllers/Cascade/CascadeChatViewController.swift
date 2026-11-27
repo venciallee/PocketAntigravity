@@ -234,7 +234,7 @@ public struct CascadeChatViewController: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                 }
-                .defaultScrollAnchor(isStaticESDDFixtureView ? nil : .bottom)
+                .defaultScrollAnchor((isStaticESDDFixtureView || allDisplayItems.isEmpty) ? nil : .bottom)
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear {
                     if isStaticESDDFixtureView {
@@ -243,6 +243,12 @@ public struct CascadeChatViewController: View {
                             scrollProxy.scrollTo("chat-bottom-anchor", anchor: .bottom)
                         }
                         return
+                    }
+                    if (store.hasPairedBackend || store.isLiveBackendConnected)
+                        && !store.activeCascadeId.isEmpty
+                        && (store.stepsByCascadeId[store.activeCascadeId] ?? []).isEmpty
+                        && !store.locallyCreatedEmptyCascadeIds.contains(store.activeCascadeId) {
+                        store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
                     }
                     guard !allDisplayItems.isEmpty else { return }
                     if let waiting = store.pendingWaitingStep {
@@ -343,9 +349,13 @@ public struct CascadeChatViewController: View {
             isTurnStopped = false
             visibleTailLimit = 60
             if (store.hasPairedBackend || store.isLiveBackendConnected)
-                && !store.activeCascadeId.isEmpty
-                && !store.hasActiveStepSync(for: store.activeCascadeId) {
-                store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                && !store.activeCascadeId.isEmpty {
+                if (store.stepsByCascadeId[store.activeCascadeId] ?? []).isEmpty
+                    && !store.locallyCreatedEmptyCascadeIds.contains(store.activeCascadeId) {
+                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
+                } else if !store.hasActiveStepSync(for: store.activeCascadeId) {
+                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
+                }
             }
         }
     }
@@ -517,6 +527,7 @@ public struct CascadeChatViewController: View {
         } else {
             let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
             let isOfflinePaired = !isActiveSessionCloud && store.hasPairedBackend && !isActiveSessionHostOnline
+            let knownStepCount = store.activeSummary?.stepCount ?? 0
             if isNoInternet || isOfflinePaired {
                 HStack(spacing: 7) {
                     Circle()
@@ -544,6 +555,78 @@ public struct CascadeChatViewController: View {
                 .padding(.top, 16)
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("chat-offline-status-pill")
+            } else if knownStepCount > 0 {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                        Text(lang.t("Conversation history not loaded", "未加载会话记录"))
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                    }
+                    Text(lang.t(
+                        "This conversation has \(knownStepCount) steps on \(effectiveHeaderHostLabel). Tap below to sync them.",
+                        "此会话在 \(effectiveHeaderHostLabel) 上包含 \(knownStepCount) 个步骤。点击下方重新同步。"
+                    ))
+                        .font(.system(size: 13))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                    Button {
+                        store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(lang.t("Load History", "加载历史记录"))
+                                .font(.system(size: 13.5, weight: .semibold))
+                        }
+                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 36)
+                        .background(AntigravityTheme.surfaceElevated)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("chat-btn-load-unhydrated-history")
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AntigravityTheme.surfaceCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.top, 12)
+                .accessibilityIdentifier("chat-unhydrated-history-card")
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                        Text(lang.t("Conversation Ready", "会话已就绪"))
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.inkReading)
+                    }
+                    Text(lang.t(
+                        "Type a message below to start collaborating with Antigravity on \(effectiveHeaderHostLabel).",
+                        "在下方输入消息，即可开始与 \(effectiveHeaderHostLabel) 上的 Antigravity 协作。"
+                    ))
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                        .lineSpacing(2)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AntigravityTheme.surfaceCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.top, 12)
+                .accessibilityIdentifier("chat-empty-ready-card")
             }
         }
     }

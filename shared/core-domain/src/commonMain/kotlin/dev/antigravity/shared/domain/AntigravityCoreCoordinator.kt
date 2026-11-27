@@ -1644,6 +1644,23 @@ public class AntigravityCoreCoordinator(
                 // Best-effort outbox replay on foreground resume.
             }
             scheduleConversationPreload()
+            val activeCid = chatStore.state.value.activeCascadeId
+            if (activeCid.isNotBlank()) {
+                val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == activeCid }
+                val resolvedIsCloud = isSummaryCloudRuntime(activeCid, summary)
+                val hasCachedSteps = !chatStore.state.value.stepsByCascadeId[activeCid].isNullOrEmpty()
+                try {
+                    if (hasCachedSteps) {
+                        syncSteps(activeCid, knownStepCount = summary?.stepCount ?: 0, isCloud = resolvedIsCloud)
+                    } else {
+                        forceSyncSteps(activeCid, knownStepCount = summary?.stepCount ?: 0, isCloud = resolvedIsCloud)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    // Handled within chatStore state
+                }
+            }
         } else {
             conversationSyncStore.stopSummarySubscriptionStream()
         }

@@ -4562,6 +4562,49 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertFalse(store.hosts.first(where: { $0.instanceId == removedUuid })?.isOnline ?? true)
         XCTAssertFalse(store.isLocalHostOnline(instanceId: removedUuid, hostname: "Old Mac mini"))
     }
+
+    func testTC25_ActiveChatStepSyncForegroundAndReentryRecovery() async {
+        let store = AntigravitySessionStore.makeESDDVerificationStore()
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.isDeviceNetworkReachable = true
+        store.isNetworkingSuspended = false
+
+        let cid = "cas-sync-recovery"
+        let summary = CascadeSummary(
+            cascadeId: cid,
+            title: "Recovery Test Chat",
+            status: .done,
+            updatedAt: Date(),
+            relativeTimeLabel: "just now",
+            stepCount: 5,
+            projectSlug: "ledger-svc",
+            originHostName: "Antigravity",
+            originInstanceUuid: "rec-uuid-1",
+            isCloud: true
+        )
+        store.summaries = [summary]
+        store.activeCascadeId = cid
+        store.activeRoute = .cascadeChat(cid)
+        store.stepsByCascadeId.removeValue(forKey: cid)
+
+        // 1. Entering a conversation with empty steps sets isLoadingSteps = true
+        store.syncStepsForCascade(cid, pollUntilIdle: true)
+        XCTAssertTrue(store.isLoadingSteps, "Entering unhydrated conversation must display loading indicator")
+
+        // 2. Backgrounding suspends networking and stops polling task
+        store.suspendNetworkingForBackground()
+        XCTAssertTrue(store.isNetworkingSuspended)
+
+        // 3. Foregrounding while viewing cascadeChat must immediately restart step sync and mark isLoadingSteps
+        await store.resumeNetworkingFromForeground()
+        XCTAssertFalse(store.isNetworkingSuspended)
+        XCTAssertTrue(store.isLoadingSteps, "Resuming from background while in chat must immediately restore step loading")
+
+        // 4. Calling syncStepsForCascade with empty steps must force refresh rather than stalling
+        store.syncStepsForCascade(cid, pollUntilIdle: true)
+        XCTAssertTrue(store.isLoadingSteps, "Re-entering must keep step loading alive when steps are empty")
+    }
 }
 
 private final class AtomicTestInt: @unchecked Sendable {

@@ -275,8 +275,9 @@ fun AntigravityAppRoot(
         lastHandledStepRetryNonce = stepSyncRetryNonce
         val summary = activeChatSummary
         val resolvedIsCloud = isCloudConversation(cid, summary)
+        val hasExistingSteps = !chatState.stepsByCascadeId[cid].isNullOrEmpty()
         runCatching {
-            if (isManualRetry) {
+            if (isManualRetry || !hasExistingSteps) {
                 coordinator.forceSyncSteps(
                     cascadeId = cid,
                     knownStepCount = summary?.stepCount ?: 0,
