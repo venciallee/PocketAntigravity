@@ -300,16 +300,7 @@ extension AntigravitySessionStore {
     /// Returns live online status for a specific host UUID (consistent with per-device Relay reachability).
     public func isHostOnline(forInstanceUuid instanceUuid: String?) -> Bool {
         guard hasPairedBackend else { return true }
-        guard isDeviceNetworkReachable && isLiveBackendConnected else { return false }
-        if let uuid = instanceUuid, !uuid.isEmpty {
-            if let inst = availableRelayInstances.first(where: { $0.uuid == uuid }) {
-                return inst.status.isReachable
-            }
-            if let host = hosts.first(where: { $0.instanceId == uuid }) {
-                return host.isOnline
-            }
-        }
-        return activeHost.isOnline
+        return isLocalHostOnline(instanceId: instanceUuid, hostname: nil)
     }
 
     internal func syncRelayInstancesToHosts(
@@ -375,14 +366,23 @@ extension AntigravitySessionStore {
             } else {
                 hosts.insert(refreshedHost, at: 0)
             }
-        } else if activeHost.channel == .cloudRelay,
-                  let matchedActive = relayInstances.first(where: { $0.uuid == activeHost.instanceId }) {
-            var updatedActive = activeHost
-            updatedActive.hostname = matchedActive.name
-            updatedActive.version = matchedActive.version
-            updatedActive.isOnline = matchedActive.status.isReachable
-            updatedActive.latencyMs = effectiveLatency
-            activeHost = updatedActive
+        } else if activeHost.channel == .cloudRelay {
+            if let matchedActive = relayInstances.first(where: { $0.uuid == activeHost.instanceId }) {
+                var updatedActive = activeHost
+                updatedActive.hostname = matchedActive.name
+                updatedActive.version = matchedActive.version
+                updatedActive.isOnline = matchedActive.status.isReachable
+                updatedActive.latencyMs = effectiveLatency
+                activeHost = updatedActive
+            } else if activeHost.instanceId != "unpaired" && !activeHost.instanceId.isEmpty {
+                // Active Cloud Relay device disappeared from authoritative ListInstances roster -> mark offline cleanly.
+                var offlineActive = activeHost
+                offlineActive.isOnline = false
+                activeHost = offlineActive
+            }
+        }
+        if activeHost.channel == .cloudRelay && !activeHost.isOnline {
+            isLiveBackendConnected = false
         }
         if isLiveBackendConnected && activeHost.isOnline {
             if let pingMs = latencyMs ?? lastPingLatencyMs {
@@ -588,9 +588,22 @@ extension AntigravitySessionStore {
                 hosts[idx] = updatedHost
             }
         }
-        connectionStatusText = (probe.isSelectedHostOnline && activeHost.isOnline)
-            ? "Connected · \(activeHost.hostname) · \(probe.latencyMs)ms"
-            : "Offline · \(activeHost.hostname)"
+        let isOnlineNow = probe.isSelectedHostOnline && activeHost.isOnline
+        isLiveBackendConnected = isOnlineNow
+        if isOnlineNow {
+            connectionErrorText = nil
+            connectionStatusText = "Connected · \(activeHost.hostname) · \(probe.latencyMs)ms"
+            connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
+        } else {
+            connectionStatusText = "Offline · \(activeHost.hostname)"
+            if !isNetworkingSuspended && isDeviceNetworkReachable && hasPairedBackend {
+                let nextDelay = ConnectionPowerPolicy.offlineBackoffBaseDelay(
+                    attempt: reconnectAttemptCount,
+                    isLowPowerMode: isLowPowerModeEnabled
+                )
+                connectionLifecyclePhase = .offlineBackoff(attempt: reconnectAttemptCount, nextRetrySeconds: nextDelay)
+            }
+        }
     }
 
     internal func performLightweightHeartbeatTick(allowFullReconciliation: Bool) async {
@@ -616,6 +629,7 @@ extension AntigravitySessionStore {
                 return
             }
             guard self.hostSwitchGeneration == generation else { return }
+            let wasOfflineBeforeProbe = !isLiveBackendConnected || !activeHost.isOnline
             applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHost)
 
             if !probe.isSelectedHostOnline {
@@ -635,8 +649,8 @@ extension AntigravitySessionStore {
             nextReconnectAt = nil
             lastBackendActivityAt = Date()
 
-            if !isLiveBackendConnected || !activeHost.isOnline {
-                markBackendReconnected()
+            if wasOfflineBeforeProbe {
+                markBackendReconnected(forceReconnectedActions: true)
             } else {
                 connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
             }
@@ -715,7 +729,7 @@ extension AntigravitySessionStore {
                 connectionStatusText = "Offline · \(activeHost.hostname)"
                 return false
             }
-            markBackendReconnected()
+            markBackendReconnected(forceReconnectedActions: true)
             await refreshWorkspacesAndSummaries(
                 forceFullSync: true,
                 includeAutomations: selectedTab == .automations,
@@ -1426,7 +1440,13 @@ extension AntigravitySessionStore {
                     }
                 } catch {
                     if !Task.isCancelled {
-                        if Self.isBackendOfflineError(error) && self.activeHost.channel != .cloudRelay {
+                        if !summaryIsCloud && ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+                            self.markLocalHostOffline(
+                                instanceUuid: originUuid ?? self.activeHost.instanceId,
+                                hostname: summaryMeta?.originHostName,
+                                error: error
+                            )
+                        } else if Self.isBackendOfflineError(error) && self.activeHost.channel != .cloudRelay {
                             self.markBackendOffline(error: error)
                         }
                         if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {

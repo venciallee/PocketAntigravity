@@ -423,6 +423,12 @@ extension AntigravityRPCClient {
         )
     }
 
+    internal func isRelayInstanceRecentlyVerified(_ uuid: String, now: Date = Date()) -> Bool {
+        guard let verifiedAt = lastEndToEndVerifiedAtByUuid[uuid] else { return false }
+        let elapsed = now.timeIntervalSince(verifiedAt)
+        return elapsed >= 0 && elapsed < Self.endToEndFreshnessWindowSeconds
+    }
+
     internal func probeRelayInstanceLiveness(
         instanceUuid: String,
         timeoutInterval: TimeInterval = 4.0
@@ -437,10 +443,18 @@ extension AntigravityRPCClient {
                 timeoutInterval: timeoutInterval,
                 ignoreCachedOfflineStatus: true
             )
+            lastEndToEndVerifiedAtByUuid[instanceUuid] = Date()
             return true
         } catch let AntigravityRPCError.httpError(code, body) {
-            return code == 404 && !ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: code, body: body)
+            let alive = code == 404 && !ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: code, body: body)
+            if alive {
+                lastEndToEndVerifiedAtByUuid[instanceUuid] = Date()
+            } else {
+                lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
+            }
+            return alive
         } catch {
+            lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
             return false
         }
     }
@@ -753,13 +767,19 @@ extension AntigravityRPCClient {
             let prevActiveUuid = resolvedInstanceUuid
 
             var instances = try await listRelayInstances(timeoutInterval: effectiveTimeout)
+            let reachableNowIds = Set(instances.filter(\.status.isReachable).map(\.uuid))
+            for key in Array(lastEndToEndVerifiedAtByUuid.keys) where !reachableNowIds.contains(key) {
+                lastEndToEndVerifiedAtByUuid.removeValue(forKey: key)
+            }
             let instancesToVerify: [RelayInstanceInfo] = {
                 guard !instances.isEmpty else { return [] }
                 let candidateReachable = instances.filter(\.status.isReachable)
                 if verifyEndToEnd {
                     return candidateReachable
                 }
-                return candidateReachable.filter { prevDisconnectedIds.contains($0.uuid) }
+                return candidateReachable.filter { inst in
+                    prevDisconnectedIds.contains(inst.uuid) || !isRelayInstanceRecentlyVerified(inst.uuid, now: start)
+                }
             }()
             if !instancesToVerify.isEmpty {
                 let perHostTimeout = min(effectiveTimeout, 4.5)
@@ -1111,9 +1131,14 @@ extension AntigravityRPCClient {
                         )
                     }
                 }
-                if !failedLocalUuids.isEmpty && !self.cachedRelayInstances.isEmpty {
-                    self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
-                        failedLocalUuids.contains(inst.uuid) ? inst.withStatus(.disconnected) : inst
+                if !failedLocalUuids.isEmpty {
+                    for uuid in failedLocalUuids {
+                        self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: uuid)
+                    }
+                    if !self.cachedRelayInstances.isEmpty {
+                        self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
+                            failedLocalUuids.contains(inst.uuid) ? inst.withStatus(.disconnected) : inst
+                        }
                     }
                 }
             }

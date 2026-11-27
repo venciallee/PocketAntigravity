@@ -25,7 +25,9 @@ public actor AntigravityRPCClient {
     internal var didRunOriginApiKeyDiscovery: Bool = false
     internal var didForceRefreshInvalidApiKey: Bool = false
     internal var preferredCloudInstanceUuid: String? = nil
+    internal static let endToEndFreshnessWindowSeconds: TimeInterval = 45.0
     internal var cachedRelayInstances: [RelayInstanceInfo] = []
+    internal var lastEndToEndVerifiedAtByUuid: [String: Date] = [:]
     internal var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
     internal var cachedLocalProjectNameById: [String: String] = [:]
     internal var cachedLocalProjectIdByName: [String: String] = [:]
@@ -1081,10 +1083,12 @@ public actor AntigravityRPCClient {
                 let text = String(data: data, encoding: .utf8) ?? ""
                 throw AntigravityRPCError.httpError(statusCode: http.statusCode, body: text)
             }
-            return try CloudRelayJSPBCodec.decodeProxyCommandResponse(
+            let decoded = try CloudRelayJSPBCodec.decodeProxyCommandResponse(
                 data,
                 responseHeaders: http.allHeaderFields
             )
+            self.lastEndToEndVerifiedAtByUuid[targetUuid] = Date()
+            return decoded
         }
 
         do {
@@ -1108,9 +1112,15 @@ public actor AntigravityRPCClient {
             }
             let isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error)
             if isInstanceUnregistered {
+                self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
                 self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
                     inst.uuid == initialTargetUuid ? inst.withStatus(.disconnected) : inst
                 }
+            } else if error is URLError {
+                self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
+            } else if case let AntigravityRPCError.httpError(code, _) = error,
+                      code == 502 || code == 503 || code == 504 {
+                self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
             }
             if ignoreCachedOfflineStatus {
                 throw error

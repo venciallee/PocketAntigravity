@@ -4438,6 +4438,153 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertTrue(handshake.isSelectedHostOnline)
         XCTAssertTrue(handshake.summaries.isEmpty)
     }
+
+    @MainActor
+    func testDeviceConnectionStatusAccuracyAcrossDisappearedActiveHostAndStaleHeartbeat() async throws {
+        // 1. Swift AntigravityRPCClient.probeHostReachability(verifyEndToEnd: false) auto-verifies
+        //    unverified stale CONNECTED zombie Macs and downgrades them to .disconnected.
+        let liveUuid = "1111-live-macbook-v2"
+        let zombieUuid = "2222-zombie-imac-v2"
+        let removedUuid = "3333-removed-mini-v2"
+        let validKey = "AI" + "zaSySWIFTSTATUS0000000000000000000000"
+        let liveProbeCounter = AtomicTestInt(0)
+        let zombieProbeCounter = AtomicTestInt(0)
+
+        MockRelayURLProtocol.state.setResponder { urlString, _, body in
+            if urlString.contains("/ListInstances") {
+                let payload = ")]}'\n[[[\"\(liveUuid)\",[\"MacBook Pro\",\"2.34.0\",1],1,[1740000000,0]],[\"\(zombieUuid)\",[\"Office iMac\",\"2.34.0\",1],1,[1740000000,0]]],5]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(payload.utf8))
+            }
+            if urlString.contains("/ProxyCommand") {
+                let bodyText = String(data: body, encoding: .utf8) ?? ""
+                if bodyText.contains(zombieUuid) {
+                    _ = zombieProbeCounter.increment()
+                    let errBody = #"[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED"]]]"#
+                    return (400, ["Content-Type": "application/json+protobuf"], Data(errBody.utf8))
+                }
+                _ = liveProbeCounter.increment()
+                let encodedInner = Data("{}".utf8).base64EncodedString()
+                let jspb = ")]}'\n[\"\(encodedInner)\",[[\"content-type\",\"application/json\"]]]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(jspb.utf8))
+            }
+            return (404, [:], Data())
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: sessionConfig)
+        defer {
+            MockRelayURLProtocol.state.setResponder(nil)
+            mockSession.invalidateAndCancel()
+        }
+
+        let liveHost = RemoteHostInstance(
+            instanceId: liveUuid,
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(liveUuid)")!,
+            isOnline: true
+        )
+        let rpcClient = AntigravityRPCClient(
+            host: liveHost,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            authUser: "0",
+            resolvedInstanceUuid: liveUuid,
+            relayApiKey: validKey,
+            urlSession: mockSession
+        )
+
+        let firstProbe = try await rpcClient.probeHostReachability(allowCrossHostFallback: false, verifyEndToEnd: false)
+        XCTAssertTrue(firstProbe.isSelectedHostOnline)
+        XCTAssertEqual(liveProbeCounter.get(), 1)
+        XCTAssertEqual(zombieProbeCounter.get(), 1)
+        XCTAssertEqual(firstProbe.availableRelayInstances.first(where: { $0.uuid == liveUuid })?.status, .connected)
+        XCTAssertEqual(firstProbe.availableRelayInstances.first(where: { $0.uuid == zombieUuid })?.status, .disconnected)
+
+        // Immediate second lightweight probe skips redundant ProxyCommand for freshly verified live host
+        let secondProbe = try await rpcClient.probeHostReachability(allowCrossHostFallback: false, verifyEndToEnd: false)
+        XCTAssertTrue(secondProbe.isSelectedHostOnline)
+        XCTAssertEqual(liveProbeCounter.get(), 1)
+        XCTAssertEqual(zombieProbeCounter.get(), 2)
+
+        // 2. syncRelayInstancesToHosts marks disappeared activeHost offline & clears isLiveBackendConnected
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.isVerificationMode = true
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.isDeviceNetworkReachable = true
+        let removedHost = RemoteHostInstance(
+            instanceId: removedUuid,
+            hostname: "Old Mac mini",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(removedUuid)")!,
+            isOnline: true
+        )
+        store.activeHost = removedHost
+        store.hosts = [removedHost, liveHost]
+
+        store.syncRelayInstancesToHosts(
+            [
+                RelayInstanceInfo(uuid: liveUuid, name: "MacBook Pro", version: "2.34.0", status: .connected),
+                RelayInstanceInfo(uuid: zombieUuid, name: "Office iMac", version: "2.34.0", status: .disconnected)
+            ],
+            latencyMs: 25,
+            persistKeychainIfChanged: false
+        )
+        XCTAssertFalse(store.activeHost.isOnline, "Active host absent from ListInstances must be marked offline")
+        XCTAssertFalse(store.isLiveBackendConnected)
+        XCTAssertEqual(store.connectionStatusText, "Offline · Old Mac mini")
+        XCTAssertFalse(store.isLocalHostOnline(instanceId: removedUuid, hostname: "Old Mac mini"))
+        XCTAssertTrue(store.isLocalHostOnline(instanceId: liveUuid, hostname: "MacBook Pro"))
+        XCTAssertTrue(store.isHostOnline(forInstanceUuid: liveUuid), "isHostOnline must match isLocalHostOnline for healthy peers")
+        XCTAssertFalse(store.isHostOnline(forInstanceUuid: zombieUuid))
+
+        // 3. applyScopedHostRefreshResult in .allHosts promotes activeHost to responding peer instead of
+        //    falsely marking the offline activeHost back to isOnline = true
+        let scopedResult = ScopedWorkspaceSyncResult(
+            workspaces: [],
+            summaries: [],
+            cloudProjects: [],
+            cloudWarmingUp: false,
+            relayInstances: [
+                RelayInstanceInfo(uuid: liveUuid, name: "MacBook Pro", version: "2.34.0", status: .connected),
+                RelayInstanceInfo(uuid: zombieUuid, name: "Office iMac", version: "2.34.0", status: .disconnected)
+            ],
+            refreshedLocalHostUuids: [liveUuid],
+            refreshedLocalHostNames: ["MacBook Pro"],
+            refreshedCloud: false,
+            targetReachable: true,
+            latencyMs: 18
+        )
+        await store.applyScopedHostRefreshResult(scopedResult, for: .allHosts)
+        XCTAssertEqual(store.activeHost.instanceId, liveUuid)
+        XCTAssertTrue(store.activeHost.isOnline)
+        XCTAssertTrue(store.isLiveBackendConnected)
+        XCTAssertFalse(store.hosts.first(where: { $0.instanceId == removedUuid })?.isOnline ?? true)
+        XCTAssertFalse(store.isLocalHostOnline(instanceId: removedUuid, hostname: "Old Mac mini"))
+    }
+}
+
+private final class AtomicTestInt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int
+
+    init(_ initial: Int) {
+        self.value = initial
+    }
+
+    func get() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    @discardableResult
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+        return value
+    }
 }
 
 private final class AtomicTestString: @unchecked Sendable {

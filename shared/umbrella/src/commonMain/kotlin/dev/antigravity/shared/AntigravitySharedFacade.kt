@@ -52,6 +52,7 @@ public object AntigravitySharedFacade {
         preferencesStore = preferencesStore,
         projectionStorage = InMemoryProjectionStorage(),
         autoPreloadConversations = false,
+        enableForegroundHeartbeatLoop = false,
     )
 
     public fun createEsddVerificationCoordinator(): AntigravityCoreCoordinator =

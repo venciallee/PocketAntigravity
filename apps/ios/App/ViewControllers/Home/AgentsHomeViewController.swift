@@ -89,17 +89,20 @@ public struct AgentsHomeViewController: View {
         case .antigravityCloud:
             guard store.isDeviceNetworkReachable else { return false }
             if store.activeHost.channel == .cloudRelay && !store.availableRelayInstances.isEmpty {
-                return store.availableRelayInstances.contains(where: \.status.isReachable) || store.isLiveBackendConnected
+                return store.availableRelayInstances.contains(where: \.status.isReachable)
             }
-            return true
+            return !store.hasPairedBackend || store.isLiveBackendConnected
         case .localHost(let id, let name):
             if !store.hasPairedBackend { return true }
             return store.isLocalHostOnline(instanceId: id, hostname: name)
         case .allHosts:
             if !store.hasPairedBackend { return true }
             guard store.isDeviceNetworkReachable else { return false }
+            if store.activeHost.channel == .cloudRelay && !store.availableRelayInstances.isEmpty {
+                return store.availableRelayInstances.contains(where: \.status.isReachable)
+            }
             if pairedLocalHosts.count > 1 {
-                return pairedLocalHosts.contains(where: { isLocalHostOnline($0) }) || store.isLiveBackendConnected
+                return pairedLocalHosts.contains(where: { isLocalHostOnline($0) })
             }
             return store.isLiveBackendConnected && store.activeHost.isOnline
         }

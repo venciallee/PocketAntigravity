@@ -51,7 +51,86 @@ public data class ConnectionState(
     public val isNetworkExpensiveOrConstrained: Boolean = false,
     public val isNetworkingSuspended: Boolean = false,
     public val selectedHostScope: AgentsHostFilterScope = AgentsHostFilterScope.AllHosts,
-)
+    public val isRefreshingRelayHosts: Boolean = false,
+) {
+    /**
+     * Authoritative per-host online evaluation aligned with iOS (`isLocalHostOnline`):
+     * - Returns `false` immediately when the mobile device has no network connectivity.
+     * - On Cloud Relay with a non-empty authoritative `availableRelayInstances` snapshot, resolves
+     *   exact UUID/name reachability and treats absent devices as offline (never falling back to
+     *   another online peer or stale `isConnecting` state).
+     * - On Direct LAN or pre-handshake/verification states with empty `availableRelayInstances`,
+     *   requires both `matched.isOnline` and `isConnected`.
+     */
+    public fun isLocalHostOnline(instanceId: String?, hostname: String?): Boolean {
+        if (!hasPairedBackend) return true
+        if (!isDeviceNetworkReachable) return false
+        val trimmedId = instanceId?.trim().orEmpty()
+        val trimmedName = hostname?.trim().orEmpty()
+
+        if (activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY && availableRelayInstances.isNotEmpty()) {
+            if (trimmedId.isNotEmpty()) {
+                availableRelayInstances.firstOrNull { it.uuid == trimmedId }?.let {
+                    return it.status.isReachable
+                }
+            }
+            if (trimmedName.isNotEmpty()) {
+                availableRelayInstances.firstOrNull { it.name == trimmedName }?.let {
+                    return it.status.isReachable
+                }
+            }
+            if (trimmedId.isNotEmpty() || trimmedName.isNotEmpty()) {
+                return false
+            }
+            val activeId = activeHost.instanceId
+            return availableRelayInstances.firstOrNull { it.uuid == activeId }?.status?.isReachable == true
+        }
+
+        if (trimmedId.isNotEmpty()) {
+            knownHosts.firstOrNull { it.instanceId == trimmedId }?.let {
+                return it.isOnline && isConnected
+            }
+        }
+        if (trimmedName.isNotEmpty()) {
+            knownHosts.firstOrNull { it.hostname == trimmedName }?.let {
+                return it.isOnline && isConnected
+            }
+        }
+        return isConnected && (activeHost?.isOnline == true)
+    }
+
+    /**
+     * Authoritative host-scope reachability evaluation for Home header pills, Cloud mode, and All Hosts.
+     */
+    public fun isHostScopeOnline(scope: AgentsHostFilterScope = selectedHostScope): Boolean {
+        if (!hasPairedBackend) return true
+        if (!isDeviceNetworkReachable) return false
+        return when (scope) {
+            is AgentsHostFilterScope.LocalHost -> isLocalHostOnline(scope.id, scope.name)
+            AgentsHostFilterScope.AntigravityCloud -> {
+                if (activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY && availableRelayInstances.isNotEmpty()) {
+                    availableRelayInstances.any { it.status.isReachable }
+                } else {
+                    isConnected
+                }
+            }
+            AgentsHostFilterScope.AllHosts -> {
+                if (activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY && availableRelayInstances.isNotEmpty()) {
+                    availableRelayInstances.any { it.status.isReachable }
+                } else {
+                    val localHosts = knownHosts.filter {
+                        it.instanceId != "unpaired" && !it.hostname.equals("cloud", ignoreCase = true)
+                    }
+                    if (localHosts.isNotEmpty()) {
+                        isConnected && localHosts.any { it.isOnline }
+                    } else {
+                        isConnected && (activeHost?.isOnline == true)
+                    }
+                }
+            }
+        }
+    }
+}
 
 /**
  * Shared KMP connection & authentication state machine (`StateFlow<ConnectionState>`).
@@ -90,8 +169,10 @@ public class ConnectionDomainStore(
     private var currentClient: AntigravityKmpRpcClient? = null
     private var reconnectAttempt: Int = 0
     private var isMonitoringNetwork: Boolean = false
+    private var previousNetworkStatus: NetworkReachabilityStatus? = null
     private var connectGeneration: Long = 0L
     internal var handshakeHardTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
+    internal var onNetworkRecovered: (() -> Unit)? = null
 
     @kotlin.concurrent.Volatile
     private var activeHandshakeClient: AntigravityKmpRpcClient? = null
@@ -115,6 +196,21 @@ public class ConnectionDomainStore(
 
     public suspend fun activeClient(): AntigravityKmpRpcClient? = clientMutex.withLock { currentClient }
 
+    internal fun currentReconnectAttempt(): Int = reconnectAttempt
+
+    internal fun resetReconnectAttempt() {
+        reconnectAttempt = 0
+    }
+
+    internal fun incrementReconnectAttempt(): Int {
+        reconnectAttempt = (reconnectAttempt + 1).coerceAtMost(ConnectionPowerPolicy.offlineBackoffScheduleSeconds.size)
+        return reconnectAttempt
+    }
+
+    internal fun setRefreshingRelayHosts(refreshing: Boolean) {
+        _state.update { it.copy(isRefreshingRelayHosts = refreshing) }
+    }
+
     public fun startNetworkMonitoring() {
         if (isMonitoringNetwork) return
         isMonitoringNetwork = true
@@ -130,19 +226,55 @@ public class ConnectionDomainStore(
     }
 
     public fun onNetworkStatusChanged(status: NetworkReachabilityStatus) {
+        val prevStatus = previousNetworkStatus
+        previousNetworkStatus = status
+        var shouldNotifyRecovery = false
         _state.update { prev ->
-            val nextPhase = when {
-                prev.isNetworkingSuspended -> prev.lifecyclePhase
-                !status.isSatisfied && prev.hasPairedBackend -> ConnectionLifecyclePhase.NoNetwork
-                status.isSatisfied && prev.lifecyclePhase is ConnectionLifecyclePhase.NoNetwork ->
-                    ConnectionLifecyclePhase.OnlineIdle
-                else -> prev.lifecyclePhase
+            if (!status.isSatisfied) {
+                val nextPhase = when {
+                    prev.isNetworkingSuspended -> prev.lifecyclePhase
+                    prev.hasPairedBackend -> ConnectionLifecyclePhase.NoNetwork
+                    else -> prev.lifecyclePhase
+                }
+                prev.copy(
+                    isDeviceNetworkReachable = false,
+                    isNetworkExpensiveOrConstrained = status.isExpensiveOrConstrained,
+                    isConnected = false,
+                    lastPingLatencyMs = null,
+                    activeHost = prev.activeHost?.copy(isOnline = false),
+                    knownHosts = prev.knownHosts.map { it.copy(isOnline = false) },
+                    availableRelayInstances = prev.availableRelayInstances.map {
+                        it.copy(status = RelayInstanceStatus.DISCONNECTED)
+                    },
+                    statusText = if (prev.hasPairedBackend) "No Internet Connection" else prev.statusText,
+                    lifecyclePhase = nextPhase,
+                )
+            } else {
+                val recoveredFromNoNetwork = (prevStatus != null && !prevStatus.isSatisfied) ||
+                    prev.lifecyclePhase is ConnectionLifecyclePhase.NoNetwork
+                val prevFp = (prevStatus as? NetworkReachabilityStatus.Satisfied)?.interfaceFingerprint
+                val nextFp = (status as? NetworkReachabilityStatus.Satisfied)?.interfaceFingerprint
+                val interfaceSwitched = prevFp != null && nextFp != null && prevFp != nextFp
+                if ((recoveredFromNoNetwork || interfaceSwitched) &&
+                    prev.hasPairedBackend &&
+                    !prev.isNetworkingSuspended
+                ) {
+                    shouldNotifyRecovery = true
+                }
+                val nextPhase = when {
+                    prev.isNetworkingSuspended -> prev.lifecyclePhase
+                    recoveredFromNoNetwork && prev.hasPairedBackend -> ConnectionLifecyclePhase.Connecting
+                    else -> prev.lifecyclePhase
+                }
+                prev.copy(
+                    isDeviceNetworkReachable = true,
+                    isNetworkExpensiveOrConstrained = status.isExpensiveOrConstrained,
+                    lifecyclePhase = nextPhase,
+                )
             }
-            prev.copy(
-                isDeviceNetworkReachable = status.isSatisfied,
-                isNetworkExpensiveOrConstrained = status.isExpensiveOrConstrained,
-                lifecyclePhase = nextPhase,
-            )
+        }
+        if (shouldNotifyRecovery) {
+            onNetworkRecovered?.invoke()
         }
     }
 
@@ -164,7 +296,11 @@ public class ConnectionDomainStore(
         startNetworkMonitoring()
         _state.update { prev ->
             val resumedPhase = if (prev.lifecyclePhase is ConnectionLifecyclePhase.Suspended) {
-                if (prev.isConnected) ConnectionLifecyclePhase.OnlineIdle else ConnectionLifecyclePhase.Connecting
+                when {
+                    !prev.isDeviceNetworkReachable -> ConnectionLifecyclePhase.NoNetwork
+                    prev.isConnected -> ConnectionLifecyclePhase.OnlineIdle
+                    else -> ConnectionLifecyclePhase.Connecting
+                }
             } else {
                 prev.lifecyclePhase
             }
@@ -372,7 +508,11 @@ public class ConnectionDomainStore(
                     latencyMs = handshake.latencyMs,
                 )
             }
-            val updatedHosts = mergeHostList(_state.value.knownHosts, listOf(verifiedHost) + relayHosts)
+            val updatedHosts = mergeHostList(
+                existing = _state.value.knownHosts,
+                incoming = listOf(verifiedHost) + relayHosts,
+                markAbsentCloudRelayOffline = handshake.availableRelayInstances.isNotEmpty(),
+            )
             projectionStorage.saveKnownHosts(updatedHosts)
             secretStore.saveCredentials(
                 SavedBackendCredentials(
@@ -461,9 +601,20 @@ public class ConnectionDomainStore(
     @Throws(Throwable::class)
     public suspend fun restoreSavedSession(): BackendHandshakeResult? {
         val saved = secretStore.loadCredentials() ?: return null
-        val cachedHosts = projectionStorage.loadKnownHosts()
+        // Always hydrate cached knownHosts as offline until the live handshake confirms reachability,
+        // preventing stale disk cache from falsely showing a sleeping/powered-off host as online.
+        val cachedHosts = projectionStorage.loadKnownHosts().map { it.copy(isOnline = false) }
         if (cachedHosts.isNotEmpty()) {
-            _state.update { it.copy(knownHosts = cachedHosts, hasPairedBackend = true) }
+            val cachedActive = cachedHosts.firstOrNull {
+                it.instanceId == saved.resolvedInstanceUuid || it.hostname == saved.hostname
+            } ?: cachedHosts.first()
+            _state.update {
+                it.copy(
+                    knownHosts = cachedHosts,
+                    activeHost = it.activeHost ?: cachedActive,
+                    hasPairedBackend = true,
+                )
+            }
         }
         return when (saved.channel) {
             RemoteConnectionChannel.DIRECT_HOST -> connectDirectLan(
@@ -492,17 +643,35 @@ public class ConnectionDomainStore(
     ): HostReachabilityProbeResult {
         val client = activeClient()
             ?: throw AntigravityRpcError.HttpError(503, "No active backend client")
-        val result = client.probeHostReachability(
-            allowCrossHostFallback = allowCrossHostFallback,
-            verifyEndToEnd = verifyEndToEnd,
-        )
-        _state.update { prev ->
-            val nextRelayInstances = result.availableRelayInstances.ifEmpty { prev.availableRelayInstances }
-            val statusByUuid = nextRelayInstances.associate { it.uuid to it.status.isReachable }
-            val nextKnownHosts = prev.knownHosts.map { host ->
-                val live = statusByUuid[host.instanceId]
-                if (live != null) host.copy(isOnline = live, latencyMs = result.latencyMs) else host
+        val result = try {
+            client.probeHostReachability(
+                allowCrossHostFallback = allowCrossHostFallback,
+                verifyEndToEnd = verifyEndToEnd,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (isBackendOfflineError(e)) {
+                markAllChannelHostsOffline(error = e)
             }
+            throw e
+        }
+
+        if (result.isSelectedHostOnline) {
+            reconnectAttempt = 0
+        }
+        var hostsToPersist: List<RemoteHostInstance>? = null
+        _state.update { prev ->
+            val hasFreshRelaySnapshot = result.availableRelayInstances.isNotEmpty()
+            val nextRelayInstances = if (hasFreshRelaySnapshot) {
+                result.availableRelayInstances
+            } else {
+                prev.availableRelayInstances
+            }
+            val originPrefix = RemoteHostInstance.parseRemoteControlTarget(
+                prev.activeHost?.endpointUrl.orEmpty()
+            )?.relayOrigin ?: SapisidHashGenerator.DEFAULT_ORIGIN
+
             val nextActiveHost = result.activeRelayInstance?.let { inst ->
                 val base = prev.activeHost
                 if (base != null) {
@@ -510,27 +679,78 @@ public class ConnectionDomainStore(
                         instanceId = inst.uuid,
                         hostname = inst.name.ifBlank { base.hostname },
                         version = inst.version.ifBlank { base.version },
+                        endpointUrl = "${originPrefix.trimEnd('/')}/r/${inst.uuid}",
                         isOnline = result.isSelectedHostOnline,
                         latencyMs = result.latencyMs,
                     )
                 } else {
-                    null
+                    RemoteHostInstance(
+                        instanceId = inst.uuid,
+                        hostname = inst.name,
+                        version = inst.version,
+                        channel = RemoteConnectionChannel.CLOUD_RELAY,
+                        endpointUrl = "${originPrefix.trimEnd('/')}/r/${inst.uuid}",
+                        isOnline = result.isSelectedHostOnline,
+                        latencyMs = result.latencyMs,
+                    )
                 }
-            } ?: prev.activeHost?.copy(isOnline = result.isSelectedHostOnline, latencyMs = result.latencyMs)
+            } ?: prev.activeHost?.let { active ->
+                val activeStillPresent = !hasFreshRelaySnapshot ||
+                    active.channel != RemoteConnectionChannel.CLOUD_RELAY ||
+                    nextRelayInstances.any { it.uuid == active.instanceId && it.status.isReachable }
+                active.copy(
+                    isOnline = result.isSelectedHostOnline && activeStillPresent,
+                    latencyMs = result.latencyMs,
+                )
+            }
+
+            val nextKnownHosts = if (hasFreshRelaySnapshot) {
+                val incomingRelayHosts = nextRelayInstances.map { inst ->
+                    RemoteHostInstance(
+                        instanceId = inst.uuid,
+                        hostname = inst.name,
+                        version = inst.version,
+                        channel = RemoteConnectionChannel.CLOUD_RELAY,
+                        endpointUrl = "${originPrefix.trimEnd('/')}/r/${inst.uuid}",
+                        isOnline = inst.status.isReachable,
+                        latencyMs = result.latencyMs,
+                    )
+                }
+                val merged = mergeHostList(
+                    existing = prev.knownHosts,
+                    incoming = incomingRelayHosts,
+                    markAbsentCloudRelayOffline = true,
+                )
+                if (merged != prev.knownHosts) {
+                    hostsToPersist = merged
+                }
+                merged
+            } else if (nextActiveHost != null) {
+                prev.knownHosts.map { host ->
+                    if (host.instanceId == nextActiveHost.instanceId) nextActiveHost else host
+                }
+            } else {
+                prev.knownHosts
+            }
+
+            val isOnlineNow = result.isSelectedHostOnline && (nextActiveHost?.isOnline != false)
             val displayHostName = nextActiveHost?.hostname?.takeIf { it.isNotBlank() } ?: "Desktop"
             prev.copy(
-                isConnected = result.isSelectedHostOnline,
-                lastPingLatencyMs = result.latencyMs,
+                isConnected = isOnlineNow,
+                lastPingLatencyMs = if (isOnlineNow) result.latencyMs else null,
                 activeHost = nextActiveHost,
                 knownHosts = nextKnownHosts,
                 availableRelayInstances = nextRelayInstances,
-                statusText = if (result.isSelectedHostOnline) {
+                errorText = if (isOnlineNow) null else prev.errorText,
+                statusText = if (isOnlineNow) {
                     "Connected · $displayHostName · ${result.latencyMs}ms"
                 } else {
                     "Offline · $displayHostName"
                 },
-                lifecyclePhase = if (result.isSelectedHostOnline) {
+                lifecyclePhase = if (isOnlineNow) {
                     ConnectionLifecyclePhase.OnlineIdle
+                } else if (!prev.isDeviceNetworkReachable) {
+                    ConnectionLifecyclePhase.NoNetwork
                 } else {
                     val delay = ConnectionPowerPolicy.offlineBackoffBaseDelaySeconds(
                         reconnectAttempt,
@@ -540,7 +760,246 @@ public class ConnectionDomainStore(
                 },
             )
         }
+        hostsToPersist?.let { updated ->
+            try {
+                projectionStorage.saveKnownHosts(updated)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort knownHosts cache persistence.
+            }
+        }
         return result
+    }
+
+    /**
+     * Propagates an authoritative Cloud Relay `ListInstances` snapshot (from federated workspace sync
+     * or deferred handshake hydration) back into [ConnectionState] so `availableRelayInstances`,
+     * `knownHosts[*].isOnline`, `activeHost.isOnline`, and `isConnected` never go stale.
+     */
+    @Throws(Throwable::class)
+    public suspend fun syncRelayInstances(
+        instances: List<RelayInstanceInfo>,
+        latencyMs: Int? = null,
+        succeededInstanceUuids: Collection<String> = emptyList(),
+        allowCrossHostPromotion: Boolean = false,
+    ) {
+        if (instances.isEmpty()) return
+        val succeededSet = succeededInstanceUuids.filter { it.isNotBlank() }.toSet()
+        var hostsToPersist: List<RemoteHostInstance>? = null
+        var promotedRelayInstance: RelayInstanceInfo? = null
+
+        _state.update { prev ->
+            if (!prev.isDeviceNetworkReachable) {
+                return@update prev
+            }
+            val originPrefix = RemoteHostInstance.parseRemoteControlTarget(
+                prev.activeHost?.endpointUrl.orEmpty()
+            )?.relayOrigin ?: SapisidHashGenerator.DEFAULT_ORIGIN
+            val effectiveLatency = latencyMs?.takeIf { it > 0 } ?: prev.lastPingLatencyMs ?: prev.activeHost?.latencyMs ?: 0
+
+            val incomingRelayHosts = instances.map { inst ->
+                RemoteHostInstance(
+                    instanceId = inst.uuid,
+                    hostname = inst.name,
+                    version = inst.version,
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "${originPrefix.trimEnd('/')}/r/${inst.uuid}",
+                    isOnline = inst.status.isReachable,
+                    latencyMs = effectiveLatency,
+                )
+            }
+            val nextKnownHosts = mergeHostList(
+                existing = prev.knownHosts,
+                incoming = incomingRelayHosts,
+                markAbsentCloudRelayOffline = true,
+            )
+            if (nextKnownHosts != prev.knownHosts) {
+                hostsToPersist = nextKnownHosts
+            }
+
+            val currentActive = prev.activeHost
+            val matchedActive = currentActive?.let { active ->
+                instances.firstOrNull { it.uuid == active.instanceId }
+            }
+            val nextActive: RemoteHostInstance? = when {
+                currentActive == null -> {
+                    val chosen = instances.firstOrNull { it.uuid in succeededSet && it.status.isReachable }
+                        ?: instances.firstOrNull { it.status.isReachable }
+                        ?: instances.firstOrNull()
+                    chosen?.let { inst ->
+                        RemoteHostInstance(
+                            instanceId = inst.uuid,
+                            hostname = inst.name,
+                            version = inst.version,
+                            channel = RemoteConnectionChannel.CLOUD_RELAY,
+                            endpointUrl = "${originPrefix.trimEnd('/')}/r/${inst.uuid}",
+                            isOnline = inst.status.isReachable,
+                            latencyMs = effectiveLatency,
+                        )
+                    }
+                }
+                currentActive.channel != RemoteConnectionChannel.CLOUD_RELAY -> currentActive
+                matchedActive != null && matchedActive.status.isReachable -> currentActive.copy(
+                    hostname = matchedActive.name.ifBlank { currentActive.hostname },
+                    version = matchedActive.version.ifBlank { currentActive.version },
+                    isOnline = true,
+                    latencyMs = effectiveLatency,
+                )
+                allowCrossHostPromotion -> {
+                    val onlinePeer = instances.firstOrNull { it.uuid in succeededSet && it.status.isReachable }
+                        ?: instances.firstOrNull { it.status.isReachable }
+                    if (onlinePeer != null) {
+                        promotedRelayInstance = onlinePeer
+                        currentActive.copy(
+                            instanceId = onlinePeer.uuid,
+                            hostname = onlinePeer.name.ifBlank { currentActive.hostname },
+                            version = onlinePeer.version.ifBlank { currentActive.version },
+                            endpointUrl = "${originPrefix.trimEnd('/')}/r/${onlinePeer.uuid}",
+                            isOnline = true,
+                            latencyMs = effectiveLatency,
+                        )
+                    } else {
+                        currentActive.copy(
+                            hostname = matchedActive?.name?.takeIf { it.isNotBlank() } ?: currentActive.hostname,
+                            version = matchedActive?.version?.takeIf { it.isNotBlank() } ?: currentActive.version,
+                            isOnline = false,
+                        )
+                    }
+                }
+                else -> currentActive.copy(
+                    hostname = matchedActive?.name?.takeIf { it.isNotBlank() } ?: currentActive.hostname,
+                    version = matchedActive?.version?.takeIf { it.isNotBlank() } ?: currentActive.version,
+                    isOnline = false,
+                )
+            }
+
+            val activeIsOnline = nextActive?.isOnline == true
+            if (activeIsOnline) {
+                reconnectAttempt = 0
+            }
+            val displayName = nextActive?.hostname?.takeIf { it.isNotBlank() } ?: "Desktop"
+            val nextStatusText = when {
+                activeIsOnline && effectiveLatency > 0 -> "Connected · $displayName · ${effectiveLatency}ms"
+                activeIsOnline -> "Connected · $displayName"
+                else -> "Offline · $displayName"
+            }
+            val nextPhase = when {
+                prev.isNetworkingSuspended -> prev.lifecyclePhase
+                !prev.isDeviceNetworkReachable -> ConnectionLifecyclePhase.NoNetwork
+                activeIsOnline -> ConnectionLifecyclePhase.OnlineIdle
+                else -> {
+                    val delay = ConnectionPowerPolicy.offlineBackoffBaseDelaySeconds(
+                        reconnectAttempt,
+                        powerStateProvider.isLowPowerModeEnabled,
+                    )
+                    ConnectionLifecyclePhase.OfflineBackoff(reconnectAttempt, delay)
+                }
+            }
+            prev.copy(
+                isConnected = activeIsOnline,
+                lastPingLatencyMs = if (activeIsOnline && effectiveLatency > 0) effectiveLatency else prev.lastPingLatencyMs,
+                activeHost = nextActive,
+                knownHosts = nextKnownHosts,
+                availableRelayInstances = instances,
+                errorText = if (activeIsOnline) null else prev.errorText,
+                statusText = nextStatusText,
+                lifecyclePhase = nextPhase,
+            )
+        }
+        promotedRelayInstance?.let { inst ->
+            activeClient()?.setTargetRelayInstance(inst.uuid, inst.name)
+        }
+        hostsToPersist?.let { updated ->
+            try {
+                projectionStorage.saveKnownHosts(updated)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort knownHosts cache persistence.
+            }
+        }
+    }
+
+    public fun markBackendConnected(latencyMs: Int? = null) {
+        reconnectAttempt = 0
+        _state.update { prev ->
+            if (!prev.isDeviceNetworkReachable) return@update prev
+            val effectiveLatency = latencyMs?.takeIf { it > 0 } ?: prev.lastPingLatencyMs ?: prev.activeHost?.latencyMs ?: 0
+            val nextActive = prev.activeHost?.copy(isOnline = true, latencyMs = effectiveLatency)
+            val nextKnownHosts = if (nextActive != null) {
+                prev.knownHosts.map { host ->
+                    if (host.instanceId == nextActive.instanceId) nextActive else host
+                }
+            } else {
+                prev.knownHosts
+            }
+            val displayName = nextActive?.hostname?.takeIf { it.isNotBlank() } ?: "Desktop"
+            prev.copy(
+                isConnected = true,
+                lastPingLatencyMs = if (effectiveLatency > 0) effectiveLatency else prev.lastPingLatencyMs,
+                activeHost = nextActive,
+                knownHosts = nextKnownHosts,
+                errorText = null,
+                statusText = if (effectiveLatency > 0) "Connected · $displayName · ${effectiveLatency}ms" else "Connected · $displayName",
+                lifecyclePhase = if (prev.isNetworkingSuspended) prev.lifecyclePhase else ConnectionLifecyclePhase.OnlineIdle,
+            )
+        }
+    }
+
+    public fun markAllChannelHostsOffline(
+        error: Throwable? = null,
+        errorMessage: String? = null,
+    ) {
+        val isAuthError = error is AntigravityRpcError.Unauthorized
+        val resolvedMsg = errorMessage ?: when (error) {
+            is AntigravityRpcError.Unauthorized -> error.detail.ifBlank { "Google session unauthorized: please sign in again." }
+            is AntigravityRpcError.HttpError -> ProtocolCompatibilityEngine.formatUserFacingRpcError(error)
+            else -> error?.message
+        }
+        _state.update { prev ->
+            val channel = prev.activeHost?.channel
+            val nextActive = prev.activeHost?.copy(isOnline = false)
+            val nextKnownHosts = prev.knownHosts.map { h ->
+                if (channel == null || h.channel == channel || !prev.isDeviceNetworkReachable) {
+                    h.copy(isOnline = false)
+                } else {
+                    h
+                }
+            }
+            val nextRelayInstances = prev.availableRelayInstances.map { inst ->
+                inst.copy(status = RelayInstanceStatus.DISCONNECTED)
+            }
+            val displayName = nextActive?.hostname?.takeIf { it.isNotBlank() } ?: "Desktop"
+            val statusText = when {
+                !prev.isDeviceNetworkReachable -> "No Internet Connection"
+                isAuthError && channel == RemoteConnectionChannel.CLOUD_RELAY -> "Google Sign-In Expired"
+                isAuthError -> "Auth Expired · $displayName"
+                else -> "Offline · $displayName"
+            }
+            val phase = when {
+                prev.isNetworkingSuspended -> ConnectionLifecyclePhase.Suspended
+                !prev.isDeviceNetworkReachable -> ConnectionLifecyclePhase.NoNetwork
+                prev.hasPairedBackend -> {
+                    val delay = ConnectionPowerPolicy.offlineBackoffBaseDelaySeconds(
+                        reconnectAttempt,
+                        powerStateProvider.isLowPowerModeEnabled,
+                    )
+                    ConnectionLifecyclePhase.OfflineBackoff(reconnectAttempt, delay)
+                }
+                else -> ConnectionLifecyclePhase.Disconnected
+            }
+            prev.copy(
+                isConnected = false,
+                lastPingLatencyMs = null,
+                activeHost = nextActive,
+                knownHosts = nextKnownHosts,
+                availableRelayInstances = nextRelayInstances,
+                statusText = statusText,
+                errorText = resolvedMsg ?: prev.errorText,
+                lifecyclePhase = phase,
+            )
+        }
     }
 
     public fun markInstanceOffline(
@@ -605,15 +1064,44 @@ public class ConnectionDomainStore(
         client.setTargetRelayInstance(instance.uuid, instance.name)
         _state.update { prev ->
             val currentHost = prev.activeHost
+            val originPrefix = RemoteHostInstance.parseRemoteControlTarget(
+                currentHost?.endpointUrl.orEmpty()
+            )?.relayOrigin ?: SapisidHashGenerator.DEFAULT_ORIGIN
             val nextHost = currentHost?.copy(
                 instanceId = instance.uuid,
                 hostname = instance.name,
-                version = instance.version,
+                version = instance.version.ifBlank { currentHost.version },
+                endpointUrl = "${originPrefix.trimEnd('/')}/r/${instance.uuid}",
                 isOnline = instance.status.isReachable,
             )
+            val isOnline = prev.isDeviceNetworkReachable && instance.status.isReachable
+            val nextKnownHosts = if (nextHost != null) {
+                val updated = prev.knownHosts.map { host ->
+                    if (host.instanceId == nextHost.instanceId) nextHost else host
+                }
+                if (updated.any { it.instanceId == nextHost.instanceId }) updated else listOf(nextHost) + updated
+            } else {
+                prev.knownHosts
+            }
+            val nextPhase = when {
+                prev.isNetworkingSuspended -> prev.lifecyclePhase
+                !prev.isDeviceNetworkReachable -> ConnectionLifecyclePhase.NoNetwork
+                isOnline -> ConnectionLifecyclePhase.OnlineIdle
+                else -> {
+                    val delay = ConnectionPowerPolicy.offlineBackoffBaseDelaySeconds(
+                        reconnectAttempt,
+                        powerStateProvider.isLowPowerModeEnabled,
+                    )
+                    ConnectionLifecyclePhase.OfflineBackoff(reconnectAttempt, delay)
+                }
+            }
             prev.copy(
                 activeHost = nextHost,
-                isConnected = instance.status.isReachable,
+                knownHosts = nextKnownHosts,
+                isConnected = isOnline,
+                errorText = if (isOnline) null else prev.errorText,
+                statusText = if (isOnline) "Connected · ${instance.name}" else "Offline · ${instance.name}",
+                lifecyclePhase = nextPhase,
                 selectedHostScope = AgentsHostFilterScope.LocalHost(instance.uuid, instance.name),
             )
         }
@@ -768,15 +1256,38 @@ public class ConnectionDomainStore(
             } else {
                 prev.activeHost
             }
+            val nextKnownHosts = prev.knownHosts.map { known ->
+                if (known.channel == host.channel || known.instanceId == resolvedHost?.instanceId) {
+                    known.copy(isOnline = false)
+                } else {
+                    known
+                }
+            }
+            val nextRelayInstances = if (host.channel == RemoteConnectionChannel.CLOUD_RELAY) {
+                prev.availableRelayInstances.map { it.copy(status = RelayInstanceStatus.DISCONNECTED) }
+            } else {
+                prev.availableRelayInstances
+            }
             val displayHostName = resolvedHost?.hostname?.takeIf { it.isNotBlank() } ?: host.hostname
+            val statusText = when {
+                !prev.isDeviceNetworkReachable -> "No Internet Connection"
+                isAuthError && host.channel == RemoteConnectionChannel.CLOUD_RELAY -> "Google Sign-In Expired"
+                isAuthError -> "Auth Expired · $displayHostName"
+                else -> "Offline · $displayHostName"
+            }
             prev.copy(
                 hasPairedBackend = keepPaired,
                 isConnected = false,
                 isConnecting = false,
+                lastPingLatencyMs = null,
                 activeHost = resolvedHost,
+                knownHosts = nextKnownHosts,
+                availableRelayInstances = nextRelayInstances,
                 errorText = errMsg,
-                statusText = if (isAuthError) "Auth Expired · $displayHostName" else "Offline · $displayHostName",
-                lifecyclePhase = if (keepPaired) {
+                statusText = statusText,
+                lifecyclePhase = if (!prev.isDeviceNetworkReachable && keepPaired) {
+                    ConnectionLifecyclePhase.NoNetwork
+                } else if (keepPaired) {
                     ConnectionLifecyclePhase.OfflineBackoff(reconnectAttempt, nextDelay)
                 } else {
                     ConnectionLifecyclePhase.Disconnected
@@ -788,11 +1299,18 @@ public class ConnectionDomainStore(
     private fun mergeHostList(
         existing: List<RemoteHostInstance>,
         incoming: List<RemoteHostInstance>,
+        markAbsentCloudRelayOffline: Boolean = false,
     ): List<RemoteHostInstance> {
         val map = linkedMapOf<String, RemoteHostInstance>()
         for (h in incoming) map[h.instanceId] = h
         for (h in existing) {
-            if (!map.containsKey(h.instanceId)) map[h.instanceId] = h
+            if (!map.containsKey(h.instanceId)) {
+                map[h.instanceId] = if (markAbsentCloudRelayOffline && h.channel == RemoteConnectionChannel.CLOUD_RELAY) {
+                    h.copy(isOnline = false)
+                } else {
+                    h
+                }
+            }
         }
         return map.values.toList()
     }
@@ -813,9 +1331,25 @@ public class ConnectionDomainStore(
         return out
     }
 
-    private companion object {
+    internal companion object {
         private const val KEY_SELECTED_HOST_SCOPE = "antigravity.kmp.selectedHostScope.v1"
         private const val KEY_USER_DISPLAY_NAME = "antigravity.userDisplayName.v1"
         private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 22_000L
+
+        internal fun isBackendOfflineError(error: Throwable): Boolean {
+            if (error is CancellationException) return false
+            if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error)) return true
+            return when (error) {
+                is AntigravityRpcError.Unauthorized,
+                is AntigravityRpcError.InvalidEndpoint,
+                -> true
+                is AntigravityRpcError.HttpError ->
+                    error.statusCode == -1 || error.statusCode in setOf(502, 503, 504)
+                is AntigravityRpcError.DecodingError,
+                is AntigravityRpcError.InteractionRejected,
+                -> false
+                else -> true
+            }
+        }
     }
 }
