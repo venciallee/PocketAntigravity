@@ -508,8 +508,29 @@ fun HostSwitcherPill(
     }
 }
 
+private object MarkdownAstLruCache {
+    private const val MAX_ENTRIES = 256
+    private val lock = Any()
+    private val cache = object : LinkedHashMap<String, List<MarkdownBlock>>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MarkdownBlock>>?): Boolean =
+            size > MAX_ENTRIES
+    }
+
+    fun parseCached(markdown: String): List<MarkdownBlock> {
+        synchronized(lock) {
+            cache[markdown]?.let { return it }
+        }
+        val parsed = AntigravityMarkdownParser.parse(markdown)
+        synchronized(lock) {
+            cache[markdown] = parsed
+        }
+        return parsed
+    }
+}
+
 /**
- * Convenience overload parsing raw Markdown via KMP [AntigravityMarkdownParser] before rendering.
+ * Convenience overload parsing raw Markdown via KMP [AntigravityMarkdownParser] before rendering,
+ * backed by a process-wide bounded LRU AST cache so `LazyColumn` recycles and re-entries are O(1).
  */
 @Composable
 fun MarkdownContentView(
@@ -517,7 +538,7 @@ fun MarkdownContentView(
     modifier: Modifier = Modifier,
     onLinkClick: (String) -> Unit = {},
 ) {
-    val blocks = remember(markdown) { AntigravityMarkdownParser.parse(markdown) }
+    val blocks = remember(markdown) { MarkdownAstLruCache.parseCached(markdown) }
     MarkdownContentView(
         blocks = blocks,
         modifier = modifier,

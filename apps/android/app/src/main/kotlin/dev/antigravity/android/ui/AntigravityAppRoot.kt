@@ -248,24 +248,35 @@ fun AntigravityAppRoot(
         if (activeChatRouteId.isNullOrBlank()) null
         else syncState.summaries.firstOrNull { it.cascadeId == activeChatRouteId }
     }
+    var lastHandledStepRetryNonce by remember { mutableStateOf(0) }
     LaunchedEffect(
         activeChatRouteId,
         activeChatSummary?.stepCount,
         activeChatSummary?.status,
-        activeChatSummary?.updatedAtEpochMs,
         stepSyncRetryNonce,
     ) {
         val cid = activeChatRouteId ?: return@LaunchedEffect
         if (coordinator.isVerificationMode || cid.startsWith("cascade-new-")) return@LaunchedEffect
+        val isManualRetry = stepSyncRetryNonce != lastHandledStepRetryNonce
+        lastHandledStepRetryNonce = stepSyncRetryNonce
         val summary = activeChatSummary
         val resolvedIsCloud = isCloudConversation(cid, summary)
         runCatching {
-            coordinator.syncSteps(
-                cascadeId = cid,
-                knownStepCount = summary?.stepCount ?: 0,
-                isCloud = resolvedIsCloud,
-                instanceUuidOverride = summary?.originInstanceUuid,
-            )
+            if (isManualRetry) {
+                coordinator.forceSyncSteps(
+                    cascadeId = cid,
+                    knownStepCount = summary?.stepCount ?: 0,
+                    isCloud = resolvedIsCloud,
+                    instanceUuidOverride = summary?.originInstanceUuid,
+                )
+            } else {
+                coordinator.syncSteps(
+                    cascadeId = cid,
+                    knownStepCount = summary?.stepCount ?: 0,
+                    isCloud = resolvedIsCloud,
+                    instanceUuidOverride = summary?.originInstanceUuid,
+                )
+            }
         }
     }
 

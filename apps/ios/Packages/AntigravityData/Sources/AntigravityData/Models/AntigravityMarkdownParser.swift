@@ -240,7 +240,7 @@ public indirect enum MarkdownBlock: Sendable, Equatable, Identifiable {
 // MARK: - Bounded Thread-Safe LRU AST Cache
 
 private final class MarkdownASTCache: @unchecked Sendable {
-    static let shared = MarkdownASTCache(capacity: 128)
+    static let shared = MarkdownASTCache(capacity: 256)
 
     private let lock = NSLock()
     private let capacity: Int
@@ -255,7 +255,12 @@ private final class MarkdownASTCache: @unchecked Sendable {
         guard key.utf8.count <= 262_144 else { return nil }
         lock.lock()
         defer { lock.unlock() }
-        return entries[key]
+        guard let value = entries[key] else { return nil }
+        if order.last != key, let idx = order.firstIndex(of: key) {
+            order.remove(at: idx)
+            order.append(key)
+        }
+        return value
     }
 
     func set(_ value: [MarkdownBlock], for key: String) {
@@ -264,6 +269,10 @@ private final class MarkdownASTCache: @unchecked Sendable {
         defer { lock.unlock() }
         if entries[key] != nil {
             entries[key] = value
+            if order.last != key, let idx = order.firstIndex(of: key) {
+                order.remove(at: idx)
+                order.append(key)
+            }
             return
         }
         entries[key] = value

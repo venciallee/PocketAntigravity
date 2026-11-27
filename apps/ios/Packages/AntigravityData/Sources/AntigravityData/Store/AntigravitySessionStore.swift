@@ -135,7 +135,11 @@ public final class AntigravitySessionStore {
 
     // MARK: - Active Trajectory & Message List State (`UE07`)
     public var activeCascadeId: String
-    public var stepsByCascadeId: [String: [CascadeStep]] = [:]
+    public var stepsByCascadeId: [String: [CascadeStep]] = [:] {
+        didSet {
+            displayItemsCacheByCascadeId.removeAll(keepingCapacity: true)
+        }
+    }
     public var expandedThinkingStepIds: Set<String> = []
     public var expandedEvidenceGroupIds: Set<String> = []
     public var expandedTerminalStepIds: Set<String> = []
@@ -531,6 +535,12 @@ public final class AntigravitySessionStore {
     internal var syncedConfigCascadeIds: Set<String> = []
     internal var locallyCreatedEmptyCascadeIds: Set<String> = []
     internal var stepSyncGeneration: UInt64 = 0
+    @ObservationIgnored internal var displayItemsCacheByCascadeId: [String: [CascadeDisplayItem]] = [:]
+    @ObservationIgnored internal var activeStepSyncCascadeId: String? = nil
+    @ObservationIgnored internal var activeStepSyncPollsUntilIdle: Bool = false
+    @ObservationIgnored internal var activeForegroundStepSyncCount: Int = 0
+    @ObservationIgnored internal var inFlightPreloadTasksByCascadeId: [String: Task<[CascadeStep], Never>] = [:]
+    @ObservationIgnored internal var syncedStepsMarkerByCascadeId: [String: (stepCount: Int, updatedAt: Date)] = [:]
     internal var lastNetworkStatus: NetworkReachabilityStatus? = nil
     internal var isNetworkExpensiveOrConstrained: Bool = false
     internal var lastBackendActivityAt: Date = .distantPast
@@ -616,6 +626,10 @@ public final class AntigravitySessionStore {
                         let stepCountAdvanced = merged.stepCount > existing.stepCount
                         let timestampAdvanced = incoming.updatedAt.timeIntervalSince(existing.updatedAt) > 0.5
                         let statusChanged = merged.status != existing.status
+                        let isActivelyRunningOrWaiting = merged.status == .inProgress
+                            || merged.status == .pending
+                            || merged.status == .waiting
+                            || merged.status == .blocked
                         let hasNewActivity = stepCountAdvanced || timestampAdvanced
 
                         if hasNewActivity {
@@ -647,7 +661,7 @@ public final class AntigravitySessionStore {
                         )
                         byId[cid] = merged
 
-                        if cid == self.activeCascadeId && (stepCountAdvanced || timestampAdvanced || statusChanged) {
+                        if cid == self.activeCascadeId && (stepCountAdvanced || statusChanged || (timestampAdvanced && isActivelyRunningOrWaiting)) {
                             shouldSyncActiveChat = true
                         }
                     } else {
@@ -689,7 +703,8 @@ public final class AntigravitySessionStore {
                 if shouldSyncActiveChat && !self.activeCascadeId.isEmpty {
                     self.syncStepsForCascade(
                         self.activeCascadeId,
-                        pollUntilIdle: self.activeRoute == .cascadeChat(self.activeCascadeId)
+                        pollUntilIdle: self.activeRoute == .cascadeChat(self.activeCascadeId),
+                        forceRefresh: true
                     )
                 }
             }

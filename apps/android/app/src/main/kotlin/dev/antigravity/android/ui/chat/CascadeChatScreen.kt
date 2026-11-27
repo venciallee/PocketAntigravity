@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -66,6 +67,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -636,7 +638,21 @@ fun CascadeChatScreen(
                 }
             }
         } else {
+        val listState = rememberLazyListState()
+        var anchoredCascadeId by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(activeCascadeId, displayItems.size) {
+            if (!coordinator.isVerificationMode && displayItems.isNotEmpty()) {
+                val lastIdx = displayItems.lastIndex
+                val isInitialAnchor = anchoredCascadeId != activeCascadeId
+                val nearBottom = listState.firstVisibleItemIndex >= (lastIdx - 4).coerceAtLeast(0)
+                if (isInitialAnchor || nearBottom) {
+                    listState.scrollToItem(lastIdx)
+                    anchoredCascadeId = activeCascadeId
+                }
+            }
+        }
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)

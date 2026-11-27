@@ -42,6 +42,9 @@ public struct ConversationOverviewSheetView: View {
             }
             .task {
                 await store.refreshConversationOverview()
+                if !store.activeCascadeId.isEmpty {
+                    await store.loadLiveArtifactsAndDiffs(for: store.activeCascadeId)
+                }
             }
         }
         .accessibilityIdentifier("sheet_conversation_overview")

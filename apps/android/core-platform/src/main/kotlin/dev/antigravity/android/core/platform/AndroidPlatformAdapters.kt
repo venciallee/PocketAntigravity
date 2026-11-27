@@ -36,6 +36,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 private val PlatformJson: Json = Json {
     ignoreUnknownKeys = true
@@ -328,7 +329,15 @@ class AndroidProjectionStorage(
     context: Context,
 ) : ProjectionStoragePort {
     private val projectionsDir: File = File(context.applicationContext.filesDir, "projections")
-    private val mutex = Mutex()
+    private val fileLocks = ConcurrentHashMap<String, Mutex>()
+    private val stepsCacheLock = Any()
+    private val stepsMemoryCache = object : LinkedHashMap<String, List<CascadeStep>>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<CascadeStep>>?): Boolean =
+            size > MAX_CACHED_CONVERSATIONS
+    }
+
+    private fun lockFor(key: String): Mutex =
+        fileLocks.computeIfAbsent(key) { Mutex() }
 
     fun writeText(fileName: String, content: String) {
         val target = resolveFile(fileName)
@@ -353,7 +362,7 @@ class AndroidProjectionStorage(
     }
 
     override suspend fun loadAllHostShards(): List<HostProjectionShard> = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        lockFor(FILE_HOST_SHARDS).withLock {
             val raw = readText(FILE_HOST_SHARDS) ?: return@withLock emptyList()
             runCatching { PlatformJson.decodeFromString<List<HostProjectionShard>>(raw) }
                 .getOrDefault(emptyList())
@@ -366,7 +375,7 @@ class AndroidProjectionStorage(
 
     override suspend fun saveHostShards(shards: List<HostProjectionShard>) {
         withContext(Dispatchers.IO) {
-            mutex.withLock {
+            lockFor(FILE_HOST_SHARDS).withLock {
                 val existing = readText(FILE_HOST_SHARDS)?.let { raw ->
                     runCatching { PlatformJson.decodeFromString<List<HostProjectionShard>>(raw) }.getOrNull()
                 }.orEmpty().associateBy { it.hostKey }.toMutableMap()
@@ -384,7 +393,7 @@ class AndroidProjectionStorage(
     }
 
     override suspend fun loadKnownHosts(): List<RemoteHostInstance> = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        lockFor(FILE_KNOWN_HOSTS).withLock {
             val raw = readText(FILE_KNOWN_HOSTS) ?: return@withLock emptyList()
             runCatching { PlatformJson.decodeFromString<List<RemoteHostInstance>>(raw) }
                 .getOrDefault(emptyList())
@@ -393,30 +402,49 @@ class AndroidProjectionStorage(
 
     override suspend fun saveKnownHosts(hosts: List<RemoteHostInstance>) {
         withContext(Dispatchers.IO) {
-            mutex.withLock {
+            lockFor(FILE_KNOWN_HOSTS).withLock {
                 writeText(FILE_KNOWN_HOSTS, PlatformJson.encodeToString(hosts))
             }
         }
     }
 
-    override suspend fun loadSteps(cascadeId: String): List<CascadeStep> = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            val raw = readText(stepsFileName(cascadeId)) ?: return@withLock emptyList()
-            runCatching { PlatformJson.decodeFromString<List<CascadeStep>>(raw) }
-                .getOrDefault(emptyList())
+    override suspend fun loadSteps(cascadeId: String): List<CascadeStep> {
+        synchronized(stepsCacheLock) {
+            stepsMemoryCache[cascadeId]?.let { return it }
+        }
+        val fileName = stepsFileName(cascadeId)
+        return withContext(Dispatchers.IO) {
+            lockFor(fileName).withLock {
+                synchronized(stepsCacheLock) {
+                    stepsMemoryCache[cascadeId]?.let { return@withLock it }
+                }
+                val raw = readText(fileName) ?: return@withLock emptyList()
+                val decoded = runCatching { PlatformJson.decodeFromString<List<CascadeStep>>(raw) }
+                    .getOrDefault(emptyList())
+                if (decoded.isNotEmpty()) {
+                    synchronized(stepsCacheLock) {
+                        stepsMemoryCache[cascadeId] = decoded
+                    }
+                }
+                decoded
+            }
         }
     }
 
     override suspend fun saveSteps(cascadeId: String, steps: List<CascadeStep>) {
+        synchronized(stepsCacheLock) {
+            stepsMemoryCache[cascadeId] = steps
+        }
+        val fileName = stepsFileName(cascadeId)
         withContext(Dispatchers.IO) {
-            mutex.withLock {
-                writeText(stepsFileName(cascadeId), PlatformJson.encodeToString(steps))
+            lockFor(fileName).withLock {
+                writeText(fileName, PlatformJson.encodeToString(steps))
             }
         }
     }
 
     override suspend fun loadPendingOutbox(): List<DurableOutboxEntry> = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        lockFor(FILE_PENDING_OUTBOX).withLock {
             val raw = readText(FILE_PENDING_OUTBOX) ?: return@withLock emptyList()
             runCatching { PlatformJson.decodeFromString<List<DurableOutboxEntry>>(raw) }
                 .getOrDefault(emptyList())
@@ -425,7 +453,7 @@ class AndroidProjectionStorage(
 
     override suspend fun enqueueOutbox(entry: DurableOutboxEntry) {
         withContext(Dispatchers.IO) {
-            mutex.withLock {
+            lockFor(FILE_PENDING_OUTBOX).withLock {
                 val existing = readText(FILE_PENDING_OUTBOX)?.let { raw ->
                     runCatching { PlatformJson.decodeFromString<List<DurableOutboxEntry>>(raw) }.getOrNull()
                 }.orEmpty().toMutableList()
@@ -440,7 +468,7 @@ class AndroidProjectionStorage(
 
     override suspend fun removeOutbox(entryId: String) {
         withContext(Dispatchers.IO) {
-            mutex.withLock {
+            lockFor(FILE_PENDING_OUTBOX).withLock {
                 val existing = readText(FILE_PENDING_OUTBOX)?.let { raw ->
                     runCatching { PlatformJson.decodeFromString<List<DurableOutboxEntry>>(raw) }.getOrNull()
                 }.orEmpty()
@@ -451,8 +479,11 @@ class AndroidProjectionStorage(
     }
 
     override suspend fun clearAll() {
+        synchronized(stepsCacheLock) {
+            stepsMemoryCache.clear()
+        }
         withContext(Dispatchers.IO) {
-            mutex.withLock {
+            lockFor("__clear_all__").withLock {
                 if (projectionsDir.exists()) {
                     projectionsDir.listFiles()?.forEach { file ->
                         runCatching { file.deleteRecursively() }
@@ -481,6 +512,7 @@ class AndroidProjectionStorage(
         private const val FILE_HOST_SHARDS = "host_shards.json"
         private const val FILE_KNOWN_HOSTS = "known_hosts.json"
         private const val FILE_PENDING_OUTBOX = "pending_outbox.json"
+        private const val MAX_CACHED_CONVERSATIONS = 48
     }
 }
 
