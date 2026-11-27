@@ -1264,4 +1264,209 @@ class AdaptiveTrajectorySyncTest {
         assertEquals(formatted, reWrapped)
         assertFalse(reWrapped.contains("HTTP 500"))
     }
+
+    @Test
+    fun testSingleSliceJsonRepairReusesTailStepsAndCachesRepairedSteps() = runTest {
+        val recorded = mutableListOf<RecordedRequest>()
+        val json = Json { ignoreUnknownKeys = true }
+
+        val step0 = encodeVarintField(1, 14) +
+            encodeVarintField(4, 3) +
+            encodeLd(19, encodeLd(1, "Open dashboard".encodeToByteArray()))
+        val step1Unknown = encodeVarintField(1, 991) +
+            encodeVarintField(4, 3) +
+            encodeLd(91, "future-canvas-1".encodeToByteArray())
+        val step2Unknown = encodeVarintField(1, 992) +
+            encodeVarintField(4, 3) +
+            encodeLd(92, "future-canvas-2".encodeToByteArray())
+        val binaryPayload = encodeLd(1, step0) + encodeLd(1, step1Unknown) + encodeLd(1, step2Unknown)
+
+        val engine = MockEngine { request ->
+            val ct = request.body.contentType?.toString()
+                ?: request.headers[HttpHeaders.ContentType].orEmpty()
+            val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            recorded.add(RecordedRequest(request.url.encodedPath, ct, bytes))
+
+            if (ct.contains("application/proto")) {
+                respond(
+                    content = binaryPayload,
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/proto"),
+                )
+            } else {
+                val reqObj = json.parseToJsonElement(bytes.decodeToString()) as JsonObject
+                val offset = (reqObj["stepOffset"] as? JsonPrimitive)?.intOrNull ?: 0
+                val tailSteps = buildJsonArray {
+                    if (offset <= 1) {
+                        add(
+                            buildJsonObject {
+                                put("type", "CORTEX_STEP_TYPE_FUTURE_WIDGET_A")
+                                put("status", "CORTEX_STEP_STATUS_DONE")
+                                put("futureWidgetA", buildJsonObject { put("summary", "Widget A repaired") })
+                            },
+                        )
+                    }
+                    if (offset <= 2) {
+                        add(
+                            buildJsonObject {
+                                put("type", "CORTEX_STEP_TYPE_FUTURE_WIDGET_B")
+                                put("status", "CORTEX_STEP_STATUS_DONE")
+                                put("futureWidgetB", buildJsonObject { put("summary", "Widget B repaired") })
+                            },
+                        )
+                    }
+                }
+                respond(
+                    content = buildJsonObject { put("steps", tailSteps) }.toString(),
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            }
+        }
+
+        val client = AntigravityKmpRpcClient(
+            host = testHost("mac-repair-reuse"),
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(engine),
+        )
+
+        // First fetch: 1 binary RPC + ONLY 1 JSON repair RPC (offset 1 returns [step1, step2] reused for step 2!)
+        val first = client.fetchAllTrajectorySteps(cascadeId = "cas-reuse", knownStepCount = 3)
+        assertEquals(3, first.size)
+        assertEquals("CORTEX_STEP_TYPE_FUTURE_WIDGET_A", first[1].rawTypeName)
+        assertEquals("Widget A repaired", first[1].fallbackSummary)
+        assertEquals("CORTEX_STEP_TYPE_FUTURE_WIDGET_B", first[2].rawTypeName)
+        assertEquals("Widget B repaired", first[2].fallbackSummary)
+        assertEquals(1, recorded.count { it.isProto })
+        assertEquals(1, recorded.count { it.isJson }, "Tail slice from offset=1 must satisfy both step 1 and step 2 in 1 RTT")
+
+        // Second fetch: repaired steps are cached -> 0 JSON repair RPCs
+        recorded.clear()
+        val second = client.fetchAllTrajectorySteps(cascadeId = "cas-reuse", knownStepCount = 3)
+        assertEquals(3, second.size)
+        assertEquals("Widget A repaired", second[1].fallbackSummary)
+        assertEquals("Widget B repaired", second[2].fallbackSummary)
+        assertEquals(1, recorded.count { it.isProto })
+        assertEquals(0, recorded.count { it.isJson }, "Cached repaired steps must require 0 JSON repair RPCs")
+    }
+
+    @Test
+    fun testIncrementalBinaryDeltaSyncAndIgnoredOffsetDetection() = runTest {
+        fun decodeProtoStepOffset(bytes: ByteArray): Int {
+            val offsetRef = intArrayOf(0)
+            while (offsetRef[0] < bytes.size) {
+                val tag = ProtobufStepCodec.readVarint(bytes, offsetRef) ?: break
+                val fieldNum = (tag shr 3).toInt()
+                val wireType = (tag and 0x07UL).toInt()
+                when (wireType) {
+                    0 -> {
+                        val v = ProtobufStepCodec.readVarint(bytes, offsetRef) ?: break
+                        if (fieldNum == 2) return v.toInt()
+                    }
+                    2 -> {
+                        val len = ProtobufStepCodec.readVarint(bytes, offsetRef) ?: break
+                        offsetRef[0] += len.toInt()
+                    }
+                    else -> break
+                }
+            }
+            return 0
+        }
+
+        fun buildSliceBinarySteps(indices: IntRange): ByteArray {
+            val out = ArrayList<Byte>()
+            for (i in indices) {
+                val stepBytes = if (i % 2 == 0) {
+                    encodeVarintField(1, 14) +
+                        encodeVarintField(4, 3) +
+                        encodeLd(19, encodeLd(1, "User prompt #$i".encodeToByteArray()))
+                } else {
+                    encodeVarintField(1, 15) +
+                        encodeVarintField(4, 3) +
+                        encodeLd(20, encodeLd(1, "Planner answer #$i".encodeToByteArray()))
+                }
+                out.addAll(encodeLd(1, stepBytes).toList())
+            }
+            return out.toByteArray()
+        }
+
+        // Case 1: Host honors step_offset -> incremental delta fetch from offset = existing.size - 1
+        val offsetsHonored = mutableListOf<Int>()
+        val honoringEngine = MockEngine { request ->
+            val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            val offset = decodeProtoStepOffset(bytes)
+            offsetsHonored.add(offset)
+            val slice = buildSliceBinarySteps(offset until 6)
+            respond(
+                content = slice,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/proto"),
+            )
+        }
+        val honoringClient = AntigravityKmpRpcClient(
+            host = testHost("mac-delta-ok"),
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(honoringEngine),
+        )
+        val initialFour = ProtobufStepCodec.decodeStepsResponse(buildSliceBinarySteps(0 until 4), "cas-delta")
+        assertEquals(4, initialFour.size)
+
+        val merged = honoringClient.fetchAllTrajectorySteps(
+            cascadeId = "cas-delta",
+            knownStepCount = 6,
+            existingSteps = initialFour,
+        )
+        assertEquals(6, merged.size)
+        assertEquals(listOf(3), offsetsHonored, "Incremental delta must request stepOffset = existing.size - 1 (anchor)")
+        assertEquals("User prompt #0", merged[0].userInput)
+        assertEquals("Planner answer #3", merged[3].plannerResponse?.response)
+        assertEquals("User prompt #4", merged[4].userInput)
+        assertEquals("Planner answer #5", merged[5].plannerResponse?.response)
+
+        // Case 2: Host ignores step_offset (returns full 0..5 even when offset=3) -> merges cleanly & caches ignore flag
+        val offsetsIgnored = mutableListOf<Int>()
+        val ignoringEngine = MockEngine { request ->
+            val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            offsetsIgnored.add(decodeProtoStepOffset(bytes))
+            respond(
+                content = buildSliceBinarySteps(0 until 6),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/proto"),
+            )
+        }
+        val ignoringClient = AntigravityKmpRpcClient(
+            host = testHost("mac-delta-ignored"),
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(ignoringEngine),
+        )
+        val fullFirst = ignoringClient.fetchAllTrajectorySteps(
+            cascadeId = "cas-delta-ign",
+            knownStepCount = 6,
+            existingSteps = initialFour,
+        )
+        assertEquals(6, fullFirst.size)
+        assertEquals(listOf(3), offsetsIgnored)
+
+        // Next incremental call skips step_offset probe and goes straight to offset=0
+        offsetsIgnored.clear()
+        val fullSecond = ignoringClient.fetchAllTrajectorySteps(
+            cascadeId = "cas-delta-ign",
+            knownStepCount = 6,
+            existingSteps = initialFour,
+        )
+        assertEquals(6, fullSecond.size)
+        assertEquals(listOf(0), offsetsIgnored, "Hosts known to ignore binary stepOffset should skip delta probes")
+    }
+
+    @Test
+    fun testCloudRelayProxyRequestIncludesGzipAndProtoAcceptHeaders() {
+        val protoBody = CloudRelayJspbCodec.encodeProxyCommandRequest(
+            targetInstanceUuid = "uuid-test",
+            rpcPath = "/exa.language_server_pb.LanguageServerService/GetCascadeTrajectorySteps",
+            payload = byteArrayOf(0x0A, 0x01, 0x61),
+            contentType = "application/proto",
+        ).decodeToString()
+        assertTrue(protoBody.contains("""["accept-encoding","gzip"]"""), "Expected gzip accept-encoding in proxy request: $protoBody")
+        assertTrue(protoBody.contains("""["accept","application/proto"]"""), "Expected application/proto accept header: $protoBody")
+    }
 }

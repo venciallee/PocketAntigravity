@@ -227,4 +227,36 @@ class DesignSystemAndPlatformUnitTest {
         )
         assertEquals("https://antigravity.google.com/r/0f5819ac-9308-40d8-a308-98b55122c533-v2", resolvedNoFinal)
     }
+
+    @Test
+    fun projectionStorageCachesStepsInMemoryLruAndClearsCleanly() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val storage = AndroidProjectionStorage(context)
+        val cid = "cas-lru-unit-test"
+        val steps = listOf(
+            dev.antigravity.shared.model.CascadeStep(
+                cascadeId = cid,
+                stepIndex = 0,
+                type = dev.antigravity.shared.model.CortexStepType.USER_INPUT,
+                status = CortexStepStatus.DONE,
+                userInput = "Check LRU cache",
+            ),
+            dev.antigravity.shared.model.CascadeStep(
+                cascadeId = cid,
+                stepIndex = 1,
+                type = dev.antigravity.shared.model.CortexStepType.PLANNER_RESPONSE,
+                status = CortexStepStatus.DONE,
+                plannerResponse = dev.antigravity.shared.model.PlannerResponsePayload(response = "Cached in RAM + disk"),
+            ),
+        )
+
+        storage.saveSteps(cid, steps)
+        val loaded = storage.loadSteps(cid)
+        assertEquals(2, loaded.size)
+        assertEquals("Check LRU cache", loaded[0].userInput)
+        assertEquals("Cached in RAM + disk", loaded[1].plannerResponse?.response)
+
+        storage.clearAll()
+        assertTrue(storage.loadSteps(cid).isEmpty())
+    }
 }

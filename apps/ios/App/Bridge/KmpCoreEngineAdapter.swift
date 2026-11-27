@@ -140,6 +140,25 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
         }
     }
 
+    public func forceSyncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [AntigravityData.CascadeStep] {
+        do {
+            let steps = try await coordinator.forceSyncSteps(
+                cascadeId: cascadeId,
+                knownStepCount: Int32(knownStepCount),
+                isCloud: isCloud,
+                instanceUuidOverride: instanceUuidOverride
+            )
+            return steps.map(KmpModelConverters.toSwiftStep)
+        } catch {
+            throw KmpModelConverters.mapKmpError(error)
+        }
+    }
+
     public func preloadSteps(
         cascadeId: String,
         knownStepCount: Int,

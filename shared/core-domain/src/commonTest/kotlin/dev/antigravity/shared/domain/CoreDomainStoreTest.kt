@@ -33,6 +33,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.headersOf
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1060,6 +1062,164 @@ class CoreDomainStoreTest {
             assertEquals(CortexStepStatus.PENDING, summary?.status, "Expected PENDING summary status, summary=$summary")
             assertFalse((outcome.errorMessage ?: "").contains("type.googleapis.com"), "Raw @type leaked: ${outcome.errorMessage}")
             coordinator.close()
+        }
+    }
+
+    @Test
+    fun testIdleCachedTrajectoryFastPathSkipsRpcAndForceRefreshBypassesCache() = runTest {
+        withContext(Dispatchers.Default) {
+            val storage = InMemoryProjectionStorage()
+            val cid = "cas-idle-fastpath-1"
+            storage.saveSteps(
+                cid,
+                listOf(
+                    CascadeStep(
+                        cascadeId = cid,
+                        stepIndex = 0,
+                        type = CortexStepType.USER_INPUT,
+                        status = CortexStepStatus.DONE,
+                        userInput = "Initial question",
+                    ),
+                    CascadeStep(
+                        cascadeId = cid,
+                        stepIndex = 1,
+                        type = CortexStepType.PLANNER_RESPONSE,
+                        status = CortexStepStatus.DONE,
+                        plannerResponse = dev.antigravity.shared.model.PlannerResponsePayload(response = "Initial answer"),
+                    ),
+                ),
+            )
+
+            val countMutex = Mutex()
+            var stepFetchCalls = 0
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/GetWorkspaceInfos") -> respond(
+                        content = """{"workspaces":[{"workspaceUri":"file:///Users/dev/app","displayName":"app"}]}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                    path.endsWith("/GetAllCascadeTrajectories") -> respond(
+                        content = """{"trajectorySummaries":{"$cid":{"summary":"Idle Cached Chat","stepCount":2,"status":"CORTEX_STEP_STATUS_DONE","lastModifiedTime":"2026-01-01T00:00:00Z","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/app"}]}}}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                    path.endsWith("/GetCascadeTrajectorySteps") -> {
+                        val ct = request.body.contentType?.toString()
+                            ?: request.headers[HttpHeaders.ContentType].orEmpty()
+                        if (ct.contains("application/proto")) {
+                            respond(
+                                content = "Unsupported Media Type",
+                                status = HttpStatusCode.UnsupportedMediaType,
+                                headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                            )
+                        } else {
+                            countMutex.withLock { stepFetchCalls += 1 }
+                            respond(
+                                content = """{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Initial question"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Refreshed answer"}}]}""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                            )
+                        }
+                    }
+                    else -> respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = InMemoryPreferencesStore(),
+                projectionStorage = storage,
+                autoPreloadConversations = false,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+            coordinator.connectDirectLan(
+                endpointUrlString = "http://127.0.0.1:42100",
+                csrfToken = "csrf-idle-test",
+                startSummaryStream = false,
+            )
+
+            // 1. Entering cached idle DONE conversation -> 0-RTT fast-path, 0 HTTP calls
+            val fastSteps = coordinator.syncSteps(cascadeId = cid, knownStepCount = 2)
+            assertEquals(2, fastSteps.size)
+            assertEquals("Initial answer", fastSteps[1].plannerResponse?.response)
+            assertEquals(0, countMutex.withLock { stepFetchCalls }, "Idle cached DONE trajectory must serve in 0 RTT")
+
+            // 2. Explicit forceSyncSteps bypasses idle cache and fetches fresh server steps
+            val forcedSteps = coordinator.forceSyncSteps(cascadeId = cid, knownStepCount = 2)
+            assertEquals(2, forcedSteps.size)
+            assertEquals("Refreshed answer", forcedSteps[1].plannerResponse?.response)
+            assertEquals(1, countMutex.withLock { stepFetchCalls }, "forceSyncSteps must bypass idle cache")
+            coordinator.close()
+        }
+    }
+
+    @Test
+    fun testConcurrentPreloadAndForegroundSyncCoalesceIntoSingleRpc() = runTest {
+        withContext(Dispatchers.Default) {
+            val cid = "cas-coalesce-kmp-1"
+            val countMutex = Mutex()
+            var stepFetchCalls = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/GetCascadeTrajectorySteps") -> {
+                        val ct = request.body.contentType?.toString()
+                            ?: request.headers[HttpHeaders.ContentType].orEmpty()
+                        if (ct.contains("application/proto")) {
+                            respond(
+                                content = "Unsupported Media Type",
+                                status = HttpStatusCode.UnsupportedMediaType,
+                                headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                            )
+                        } else {
+                            countMutex.withLock { stepFetchCalls += 1 }
+                            delay(120L)
+                            respond(
+                                content = """{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Coalesced prompt"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Coalesced reply"}}]}""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                            )
+                        }
+                    }
+                    else -> respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = "mac-coalesce",
+                    hostname = "Coalesce Mac",
+                    channel = RemoteConnectionChannel.DIRECT_HOST,
+                    endpointUrl = "http://127.0.0.1:42101",
+                    isOnline = true,
+                ),
+                csrfToken = "csrf-coalesce",
+                httpClientOverride = HttpClient(engine),
+            )
+            val store = CascadeChatDomainStore(projectionStorage = InMemoryProjectionStorage())
+
+            val results = listOf(
+                async { store.preloadSteps(client, cid, knownStepCount = 2) },
+                async { store.syncSteps(client, cid, knownStepCount = 2) },
+            ).awaitAll()
+
+            assertEquals(2, results[0].size)
+            assertEquals(2, results[1].size)
+            assertEquals("Coalesced reply", results[1][1].plannerResponse?.response)
+            assertEquals(1, countMutex.withLock { stepFetchCalls }, "Concurrent preloadSteps + syncSteps must coalesce into 1 RPC")
         }
     }
 

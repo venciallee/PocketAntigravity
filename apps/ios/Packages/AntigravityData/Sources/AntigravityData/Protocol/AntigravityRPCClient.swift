@@ -35,6 +35,11 @@ public actor AntigravityRPCClient {
     internal var cachedValidUpstreamModels: Set<String>?
     internal var cachedDefaultUpstreamModel: String?
     internal var capabilityProfilesByHost: [String: HostCapabilityProfile] = [:]
+    internal var repairedStepCache: [String: CascadeStep] = [:]
+    internal var repairedStepCacheOrder: [String] = []
+    internal var attemptedRepairStepKeys: Set<String> = []
+    internal var learnedWireStepTypeByHost: [String: CortexStepType] = [:]
+    internal var stepOffsetIgnoredHosts: Set<String> = []
 
     internal enum CloudTrajectoryBackendField: String, Sendable {
         case backend = "backend"

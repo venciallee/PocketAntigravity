@@ -938,12 +938,16 @@ public enum CloudRelayJSPBCodec: Sendable {
         remoteUserAgent: String = SAPISIDHashGenerator.mobileRemoteUserAgent
     ) throws -> Data {
         let base64Payload = payload.isEmpty ? "" : payload.base64EncodedString()
-        let headerPairs: [[String]] = [
+        var headerPairs: [[String]] = [
             ["x-is-streaming", isStreaming ? "true" : "false"],
             ["x-jetski-remote-control-user-agent", remoteUserAgent],
             ["content-type", contentType],
-            ["connect-protocol-version", "1"]
+            ["connect-protocol-version", "1"],
+            ["accept-encoding", "gzip"]
         ]
+        if contentType.caseInsensitiveCompare("application/proto") == .orderedSame {
+            headerPairs.append(["accept", "application/proto"])
+        }
         let jspb: JSONValue = .array([
             .string(targetInstanceUuid),
             .string(rpcPath),

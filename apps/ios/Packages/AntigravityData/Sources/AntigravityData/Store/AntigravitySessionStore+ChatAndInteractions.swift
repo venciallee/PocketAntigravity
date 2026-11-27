@@ -408,8 +408,9 @@ extension AntigravitySessionStore {
                     }
                     if let self, !targetCascadeId.isEmpty {
                         self.lastFailedSendByCascadeId.removeValue(forKey: targetCascadeId)
+                        self.syncedStepsMarkerByCascadeId.removeValue(forKey: targetCascadeId)
                         self.optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
-                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true, forceRefresh: true)
                     }
                 } else if let clientRef {
                     var didStartCascade = false
@@ -430,8 +431,9 @@ extension AntigravitySessionStore {
                     }
 
                     if let self, !targetCascadeId.isEmpty {
+                        self.syncedStepsMarkerByCascadeId.removeValue(forKey: targetCascadeId)
                         self.optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
-                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true, forceRefresh: true)
                     }
 
                     do {
@@ -514,7 +516,8 @@ extension AntigravitySessionStore {
                         self.markBackendReconnected()
                     }
                     if !targetCascadeId.isEmpty {
-                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                        self.syncedStepsMarkerByCascadeId.removeValue(forKey: targetCascadeId)
+                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true, forceRefresh: true)
                     }
                 }
             } catch {
@@ -525,7 +528,7 @@ extension AntigravitySessionStore {
                         self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
                         self.lastFailedSendByCascadeId.removeValue(forKey: targetCascadeId)
                         // Turn already started streaming on backend despite unary HTTP timeout; keep polling steps
-                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                        self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true, forceRefresh: true)
                     } else if Self.isBackendOfflineError(error) {
                         // Keep entry persisted in Durable Outbox so it automatically replays once host reconnects
                         self.optimisticActiveUntilByCascadeId.removeValue(forKey: targetCascadeId)
@@ -576,7 +579,7 @@ extension AntigravitySessionStore {
         guard !cid.isEmpty, let failed = lastFailedSendByCascadeId.removeValue(forKey: cid) else {
             if !cid.isEmpty {
                 stepLoadErrorText = nil
-                syncStepsForCascade(cid, pollUntilIdle: true)
+                syncStepsForCascade(cid, pollUntilIdle: true, forceRefresh: true)
             }
             return
         }
@@ -617,6 +620,8 @@ extension AntigravitySessionStore {
         guard !newId.isEmpty, oldId != newId else { return }
         locallyCreatedEmptyCascadeIds.remove(oldId)
         locallyCreatedEmptyCascadeIds.remove(newId)
+        syncedStepsMarkerByCascadeId.removeValue(forKey: oldId)
+        syncedStepsMarkerByCascadeId.removeValue(forKey: newId)
         let existing = stepsByCascadeId.removeValue(forKey: oldId) ?? fallbackSteps
         if let existing {
             stepsByCascadeId[newId] = existing.map { step in
@@ -793,8 +798,9 @@ extension AntigravitySessionStore {
                     summaries[sumIdx].statusSubtitle = "Running"
                 }
                 if !targetCascadeId.isEmpty {
+                    syncedStepsMarkerByCascadeId.removeValue(forKey: targetCascadeId)
                     optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
-                    syncStepsForCascade(targetCascadeId, pollUntilIdle: true)
+                    syncStepsForCascade(targetCascadeId, pollUntilIdle: true, forceRefresh: true)
                 }
             } catch {
                 if Self.isBackendOfflineError(error) {
@@ -811,6 +817,7 @@ extension AntigravitySessionStore {
 
     public func stopActiveCascadeStreaming() {
         optimisticActiveUntilByCascadeId.removeValue(forKey: activeCascadeId)
+        syncedStepsMarkerByCascadeId.removeValue(forKey: activeCascadeId)
         manuallyCancelledCascadeIds.insert(activeCascadeId)
         guard var currentSteps = stepsByCascadeId[activeCascadeId] else { return }
         for i in currentSteps.indices where currentSteps[i].status == .inProgress || currentSteps[i].status == .pending || currentSteps[i].status == .waiting {
@@ -1009,7 +1016,8 @@ extension AntigravitySessionStore {
                     self.optimisticActiveUntilByCascadeId[cid] = Date().addingTimeInterval(6.0)
                 }
                 if shouldSyncLive && !cid.isEmpty {
-                    self.syncStepsForCascade(cid, pollUntilIdle: !isRejection && interactionError == nil)
+                    self.syncedStepsMarkerByCascadeId.removeValue(forKey: cid)
+                    self.syncStepsForCascade(cid, pollUntilIdle: !isRejection && interactionError == nil, forceRefresh: true)
                 }
             }
         }
@@ -1294,6 +1302,7 @@ extension AntigravitySessionStore {
 
     public func revertConversationToStep(_ stepIndex: Int) {
         guard let previousSteps = stepsByCascadeId[activeCascadeId] else { return }
+        syncedStepsMarkerByCascadeId.removeValue(forKey: activeCascadeId)
         var steps = previousSteps
         steps.removeAll { $0.stepIndex > stepIndex }
         stepsByCascadeId[activeCascadeId] = steps

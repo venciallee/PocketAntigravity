@@ -403,7 +403,14 @@ extension AntigravitySessionStore {
     }
 
     public var displayItems: [CascadeDisplayItem] {
-        CascadeDisplayItem.buildDisplayItems(from: activeSteps)
+        let cid = activeCascadeId
+        let steps = stepsByCascadeId[cid] ?? []
+        if let cached = displayItemsCacheByCascadeId[cid] {
+            return cached
+        }
+        let built = CascadeDisplayItem.buildDisplayItems(from: steps)
+        displayItemsCacheByCascadeId[cid] = built
+        return built
     }
 
     public var activeTaskBoundary: TaskBoundaryPayload? {
