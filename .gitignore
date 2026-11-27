@@ -11,6 +11,7 @@ __pycache__/
 build/
 **/build/
 local.properties
+local.signing.xcconfig
 *.xcframework/
 .project.*.tmp.yml
 

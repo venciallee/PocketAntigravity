@@ -126,7 +126,8 @@ public struct ChatComposerView: View {
     }
 
     private var activeQueuedMessages: [QueuedMessageItem] {
-        store.queuedMessages.filter { $0.cascadeId == store.activeCascadeId }
+        guard !isHomeComposer, !store.activeCascadeId.isEmpty else { return [] }
+        return store.queuedMessages.filter { $0.cascadeId == store.activeCascadeId }
     }
 
     private var canSendDraft: Bool {
@@ -366,7 +367,7 @@ public struct ChatComposerView: View {
             }
 
             // Queued Follow-Up Messages Strip (when messages were queued mid-stream)
-            if !activeQueuedMessages.isEmpty {
+            if !isHomeComposer && !activeQueuedMessages.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(activeQueuedMessages) { queued in
                         HStack(spacing: 8) {
@@ -386,6 +387,7 @@ public struct ChatComposerView: View {
                                     .foregroundStyle(AntigravityTheme.inkMuted)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityIdentifier("btn-remove-queued-\(queued.id)")
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
@@ -396,6 +398,7 @@ public struct ChatComposerView: View {
                         )
                     }
                 }
+                .accessibilityIdentifier("composer-queued-messages-strip")
             }
 
             // Composer Card
