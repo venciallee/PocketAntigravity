@@ -3950,34 +3950,31 @@ public class AntigravityKmpRpcClient(
             preferred = pinnedTarget ?: instanceUuidOverride,
             allowCrossHostFailover = isRemoteCloud,
         )
-        var primaryError: Throwable? = null
-        if (primaryTarget != null) {
-            try {
-                sendToSingleInstance(primaryTarget, allowCrossHostFailover = isRemoteCloud)
-                return
-            } catch (e: AntigravityRpcError.Unauthorized) {
-                throw e
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                if (!ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
-                    throw e
-                }
-                primaryError = e
-            }
-        } else {
-            // Let `sendToSingleInstance` surface the standard offline / failover error when no cached target is online.
-            sendToSingleInstance(instanceUuidOverride, allowCrossHostFailover = isRemoteCloud)
+        val primaryError: Throwable = try {
+            sendToSingleInstance(primaryTarget ?: instanceUuidOverride, allowCrossHostFailover = isRemoteCloud)
             return
+        } catch (e: AntigravityRpcError.Unauthorized) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (!ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
+                throw e
+            }
+            e
         }
 
         // Primary instance confirmed `not_found` (never executed the turn). Probe reachable peer
         // instances — all reachable peers for Cloud cascades, or same-host-family peers (e.g. another
         // Antigravity window / restarted language_server on the same machine) for local cascades.
-        val probedUuids = mutableSetOf(primaryTarget)
+        val resolvedPrimary = (primaryTarget ?: instanceUuidOverride ?: currentResolvedInstanceUuid()).orEmpty()
+        val probedUuids = mutableSetOf<String>()
+        if (resolvedPrimary.isNotEmpty()) {
+            probedUuids.add(resolvedPrimary)
+        }
 
         suspend fun probePeers(instances: List<RelayInstanceInfo>): Boolean {
-            val seedUuid = primaryTarget.ifEmpty { instanceUuidOverride ?: currentResolvedInstanceUuid().orEmpty() }
+            val seedUuid = resolvedPrimary.ifEmpty { instanceUuidOverride ?: currentResolvedInstanceUuid().orEmpty() }
             val familySeed = instances.firstOrNull { it.uuid == seedUuid }?.name.orEmpty()
             val peers = instances.filter { inst ->
                 inst.status.isReachable && inst.uuid !in probedUuids &&

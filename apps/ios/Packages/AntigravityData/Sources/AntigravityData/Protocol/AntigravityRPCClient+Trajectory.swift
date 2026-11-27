@@ -1794,24 +1794,15 @@ extension AntigravityRPCClient {
             preferred: pinnedTarget ?? instanceUuidOverride,
             allowCrossHostFailover: isRemoteCloud
         )
-        guard let primaryTarget, !primaryTarget.isEmpty else {
-            try await sendUserCascadeMessageToSingleInstance(
-                cascadeId: cascadeId,
-                baseBody: requestBody,
-                isRemoteCloud: isRemoteCloud,
-                targetUuid: instanceUuidOverride,
-                allowCrossHostFailover: isRemoteCloud
-            )
-            return
-        }
+        let initialTarget = (primaryTarget?.isEmpty == false) ? primaryTarget : instanceUuidOverride
 
-        var primaryError: Error
+        let primaryError: Error
         do {
             try await sendUserCascadeMessageToSingleInstance(
                 cascadeId: cascadeId,
                 baseBody: requestBody,
                 isRemoteCloud: isRemoteCloud,
-                targetUuid: primaryTarget,
+                targetUuid: initialTarget,
                 allowCrossHostFailover: isRemoteCloud
             )
             return
@@ -1826,7 +1817,11 @@ extension AntigravityRPCClient {
 
         // Primary instance confirmed `not_found`. Probe reachable peer instances (all reachable
         // peers for Cloud; same-host-family peers for Local).
-        var probedUuids: Set<String> = [primaryTarget]
+        let resolvedPrimary = initialTarget ?? resolvedInstanceUuid ?? ""
+        var probedUuids: Set<String> = []
+        if !resolvedPrimary.isEmpty {
+            probedUuids.insert(resolvedPrimary)
+        }
         for pass in 0..<2 {
             let instancesToSearch: [RelayInstanceInfo]
             if pass == 0 {
@@ -1840,7 +1835,7 @@ extension AntigravityRPCClient {
                 instancesToSearch = refreshed
             }
             guard !instancesToSearch.isEmpty else { continue }
-            let seedUuid = primaryTarget.isEmpty ? (instanceUuidOverride ?? resolvedInstanceUuid) : primaryTarget
+            let seedUuid = resolvedPrimary.isEmpty ? (instanceUuidOverride ?? resolvedInstanceUuid) : resolvedPrimary
             let familySeed = instancesToSearch.first(where: { $0.uuid == seedUuid })?.name
                 ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : "")
             let peers = instancesToSearch.filter { inst in

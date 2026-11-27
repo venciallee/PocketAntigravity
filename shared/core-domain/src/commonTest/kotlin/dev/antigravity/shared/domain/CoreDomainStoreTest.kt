@@ -1288,7 +1288,7 @@ class CoreDomainStoreTest {
     }
 
     @Test
-    fun testCreateLocalDraftConversationPreservesCloudAndProjectMetadata() {
+    fun testCreateLocalDraftConversationPreservesCloudAndProjectMetadata() = runTest {
         val coordinator = AntigravityCoreCoordinator(
             preferencesStore = InMemoryPreferencesStore(),
             projectionStorage = InMemoryProjectionStorage(),

@@ -1550,6 +1550,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
         try await client.sendUserCascadeMessage(
             cascadeId: cloudCascadeId,
             message: "First message",
+            modelId: "MODEL_PLACEHOLDER_M37",
             isCloud: true
         )
         XCTAssertTrue(state.sendTargets().contains(peerUuid))
@@ -1558,6 +1559,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
         try await client.sendUserCascadeMessage(
             cascadeId: cloudCascadeId,
             message: "Second message",
+            modelId: "MODEL_PLACEHOLDER_M37",
             isCloud: true
         )
         try await client.cancelCascadeInvocation(cascadeId: cloudCascadeId)
