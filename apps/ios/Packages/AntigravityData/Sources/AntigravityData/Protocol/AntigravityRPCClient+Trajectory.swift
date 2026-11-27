@@ -315,7 +315,8 @@ extension AntigravityRPCClient {
         knownStepCount: Int = 0,
         isCloud: Bool = false,
         instanceUuidOverride: String? = nil,
-        existingSteps: [CascadeStep] = []
+        existingSteps: [CascadeStep] = [],
+        onPartialSteps: (@Sendable ([CascadeStep]) async -> Void)? = nil
     ) async throws -> [CascadeStep] {
         let isRemoteCloud = Self.isRemoteCloudCascade(cascadeId: cascadeId, isCloud: isCloud)
         let pinnedTarget = (channel == .cloudRelay) ? pinnedInstance(for: cascadeId) : nil
@@ -356,7 +357,9 @@ extension AntigravityRPCClient {
                     cascadeId: cascadeId,
                     knownStepCount: knownStepCount,
                     isCloud: isRemoteCloud,
-                    targetUuid: primaryTarget
+                    targetUuid: primaryTarget,
+                    existingStepsCount: existingSteps.count,
+                    onPartialSteps: onPartialSteps
                 )
                 if !steps.isEmpty {
                     recordPinnedInstance(for: cascadeId, instanceUuid: primaryTarget)
@@ -428,7 +431,9 @@ extension AntigravityRPCClient {
                             cascadeId: cascadeId,
                             knownStepCount: knownStepCount,
                             isCloud: isRemoteCloud,
-                            targetUuid: peer.uuid
+                            targetUuid: peer.uuid,
+                            existingStepsCount: existingSteps.count,
+                            onPartialSteps: onPartialSteps
                         )
                         if !peerSteps.isEmpty {
                             recordPinnedInstance(for: cascadeId, instanceUuid: peer.uuid)
@@ -458,7 +463,9 @@ extension AntigravityRPCClient {
         cascadeId: String,
         knownStepCount: Int,
         isCloud: Bool,
-        targetUuid: String?
+        targetUuid: String?,
+        existingStepsCount: Int = 0,
+        onPartialSteps: (@Sendable ([CascadeStep]) async -> Void)? = nil
     ) async throws -> [CascadeStep] {
         let isRemoteCloud = Self.isRemoteCloudCascade(cascadeId: cascadeId, isCloud: isCloud)
         let wakeKey = "\(targetUuid ?? "direct")|\(cascadeId)"
@@ -492,56 +499,78 @@ extension AntigravityRPCClient {
         }
 
         // Path 1 (Default for Local PC Hosts): Binary Protobuf (`application/proto`) first.
-        // Saves ~65% mobile bandwidth, avoids any server-side JSON step truncation, wakes dormant
-        // disk sessions on empty OR 404 `not_found`, and repairs unknown wire interactions via JSON.
+        // Saves ~65% mobile bandwidth, avoids any server-side JSON step truncation, paints recent
+        // tail steps immediately on long uncached chats, emits before JSON repair, and wakes dormant sessions.
         let protoAllowed = !isRemoteCloud && !isBinaryProtobufStepsUnsupported(for: targetUuid)
         if protoAllowed {
-            var shouldWakeAndRetryProto = false
-            do {
-                let protoSteps = try await fetchTrajectoryStepsProtobuf(
-                    cascadeId: cascadeId,
-                    startIndex: 0,
-                    endIndex: knownStepCount,
-                    instanceUuidOverride: targetUuid,
-                    allowCrossHostFailover: false
-                )
-                if !protoSteps.isEmpty {
-                    wokenInstanceCascadeKeys.insert(wakeKey)
-                    return protoSteps
-                }
-                shouldWakeAndRetryProto = knownStepCount > 0 || !wokenInstanceCascadeKeys.contains(wakeKey)
-            } catch let AntigravityRPCError.unauthorized(msg) {
-                throw AntigravityRPCError.unauthorized(msg)
-            } catch {
-                if Self.isBinaryProtobufUnsupportedError(error) {
-                    recordBinaryProtobufStepsUnsupported(for: targetUuid)
-                } else {
-                    lastError = error
-                    if ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
-                        shouldWakeAndRetryProto = true
+            let hostKey = capabilityHostKey(for: targetUuid)
+            var tailFastPainted = false
+
+            if let onPartialSteps,
+               existingStepsCount == 0,
+               knownStepCount >= 80,
+               !stepOffsetIgnoredHosts.contains(hostKey) {
+                let tailOffset = max(0, knownStepCount - 48)
+                do {
+                    let tailSteps = try await fetchTrajectoryStepsProtobuf(
+                        cascadeId: cascadeId,
+                        startIndex: tailOffset,
+                        endIndex: knownStepCount,
+                        instanceUuidOverride: targetUuid,
+                        allowCrossHostFailover: false,
+                        repairUnknownSteps: false
+                    )
+                    if !tailSteps.isEmpty {
+                        let serverIgnoredOffset = tailOffset > 0 && tailSteps.count >= knownStepCount
+                        if serverIgnoredOffset {
+                            stepOffsetIgnoredHosts.insert(hostKey)
+                            wokenInstanceCascadeKeys.insert(wakeKey)
+                            let normalized = tailSteps.enumerated().map { idx, step -> CascadeStep in
+                                if step.stepIndex == idx { return step }
+                                var copy = step
+                                copy.stepIndex = idx
+                                return copy
+                            }
+                            await onPartialSteps(normalized)
+                            return await repairUnrecognizedWireInteractionsIfNeeded(
+                                normalized,
+                                cascadeId: cascadeId,
+                                instanceUuidOverride: targetUuid,
+                                allowCrossHostFailover: false
+                            )
+                        }
+                        tailFastPainted = true
+                        wokenInstanceCascadeKeys.insert(wakeKey)
+                        await onPartialSteps(tailSteps)
+                    }
+                } catch let AntigravityRPCError.unauthorized(msg) {
+                    throw AntigravityRPCError.unauthorized(msg)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if Self.isBinaryProtobufUnsupportedError(error) {
+                        recordBinaryProtobufStepsUnsupported(for: targetUuid)
                     }
                 }
             }
 
-            if shouldWakeAndRetryProto {
+            if !isBinaryProtobufStepsUnsupported(for: targetUuid) {
+                var shouldWakeAndRetryProto = false
                 do {
-                    try await loadTrajectory(cascadeId: cascadeId, isCloud: false, instanceUuidOverride: targetUuid)
-                } catch let AntigravityRPCError.unauthorized(msg) {
-                    throw AntigravityRPCError.unauthorized(msg)
-                } catch {
-                    // Best-effort wake; still retry Binary Protobuf and fall through to Path 2 if needed.
-                }
-                do {
-                    let retryProtoSteps = try await fetchTrajectoryStepsProtobuf(
+                    let protoSteps = try await fetchTrajectoryStepsProtobuf(
                         cascadeId: cascadeId,
                         startIndex: 0,
                         endIndex: knownStepCount,
                         instanceUuidOverride: targetUuid,
-                        allowCrossHostFailover: false
+                        allowCrossHostFailover: false,
+                        onDecodedBeforeRepair: onPartialSteps
                     )
-                    if !retryProtoSteps.isEmpty {
+                    if !protoSteps.isEmpty {
                         wokenInstanceCascadeKeys.insert(wakeKey)
-                        return retryProtoSteps
+                        return protoSteps
+                    }
+                    if !tailFastPainted {
+                        shouldWakeAndRetryProto = knownStepCount > 0 || !wokenInstanceCascadeKeys.contains(wakeKey)
                     }
                 } catch let AntigravityRPCError.unauthorized(msg) {
                     throw AntigravityRPCError.unauthorized(msg)
@@ -550,6 +579,41 @@ extension AntigravityRPCClient {
                         recordBinaryProtobufStepsUnsupported(for: targetUuid)
                     } else {
                         lastError = error
+                        if ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
+                            shouldWakeAndRetryProto = true
+                        }
+                    }
+                }
+
+                if shouldWakeAndRetryProto {
+                    do {
+                        try await loadTrajectory(cascadeId: cascadeId, isCloud: false, instanceUuidOverride: targetUuid)
+                    } catch let AntigravityRPCError.unauthorized(msg) {
+                        throw AntigravityRPCError.unauthorized(msg)
+                    } catch {
+                        // Best-effort wake; still retry Binary Protobuf and fall through to Path 2 if needed.
+                    }
+                    do {
+                        let retryProtoSteps = try await fetchTrajectoryStepsProtobuf(
+                            cascadeId: cascadeId,
+                            startIndex: 0,
+                            endIndex: knownStepCount,
+                            instanceUuidOverride: targetUuid,
+                            allowCrossHostFailover: false,
+                            onDecodedBeforeRepair: onPartialSteps
+                        )
+                        if !retryProtoSteps.isEmpty {
+                            wokenInstanceCascadeKeys.insert(wakeKey)
+                            return retryProtoSteps
+                        }
+                    } catch let AntigravityRPCError.unauthorized(msg) {
+                        throw AntigravityRPCError.unauthorized(msg)
+                    } catch {
+                        if Self.isBinaryProtobufUnsupportedError(error) {
+                            recordBinaryProtobufStepsUnsupported(for: targetUuid)
+                        } else {
+                            lastError = error
+                        }
                     }
                 }
             }
@@ -1293,7 +1357,9 @@ extension AntigravityRPCClient {
         startIndex: Int,
         endIndex: Int = 0,
         instanceUuidOverride: String? = nil,
-        allowCrossHostFailover: Bool = false
+        allowCrossHostFailover: Bool = false,
+        repairUnknownSteps: Bool = true,
+        onDecodedBeforeRepair: (@Sendable ([CascadeStep]) async -> Void)? = nil
     ) async throws -> [CascadeStep] {
         let protoReqBytes = ProtobufStepCodec.encodeGetStepsRequest(
             cascadeId: cascadeId,
@@ -1314,6 +1380,10 @@ extension AntigravityRPCClient {
                 cascadeId: cascadeId,
                 startingIndex: startIndex
             )
+            if !decoded.isEmpty, let onDecodedBeforeRepair {
+                await onDecodedBeforeRepair(decoded)
+            }
+            if !repairUnknownSteps { return decoded }
             return await repairUnrecognizedWireInteractionsIfNeeded(
                 decoded,
                 cascadeId: cascadeId,
@@ -1346,6 +1416,10 @@ extension AntigravityRPCClient {
             cascadeId: cascadeId,
             startingIndex: startIndex
         )
+        if !decoded.isEmpty, let onDecodedBeforeRepair {
+            await onDecodedBeforeRepair(decoded)
+        }
+        if !repairUnknownSteps { return decoded }
         return await repairUnrecognizedWireInteractionsIfNeeded(
             decoded,
             cascadeId: cascadeId,

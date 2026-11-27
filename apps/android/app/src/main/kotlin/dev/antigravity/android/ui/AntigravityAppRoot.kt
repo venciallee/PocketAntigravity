@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -292,6 +293,27 @@ fun AntigravityAppRoot(
                     instanceUuidOverride = summary?.originInstanceUuid,
                 )
             }
+        }
+    }
+
+    DisposableEffect(activeChatRouteId, connectionState.isConnected) {
+        val cid = activeChatRouteId
+        if (!coordinator.isVerificationMode &&
+            !cid.isNullOrBlank() &&
+            !cid.startsWith("cascade-new-") &&
+            connectionState.isConnected
+        ) {
+            val summary = activeChatSummary
+            coordinator.startLiveChatStream(
+                cascadeId = cid,
+                isCloud = isCloudConversation(cid, summary),
+                instanceUuidOverride = summary?.originInstanceUuid,
+            )
+        } else {
+            coordinator.stopLiveChatStream()
+        }
+        onDispose {
+            coordinator.stopLiveChatStream()
         }
     }
 

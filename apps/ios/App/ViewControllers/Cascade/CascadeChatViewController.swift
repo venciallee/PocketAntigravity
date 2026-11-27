@@ -358,6 +358,12 @@ public struct CascadeChatViewController: View {
                 }
             }
         }
+        .onDisappear {
+            if case .cascadeChat = store.activeRoute {
+                return
+            }
+            store.stopLiveChatStream()
+        }
     }
 
     @ViewBuilder
