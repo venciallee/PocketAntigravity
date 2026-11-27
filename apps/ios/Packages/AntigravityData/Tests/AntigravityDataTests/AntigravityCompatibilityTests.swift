@@ -1455,7 +1455,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
     }
 
     func testSwiftIncrementalBinaryDeltaSyncMergesTailSteps() async throws {
-        func makeSlice(_ range: Range<Int>) -> Data {
+        let makeSlice: @Sendable (Range<Int>) -> Data = { range in
             var out = Data()
             for i in range {
                 var step = Data()
@@ -1493,7 +1493,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
             return out
         }
 
-        func decodeOffset(_ body: Data) -> Int {
+        let decodeOffset: @Sendable (Data) -> Int = { body in
             var pos = 0
             while pos < body.count {
                 guard let tag = ProtobufStepCodec.readVarint(from: body, offset: &pos) else { break }
