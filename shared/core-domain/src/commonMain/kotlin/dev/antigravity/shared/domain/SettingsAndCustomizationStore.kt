@@ -100,7 +100,6 @@ public class SettingsAndCustomizationStore(
                 remotePermissionPreset = loadedRemotePreset,
                 appearance = loadedAppearance.copy(
                     globalPermissionPreset = loadedLocalPreset,
-                    terminalSandboxEnabled = loadedLocalPreset.usesTerminalSandbox,
                 ),
             ),
         )
@@ -244,7 +243,6 @@ public class SettingsAndCustomizationStore(
             _state.update { prev ->
                 val nextAppearance = prev.appearance.copy(
                     globalPermissionPreset = resolved,
-                    terminalSandboxEnabled = resolved.usesTerminalSandbox,
                 )
                 updatedAppearance = nextAppearance
                 prev.copy(
@@ -275,7 +273,6 @@ public class SettingsAndCustomizationStore(
                 localPermissionPreset = resolved,
                 appearance = it.appearance.copy(
                     globalPermissionPreset = resolved,
-                    terminalSandboxEnabled = resolved.usesTerminalSandbox,
                 ),
                 lastCapabilityError = null,
             )
