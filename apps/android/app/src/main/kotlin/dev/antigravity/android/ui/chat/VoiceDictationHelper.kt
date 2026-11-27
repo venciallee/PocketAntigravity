@@ -140,10 +140,17 @@ class VoiceDictationController(
         if (preferredLanguage != VoiceDictationLanguage.AUTO) {
             return preferredLanguage.shortBadgeLabel(appLanguage)
         }
-        val resolved = activeLocaleTag ?: resolveSpeechLocaleTag(
-            appLanguage = appLanguage,
-            contextTextHint = contextTextHint ?: pendingContextTextHint,
-        )
+        val resolved = if (isRecording || isStarting) {
+            activeLocaleTag ?: resolveSpeechLocaleTag(
+                appLanguage = appLanguage,
+                contextTextHint = contextTextHint ?: pendingContextTextHint,
+            )
+        } else {
+            resolveSpeechLocaleTag(
+                appLanguage = appLanguage,
+                contextTextHint = contextTextHint ?: pendingContextTextHint,
+            )
+        }
         val shortLang = VoiceLocaleResolver.shortDisplayLabelForLocale(resolved)
         val autoPrefix = appLanguage.t("Auto", "自动")
         return if (shortLang == "Auto") autoPrefix else "$autoPrefix · $shortLang"
@@ -159,7 +166,7 @@ class VoiceDictationController(
         preferredLanguage = language
         prefs.edit().putString(KEY_DICTATION_LANGUAGE, language.tag).apply()
         val effectiveHint = contextTextHint ?: pendingContextTextHint
-        activeLocaleTag = language.bcp47Tag ?: resolveSpeechLocaleTag(appLanguage, effectiveHint)
+        activeLocaleTag = language.bcp47Tag
         if ((isRecording || isStarting) && onDraftUpdated != null) {
             stopRecording()
             toggleRecording(

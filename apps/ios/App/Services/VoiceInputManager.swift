@@ -109,7 +109,7 @@ public final class VoiceInputManager {
             return preferredLanguage.shortBadgeLabel(for: appLanguage)
         }
         let resolvedTag: String?
-        if let activeLocaleIdentifier {
+        if (isRecording || isStarting || isRefining), let activeLocaleIdentifier {
             resolvedTag = activeLocaleIdentifier
         } else {
             let candidates = VoiceLocaleResolver.buildCandidateLocaleTags(
@@ -717,7 +717,8 @@ public final class VoiceInputManager {
         let altLocale = alternateLocaleIdentifier
         let allowAutoProbe = (preferredLanguage == .auto && !hasSwitchedLiveToAlternate && altLocale != nil)
         let callback = activeTranscriptCallback
-        let captureSnapshot = audioCaptureStore?.snapshotBuffersForOfflineProbe() ?? ([], 0)
+        let captureSnapshot: (buffers: [AVAudioPCMBuffer], activeSpeechMs: Int) =
+            audioCaptureStore?.snapshotBuffersForOfflineProbe() ?? (buffers: [], activeSpeechMs: 0)
 
         activeRequestBox?.finish()
         activeRequestBox = nil
