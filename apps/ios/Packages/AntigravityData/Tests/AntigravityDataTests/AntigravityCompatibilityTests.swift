@@ -1859,6 +1859,172 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertTrue(text.contains("[\"accept-encoding\",\"gzip\"]"), "Missing gzip accept-encoding header: \(text)")
         XCTAssertTrue(text.contains("[\"accept\",\"application/proto\"]"), "Missing application/proto accept header: \(text)")
     }
+
+    func testCloudStreamAgentStateUpdatesDoesNotAbortOnEmptyZeroStubAndTriesBackendVariant() async throws {
+        let instanceUuid = "inst-swift-cloud-stub"
+        let cloudCascadeId = "v1/default/jetski_remote_agents_3p_devbox/xcode-signing-swift"
+        let probe = CompatCloudWakeProbeState()
+
+        let emptyStubFrame = """
+        {"update":{"conversationId":"\(cloudCascadeId)","mainTrajectoryUpdate":{"stepsUpdate":{"totalLength":0}}}}
+        """
+        var emptyStreamBytes = Data()
+        emptyStreamBytes.append(ConnectEnvelope.encode(payload: Data(emptyStubFrame.utf8)))
+        emptyStreamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let emptyBoqChunk = "[\"\(emptyStreamBytes.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        let realStepsFrame = """
+        {"update":{"conversationId":"\(cloudCascadeId)","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Xcode签名丢失原因分析"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"根因是自动签名配置被覆盖。"}}]}}}}
+        """
+        var realStreamBytes = Data()
+        realStreamBytes.append(ConnectEnvelope.encode(payload: Data(realStepsFrame.utf8)))
+        realStreamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let realBoqChunk = "[\"\(realStreamBytes.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.34.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+                let b64Inner = arr.count > 2 ? (arr[2].stringValue ?? "") : ""
+                let framed = CloudRelayJSPBCodec.decodeBase64Flexible(b64Inner) ?? Data()
+                let innerData = framed.count > 5 ? framed.subdata(in: 5..<framed.count) : Data("{}".utf8)
+                let innerObj = (try? JSONDecoder().decode([String: JSONValue].self, from: innerData)) ?? [:]
+                probe.recordLoadPayload(innerObj)
+                let isRemoteTag = innerObj["backend"]?.stringValue == "BACKEND_TYPE_REMOTE_AICODE"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data((isRemoteTag ? realBoqChunk : emptyBoqChunk).utf8))
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let client = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: instanceUuid,
+                hostname: "MacBook Pro",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let steps = try await client.fetchAllTrajectorySteps(
+            cascadeId: cloudCascadeId,
+            knownStepCount: 2,
+            isCloud: true
+        )
+        XCTAssertEqual(steps.count, 2)
+        XCTAssertEqual(steps[0].userInput, "Xcode签名丢失原因分析")
+        XCTAssertEqual(steps[1].plannerResponse?.response, "根因是自动签名配置被覆盖。")
+        XCTAssertEqual(probe.loadPayloads().count, 2)
+        XCTAssertNil(probe.loadPayloads().first?["backend"])
+        XCTAssertEqual(probe.loadPayloads().last?["backend"]?.stringValue, "BACKEND_TYPE_REMOTE_AICODE")
+    }
+
+    func testDormantCloudTrajectoryRetriesStreamAgentStateUpdatesAfterLoadTrajectoryWake() async throws {
+        let instanceUuid = "inst-swift-cloud-wake"
+        let cloudCascadeId = "v1/default/jetski_remote_agents_3p_devbox/dormant-swift-wake"
+        let state = CompatSendRecoveryProbeState()
+        let counter = CompatRequestCounter()
+
+        let emptyStreamBytes = ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream)
+        let emptyBoqChunk = "[\"\(emptyStreamBytes.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        let wokeFrame = """
+        {"update":{"conversationId":"\(cloudCascadeId)","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"唤醒云端历史对话"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"云端历史已恢复。"}}]}}}}
+        """
+        var wokeStreamBytes = Data()
+        wokeStreamBytes.append(ConnectEnvelope.encode(payload: Data(wokeFrame.utf8)))
+        wokeStreamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let wokeBoqChunk = "[\"\(wokeStreamBytes.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            counter.record(path: path)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.34.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                let body = state.isWoken(cloudCascadeId) ? wokeBoqChunk : emptyBoqChunk
+                return (resp, Data(body.utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+                let rpcPath = arr.count > 1 ? (arr[1].stringValue ?? "") : ""
+                if rpcPath.hasSuffix("/LoadTrajectory") {
+                    state.markWoken(cloudCascadeId)
+                    let okB64 = Data("{}".utf8).base64EncodedString()
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                    return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                }
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data("[5,\"not_found: trajectory not found\"]".utf8))
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let client = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: instanceUuid,
+                hostname: "MacBook Pro",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let steps = try await client.fetchAllTrajectorySteps(
+            cascadeId: cloudCascadeId,
+            knownStepCount: 2,
+            isCloud: true
+        )
+        XCTAssertEqual(steps.count, 2)
+        XCTAssertEqual(steps[0].userInput, "唤醒云端历史对话")
+        XCTAssertEqual(steps[1].plannerResponse?.response, "云端历史已恢复。")
+        XCTAssertGreaterThanOrEqual(counter.count(forSuffix: "/StreamProxyCommand"), 2)
+    }
+
+    func testDecodeAgentStateStepsUpdateHandlesAlternativeWrappersAndSnakeCaseSteps() throws {
+        let rawJSON = """
+        {
+          "agentStateUpdate": {
+            "mainTrajectory": {
+              "trajectory": {
+                "total_length": 4,
+                "steps": [
+                  {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "user_input": {"items": [{"item": {"text": "为什么进来显示空白"}}]}},
+                  {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE", "planner_response": {"modified_response": "已定位根因并修复"}}
+                ]
+              }
+            }
+          }
+        }
+        """
+        let decodedMap = try JSONDecoder().decode([String: JSONValue].self, from: Data(rawJSON.utf8))
+        let update = AntigravityRPCClient.decodeAgentStateStepsUpdate(decodedMap, cascadeId: "v1/alt")
+        XCTAssertTrue(update.hasMainTrajectoryUpdate)
+        XCTAssertEqual(update.totalLength, 4)
+        XCTAssertEqual(update.steps.count, 2)
+        XCTAssertEqual(update.steps[0].userInput, "为什么进来显示空白")
+        XCTAssertEqual(update.steps[1].plannerResponse?.response, "已定位根因并修复")
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers

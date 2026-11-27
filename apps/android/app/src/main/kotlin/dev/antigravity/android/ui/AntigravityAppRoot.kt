@@ -263,11 +263,16 @@ fun AntigravityAppRoot(
         if (activeChatRouteId.isNullOrBlank()) null
         else syncState.summaries.firstOrNull { it.cascadeId == activeChatRouteId }
     }
+    val hasAnyReachableRelayHost = remember(connectionState.availableRelayInstances) {
+        connectionState.availableRelayInstances.any { it.status.isReachable }
+    }
     var lastHandledStepRetryNonce by remember { mutableStateOf(0) }
     LaunchedEffect(
         activeChatRouteId,
         activeChatSummary?.stepCount,
         activeChatSummary?.status,
+        connectionState.isConnected,
+        hasAnyReachableRelayHost,
         stepSyncRetryNonce,
     ) {
         val cid = activeChatRouteId ?: return@LaunchedEffect
@@ -278,6 +283,9 @@ fun AntigravityAppRoot(
         val resolvedIsCloud = isCloudConversation(cid, summary)
         runCatching {
             if (isManualRetry) {
+                if (!connectionState.isConnected && !hasAnyReachableRelayHost && connectionState.hasPairedBackend) {
+                    runCatching { coordinator.reconnectNow() }
+                }
                 coordinator.forceSyncSteps(
                     cascadeId = cid,
                     knownStepCount = summary?.stepCount ?: 0,
