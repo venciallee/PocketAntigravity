@@ -778,7 +778,8 @@ final class KmpEnginePortTests: XCTestCase {
     func testRefreshAvailableRelayHostsUsesKmpEngineAndReconcilesOfflineRecovery() async throws {
         let hostUuid = "probe-kmp-macbook-v2"
         let engine = ProbeStateToggleKmpEngineDouble(hostUuid: hostUuid)
-        let store = AntigravitySessionStore.makeLiveStore()
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+        defer { store.suspendNetworkingForBackground() }
         store.isVerificationMode = false
         store.isNetworkingSuspended = false
         store.isDeviceNetworkReachable = true
@@ -794,7 +795,6 @@ final class KmpEnginePortTests: XCTestCase {
         )
         store.hosts = [store.activeHost]
         store.selectedHostScope = .localHost(id: hostUuid, name: "MacBook Pro")
-        store.attachKmpEngine(engine)
 
         // 1. Host goes offline -> refreshAvailableRelayHosts routes through kmpEngine with verifyEndToEnd=true
         //    and flips BOTH activeHost.isOnline AND isLiveBackendConnected to false.

@@ -643,6 +643,7 @@ public class ConnectionDomainStore(
     ): HostReachabilityProbeResult {
         val client = activeClient()
             ?: throw AntigravityRpcError.HttpError(503, "No active backend client")
+        val probeStartedHostId = _state.value.activeHost?.instanceId
         val result = try {
             client.probeHostReachability(
                 allowCrossHostFallback = allowCrossHostFallback,
@@ -672,7 +673,19 @@ public class ConnectionDomainStore(
                 prev.activeHost?.endpointUrl.orEmpty()
             )?.relayOrigin ?: SapisidHashGenerator.DEFAULT_ORIGIN
 
-            val nextActiveHost = result.activeRelayInstance?.let { inst ->
+            val activeHostSwitched = probeStartedHostId != null &&
+                prev.activeHost?.instanceId != probeStartedHostId
+            val allowActiveReplacement = !activeHostSwitched &&
+                (allowCrossHostFallback && prev.selectedHostScope !is AgentsHostFilterScope.LocalHost)
+
+            val candidateInst = result.activeRelayInstance?.takeIf { inst ->
+                !activeHostSwitched && (
+                    allowActiveReplacement ||
+                        prev.activeHost == null ||
+                        inst.uuid == prev.activeHost.instanceId
+                    )
+            }
+            val nextActiveHost = candidateInst?.let { inst ->
                 val base = prev.activeHost
                 if (base != null) {
                     base.copy(
@@ -695,13 +708,26 @@ public class ConnectionDomainStore(
                     )
                 }
             } ?: prev.activeHost?.let { active ->
-                val activeStillPresent = !hasFreshRelaySnapshot ||
-                    active.channel != RemoteConnectionChannel.CLOUD_RELAY ||
-                    nextRelayInstances.any { it.uuid == active.instanceId && it.status.isReachable }
-                active.copy(
-                    isOnline = result.isSelectedHostOnline && activeStillPresent,
-                    latencyMs = result.latencyMs,
-                )
+                if (activeHostSwitched) {
+                    if (hasFreshRelaySnapshot && active.channel == RemoteConnectionChannel.CLOUD_RELAY) {
+                        val matched = nextRelayInstances.firstOrNull { it.uuid == active.instanceId }
+                        active.copy(
+                            hostname = matched?.name?.takeIf { it.isNotBlank() } ?: active.hostname,
+                            version = matched?.version?.takeIf { it.isNotBlank() } ?: active.version,
+                            isOnline = matched?.status?.isReachable == true,
+                        )
+                    } else {
+                        active
+                    }
+                } else {
+                    val activeStillPresent = !hasFreshRelaySnapshot ||
+                        active.channel != RemoteConnectionChannel.CLOUD_RELAY ||
+                        nextRelayInstances.any { it.uuid == active.instanceId && it.status.isReachable }
+                    active.copy(
+                        isOnline = result.isSelectedHostOnline && activeStillPresent,
+                        latencyMs = result.latencyMs,
+                    )
+                }
             }
 
             val nextKnownHosts = if (hasFreshRelaySnapshot) {
@@ -733,17 +759,25 @@ public class ConnectionDomainStore(
                 prev.knownHosts
             }
 
-            val isOnlineNow = result.isSelectedHostOnline && (nextActiveHost?.isOnline != false)
+            val isOnlineNow = if (activeHostSwitched) {
+                nextActiveHost?.isOnline == true
+            } else {
+                result.isSelectedHostOnline && (nextActiveHost?.isOnline != false)
+            }
             val displayHostName = nextActiveHost?.hostname?.takeIf { it.isNotBlank() } ?: "Desktop"
             prev.copy(
                 isConnected = isOnlineNow,
-                lastPingLatencyMs = if (isOnlineNow) result.latencyMs else null,
+                lastPingLatencyMs = if (isOnlineNow) {
+                    if (activeHostSwitched) prev.lastPingLatencyMs else result.latencyMs
+                } else {
+                    null
+                },
                 activeHost = nextActiveHost,
                 knownHosts = nextKnownHosts,
                 availableRelayInstances = nextRelayInstances,
                 errorText = if (isOnlineNow) null else prev.errorText,
                 statusText = if (isOnlineNow) {
-                    "Connected · $displayHostName · ${result.latencyMs}ms"
+                    if (activeHostSwitched) "Connected · $displayHostName" else "Connected · $displayHostName · ${result.latencyMs}ms"
                 } else {
                     "Offline · $displayHostName"
                 },

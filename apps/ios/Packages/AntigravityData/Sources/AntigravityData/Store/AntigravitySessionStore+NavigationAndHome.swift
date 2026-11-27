@@ -547,6 +547,7 @@ extension AntigravitySessionStore {
         isRefreshingRelayHosts = true
         defer { isRefreshingRelayHosts = false }
 
+        let generation = hostSwitchGeneration
         let allowCrossHostFallback = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
         let wasOfflineBeforeProbe = !isLiveBackendConnected || !activeHost.isOnline
         do {
@@ -565,7 +566,18 @@ extension AntigravitySessionStore {
             } else {
                 return
             }
-            applyRelayProbeMetadata(probe, allowCrossHostFallback: allowCrossHostFallback)
+            if generation != hostSwitchGeneration {
+                if !probe.availableRelayInstances.isEmpty {
+                    syncRelayInstancesToHosts(
+                        probe.availableRelayInstances,
+                        latencyMs: probe.latencyMs,
+                        preferredActiveInstance: nil
+                    )
+                }
+                return
+            }
+            let currentAllowCrossHost = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
+            applyRelayProbeMetadata(probe, allowCrossHostFallback: currentAllowCrossHost)
             if probe.isSelectedHostOnline && activeHost.isOnline {
                 if wasOfflineBeforeProbe {
                     markBackendReconnected(forceReconnectedActions: true)
@@ -585,6 +597,7 @@ extension AntigravitySessionStore {
                 await projectionStore.saveKnownHosts(localHostsSnapshot)
             }
         } catch {
+            guard generation == hostSwitchGeneration else { return }
             if Self.isBackendOfflineError(error) {
                 if let client = rpcClient {
                     let latestInstances = await client.currentCachedRelayInstances()
