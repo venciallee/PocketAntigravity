@@ -43,9 +43,11 @@ extension AntigravitySessionStore {
                let exact = availableRelayInstances.first(where: { $0.uuid == trimmedId }) {
                 return exact.status.isReachable
             }
-            if !trimmedName.isEmpty,
-               let byName = availableRelayInstances.first(where: { $0.name == trimmedName }) {
-                return byName.status.isReachable
+            if !trimmedName.isEmpty {
+                let byNameMatches = availableRelayInstances.filter { $0.name == trimmedName }
+                if !byNameMatches.isEmpty {
+                    return byNameMatches.contains(where: \.status.isReachable)
+                }
             }
             if !trimmedId.isEmpty || !trimmedName.isEmpty {
                 return false
@@ -57,9 +59,11 @@ extension AntigravitySessionStore {
            let matched = hosts.first(where: { $0.instanceId == trimmedId }) {
             return matched.isOnline && (matched.channel == .cloudRelay || isLiveBackendConnected)
         }
-        if !trimmedName.isEmpty,
-           let matchedByName = hosts.first(where: { $0.hostname == trimmedName }) {
-            return matchedByName.isOnline && (matchedByName.channel == .cloudRelay || isLiveBackendConnected)
+        if !trimmedName.isEmpty {
+            let nameMatches = hosts.filter { $0.hostname == trimmedName }
+            if !nameMatches.isEmpty {
+                return nameMatches.contains { $0.isOnline && ($0.channel == .cloudRelay || isLiveBackendConnected) }
+            }
         }
         return isLiveBackendConnected && activeHost.isOnline
     }
@@ -603,6 +607,7 @@ extension AntigravitySessionStore {
             let currentAllowCrossHost = (selectedHostScope == .allHosts || selectedHostScope == .antigravityCloud)
             applyRelayProbeMetadata(probe, allowCrossHostFallback: currentAllowCrossHost)
             if probe.isSelectedHostOnline && activeHost.isOnline {
+                consecutiveSyncFailures = 0
                 if wasOfflineBeforeProbe {
                     markBackendReconnected(forceReconnectedActions: true)
                 }
@@ -623,14 +628,36 @@ extension AntigravitySessionStore {
         } catch {
             guard generation == hostSwitchGeneration else { return }
             if Self.isBackendOfflineError(error) {
-                if let client = rpcClient {
-                    let latestInstances = await client.currentCachedRelayInstances()
-                    if !latestInstances.isEmpty {
-                        let downgraded = latestInstances.map { $0.withStatus(.disconnected) }
-                        syncRelayInstancesToHosts(downgraded, latencyMs: nil)
+                let isDefiniteOffline: Bool = {
+                    if case AntigravityRPCError.unauthorized = error { return true }
+                    if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) { return true }
+                    if case AntigravityRPCError.httpError(let code, let body) = error,
+                       code == 503 && body.lowercased().contains("no reachable") {
+                        return true
                     }
+                    return false
+                }()
+                let shouldMarkOffline: Bool
+                if isDefiniteOffline || wasOfflineBeforeProbe || activeHost.channel != .cloudRelay {
+                    shouldMarkOffline = true
+                } else {
+                    consecutiveSyncFailures += 1
+                    let threshold = ConnectionPowerPolicy.offlineFailureThreshold(
+                        channel: activeHost.channel,
+                        error: error
+                    )
+                    shouldMarkOffline = consecutiveSyncFailures >= threshold
                 }
-                markBackendOffline(error: error)
+                if shouldMarkOffline {
+                    if let client = rpcClient {
+                        let latestInstances = await client.currentCachedRelayInstances()
+                        if !latestInstances.isEmpty {
+                            let downgraded = latestInstances.map { $0.withStatus(.disconnected) }
+                            syncRelayInstancesToHosts(downgraded, latencyMs: nil)
+                        }
+                    }
+                    markBackendOffline(error: error)
+                }
             }
         }
     }
@@ -755,14 +782,32 @@ extension AntigravitySessionStore {
         } catch {
             if Self.isBackendOfflineError(error) {
                 if case .localHost(let id, let name) = scope {
-                    if let idx = hosts.firstIndex(where: { $0.instanceId == id || $0.hostname == name }) {
-                        hosts[idx].isOnline = false
+                    let isUnauthorized: Bool = {
+                        if case AntigravityRPCError.unauthorized = error { return true }
+                        return false
+                    }()
+                    let isDefinite = isUnauthorized || ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error)
+                    let shouldMarkOffline: Bool
+                    if activeHost.channel != .cloudRelay || isDefinite || !isLocalHostOnline(instanceId: id, hostname: name) {
+                        shouldMarkOffline = true
+                    } else {
+                        consecutiveSyncFailures += 1
+                        let threshold = ConnectionPowerPolicy.offlineFailureThreshold(
+                            channel: activeHost.channel,
+                            error: error
+                        )
+                        shouldMarkOffline = consecutiveSyncFailures >= threshold
                     }
-                    if activeHost.instanceId == id || activeHost.hostname == name {
-                        activeHost.isOnline = false
-                        isLiveBackendConnected = false
-                        connectionStatusText = "Offline · \(activeHost.hostname)"
-                        connectionErrorText = "\(name) is currently offline."
+                    if shouldMarkOffline {
+                        if let idx = hosts.firstIndex(where: { $0.instanceId == id || $0.hostname == name }) {
+                            hosts[idx].isOnline = false
+                        }
+                        if activeHost.instanceId == id || activeHost.hostname == name {
+                            activeHost.isOnline = false
+                            isLiveBackendConnected = false
+                            connectionStatusText = "Offline · \(activeHost.hostname)"
+                            connectionErrorText = "\(name) is currently offline."
+                        }
                     }
                 }
             }
@@ -786,6 +831,29 @@ extension AntigravitySessionStore {
         cloudAgentWarmingUp = result.cloudWarmingUp
 
         if case .localHost(let targetId, let targetName) = scope, !result.targetReachable {
+            let listReportsReachable: Bool = {
+                if !result.relayInstances.isEmpty {
+                    return result.relayInstances.contains { inst in
+                        (inst.uuid == targetId || inst.name == targetName) && inst.status.isReachable
+                    }
+                }
+                return availableRelayInstances.contains { inst in
+                    (inst.uuid == targetId || inst.name == targetName) && inst.status.isReachable
+                }
+            }()
+            if activeHost.channel == .cloudRelay && listReportsReachable {
+                consecutiveSyncFailures += 1
+                let threshold = ConnectionPowerPolicy.offlineFailureThreshold(
+                    channel: activeHost.channel,
+                    error: AntigravityRPCError.httpError(
+                        statusCode: 504,
+                        body: "\(targetName) sync timed out"
+                    )
+                )
+                if consecutiveSyncFailures < threshold {
+                    return
+                }
+            }
             if let idx = hosts.firstIndex(where: { $0.instanceId == targetId || $0.hostname == targetName }) {
                 hosts[idx].isOnline = false
             }

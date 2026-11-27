@@ -186,11 +186,7 @@ extension AntigravitySessionStore {
 
         if isLiveBackendConnected && activeHost.isOnline {
             lastStreamReopenAttemptAt = .distantPast
-            if kmpEngine != nil {
-                startKmpSummarySubscriptionIfNeeded()
-            } else {
-                ensureSummaryEnvelopeStreamRunning()
-            }
+            ensureActiveSummaryStreamRunning()
             connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
         }
 
@@ -658,23 +654,29 @@ extension AntigravitySessionStore {
             if probe.relayTopologyChanged {
                 cancelAllSummaryStreams()
                 lastStreamReopenAttemptAt = .distantPast
-                ensureSummaryEnvelopeStreamRunning()
+                ensureActiveSummaryStreamRunning()
                 await refreshWorkspacesAndSummaries(
                     forceFullSync: true,
                     includeAutomations: false,
                     skipRelayMetadataProbe: true
                 )
             } else {
-                let missingLocalStream: Bool = {
-                    if isRelay, case .localHost(let selectedId, _) = selectedHostScope {
-                        return localSummaryStreamTasks[selectedId] == nil
+                if kmpEngine != nil {
+                    if kmpSummaryStreamTask == nil {
+                        startKmpSummarySubscriptionIfNeeded()
                     }
-                    return localSummaryStreamTasks.isEmpty
-                        || (isRelay && availableRelayInstances.contains { $0.status.isReachable && localSummaryStreamTasks[$0.uuid] == nil })
-                }()
-                let missingCloudStream = (cloudSummaryStreamTask == nil)
-                if missingLocalStream || missingCloudStream {
-                    ensureSummaryEnvelopeStreamRunning()
+                } else {
+                    let missingLocalStream: Bool = {
+                        if isRelay, case .localHost(let selectedId, _) = selectedHostScope {
+                            return localSummaryStreamTasks[selectedId] == nil
+                        }
+                        return localSummaryStreamTasks.isEmpty
+                            || (isRelay && availableRelayInstances.contains { $0.status.isReachable && localSummaryStreamTasks[$0.uuid] == nil })
+                    }()
+                    let missingCloudStream = (cloudSummaryStreamTask == nil)
+                    if missingLocalStream || missingCloudStream {
+                        ensureSummaryEnvelopeStreamRunning()
+                    }
                 }
                 if allowFullReconciliation {
                     await refreshWorkspacesAndSummaries(
@@ -696,6 +698,16 @@ extension AntigravitySessionStore {
                     markBackendOffline(error: error)
                 }
             }
+        }
+    }
+
+    internal func ensureActiveSummaryStreamRunning() {
+        if kmpEngine != nil {
+            if kmpSummaryStreamTask == nil {
+                startKmpSummarySubscriptionIfNeeded()
+            }
+        } else {
+            ensureSummaryEnvelopeStreamRunning()
         }
     }
 

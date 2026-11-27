@@ -593,10 +593,27 @@ public class AntigravityCoreCoordinator(
                 )
             }
             if (effectiveScope is AgentsHostFilterScope.LocalHost && result.succeededInstanceUuids.isEmpty()) {
-                connectionStore.markInstanceOffline(
-                    instanceUuid = effectiveHost.instanceId,
-                    errorMessage = "${effectiveHost.hostname} is currently offline.",
-                )
+                val relayStillReachable = result.availableRelayInstances.any {
+                    (it.uuid == effectiveHost.instanceId || it.name == effectiveHost.hostname) && it.status.isReachable
+                }
+                if (!relayStillReachable) {
+                    connectionStore.markInstanceOffline(
+                        instanceUuid = effectiveHost.instanceId,
+                        errorMessage = "${effectiveHost.hostname} is currently offline.",
+                    )
+                } else {
+                    consecutiveSyncFailures += 1
+                    val threshold = ConnectionPowerPolicy.offlineFailureThreshold(
+                        effectiveHost.channel,
+                        AntigravityRpcError.HttpError(504, "Sync timed out"),
+                    )
+                    if (consecutiveSyncFailures >= threshold) {
+                        connectionStore.markInstanceOffline(
+                            instanceUuid = effectiveHost.instanceId,
+                            errorMessage = "${effectiveHost.hostname} is currently offline.",
+                        )
+                    }
+                }
             } else if (result.succeededInstanceUuids.isEmpty() &&
                 !result.cloudSucceeded &&
                 result.availableRelayInstances.isNotEmpty() &&
@@ -2051,10 +2068,15 @@ public class AntigravityCoreCoordinator(
                             )
                         }
                         if (activeScope is AgentsHostFilterScope.LocalHost && synced.succeededInstanceUuids.isEmpty()) {
-                            connectionStore.markInstanceOffline(
-                                instanceUuid = host.instanceId,
-                                errorMessage = "${host.hostname} is currently offline.",
-                            )
+                            val relayStillReachable = synced.availableRelayInstances.any {
+                                (it.uuid == host.instanceId || it.name == host.hostname) && it.status.isReachable
+                            }
+                            if (!relayStillReachable) {
+                                connectionStore.markInstanceOffline(
+                                    instanceUuid = host.instanceId,
+                                    errorMessage = "${host.hostname} is currently offline.",
+                                )
+                            }
                         } else if (synced.succeededInstanceUuids.isEmpty() &&
                             !synced.cloudSucceeded &&
                             synced.availableRelayInstances.isNotEmpty() &&
