@@ -740,10 +740,12 @@ public final class AntigravitySessionStore {
                 if self.isLiveBackendConnected && self.activeHost.isOnline {
                     self.connectionLifecyclePhase = self.isCascadeStreaming ? .onlineStreaming : .onlineIdle
                 }
-                if shouldSyncActiveChat && !self.activeCascadeId.isEmpty {
+                if shouldSyncActiveChat
+                    && !self.activeCascadeId.isEmpty
+                    && self.activeRoute == .cascadeChat(self.activeCascadeId) {
                     self.syncStepsForCascade(
                         self.activeCascadeId,
-                        pollUntilIdle: self.activeRoute == .cascadeChat(self.activeCascadeId),
+                        pollUntilIdle: true,
                         forceRefresh: true,
                         cancelInFlight: false
                     )

@@ -922,20 +922,38 @@ final class KmpEnginePortTests: XCTestCase {
         )
         XCTAssertTrue(connected)
 
-        // Open conversation: during syncSteps, KMP engine emits hydrated summary (stepCount 1 -> 2)
-        // right before returning the 2 steps. Store MUST NOT cancel stepPollingTask or drop steps.
-        store.selectCascade("kmp-echo-1")
+        // 1. Even if background preload runs on Home and emits a summary echo, it must NOT fire forceSyncSteps
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        let homeForceCalls = await engine.forceSyncStepsCalls.count
+        XCTAssertEqual(homeForceCalls, 0, "Background preload echo while on Home must NOT trigger redundant forceSyncSteps")
 
-        for _ in 0..<60 where (store.stepsByCascadeId["kmp-echo-1"]?.count ?? 0) < 2 || store.isLoadingSteps {
+        // 2. Open a fresh uncached chat in foreground: during engine.syncSteps, KMP emits a hydrated summary
+        // echo (stepCount 1 -> 2) right before returning 2 steps. Store MUST NOT cancel stepPollingTask or drop steps.
+        let fgCid = "kmp-echo-fg-2"
+        store.summaries.append(
+            CascadeSummary(
+                cascadeId: fgCid,
+                title: "Foreground Historical Chat",
+                projectSlug: "app",
+                workspaceUri: "file:///Users/dev/code/app",
+                status: .unspecified,
+                stepCount: 1,
+                updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                isUnread: false
+            )
+        )
+        store.selectCascade(fgCid)
+
+        for _ in 0..<60 where (store.stepsByCascadeId[fgCid]?.count ?? 0) < 2 || store.isLoadingSteps {
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
 
-        XCTAssertEqual(store.stepsByCascadeId["kmp-echo-1"]?.count, 2, "Mid-flight KMP summary echo must not cancel and drop downloaded steps")
+        XCTAssertEqual(store.stepsByCascadeId[fgCid]?.count, 2, "Mid-flight KMP summary echo must not cancel and drop downloaded steps")
         XCTAssertFalse(store.isLoadingSteps, "Loading spinner must clear promptly once syncSteps returns")
-        let syncCalls = await engine.syncStepsCalls.count
-        let forceCalls = await engine.forceSyncStepsCalls.count
-        XCTAssertEqual(syncCalls, 1, "Expected exactly 1 syncSteps call without self-cancellation")
-        XCTAssertEqual(forceCalls, 0, "Summary echo matching downloaded step count must NOT trigger redundant forceSyncSteps")
+        let fgSyncCalls = await engine.syncStepsCalls.filter { $0 == fgCid }.count
+        let totalForceCalls = await engine.forceSyncStepsCalls.count
+        XCTAssertEqual(fgSyncCalls, 1, "Expected exactly 1 syncSteps call for foreground chat without self-cancellation")
+        XCTAssertEqual(totalForceCalls, 0, "Summary echo matching downloaded step count must NOT trigger redundant forceSyncSteps")
     }
 
     @MainActor

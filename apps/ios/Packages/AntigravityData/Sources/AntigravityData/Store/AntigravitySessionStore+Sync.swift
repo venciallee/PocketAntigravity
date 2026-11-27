@@ -952,10 +952,12 @@ extension AntigravitySessionStore {
             connectionLifecyclePhase = isCascadeStreaming ? .onlineStreaming : .onlineIdle
         }
 
-        if !activeCascadeId.isEmpty && activeChatNeedsStepSync {
+        if !activeCascadeId.isEmpty
+            && activeRoute == .cascadeChat(activeCascadeId)
+            && activeChatNeedsStepSync {
             syncStepsForCascade(
                 activeCascadeId,
-                pollUntilIdle: activeRoute == .cascadeChat(activeCascadeId),
+                pollUntilIdle: true,
                 forceRefresh: true,
                 cancelInFlight: false
             )
@@ -1274,7 +1276,7 @@ extension AntigravitySessionStore {
             }
 
             // Coalesce onto an already in-flight background preload for the same conversation instead of firing a duplicate RPC.
-            if let self, !forceRefresh, let inFlightPreload = self.inFlightPreloadTasksByCascadeId[cascadeId] {
+            if let self, (!forceRefresh || !cancelInFlight), let inFlightPreload = self.inFlightPreloadTasksByCascadeId[cascadeId] {
                 let preloadedSteps = await inFlightPreload.value
                 guard !Task.isCancelled, self.stepSyncGeneration == generation else { return }
                 if !preloadedSteps.isEmpty {
