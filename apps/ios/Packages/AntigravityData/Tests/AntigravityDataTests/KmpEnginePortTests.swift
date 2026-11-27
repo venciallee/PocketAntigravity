@@ -913,7 +913,7 @@ final class KmpEnginePortTests: XCTestCase {
 
     @MainActor
     func testKmpIncrementalDeltaSyncAndLiveChatUpdateStatusReconciliation() async throws {
-        let cid = "cas-ios-delta-live-1"
+        let cid = "kmp-ios-delta-live-1"
         let baseDate = Date(timeIntervalSince1970: 1_740_000_000)
         let cachedSteps: [CascadeStep] = [
             CascadeStep(
@@ -958,13 +958,15 @@ final class KmpEnginePortTests: XCTestCase {
         store.hasPairedBackend = true
         store.isLiveBackendConnected = true
         store.isDeviceNetworkReachable = true
-        store.activeHost = RemoteHostInstance(
+        let host = RemoteHostInstance(
             instanceId: "mac-delta-1",
             hostname: "MacBook Pro",
             channel: .directHost,
             endpointURL: URL(string: "http://127.0.0.1:42421")!,
             isOnline: true
         )
+        store.activeHost = host
+        store.hosts = [host]
         store.summaries = [
             CascadeSummary(
                 cascadeId: cid,
@@ -992,7 +994,7 @@ final class KmpEnginePortTests: XCTestCase {
         XCTAssertEqual(deltaOffsets, [2], "Cold-start incremental sync must request delta starting at anchor stepIndex 2")
         XCTAssertEqual(fullCalls, 0, "Successful incremental delta must avoid full syncSteps reload")
         XCTAssertEqual(store.stepsByCascadeId[cid]?.count, 4)
-        XCTAssertEqual(store.stepsByCascadeId[cid]?[3].plannerResponse?.response, "Delta Answer 3")
+        XCTAssertEqual(store.stepsByCascadeId[cid]?.last?.plannerResponse?.response, "Delta Answer 3")
 
         // 2. Real-time KmpLiveChatUpdate preserves cached prefix on tail slice and updates live runStatus immediately
         let tailSliceUpdate = KmpLiveChatUpdate(
@@ -1013,8 +1015,8 @@ final class KmpEnginePortTests: XCTestCase {
         )
         store.applyKmpLiveChatUpdate(tailSliceUpdate)
         XCTAssertEqual(store.stepsByCascadeId[cid]?.count, 5, "Tail slice must merge onto cached prefix without dropping steps 0..3")
-        XCTAssertEqual(store.stepsByCascadeId[cid]?[0].userInput, "Question 0")
-        XCTAssertEqual(store.stepsByCascadeId[cid]?[4].plannerResponse?.response, "Streaming token...")
+        XCTAssertEqual(store.stepsByCascadeId[cid]?.first?.userInput, "Question 0")
+        XCTAssertEqual(store.stepsByCascadeId[cid]?.last?.plannerResponse?.response, "Streaming token...")
         XCTAssertEqual(store.summaries.first(where: { $0.cascadeId == cid })?.status, .inProgress)
         XCTAssertFalse(store.isLoadingSteps)
     }
