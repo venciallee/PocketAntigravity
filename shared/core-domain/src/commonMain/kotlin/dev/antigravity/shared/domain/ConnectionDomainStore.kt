@@ -75,8 +75,9 @@ public data class ConnectionState(
                 }
             }
             if (trimmedName.isNotEmpty()) {
-                availableRelayInstances.firstOrNull { it.name == trimmedName }?.let {
-                    return it.status.isReachable
+                val nameMatches = availableRelayInstances.filter { it.name == trimmedName }
+                if (nameMatches.isNotEmpty()) {
+                    return nameMatches.any { it.status.isReachable }
                 }
             }
             if (trimmedId.isNotEmpty() || trimmedName.isNotEmpty()) {
@@ -92,8 +93,9 @@ public data class ConnectionState(
             }
         }
         if (trimmedName.isNotEmpty()) {
-            knownHosts.firstOrNull { it.hostname == trimmedName }?.let {
-                return it.isOnline && isConnected
+            val hostNameMatches = knownHosts.filter { it.hostname == trimmedName }
+            if (hostNameMatches.isNotEmpty()) {
+                return isConnected && hostNameMatches.any { it.isOnline }
             }
         }
         return isConnected && (activeHost?.isOnline == true)
@@ -643,7 +645,8 @@ public class ConnectionDomainStore(
     ): HostReachabilityProbeResult {
         val client = activeClient()
             ?: throw AntigravityRpcError.HttpError(503, "No active backend client")
-        val probeStartedHostId = _state.value.activeHost?.instanceId
+        val stateAtStart = _state.value
+        val probeStartedHostId = stateAtStart.activeHost?.instanceId
         val result = try {
             client.probeHostReachability(
                 allowCrossHostFallback = allowCrossHostFallback,
@@ -653,7 +656,14 @@ public class ConnectionDomainStore(
             throw e
         } catch (e: Throwable) {
             if (isBackendOfflineError(e)) {
-                markAllChannelHostsOffline(error = e)
+                val isDefiniteOffline = e is AntigravityRpcError.Unauthorized ||
+                    ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e) ||
+                    (e is AntigravityRpcError.HttpError && e.statusCode == 503 && e.body.contains("no reachable", ignoreCase = true))
+                val isCloudRelayCurrentlyOnline = stateAtStart.activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY &&
+                    (stateAtStart.isConnected || stateAtStart.availableRelayInstances.any { it.status.isReachable })
+                if (isDefiniteOffline || !isCloudRelayCurrentlyOnline) {
+                    markAllChannelHostsOffline(error = e)
+                }
             }
             throw e
         }

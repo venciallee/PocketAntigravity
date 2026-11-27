@@ -495,6 +495,22 @@ extension AntigravitySessionStore {
 
             if isRelay, case .localHost(let targetId, let targetName) = effectiveScope {
                 if federated.succeededInstanceUuids.isEmpty {
+                    let listReportsReachable = federated.availableRelayInstances.contains { inst in
+                        (inst.uuid == targetId || inst.name == targetName) && inst.status.isReachable
+                    }
+                    if listReportsReachable {
+                        consecutiveSyncFailures += 1
+                        let threshold = ConnectionPowerPolicy.offlineFailureThreshold(
+                            channel: activeHost.channel,
+                            error: AntigravityRPCError.httpError(
+                                statusCode: 504,
+                                body: "\(targetName) sync timed out"
+                            )
+                        )
+                        if consecutiveSyncFailures < threshold {
+                            return
+                        }
+                    }
                     var offlineHost = activeHost
                     offlineHost.isOnline = false
                     activeHost = offlineHost
