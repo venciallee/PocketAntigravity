@@ -16,6 +16,21 @@ public struct VoiceModeSheetView: View {
 
     private var lang: AppLanguage { store.appearancePreferences.language }
 
+    private var voiceContextHint: String? {
+        var parts: [String] = []
+        let trimmedManual = manualPromptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedManual.isEmpty {
+            parts.append(trimmedManual)
+        }
+        let recentTurns = store.voiceModeState.activeTurns
+            .suffix(3)
+            .map { $0.transcript.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        parts.append(contentsOf: recentTurns)
+        let joined = parts.joined(separator: " ")
+        return joined.isEmpty ? nil : joined
+    }
+
     public var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
@@ -61,11 +76,13 @@ public struct VoiceModeSheetView: View {
             Text(
                 voiceManager.isRecording
                     ? lang.t("Listening...", "正在聆听...")
-                    : (voiceManager.isStarting
-                        ? lang.t("Starting microphone...", "正在启动麦克风...")
-                        : (store.voiceModeState.isMuted
-                            ? lang.t("Microphone Muted", "麦克风已静音")
-                            : lang.t("Connected · \(store.voiceModeState.selectedVoiceId.capitalized)", "已连接 · \(store.voiceModeState.selectedVoiceId.capitalized)")))
+                    : (voiceManager.isRefining
+                        ? lang.t("Refining transcript...", "自动校准中...")
+                        : (voiceManager.isStarting
+                            ? lang.t("Starting microphone...", "正在启动麦克风...")
+                            : (store.voiceModeState.isMuted
+                                ? lang.t("Microphone Muted", "麦克风已静音")
+                                : lang.t("Connected · \(store.voiceModeState.selectedVoiceId.capitalized)", "已连接 · \(store.voiceModeState.selectedVoiceId.capitalized)"))))
             )
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(AntigravityTheme.inkReading)
@@ -111,7 +128,8 @@ public struct VoiceModeSheetView: View {
                             let prefix = manualPromptText
                             voiceManager.selectLanguage(
                                 option,
-                                appLanguage: lang
+                                appLanguage: lang,
+                                contextTextHint: voiceContextHint
                             ) { spoken in
                                 manualPromptText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: spoken)
                             }
@@ -124,7 +142,10 @@ public struct VoiceModeSheetView: View {
                         }
                     }
                 } label: {
-                    Label(voiceManager.activeLanguageBadgeLabel(for: lang), systemImage: "globe")
+                    Label(
+                        voiceManager.activeLanguageBadgeLabel(for: lang, contextTextHint: voiceContextHint),
+                        systemImage: "globe"
+                    )
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(AntigravityTheme.inkReading)
                         .padding(.horizontal, 10)
@@ -238,11 +259,14 @@ public struct VoiceModeSheetView: View {
                 }
 
                 Button {
-                    if !voiceManager.isRecording && !voiceManager.isStarting && store.voiceModeState.isMuted {
+                    if !voiceManager.isRecording && !voiceManager.isStarting && !voiceManager.isRefining && store.voiceModeState.isMuted {
                         store.toggleVoiceMute()
                     }
                     let prefix = manualPromptText
-                    voiceManager.toggleRecording(appLanguage: lang) { spoken in
+                    voiceManager.toggleRecording(
+                        appLanguage: lang,
+                        contextTextHint: voiceContextHint
+                    ) { spoken in
                         manualPromptText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: spoken)
                     }
                 } label: {

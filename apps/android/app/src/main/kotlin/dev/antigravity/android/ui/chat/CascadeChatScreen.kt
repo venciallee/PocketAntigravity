@@ -456,6 +456,23 @@ fun CascadeChatScreen(
                     }
                 }
 
+                val voiceContextHint = remember(
+                    chatState.draftInputText,
+                    chatState.activeSteps,
+                    activeSummary?.title,
+                ) {
+                    buildList {
+                        chatState.draftInputText.trim().takeIf { it.isNotEmpty() }?.let(::add)
+                        chatState.activeSteps
+                            .mapNotNull { it.userInput?.trim()?.takeIf(String::isNotEmpty) }
+                            .takeLast(2)
+                            .forEach(::add)
+                        activeSummary?.title?.trim()
+                            ?.takeIf { it.isNotEmpty() && it != "New Conversation" }
+                            ?.let(::add)
+                    }.joinToString(" ").ifBlank { null }
+                }
+
                 // Docked Material 3 Chat Composer (`and-chat.png`)
                 ChatComposerCard(
                     draftText = chatState.draftInputText,
@@ -470,6 +487,7 @@ fun CascadeChatScreen(
                     modelLabel = modelDisplayName,
                     permissionLabel = permissionLabel,
                     voiceController = voiceController,
+                    voiceContextHint = voiceContextHint,
                     onAddContext = onOpenAddContext,
                     onOpenModelAndMode = onOpenModelAndMode,
                     onOpenPermissionsPreset = onOpenPermissionsPreset,
@@ -477,6 +495,7 @@ fun CascadeChatScreen(
                         voiceController.toggleRecording(
                             existingDraft = chatState.draftInputText,
                             appLanguage = lang,
+                            contextTextHint = voiceContextHint,
                         ) { updated ->
                             coordinator.chatStore.setDraftInputText(updated)
                         }
@@ -2020,6 +2039,7 @@ private fun ChatComposerCard(
     modelLabel: String,
     permissionLabel: String,
     voiceController: VoiceDictationController,
+    voiceContextHint: String? = null,
     onAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
     onOpenPermissionsPreset: () -> Unit,
@@ -2057,6 +2077,7 @@ private fun ChatComposerCard(
                 controller = voiceController,
                 existingDraft = draftText,
                 onDraftUpdated = onDraftChange,
+                contextTextHint = voiceContextHint,
             )
 
             if (!voiceErrorMessage.isNullOrBlank()) {
@@ -2215,6 +2236,7 @@ private fun ChatComposerCard(
                                 language = chosen,
                                 appLanguage = appLanguage,
                                 existingDraft = draftText,
+                                contextTextHint = voiceContextHint,
                                 onDraftUpdated = onDraftChange,
                             )
                         },
