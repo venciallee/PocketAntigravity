@@ -2010,6 +2010,195 @@ class CoreDomainStoreTest {
     }
 
     @Test
+    fun testIdleUnspecifiedCachedConversationServesZeroRttAfterColdRestart() = runTest {
+        val storage = InMemoryProjectionStorage()
+        val cid = "cas-idle-cold-restart"
+        val cachedSteps = listOf(
+            CascadeStep(cascadeId = cid, stepIndex = 0, type = CortexStepType.USER_INPUT, status = CortexStepStatus.DONE, userInput = "Old prompt"),
+            CascadeStep(cascadeId = cid, stepIndex = 1, type = CortexStepType.PLANNER_RESPONSE, status = CortexStepStatus.DONE),
+        )
+        storage.saveSteps(cid, cachedSteps)
+
+        var rpcCalls = 0
+        val engine = MockEngine {
+            rpcCalls += 1
+            respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val client = AntigravityKmpRpcClient(
+            host = RemoteHostInstance(
+                instanceId = "direct-idle-cache",
+                hostname = "MacBook Pro",
+                channel = RemoteConnectionChannel.DIRECT_HOST,
+                endpointUrl = "http://127.0.0.1:18994",
+                isOnline = true,
+            ),
+            csrfToken = "csrf-ok",
+            httpClientOverride = HttpClient(engine),
+        )
+
+        // Fresh store simulates cold app restart (empty in-memory markers)
+        val chatStore = CascadeChatDomainStore(projectionStorage = storage)
+        chatStore.setActiveCascade(cid)
+        val result = chatStore.syncSteps(
+            client = client,
+            cascadeId = cid,
+            knownStepCount = 2,
+            summaryStatus = CortexStepStatus.UNSPECIFIED,
+            summaryUpdatedAtEpochMs = 1_700_000_000_000L,
+        )
+        assertEquals(2, result.size)
+        assertEquals(0, rpcCalls, "Cold-start IDLE (UNSPECIFIED) cached conversation must render in 0 RTT")
+        assertFalse(chatStore.state.value.isLoadingSteps)
+    }
+
+    @Test
+    fun testCancellingSyncStepsAndSwitchingActiveCascadeClearsLoadingSpinner() = runTest {
+        withContext(Dispatchers.Default) {
+            val storage = InMemoryProjectionStorage()
+            val engine = MockEngine {
+                delay(2_000)
+                respond("""{"steps":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+            }
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = "direct-cancel-spinner",
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.DIRECT_HOST,
+                    endpointUrl = "http://127.0.0.1:18995",
+                    isOnline = true,
+                ),
+                csrfToken = "csrf-ok",
+                httpClientOverride = HttpClient(engine),
+            )
+            val chatStore = CascadeChatDomainStore(projectionStorage = storage)
+            chatStore.setActiveCascade("cas-slow-1")
+
+            val job = async {
+                chatStore.syncSteps(client = client, cascadeId = "cas-slow-1", knownStepCount = 4)
+            }
+            for (i in 0 until 40) {
+                if (chatStore.state.value.isLoadingSteps) break
+                delay(15)
+            }
+            assertTrue(chatStore.state.value.isLoadingSteps, "Expected isLoadingSteps=true while slow RPC is in flight")
+
+            job.cancel()
+            runCatching { job.await() }
+            assertFalse(chatStore.state.value.isLoadingSteps, "Cancelling syncSteps must clear isLoadingSteps to avoid stuck spinner")
+
+            // Switching active cascade while loading must also clear isLoadingSteps
+            val job2 = async {
+                chatStore.syncSteps(client = client, cascadeId = "cas-slow-1", knownStepCount = 4)
+            }
+            for (i in 0 until 40) {
+                if (chatStore.state.value.isLoadingSteps) break
+                delay(15)
+            }
+            chatStore.setActiveCascade("cas-other-2")
+            assertFalse(chatStore.state.value.isLoadingSteps, "Switching activeCascadeId must immediately reset isLoadingSteps")
+            job2.cancel()
+        }
+    }
+
+    @Test
+    fun testForegroundSyncPreemptsCompetingBackgroundPreload() = runTest {
+        withContext(Dispatchers.Default) {
+            val bgId = "cas-bg-slow"
+            val fgId = "cas-fg-target"
+            val bgStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+            var bgWasCancelled = false
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyBytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+                val bodyText = bodyBytes.decodeToString()
+                when {
+                    path.endsWith("/GetWorkspaceInfos") -> respond("""{"workspaceInfos":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    path.endsWith("/GetAllCascadeTrajectories") -> respond("""{"trajectorySummaries":{}}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    path.endsWith("/GetCascadeTrajectorySteps") -> {
+                        if (bodyText.contains(bgId)) {
+                            bgStarted.complete(Unit)
+                            try {
+                                delay(5_000)
+                                respond("""{"steps":[]}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                bgWasCancelled = true
+                                throw e
+                            }
+                        } else {
+                            respond(
+                                content = """{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Foreground loaded"}}]}""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                            )
+                        }
+                    }
+                    else -> respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = InMemoryPreferencesStore(),
+                projectionStorage = InMemoryProjectionStorage(),
+                autoPreloadConversations = true,
+                enableForegroundHeartbeatLoop = false,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+            coordinator.connectDirectLan(
+                endpointUrlString = "http://127.0.0.1:18996",
+                csrfToken = "csrf-ok",
+                hostName = "Test Mac",
+                startSummaryStream = false,
+            )
+            coordinator.conversationSyncStore.upsertSummary(
+                CascadeSummary(
+                    cascadeId = bgId,
+                    title = "Background heavy chat",
+                    projectSlug = "repo",
+                    workspaceUri = "file:///repo",
+                    status = CortexStepStatus.DONE,
+                    stepCount = 20,
+                    originInstanceUuid = "direct-127.0.0.1",
+                ),
+            )
+            coordinator.conversationSyncStore.upsertSummary(
+                CascadeSummary(
+                    cascadeId = fgId,
+                    title = "Foreground target chat",
+                    projectSlug = "repo",
+                    workspaceUri = "file:///repo",
+                    status = CortexStepStatus.DONE,
+                    stepCount = 1,
+                    originInstanceUuid = "direct-127.0.0.1",
+                ),
+            )
+
+            coordinator.scheduleConversationPreload(priorityCascadeIds = listOf(bgId))
+            kotlinx.coroutines.withTimeout(3_000) { bgStarted.await() }
+
+            val fgSteps = coordinator.syncSteps(cascadeId = fgId, knownStepCount = 1)
+            assertEquals(1, fgSteps.size)
+            assertEquals("Foreground loaded", fgSteps.first().userInput)
+            for (i in 0 until 20) {
+                if (bgWasCancelled) break
+                delay(15)
+            }
+            assertTrue(bgWasCancelled, "Opening a foreground conversation must immediately preempt competing in-flight background preloads")
+            coordinator.close()
+        }
+    }
+
+    @Test
     fun testSyncStepsWithNullClientPreservesConnectingStateAndSurfacesOfflineErrorWhenDisconnected() = runTest {
         withContext(Dispatchers.Default) {
             val coordinator = AntigravityCoreCoordinator(

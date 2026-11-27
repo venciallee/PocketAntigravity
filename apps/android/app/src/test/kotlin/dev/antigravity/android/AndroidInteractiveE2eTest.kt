@@ -1361,6 +1361,152 @@ class AndroidInteractiveE2eTest {
     }
 
     @Test
+    fun atc36_midFlightSummaryUpdateDoesNotCancelChatHistoryLoadOrStickSpinner() {
+        val cid = "cas-android-hist-1"
+        val stepsCalls = java.util.concurrent.atomic.AtomicInteger(0)
+        val requestEntered = java.util.concurrent.CountDownLatch(1)
+        val allowResponse = java.util.concurrent.CountDownLatch(1)
+        val serverSocket = java.net.ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
+        val pool = java.util.concurrent.Executors.newCachedThreadPool()
+        val acceptThread = Thread {
+            while (!serverSocket.isClosed) {
+                val client = try {
+                    serverSocket.accept()
+                } catch (_: Exception) {
+                    break
+                }
+                pool.submit {
+                    client.use { sock ->
+                        val reader = sock.getInputStream().bufferedReader(Charsets.UTF_8)
+                        val requestLine = reader.readLine() ?: return@use
+                        val path = requestLine.split(" ").getOrNull(1).orEmpty()
+                        var contentType = ""
+                        var contentLength = 0
+                        while (true) {
+                            val headerLine = reader.readLine() ?: break
+                            if (headerLine.isEmpty()) break
+                            val lower = headerLine.lowercase()
+                            if (lower.startsWith("content-type:")) {
+                                contentType = headerLine.substringAfter(":").trim()
+                            } else if (lower.startsWith("content-length:")) {
+                                contentLength = headerLine.substringAfter(":").trim().toIntOrNull() ?: 0
+                            }
+                        }
+                        if (contentLength > 0) {
+                            val buf = CharArray(contentLength)
+                            var read = 0
+                            while (read < contentLength) {
+                                val n = reader.read(buf, read, contentLength - read)
+                                if (n <= 0) break
+                                read += n
+                            }
+                        }
+                        val (status, respCt, body) = when {
+                            path.endsWith("/GetWorkspaceInfos") -> Triple(
+                                200,
+                                "application/json",
+                                """{"workspaceInfos":[{"workspaceUri":"file:///Users/dev/code/app","displayName":"app","activeBranch":"main"}]}""",
+                            )
+                            path.endsWith("/GetAllCascadeTrajectories") -> Triple(
+                                200,
+                                "application/json",
+                                """{"trajectorySummaries":{"$cid":{"summary":"Historical Android Chat","stepCount":1,"status":"CASCADE_RUN_STATUS_IDLE","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/code/app"}]}}}""",
+                            )
+                            path.endsWith("/GetCascadeTrajectorySteps") -> {
+                                if (contentType.contains("application/proto")) {
+                                    Triple(415, "application/json", """{"code":"invalid_argument","message":"unsupported media type application/proto"}""")
+                                } else {
+                                    stepsCalls.incrementAndGet()
+                                    requestEntered.countDown()
+                                    allowResponse.await(3, java.util.concurrent.TimeUnit.SECONDS)
+                                    Triple(
+                                        200,
+                                        "application/json",
+                                        """{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Inspect history"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Loaded cleanly on Android"}}]}""",
+                                    )
+                                }
+                            }
+                            else -> Triple(200, "application/json", "{}")
+                        }
+                        val bodyBytes = body.toByteArray(Charsets.UTF_8)
+                        val reason = if (status == 200) "OK" else "Error"
+                        val respHeader = "HTTP/1.1 $status $reason\r\nContent-Type: $respCt\r\nContent-Length: ${bodyBytes.size}\r\nConnection: close\r\n\r\n"
+                        val out = sock.getOutputStream()
+                        out.write(respHeader.toByteArray(Charsets.UTF_8))
+                        out.write(bodyBytes)
+                        out.flush()
+                    }
+                }
+            }
+        }
+        acceptThread.isDaemon = true
+        acceptThread.start()
+
+        val coordinator = AntigravityCoreCoordinator(
+            autoPreloadConversations = false,
+            enableForegroundHeartbeatLoop = false,
+        )
+        try {
+            kotlinx.coroutines.runBlocking {
+                val handshake = coordinator.connectDirectLan(
+                    endpointUrlString = "http://127.0.0.1:${serverSocket.localPort}",
+                    csrfToken = "csrf-android-e2e",
+                    hostName = "Android Test Mac",
+                    startSummaryStream = false,
+                )
+                assertTrue(handshake.isSelectedHostOnline)
+            }
+
+            composeRule.setContent {
+                AntigravityAppRoot(
+                    coordinator = coordinator,
+                    initialVerifyScene = null,
+                )
+            }
+
+            // Open sidebar and tap historical conversation
+            composeRule.onNodeWithTag("btn-sidebar").performClick()
+            composeRule.onNodeWithTag("sidebar-drawer").assertIsDisplayed()
+            composeRule.onNodeWithTag("conversation-row-$cid").performClick()
+
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                requestEntered.count == 0L
+            }
+
+            // Emit a mid-flight summary stepCount update while foreground syncSteps is active:
+            // AntigravityAppRoot's primary LaunchedEffect must NOT cancel the in-flight sync!
+            coordinator.conversationSyncStore.upsertSummary(
+                dev.antigravity.shared.model.CascadeSummary(
+                    cascadeId = cid,
+                    title = "Historical Android Chat",
+                    projectSlug = "app",
+                    workspaceUri = "file:///Users/dev/code/app",
+                    status = CortexStepStatus.DONE,
+                    stepCount = 2,
+                    hasResolvedTitle = true,
+                    originInstanceUuid = "direct-127.0.0.1",
+                    originHostName = "Android Test Mac",
+                ),
+            )
+            composeRule.waitForIdle()
+            allowResponse.countDown()
+
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                coordinator.chatState.value.stepsByCascadeId[cid]?.size == 2 &&
+                    !coordinator.chatState.value.isLoadingSteps
+            }
+            composeRule.onNodeWithText("Loaded cleanly on Android", substring = true, useUnmergedTree = true).assertIsDisplayed()
+            assertFalse(coordinator.chatState.value.isLoadingSteps)
+            assertEquals(1, stepsCalls.get())
+        } finally {
+            allowResponse.countDown()
+            kotlinx.coroutines.runBlocking { coordinator.close() }
+            runCatching { serverSocket.close() }
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
     fun atc34_existingCloudConversationNeverShowsSilentBlankCanvasWhenEmptyOrOffline() {
         val hostUuid = "macbook-relay-cloud-test"
         val cloudCid = "v1/default/jetski_remote_agents_3p_devbox/xcode-signing"

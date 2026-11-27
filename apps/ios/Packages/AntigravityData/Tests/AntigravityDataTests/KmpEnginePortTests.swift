@@ -912,6 +912,105 @@ final class KmpEnginePortTests: XCTestCase {
     }
 
     @MainActor
+    func testMidFlightKmpSummaryStreamEchoDoesNotCancelActiveStepSyncOrStickSpinner() async throws {
+        let engine = EchoingSlowStepKmpEngineDouble()
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+        let connected = await store.connectDirectLAN(
+            endpointURLString: "http://127.0.0.1:18793",
+            csrfToken: "csrf-echo-test",
+            hostName: "Echo-MacBook"
+        )
+        XCTAssertTrue(connected)
+
+        // 1. Even if background preload runs on Home and emits a summary echo, it must NOT fire forceSyncSteps
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        let homeForceCalls = await engine.forceSyncStepsCalls.count
+        XCTAssertEqual(homeForceCalls, 0, "Background preload echo while on Home must NOT trigger redundant forceSyncSteps")
+
+        // 2. Open a fresh uncached chat in foreground: during engine.syncSteps, KMP emits a hydrated summary
+        // echo (stepCount 1 -> 2) right before returning 2 steps. Store MUST NOT cancel stepPollingTask or drop steps.
+        let fgCid = "kmp-echo-fg-2"
+        store.summaries.append(
+            CascadeSummary(
+                cascadeId: fgCid,
+                title: "Foreground Historical Chat",
+                projectSlug: "app",
+                workspaceUri: "file:///Users/dev/code/app",
+                status: .unspecified,
+                stepCount: 1,
+                updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                isUnread: false
+            )
+        )
+        store.selectCascade(fgCid)
+
+        for _ in 0..<60 where (store.stepsByCascadeId[fgCid]?.count ?? 0) < 2 || store.isLoadingSteps {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        XCTAssertEqual(store.stepsByCascadeId[fgCid]?.count, 2, "Mid-flight KMP summary echo must not cancel and drop downloaded steps")
+        XCTAssertFalse(store.isLoadingSteps, "Loading spinner must clear promptly once syncSteps returns")
+        let fgSyncCalls = await engine.syncStepsCalls.filter { $0 == fgCid }.count
+        let totalForceCalls = await engine.forceSyncStepsCalls.count
+        XCTAssertEqual(fgSyncCalls, 1, "Expected exactly 1 syncSteps call for foreground chat without self-cancellation")
+        XCTAssertEqual(totalForceCalls, 0, "Summary echo matching downloaded step count must NOT trigger redundant forceSyncSteps")
+    }
+
+    @MainActor
+    func testIdleUnspecifiedCachedConversationUsesZeroRttAndOfflineHandshakeClearsLoadingSpinner() async throws {
+        let engine = SlowStepKmpEngineDouble()
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+        let connected = await store.connectDirectLAN(
+            endpointURLString: "http://127.0.0.1:18794",
+            csrfToken: "csrf-idle-test",
+            hostName: "Idle-MacBook"
+        )
+        XCTAssertTrue(connected)
+
+        // Seed an IDLE (`.unspecified`) summary with cached steps and NO syncedStepsMarker (cold restart)
+        let cid = "kmp-idle-unspecified-1"
+        store.summaries.append(
+            CascadeSummary(
+                cascadeId: cid,
+                title: "Historical idle chat",
+                projectSlug: "ledger-svc",
+                workspaceUri: "file:///Users/dev/code/ledger-svc",
+                status: .unspecified,
+                stepCount: 2,
+                hasResolvedTitle: true
+            )
+        )
+        store.stepsByCascadeId[cid] = [
+            CascadeStep(cascadeId: cid, stepIndex: 0, type: .userInput, status: .done, userInput: "Hi"),
+            CascadeStep(cascadeId: cid, stepIndex: 1, type: .plannerResponse, status: .done, plannerResponse: PlannerResponsePayload(response: "Hello"))
+        ]
+        store.syncedStepsMarkerByCascadeId.removeValue(forKey: cid)
+
+        let beforeCalls = await engine.syncStepsCalls.count
+        store.syncStepsForCascade(cid, pollUntilIdle: false)
+        try? await Task.sleep(nanoseconds: 80_000_000)
+        let afterCalls = await engine.syncStepsCalls.count
+        XCTAssertEqual(afterCalls, beforeCalls, "Settled IDLE (.unspecified) cached conversation must render in 0 RTT after cold restart")
+        XCTAssertFalse(store.isLoadingSteps)
+
+        // Simulate cold-start loading spinner active while connecting, then handshake resolves host offline
+        store.activeCascadeId = "kmp-offline-chat"
+        store.activeRoute = .cascadeChat("kmp-offline-chat")
+        store.isLoadingSteps = true
+        store.applyVerifiedLiveConnection(
+            host: store.activeHost,
+            client: AntigravityRPCClient(host: store.activeHost, csrfToken: "csrf-idle-test"),
+            handshake: BackendHandshakeResult(
+                latencyMs: 25,
+                workspaces: [],
+                summaries: [],
+                isSelectedHostOnline: false
+            )
+        )
+        XCTAssertFalse(store.isLoadingSteps, "Offline handshake resolution must clear cold-start isLoadingSteps spinner")
+    }
+
+    @MainActor
     func testColdStartWithAttachedKmpEngineDoesNotReturnFakeEmptyStepsBeforeHandshake() async throws {
         let engine = RecordingKmpEngineDouble()
         let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
@@ -2089,6 +2188,153 @@ private actor SendRecoveryKmpEngineDouble: AntigravityKmpEnginePort {
     func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
     func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
     nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { AsyncStream { _ in } }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
+}
+
+private actor EchoingSlowStepKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "EchoingSlowStepKmpEngineDouble" }
+    nonisolated var lastHandshakeDiagnostic: String { "engine=EchoingSlowStepKmpEngineDouble" }
+    private let hub = StreamHub()
+
+    var syncStepsCalls: [String] = []
+    var forceSyncStepsCalls: [String] = []
+
+    func connectDirectLan(
+        endpointURLString: String,
+        csrfToken: String,
+        certSHA256: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(
+            latencyMs: 10,
+            workspaces: [WorkspaceInfo(workspaceUri: "file:///Users/dev/code/app", displayName: "app", activeBranch: "main")],
+            summaries: [
+                CascadeSummary(
+                    cascadeId: "kmp-echo-1",
+                    title: "Historical Chat",
+                    projectSlug: "app",
+                    workspaceUri: "file:///Users/dev/code/app",
+                    status: .unspecified,
+                    stepCount: 1,
+                    updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    isUnread: false
+                )
+            ],
+            resolvedHostname: hostName,
+            isSelectedHostOnline: true
+        )
+    }
+
+    func connectCloudRelay(
+        relayURLString: String,
+        sessionCookie: String,
+        authUser: String?,
+        resolvedInstanceUuid: String?,
+        relayApiKey: String?,
+        hostName: String,
+        isRestoringSavedSession: Bool,
+        strictTargetMatch: Bool
+    ) async throws -> BackendHandshakeResult {
+        BackendHandshakeResult(latencyMs: 10, workspaces: [], summaries: [], isSelectedHostOnline: true)
+    }
+
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        HostReachabilityProbeResult(latencyMs: 10, isSelectedHostOnline: true)
+    }
+
+    func refreshWorkspacesAndSummaries(
+        hostScope: AgentsHostFilterScope,
+        skipRelayListRefresh: Bool
+    ) async throws -> KmpFederatedSyncResult {
+        KmpFederatedSyncResult(workspaces: [], summaries: [], latencyMs: 10)
+    }
+
+    func syncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        syncStepsCalls.append(cascadeId)
+        // Mimic KMP `applyHydratedStepsMetadata` emitting updated summary (stepCount 1 -> 2)
+        // right before returning the fetched steps across SKIE!
+        hub.yield([
+            CascadeSummary(
+                cascadeId: cascadeId,
+                title: "Historical Chat",
+                projectSlug: "app",
+                workspaceUri: "file:///Users/dev/code/app",
+                status: .done,
+                stepCount: 2,
+                updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                isUnread: false
+            )
+        ])
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        return [
+            CascadeStep(cascadeId: cascadeId, stepIndex: 0, type: .userInput, status: .done, userInput: "Open history"),
+            CascadeStep(cascadeId: cascadeId, stepIndex: 1, type: .plannerResponse, status: .done, plannerResponse: PlannerResponsePayload(response: "Loaded cleanly"))
+        ]
+    }
+
+    func forceSyncSteps(
+        cascadeId: String,
+        knownStepCount: Int,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        forceSyncStepsCalls.append(cascadeId)
+        return [
+            CascadeStep(cascadeId: cascadeId, stepIndex: 0, type: .userInput, status: .done, userInput: "Open history"),
+            CascadeStep(cascadeId: cascadeId, stepIndex: 1, type: .plannerResponse, status: .done, plannerResponse: PlannerResponsePayload(response: "Loaded cleanly"))
+        ]
+    }
+
+    func startConversation(
+        workspaceUri: String,
+        initialPrompt: String,
+        modelId: String,
+        cloudProjectId: String?,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) async throws -> String {
+        "kmp-echo-new"
+    }
+
+    func sendMessage(
+        cascadeId: String,
+        message: String,
+        workspaceUri: String,
+        attachments: [ComposerAttachmentChip],
+        modelId: String,
+        effort: ThinkingEffortLevel,
+        mode: CascadeExecutionMode,
+        agentPersona: String,
+        isCloud: Bool,
+        cloudProjectId: String?,
+        permissionPreset: AgentPermissionPreset?,
+        instanceUuidOverride: String?,
+        isOptimisticDraft: Bool
+    ) async throws -> KmpSendMessageResult {
+        KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: true, queuedInOutbox: false)
+    }
+
+    func resolveWaitingInteraction(
+        step: CascadeStep,
+        decision: InteractionDecision,
+        workspaceUri: String?,
+        instanceUuidOverride: String?
+    ) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { hub.makeStream() }
     nonisolated func onBackground() {}
     func onForeground() async {}
     func disconnectAndClearCredentials() async {}
