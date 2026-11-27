@@ -422,36 +422,19 @@ public data class DecodedProxyCommandResponse(
 public object CloudRelayJspbCodec {
     private val json = Json { ignoreUnknownKeys = true }
 
-    public fun decodeBase64Flexible(raw: String): ByteArray? {
-        val cleaned = buildString(raw.length) {
-            for (ch in raw) {
-                when (ch) {
-                    '-' -> append('+')
-                    '_' -> append('/')
-                    '\r', '\n', ' ', '\t' -> Unit
-                    else -> append(ch)
-                }
-            }
-        }
-        if (cleaned.isEmpty()) return ByteArray(0)
-        if (cleaned.length % 4 == 1) return null
-        val padded = when (cleaned.length % 4) {
-            0 -> cleaned
-            2 -> "$cleaned=="
-            3 -> "$cleaned="
-            else -> return null
-        }
-        return decodeStandardBase64(padded)
-    }
+    public fun decodeBase64Flexible(raw: String): ByteArray? =
+        decodeBase64CharSequence(raw)
 
     public fun isPlausibleBase64Payload(raw: String): Boolean {
-        val trimmed = raw.trim()
-        if (trimmed.length < 2) return false
+        val len = raw.length
         var count = 0
-        for (ch in trimmed) {
-            when (ch) {
-                in 'A'..'Z', in 'a'..'z', in '0'..'9', '+', '/', '-', '_', '=' -> count += 1
-                '\r', '\n' -> continue
+        for (i in 0 until len) {
+            val code = raw[i].code
+            if (code >= 128) return false
+            val v = B64_DECODE_TABLE[code]
+            when {
+                v >= 0 || code == '='.code -> count += 1
+                code == '\r'.code || code == '\n'.code || code == ' '.code || code == '\t'.code -> continue
                 else -> return false
             }
         }
@@ -463,29 +446,35 @@ public object CloudRelayJspbCodec {
         responseHeaders: Map<String, String> = emptyMap(),
     ): ByteArray {
         var data = rawData
-        val isBase64Header = responseHeaders.any { (k, v) ->
-            val lk = k.lowercase()
-            (lk == "x-goog-safety-encoding" || lk == "content-transfer-encoding") &&
-                v.lowercase().contains("base64")
-        }
+        var start = skipAsciiWhitespace(data, 0, data.size)
+        var end = trimTrailingAsciiWhitespace(data, start, data.size)
+        if (start >= end) return ByteArray(0)
 
-        val initialText = data.decodeToString().trim()
-        val firstChar = initialText.firstOrNull()
-        if (firstChar != null && firstChar != '[' && firstChar != '{' && firstChar != ')') {
-            val decoded = decodeBase64Flexible(initialText)
+        val firstByte = data[start].toInt() and 0xFF
+        if (firstByte != '['.code && firstByte != '{'.code && firstByte != ')'.code) {
+            val isBase64Header = responseHeaders.any { (k, v) ->
+                val lk = k.lowercase()
+                (lk == "x-goog-safety-encoding" || lk == "content-transfer-encoding") &&
+                    v.lowercase().contains("base64")
+            }
+            val decoded = decodeBase64Bytes(data, start, end)
             if (decoded != null) {
-                val decodedText = decoded.decodeToString().trim()
-                if (isBase64Header || decodedText.startsWith("[") || decodedText.startsWith(")]}'")) {
+                val dStart = skipAsciiWhitespace(decoded, 0, decoded.size)
+                val dFirst = if (dStart < decoded.size) decoded[dStart].toInt() and 0xFF else -1
+                if (isBase64Header || dFirst == '['.code || startsWithXssiPrefix(decoded, dStart)) {
                     data = decoded
+                    start = dStart
+                    end = trimTrailingAsciiWhitespace(decoded, dStart, decoded.size)
                 }
             }
         }
 
-        val text = data.decodeToString().trim()
-        if (text.startsWith(")]}'")) {
-            return text.drop(4).trim().encodeToByteArray()
+        if (startsWithXssiPrefix(data, start)) {
+            start = skipAsciiWhitespace(data, start + 4, end)
         }
-        return data
+        if (start == 0 && end == data.size) return data
+        if (start >= end) return ByteArray(0)
+        return data.copyOfRange(start, end)
     }
 
     public fun encodeListInstancesRequest(): ByteArray = "[]".encodeToByteArray()
@@ -809,36 +798,75 @@ public object CloudRelayJspbCodec {
 }
 
 /**
- * Incremental Base64 / Base64URL byte decoder for streaming Google Boq responses.
+ * Incremental zero-boxing Base64 / Base64URL byte decoder for streaming Google Boq responses.
  */
 public class StreamingBase64Decoder {
-    private val quartet = ByteArray(4)
+    private val quartet = IntArray(4)
     private var quartetSize = 0
 
     public fun feedByte(byte: Byte): ByteArray? {
         val c = byte.toInt() and 0xFF
-        val normalized: Byte = when (c) {
-            in 'A'.code..'Z'.code,
-            in 'a'.code..'z'.code,
-            in '0'.code..'9'.code,
-            '+'.code, '/'.code, '='.code -> byte
-            '-'.code -> '+'.code.toByte()
-            '_'.code -> '/'.code.toByte()
+        val v = if (c < 128) B64_DECODE_TABLE[c] else -1
+        val code = when {
+            v >= 0 -> v
+            c == '='.code -> -2
             else -> return null
         }
-        quartet[quartetSize++] = normalized
+        quartet[quartetSize++] = code
         if (quartetSize < 4) return null
-        val chunk = quartet.decodeToString()
         quartetSize = 0
-        return decodeStandardBase64(chunk)
+        val c0 = quartet[0]
+        val c1 = quartet[1]
+        val c2 = quartet[2]
+        val c3 = quartet[3]
+        if (c0 < 0 || c1 < 0) return null
+        return when {
+            c2 < 0 -> byteArrayOf(((c0 shl 2) or (c1 ushr 4)).toByte())
+            c3 < 0 -> byteArrayOf(
+                ((c0 shl 2) or (c1 ushr 4)).toByte(),
+                (((c1 and 0x0F) shl 4) or (c2 ushr 2)).toByte(),
+            )
+            else -> byteArrayOf(
+                ((c0 shl 2) or (c1 ushr 4)).toByte(),
+                (((c1 and 0x0F) shl 4) or (c2 ushr 2)).toByte(),
+                (((c2 and 0x03) shl 6) or c3).toByte(),
+            )
+        }
     }
 
     public fun feed(bytes: ByteArray): ByteArray {
-        val out = ArrayList<Byte>(bytes.size)
-        for (b in bytes) {
-            feedByte(b)?.forEach { out.add(it) }
+        if (bytes.isEmpty()) return ByteArray(0)
+        val out = ByteArray(((bytes.size + quartetSize) / 4) * 3 + 3)
+        var outIdx = 0
+        var qSize = quartetSize
+        val q = quartet
+        for (i in bytes.indices) {
+            val c = bytes[i].toInt() and 0xFF
+            val v = if (c < 128) B64_DECODE_TABLE[c] else -1
+            val code = when {
+                v >= 0 -> v
+                c == '='.code -> -2
+                else -> continue
+            }
+            q[qSize++] = code
+            if (qSize == 4) {
+                qSize = 0
+                val c0 = q[0]
+                val c1 = q[1]
+                val c2 = q[2]
+                val c3 = q[3]
+                if (c0 < 0 || c1 < 0) continue
+                out[outIdx++] = ((c0 shl 2) or (c1 ushr 4)).toByte()
+                if (c2 >= 0) {
+                    out[outIdx++] = (((c1 and 0x0F) shl 4) or (c2 ushr 2)).toByte()
+                    if (c3 >= 0) {
+                        out[outIdx++] = (((c2 and 0x03) shl 6) or c3).toByte()
+                    }
+                }
+            }
         }
-        return out.toByteArray()
+        quartetSize = qSize
+        return if (outIdx == out.size) out else out.copyOf(outIdx)
     }
 
     public fun flush(): ByteArray {
@@ -846,17 +874,52 @@ public class StreamingBase64Decoder {
             quartetSize = 0
             return ByteArray(0)
         }
-        while (quartetSize < 4) {
-            quartet[quartetSize++] = '='.code.toByte()
-        }
-        val chunk = quartet.decodeToString()
+        val c0 = quartet[0]
+        val c1 = quartet[1]
+        val c2 = if (quartetSize >= 3) quartet[2] else -2
         quartetSize = 0
-        return decodeStandardBase64(chunk) ?: ByteArray(0)
+        if (c0 < 0 || c1 < 0) return ByteArray(0)
+        return if (c2 >= 0) {
+            byteArrayOf(
+                ((c0 shl 2) or (c1 ushr 4)).toByte(),
+                (((c1 and 0x0F) shl 4) or (c2 ushr 2)).toByte(),
+            )
+        } else {
+            byteArrayOf(((c0 shl 2) or (c1 ushr 4)).toByte())
+        }
     }
 }
 
 /**
- * Incremental O(1)-memory byte-level parser for Google Boq `StreamProxyCommand` JSPB streams.
+ * Reusable primitive ByteArray buffer avoiding boxed `ArrayList<Byte>` overhead on Kotlin/Native & JVM.
+ */
+private class PrimitiveByteBuffer(initialCapacity: Int = 256) {
+    var data = ByteArray(initialCapacity)
+    var size = 0
+
+    fun add(b: Byte) {
+        if (size == data.size) {
+            data = data.copyOf(data.size shl 1)
+        }
+        data[size++] = b
+    }
+
+    fun clear() {
+        size = 0
+        if (data.size > 262_144) {
+            data = ByteArray(256)
+        }
+    }
+
+    fun copyToByteArray(start: Int = 0, end: Int = size): ByteArray =
+        if (end <= start) ByteArray(0) else data.copyOfRange(start, end)
+
+    fun decodeToString(start: Int = 0, end: Int = size): String =
+        if (end <= start) "" else data.decodeToString(startIndex = start, endIndex = end)
+}
+
+/**
+ * Incremental zero-boxing O(N) byte-level parser for Google Boq `StreamProxyCommand` JSPB streams.
  */
 public class CloudRelayJspbStreamParser {
     private enum class ElementKind { STRING, ARRAY, NULL, OTHER }
@@ -865,13 +928,20 @@ public class CloudRelayJspbStreamParser {
         var elementCount: Int = 0
         var firstElement: ElementKind? = null
         var secondElement: ElementKind? = null
+        var firstRawBytes: ByteArray? = null
         var firstString: String? = null
         var firstInt: Int? = null
         var secondString: String? = null
 
-        fun append(kind: ElementKind, stringValue: String? = null, intValue: Int? = null) {
+        fun append(
+            kind: ElementKind,
+            rawBytes: ByteArray? = null,
+            stringValue: String? = null,
+            intValue: Int? = null,
+        ) {
             if (elementCount == 0) {
                 firstElement = kind
+                firstRawBytes = rawBytes
                 firstString = stringValue
                 firstInt = intValue
             } else if (elementCount == 1) {
@@ -888,23 +958,27 @@ public class CloudRelayJspbStreamParser {
     private var isEscaped = false
     private var stringHasEscape = false
     private var captureCurrentString = false
-    private val stringBytes = ArrayList<Byte>(128)
-    private val tokenBytes = ArrayList<Byte>(32)
+    private val stringBytes = PrimitiveByteBuffer(1024)
+    private val tokenBytes = PrimitiveByteBuffer(32)
 
     public var lastErrorTrailer: String? = null
         private set
 
     public fun feed(bytes: ByteArray): List<ByteArray> {
-        val emitted = mutableListOf<ByteArray>()
-        for (b in bytes) {
-            feedByte(b)?.let { emitted.addAll(it) }
+        var emitted: MutableList<ByteArray>? = null
+        for (i in bytes.indices) {
+            val chunk = feedByteInternal(bytes[i])
+            if (chunk != null) {
+                if (emitted == null) emitted = mutableListOf()
+                emitted.add(chunk)
+            }
         }
-        return emitted
+        return emitted ?: emptyList()
     }
 
     private fun flushPendingToken() {
-        if (tokenBytes.isEmpty()) return
-        val token = tokenBytes.toByteArray().decodeToString()
+        if (tokenBytes.size == 0) return
+        val token = tokenBytes.decodeToString()
         tokenBytes.clear()
         val top = stack.lastOrNull() ?: return
         when {
@@ -915,6 +989,11 @@ public class CloudRelayJspbStreamParser {
     }
 
     public fun feedByte(byte: Byte): List<ByteArray>? {
+        val chunk = feedByteInternal(byte) ?: return null
+        return listOf(chunk)
+    }
+
+    private fun feedByteInternal(byte: Byte): ByteArray? {
         val c = byte.toInt() and 0xFF
         if (inString) {
             if (captureCurrentString) stringBytes.add(byte)
@@ -926,21 +1005,25 @@ public class CloudRelayJspbStreamParser {
             } else if (c == '"'.code) {
                 inString = false
                 if (objectDepth == 0 && stack.isNotEmpty()) {
-                    val decoded: String? = if (captureCurrentString && stringBytes.size >= 2) {
-                        val rawJson = stringBytes.toByteArray().decodeToString()
-                        if (!stringHasEscape) {
-                            rawJson.substring(1, rawJson.length - 1)
+                    val top = stack.last()
+                    var rawBytes: ByteArray? = null
+                    var decodedStr: String? = null
+                    if (captureCurrentString && stringBytes.size >= 2) {
+                        if (!stringHasEscape && top.elementCount == 0) {
+                            // Fast path: keep raw inner bytes (excluding quotes) and decode Base64 directly without UTF-8 String allocation
+                            rawBytes = stringBytes.copyToByteArray(1, stringBytes.size - 1)
+                        } else if (!stringHasEscape) {
+                            decodedStr = stringBytes.decodeToString(1, stringBytes.size - 1)
                         } else {
-                            runCatching { Json.decodeFromString<String>(rawJson) }
+                            val rawJson = stringBytes.decodeToString(0, stringBytes.size)
+                            decodedStr = runCatching { Json.decodeFromString<String>(rawJson) }
                                 .getOrElse { rawJson.substring(1, rawJson.length - 1) }
                         }
-                    } else {
-                        null
                     }
                     stringBytes.clear()
                     stringHasEscape = false
                     captureCurrentString = false
-                    stack.last().append(ElementKind.STRING, stringValue = decoded)
+                    top.append(ElementKind.STRING, rawBytes = rawBytes, stringValue = decodedStr)
                 }
             }
             return null
@@ -1016,10 +1099,16 @@ public class CloudRelayJspbStreamParser {
                     closed.elementCount in 1..3 &&
                     (closed.elementCount == 1 || closed.secondElement == ElementKind.ARRAY || closed.secondElement == ElementKind.NULL)
                 ) {
-                    val b64 = closed.firstString
-                    if (b64 != null && CloudRelayJspbCodec.isPlausibleBase64Payload(b64)) {
-                        val decoded = CloudRelayJspbCodec.decodeBase64Flexible(b64)
-                        if (decoded != null && decoded.isNotEmpty()) return listOf(decoded)
+                    val rawBytes = closed.firstRawBytes
+                    if (rawBytes != null && rawBytes.size >= 2) {
+                        val decoded = decodeBase64Bytes(rawBytes, 0, rawBytes.size)
+                        if (decoded != null && decoded.isNotEmpty()) return decoded
+                    } else {
+                        val b64 = closed.firstString
+                        if (b64 != null && b64.length >= 2) {
+                            val decoded = decodeBase64CharSequence(b64)
+                            if (decoded != null && decoded.isNotEmpty()) return decoded
+                        }
                     }
                 }
                 null
@@ -1032,36 +1121,142 @@ public class CloudRelayJspbStreamParser {
     }
 }
 
-private fun decodeStandardBase64(padded: String): ByteArray? {
-    if (padded.isEmpty()) return ByteArray(0)
-    if (padded.length % 4 != 0) return null
-    val out = ByteArray((padded.length / 4) * 3)
-    var outIdx = 0
-    var i = 0
-    while (i < padded.length) {
-        val c0 = b64Val(padded[i]) ?: return null
-        val c1 = b64Val(padded[i + 1]) ?: return null
-        val p2 = padded[i + 2]
-        val p3 = padded[i + 3]
-        val c2 = if (p2 == '=') -1 else (b64Val(p2) ?: return null)
-        val c3 = if (p3 == '=') -1 else (b64Val(p3) ?: return null)
-        out[outIdx++] = ((c0 shl 2) or (c1 ushr 4)).toByte()
-        if (c2 >= 0) {
-            out[outIdx++] = (((c1 and 0x0F) shl 4) or (c2 ushr 2)).toByte()
-            if (c3 >= 0) {
-                out[outIdx++] = (((c2 and 0x03) shl 6) or c3).toByte()
-            }
-        }
-        i += 4
-    }
-    return out.copyOf(outIdx)
+private val B64_DECODE_TABLE: IntArray = IntArray(128) { -1 }.apply {
+    for (c in 'A'..'Z') this[c.code] = c - 'A'
+    for (c in 'a'..'z') this[c.code] = c - 'a' + 26
+    for (c in '0'..'9') this[c.code] = c - '0' + 52
+    this['+'.code] = 62
+    this['/'.code] = 63
+    this['-'.code] = 62
+    this['_'.code] = 63
 }
 
-private fun b64Val(ch: Char): Int? = when (ch) {
-    in 'A'..'Z' -> ch - 'A'
-    in 'a'..'z' -> ch - 'a' + 26
-    in '0'..'9' -> ch - '0' + 52
-    '+' -> 62
-    '/' -> 63
-    else -> null
+private fun skipAsciiWhitespace(data: ByteArray, start: Int, end: Int): Int {
+    var i = start
+    while (i < end) {
+        val c = data[i].toInt() and 0xFF
+        if (c == ' '.code || c == '\t'.code || c == '\r'.code || c == '\n'.code) {
+            i += 1
+        } else {
+            break
+        }
+    }
+    return i
+}
+
+private fun trimTrailingAsciiWhitespace(data: ByteArray, start: Int, end: Int): Int {
+    var i = end
+    while (i > start) {
+        val c = data[i - 1].toInt() and 0xFF
+        if (c == ' '.code || c == '\t'.code || c == '\r'.code || c == '\n'.code) {
+            i -= 1
+        } else {
+            break
+        }
+    }
+    return i
+}
+
+private fun startsWithXssiPrefix(data: ByteArray, offset: Int): Boolean =
+    offset + 4 <= data.size &&
+        data[offset] == ')'.code.toByte() &&
+        data[offset + 1] == ']'.code.toByte() &&
+        data[offset + 2] == '}'.code.toByte() &&
+        data[offset + 3] == '\''.code.toByte()
+
+private fun decodeBase64CharSequence(raw: CharSequence): ByteArray? {
+    val len = raw.length
+    if (len == 0) return ByteArray(0)
+    val out = ByteArray((len / 4) * 3 + 3)
+    var outIdx = 0
+    var q0 = 0
+    var q1 = 0
+    var q2 = 0
+    var qSize = 0
+    var sawPadding = false
+    for (i in 0 until len) {
+        val ch = raw[i]
+        val code = ch.code
+        if (code == '\r'.code || code == '\n'.code || code == ' '.code || code == '\t'.code) continue
+        if (code == '='.code) {
+            sawPadding = true
+            continue
+        }
+        if (sawPadding || code >= 128) return null
+        val v = B64_DECODE_TABLE[code]
+        if (v < 0) return null
+        when (qSize) {
+            0 -> { q0 = v; qSize = 1 }
+            1 -> { q1 = v; qSize = 2 }
+            2 -> { q2 = v; qSize = 3 }
+            else -> {
+                out[outIdx++] = ((q0 shl 2) or (q1 ushr 4)).toByte()
+                out[outIdx++] = (((q1 and 0x0F) shl 4) or (q2 ushr 2)).toByte()
+                out[outIdx++] = (((q2 and 0x03) shl 6) or v).toByte()
+                qSize = 0
+            }
+        }
+    }
+    return when (qSize) {
+        0 -> if (outIdx == out.size) out else out.copyOf(outIdx)
+        1 -> null
+        2 -> {
+            out[outIdx++] = ((q0 shl 2) or (q1 ushr 4)).toByte()
+            if (outIdx == out.size) out else out.copyOf(outIdx)
+        }
+        3 -> {
+            out[outIdx++] = ((q0 shl 2) or (q1 ushr 4)).toByte()
+            out[outIdx++] = (((q1 and 0x0F) shl 4) or (q2 ushr 2)).toByte()
+            if (outIdx == out.size) out else out.copyOf(outIdx)
+        }
+        else -> null
+    }
+}
+
+private fun decodeBase64Bytes(data: ByteArray, start: Int, end: Int): ByteArray? {
+    val len = end - start
+    if (len <= 0) return ByteArray(0)
+    val out = ByteArray((len / 4) * 3 + 3)
+    var outIdx = 0
+    var q0 = 0
+    var q1 = 0
+    var q2 = 0
+    var qSize = 0
+    var sawPadding = false
+    for (i in start until end) {
+        val code = data[i].toInt() and 0xFF
+        if (code == '\r'.code || code == '\n'.code || code == ' '.code || code == '\t'.code) continue
+        if (code == '='.code) {
+            sawPadding = true
+            continue
+        }
+        if (sawPadding || code >= 128) return null
+        val v = B64_DECODE_TABLE[code]
+        if (v < 0) return null
+        when (qSize) {
+            0 -> { q0 = v; qSize = 1 }
+            1 -> { q1 = v; qSize = 2 }
+            2 -> { q2 = v; qSize = 3 }
+            else -> {
+                out[outIdx++] = ((q0 shl 2) or (q1 ushr 4)).toByte()
+                out[outIdx++] = (((q1 and 0x0F) shl 4) or (q2 ushr 2)).toByte()
+                out[outIdx++] = (((q2 and 0x03) shl 6) or v).toByte()
+                qSize = 0
+            }
+        }
+    }
+    return when (qSize) {
+        0 -> if (outIdx == out.size) out else out.copyOf(outIdx)
+        1 -> null
+        2 -> {
+            out[outIdx++] = ((q0 shl 2) or (q1 ushr 4)).toByte()
+            if (outIdx == out.size) out else out.copyOf(outIdx)
+        }
+        3 -> {
+            out[outIdx++] = ((q0 shl 2) or (q1 ushr 4)).toByte()
+            out[outIdx++] = (((q1 and 0x0F) shl 4) or (q2 ushr 2)).toByte()
+            if (outIdx == out.size) out else out.copyOf(outIdx)
+        }
+        else -> null
+    }
 }

@@ -55,6 +55,29 @@ public struct KmpFederatedSyncResult: Sendable, Equatable {
     }
 }
 
+/// Incremental real-time step and status update delivered by KMP `StreamAgentStateUpdates` or progressive sync.
+public struct KmpLiveChatUpdate: Sendable, Equatable {
+    public let cascadeId: String
+    public let steps: [CascadeStep]
+    public let totalLength: Int?
+    public let runStatus: String?
+    public let isSnapshotComplete: Bool
+
+    public init(
+        cascadeId: String,
+        steps: [CascadeStep],
+        totalLength: Int? = nil,
+        runStatus: String? = nil,
+        isSnapshotComplete: Bool = false
+    ) {
+        self.cascadeId = cascadeId
+        self.steps = steps
+        self.totalLength = totalLength
+        self.runStatus = runStatus
+        self.isSnapshotComplete = isSnapshotComplete
+    }
+}
+
 /// Dependency-inverted pure-Swift port for delegating core connection, conversation sync,
 /// adaptive binary-first trajectory step loading (Binary Protobuf default + runtime JSON ceiling learning), and PC-side core interactions
 /// (`StartCascade`, `SendUserCascadeMessage`, `HandleCascadeUserInteraction`, `CancelCascadeInvocation`)
@@ -107,6 +130,13 @@ public protocol AntigravityKmpEnginePort: Sendable {
         instanceUuidOverride: String?
     ) async throws -> [CascadeStep]
 
+    func fetchBinaryStepDelta(
+        cascadeId: String,
+        startIndex: Int,
+        knownStepCount: Int,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep]
+
     func preloadSteps(
         cascadeId: String,
         knownStepCount: Int,
@@ -114,6 +144,15 @@ public protocol AntigravityKmpEnginePort: Sendable {
         instanceUuidOverride: String?,
         requireRemoteRefresh: Bool
     ) async throws -> [CascadeStep]
+
+    var supportsNativeLiveChatStream: Bool { get }
+    func startLiveChatStream(
+        cascadeId: String,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    )
+    func stopLiveChatStream()
+    func liveChatUpdatesStream() -> AsyncStream<KmpLiveChatUpdate>
 
     func startConversation(
         workspaceUri: String,
@@ -196,6 +235,29 @@ public extension AntigravityKmpEnginePort {
             isCloud: isCloud,
             instanceUuidOverride: instanceUuidOverride
         )
+    }
+
+    func fetchBinaryStepDelta(
+        cascadeId: String,
+        startIndex: Int,
+        knownStepCount: Int,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep] {
+        []
+    }
+
+    var supportsNativeLiveChatStream: Bool { false }
+
+    func startLiveChatStream(
+        cascadeId: String,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) {}
+
+    func stopLiveChatStream() {}
+
+    func liveChatUpdatesStream() -> AsyncStream<KmpLiveChatUpdate> {
+        AsyncStream { $0.finish() }
     }
 
     func preloadSteps(
