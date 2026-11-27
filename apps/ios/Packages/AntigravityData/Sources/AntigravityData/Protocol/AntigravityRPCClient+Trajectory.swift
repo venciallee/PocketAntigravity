@@ -1202,7 +1202,9 @@ extension AntigravityRPCClient {
             let needsInteractionRepair = step.isWaitingForUser
                 && step.requestedInteraction?.isUnrecognizedWireMember == true
             let needsStepTypeRepair = step.type == .unspecified && step.rawTypeName != nil
-            return needsInteractionRepair || needsStepTypeRepair
+            let needsErrorRepair = step.type == .errorMessage
+                && (step.errorMessage?.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            return needsInteractionRepair || needsStepTypeRepair || needsErrorRepair
         }
         guard !targets.isEmpty else { return steps }
 
@@ -1237,12 +1239,19 @@ extension AntigravityRPCClient {
             if current.type == .unspecified && current.rawTypeName != nil {
                 if matched.type != .unspecified
                     || matched.plannerResponse != nil
+                    || matched.errorMessage != nil
                     || matched.requestedInteraction != nil
                     || (matched.fallbackSummary?.isEmpty == false)
                     || (matched.rawTypeName?.isEmpty == false && matched.rawTypeName != current.rawTypeName) {
                     repaired[idx] = matched
                     continue
                 }
+            }
+            if current.type == .errorMessage,
+               (current.errorMessage?.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+               !(matched.errorMessage?.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                repaired[idx] = matched
+                continue
             }
             if let recoveredInteraction = matched.requestedInteraction,
                !recoveredInteraction.isUnrecognizedWireMember,

@@ -302,6 +302,14 @@ enum KmpModelConverters {
             )
         }
 
+        let errorMessage = kmp.errorMessage.map { err in
+            AntigravityData.ErrorMessagePayload(
+                message: err.message,
+                detail: err.detail,
+                errorCode: err.errorCode
+            )
+        }
+
         let requestedInteraction = kmp.requestedInteraction.map(toSwiftRequestedInteraction)
         let recordedMode: AntigravityData.CascadeExecutionMode? = kmp.recordedExecutionMode.map {
             KmpBridgeHelpers.shared.isPlanningMode(mode: $0) ? .planning : .fast
@@ -377,13 +385,16 @@ enum KmpModelConverters {
             codeAction: codeAction,
             viewFile: viewFile,
             search: search,
+            errorMessage: errorMessage,
             requestedInteraction: requestedInteraction,
             recordedExecutionMode: recordedMode,
             recordedModelId: kmp.recordedModelId,
             subagent: subagent,
             dynamicWorkflow: dynamicWorkflow,
             swarmBoard: swarmBoard,
-            mcpToolCall: mcpToolCall
+            mcpToolCall: mcpToolCall,
+            rawTypeName: kmp.rawTypeName,
+            fallbackSummary: kmp.fallbackSummary
         )
     }
 

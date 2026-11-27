@@ -202,4 +202,125 @@ class HostCapabilityRegistryAndCompatTest {
         assertEquals("futureDeployApproval", step.requestedInteraction?.rawMemberKey)
         assertEquals(RequestedInteraction.MemberKind.APPROVAL_INTERACTION, step.requestedInteraction?.kind)
     }
+
+    @Test
+    fun errorMessageStepDecodesNestedJsonEmptyJsonAndProtobufWithoutUnknownFallback() {
+        // 1. Standard upstream JSON with nested errorMessage.error.{userErrorMessage, shortError, fullError, httpStatusCode}
+        //    and upstream status CORTEX_STEP_STATUS_DONE
+        val nestedJson = buildJsonObject {
+            put("type", "CORTEX_STEP_TYPE_ERROR_MESSAGE")
+            put("status", "CORTEX_STEP_STATUS_DONE")
+            put(
+                "errorMessage",
+                buildJsonObject {
+                    put("shouldShowModel", true)
+                    put(
+                        "error",
+                        buildJsonObject {
+                            put("userErrorMessage", "Model quota reached for Gemini 4 Neon.")
+                            put("shortError", "RESOURCE_EXHAUSTED")
+                            put("fullError", "rpc error: code = ResourceExhausted desc = quota exhausted")
+                            put("httpStatusCode", 429)
+                        }
+                    )
+                }
+            )
+        }
+        val decodedNested = assertNotNull(
+            JsonStepAndSummaryDecoder.decodeSingleStepJson(
+                raw = nestedJson,
+                cascadeId = "cas-err",
+                stepIndex = 1,
+            )
+        )
+        assertEquals(CortexStepType.ERROR_MESSAGE, decodedNested.type)
+        assertEquals(CortexStepStatus.ERROR, decodedNested.status)
+        assertTrue(decodedNested.isErrorMessageStep)
+        assertFalse(decodedNested.isUnrecognizedForwardStep)
+        assertTrue(decodedNested.hasRenderableChatContent)
+        assertEquals("Model quota reached for Gemini 4 Neon.", decodedNested.errorMessage?.message)
+        assertEquals("rpc error: code = ResourceExhausted desc = quota exhausted", decodedNested.errorMessage?.detail)
+        assertEquals("HTTP 429", decodedNested.errorMessage?.errorCode)
+
+        // 2. Empty errorMessage object still decodes as ERROR_MESSAGE + ERROR (never falls back to UnknownStepFallbackCard)
+        val emptyErrJson = buildJsonObject {
+            put("type", "CORTEX_STEP_TYPE_ERROR_MESSAGE")
+            put("status", "CORTEX_STEP_STATUS_DONE")
+            put("errorMessage", buildJsonObject {})
+        }
+        val decodedEmpty = assertNotNull(
+            JsonStepAndSummaryDecoder.decodeSingleStepJson(
+                raw = emptyErrJson,
+                cascadeId = "cas-err",
+                stepIndex = 2,
+            )
+        )
+        assertEquals(CortexStepType.ERROR_MESSAGE, decodedEmpty.type)
+        assertEquals(CortexStepStatus.ERROR, decodedEmpty.status)
+        assertTrue(decodedEmpty.isErrorMessageStep)
+        assertFalse(decodedEmpty.isUnrecognizedForwardStep)
+        assertTrue(decodedEmpty.hasRenderableChatContent)
+        assertNotNull(decodedEmpty.errorMessage)
+
+        // 3. Binary Protobuf field 24 (CortexStepErrorMessage) with nested CortexErrorDetails submessage at field 1
+        fun encodeLenField(fieldNumber: Int, payload: ByteArray): ByteArray {
+            val tag = ProtobufStepCodec.encodeVarint(((fieldNumber shl 3) or 2).toULong())
+            val len = ProtobufStepCodec.encodeVarint(payload.size.toULong())
+            return tag + len + payload
+        }
+        fun encodeVarField(fieldNumber: Int, value: Int): ByteArray {
+            val tag = ProtobufStepCodec.encodeVarint((fieldNumber shl 3).toULong())
+            val v = ProtobufStepCodec.encodeVarint(value.toULong())
+            return tag + v
+        }
+        val innerDetails = encodeLenField(1, "Upstream model timed out".encodeToByteArray()) +
+            encodeLenField(2, "DEADLINE_EXCEEDED after 60s".encodeToByteArray())
+        val errMsgSub = encodeLenField(1, innerDetails)
+        val stepBytes = encodeVarField(1, 17) + // upstream CORTEX_STEP_TYPE_ERROR_MESSAGE = 17
+            encodeVarField(4, 3) + // DONE
+            encodeLenField(24, errMsgSub)
+        val protoSteps = ProtobufStepCodec.decodeStepsResponse(
+            encodeLenField(1, stepBytes),
+            cascadeId = "cas-err",
+            startingIndex = 3,
+        )
+        assertEquals(1, protoSteps.size)
+        val protoErr = protoSteps[0]
+        assertEquals(CortexStepType.ERROR_MESSAGE, protoErr.type)
+        assertEquals(CortexStepStatus.ERROR, protoErr.status)
+        assertTrue(protoErr.isErrorMessageStep)
+        assertFalse(protoErr.isUnrecognizedForwardStep)
+        assertEquals("Upstream model timed out", protoErr.errorMessage?.message)
+        assertEquals("DEADLINE_EXCEEDED after 60s", protoErr.errorMessage?.detail)
+    }
+
+    @Test
+    fun unknownForwardStepExtractsDeepNestedSummary() {
+        val nestedFutureJson = buildJsonObject {
+            put("type", "CORTEX_STEP_TYPE_FUTURE_DEEP_TOOL")
+            put("status", "CORTEX_STEP_STATUS_DONE")
+            put(
+                "futureDeepTool",
+                buildJsonObject {
+                    put("enabled", true)
+                    put(
+                        "payload",
+                        buildJsonObject {
+                            put("message", "Deep nested tool completed cleanly")
+                        }
+                    )
+                }
+            )
+        }
+        val decoded = assertNotNull(
+            JsonStepAndSummaryDecoder.decodeSingleStepJson(
+                raw = nestedFutureJson,
+                cascadeId = "cas-nested",
+                stepIndex = 7,
+            )
+        )
+        assertEquals(CortexStepType.UNSPECIFIED, decoded.type)
+        assertTrue(decoded.isUnrecognizedForwardStep)
+        assertEquals("Deep nested tool completed cleanly", decoded.fallbackSummary)
+    }
 }

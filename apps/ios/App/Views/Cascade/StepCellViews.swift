@@ -1061,8 +1061,13 @@ public struct CascadeStepCellView: View {
                 .background(AntigravityTheme.surfaceCard)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
+            case .errorMessage:
+                ErrorMessageStepCardView(step: step, store: store)
+
             default:
-                if let prose = step.plannerResponse?.response, !prose.isEmpty {
+                if step.isErrorMessageStep {
+                    ErrorMessageStepCardView(step: step, store: store)
+                } else if let prose = step.plannerResponse?.response, !prose.isEmpty {
                     AntigravityMarkdownView(markdown: prose, variant: .assistant, store: store)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("step-prose-\(step.stepIndex)")
@@ -1091,6 +1096,129 @@ public struct CascadeStepCellView: View {
                 RemoteArtifactPreviewSheet(uri: uri, store: store)
             }
         }
+    }
+}
+
+/// First-class error card rendered for upstream `CORTEX_STEP_TYPE_ERROR_MESSAGE` steps
+/// (including legacy offline-cached steps decoded before explicit `errorMessage` support).
+private struct ErrorMessageStepCardView: View {
+    let step: CascadeStep
+    let store: AntigravitySessionStore
+    @Environment(\.appLanguage) private var lang
+    @State private var isDetailExpanded: Bool = false
+
+    private var primaryMessage: String? {
+        let candidates: [String?] = [
+            step.errorMessage?.message,
+            step.fallbackSummary,
+            step.plannerResponse?.response
+        ]
+        for candidate in candidates {
+            guard var text = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+                continue
+            }
+            if text.hasPrefix("⚠️") {
+                text = String(text.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if !text.isEmpty {
+                return text
+            }
+        }
+        return nil
+    }
+
+    private var detailText: String? {
+        guard let detail = step.errorMessage?.detail?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !detail.isEmpty,
+              detail != primaryMessage else {
+            return nil
+        }
+        return detail
+    }
+
+    private var badgeLabel: String {
+        if let code = step.errorMessage?.errorCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+            return code
+        }
+        return lang.t("ERROR", "错误")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.statusError)
+                Text(lang.t("Error", "出错了"))
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(AntigravityTheme.statusError)
+                Spacer()
+                Text(badgeLabel)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(AntigravityTheme.statusError)
+                    .lineLimit(1)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(AntigravityTheme.statusError.opacity(0.14), in: Capsule())
+            }
+
+            if let message = primaryMessage {
+                AntigravityMarkdownView(markdown: message, variant: .assistant, store: store)
+            } else {
+                Text(lang.t(
+                    "Antigravity Desktop encountered an error while processing this turn.",
+                    "Antigravity 桌面端在处理本轮请求时遇到错误。"
+                ))
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let detail = detailText {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        isDetailExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(isDetailExpanded
+                             ? lang.t("Hide details", "收起详情")
+                             : lang.t("Show details", "查看详情"))
+                            .font(.system(size: 12, weight: .medium))
+                        Image(systemName: isDetailExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(AntigravityTheme.inkSecondary)
+                }
+                .buttonStyle(.plain)
+
+                if isDetailExpanded {
+                    Text(detail)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                        .textSelection(.enabled)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AntigravityTheme.surfaceCodeBlock, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(AntigravityTheme.surfaceCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(AntigravityTheme.surfaceDiffRemove)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AntigravityTheme.statusError.opacity(0.32), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityIdentifier("step-error-\(step.stepIndex)")
     }
 }
 
