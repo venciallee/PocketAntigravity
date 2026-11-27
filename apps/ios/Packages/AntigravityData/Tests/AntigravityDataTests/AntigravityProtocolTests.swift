@@ -4575,14 +4575,13 @@ final class AntigravityProtocolTests: XCTestCase {
         let summary = CascadeSummary(
             cascadeId: cid,
             title: "Recovery Test Chat",
-            status: .done,
-            updatedAt: Date(),
-            relativeTimeLabel: "just now",
-            stepCount: 5,
             projectSlug: "ledger-svc",
-            originHostName: "Antigravity",
+            workspaceUri: "cloud://ledger-svc",
+            status: .done,
+            stepCount: 5,
+            isCloud: true,
             originInstanceUuid: "rec-uuid-1",
-            isCloud: true
+            originHostName: "Antigravity"
         )
         store.summaries = [summary]
         store.activeCascadeId = cid
