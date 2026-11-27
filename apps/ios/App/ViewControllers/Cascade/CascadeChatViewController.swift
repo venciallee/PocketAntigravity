@@ -75,7 +75,12 @@ public struct CascadeChatViewController: View {
 
     private var isActiveSessionHostOnline: Bool {
         if isActiveSessionCloud {
-            return store.isDeviceNetworkReachable
+            guard store.hasPairedBackend else { return true }
+            guard store.isDeviceNetworkReachable else { return false }
+            if store.activeHost.channel == .cloudRelay && !store.availableRelayInstances.isEmpty {
+                return store.availableRelayInstances.contains(where: \.status.isReachable)
+            }
+            return store.isLiveBackendConnected && store.activeHost.isOnline
         }
         if !store.hasPairedBackend { return true }
         let hostTitle = store.activeSummary?.originHostName
@@ -487,29 +492,7 @@ public struct CascadeChatViewController: View {
                     .font(.system(size: 13))
                     .foregroundStyle(AntigravityTheme.inkSecondary)
                 Button {
-                    if !store.isDeviceNetworkReachable || !isActiveSessionHostOnline {
-                        Task {
-                            if !isActiveSessionCloud,
-                               let originId = store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid,
-                               !originId.isEmpty {
-                                let hostLabel = store.resolvedHostName(
-                                    forInstanceUuid: originId,
-                                    fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
-                                )
-                                let hostReachable = await store.refreshConversationsForHostScope(
-                                    .localHost(id: originId, name: hostLabel),
-                                    forceFullSync: true
-                                )
-                                if hostReachable {
-                                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
-                                }
-                            } else {
-                                await store.reconnectNow(userInitiated: true)
-                            }
-                        }
-                    } else {
-                        store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
-                    }
+                    triggerRetryOrReconnect()
                 } label: {
                     Text(lang.t("Retry", "重试"))
                         .font(.system(size: 13.5, weight: .semibold))
@@ -532,68 +515,133 @@ public struct CascadeChatViewController: View {
             .padding(.top, 12)
         } else {
             let isNoInternet = store.hasPairedBackend && !store.isDeviceNetworkReachable
-            let isOfflinePaired = !isActiveSessionCloud && store.hasPairedBackend && !isActiveSessionHostOnline
+            let isOfflinePaired = (!isActiveSessionCloud && store.hasPairedBackend && !isActiveSessionHostOnline)
+            let isBrandNewEmpty = activePendingDraft != nil || store.isBrandNewEmptyCascade(store.activeCascadeId)
             let knownStepCount = store.activeSummary?.stepCount ?? 0
             if isNoInternet || isOfflinePaired {
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(AntigravityTheme.statusError)
-                        .frame(width: 7, height: 7)
-                    Text(
-                        isNoInternet
-                            ? lang.t("No internet · Messages will queue", "无网络 · 消息将排队等待发送")
-                            : (store.pendingOutboxCount > 0
-                                ? lang.t("Host offline · \(store.pendingOutboxCount) queued", "主机离线 · \(store.pendingOutboxCount) 条排队中")
-                                : lang.t("Host offline · Messages will send on reconnect", "主机离线 · 重连后自动发送"))
+                if !isBrandNewEmpty && store.activeSteps.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(AntigravityTheme.statusError)
+                                .frame(width: 8, height: 8)
+                            Text(
+                                isNoInternet
+                                    ? lang.t("No internet connection", "无网络连接")
+                                    : (isActiveSessionCloud
+                                        ? lang.t("Antigravity Desktop host offline", "Antigravity 桌面主机离线")
+                                        : lang.t("Host offline", "主机离线"))
+                            )
+                                .font(.system(size: 14.5, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.inkReading)
+                        }
+                        Text(
+                            isNoInternet
+                                ? lang.t(
+                                    "This conversation has not been cached on this device yet. Reconnect to load its history.",
+                                    "此对话尚未缓存到当前设备，恢复网络后即可加载历史记录。"
+                                )
+                                : lang.t(
+                                    "This conversation has not been cached on this device yet. Bring an Antigravity Desktop host online, then tap Retry.",
+                                    "此对话尚未缓存到当前设备。请确保 Antigravity 桌面端在线后点击重试。"
+                                )
+                        )
+                            .font(.system(size: 13))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        Button {
+                            triggerRetryOrReconnect()
+                        } label: {
+                            Text(lang.t("Retry", "重试"))
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 36)
+                                .background(AntigravityTheme.surfaceElevated)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("btn-chat-reload-empty")
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AntigravityTheme.surfaceCard)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
                     )
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(AntigravityTheme.inkSecondary)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .padding(.top, 12)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("chat-empty-history-card")
+                } else {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(AntigravityTheme.statusError)
+                            .frame(width: 7, height: 7)
+                        Text(
+                            isNoInternet
+                                ? lang.t("No internet · Messages will queue", "无网络 · 消息将排队等待发送")
+                                : (store.pendingOutboxCount > 0
+                                    ? lang.t("Host offline · \(store.pendingOutboxCount) queued", "主机离线 · \(store.pendingOutboxCount) 条排队中")
+                                    : lang.t("Host offline · Messages will send on reconnect", "主机离线 · 重连后自动发送"))
+                        )
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(AntigravityTheme.surfaceCard)
+                    .overlay(
+                        Capsule()
+                            .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                    )
+                    .clipShape(Capsule())
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 16)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("chat-offline-status-pill")
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(AntigravityTheme.surfaceCard)
-                .overlay(
-                    Capsule()
-                        .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
-                )
-                .clipShape(Capsule())
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 16)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("chat-offline-status-pill")
-            } else if knownStepCount > 0 {
+            } else if (store.hasPairedBackend || store.isLiveBackendConnected) && !isBrandNewEmpty {
+                let rawStepCount = store.activeSteps.count
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
-                        Image(systemName: "clock.arrow.circlepath")
+                        Image(systemName: "arrow.clockwise.circle")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                        Text(lang.t("Conversation history not loaded", "未加载会话记录"))
+                            .foregroundStyle(AntigravityTheme.inkSecondary)
+                        Text(
+                            rawStepCount > 0
+                                ? lang.t("No visible messages in this conversation", "该对话暂无可显示的消息")
+                                : lang.t("No conversation history loaded", "未加载到对话记录")
+                        )
                             .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(AntigravityTheme.inkReading)
                     }
-                    Text(lang.t(
-                        "This conversation has \(knownStepCount) steps on \(effectiveHeaderHostLabel). Tap below to sync them.",
-                        "此会话在 \(effectiveHeaderHostLabel) 上包含 \(knownStepCount) 个步骤。点击下方重新同步。"
-                    ))
+                    Text(
+                        rawStepCount > 0
+                            ? lang.t(
+                                "\(rawStepCount) internal steps were synced from \(effectiveHeaderHostLabel). Tap Reload to refresh.",
+                                "已从 \(effectiveHeaderHostLabel) 同步 \(rawStepCount) 条内部步骤，可点击重新加载刷新。"
+                            )
+                            : lang.t(
+                                "\(effectiveHeaderHostLabel) returned no trajectory steps for this conversation yet. Tap Reload to try again.",
+                                "\(effectiveHeaderHostLabel) 暂未返回此对话的执行轨迹，可点击重新加载重试。"
+                            )
+                    )
                         .font(.system(size: 13))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
                     Button {
-                        store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
+                        triggerRetryOrReconnect()
                     } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 12, weight: .semibold))
-                            Text(lang.t("Load History", "加载历史记录"))
-                                .font(.system(size: 13.5, weight: .semibold))
-                        }
-                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 36)
-                        .background(AntigravityTheme.surfaceElevated)
-                        .clipShape(Capsule())
+                        Text(lang.t("Reload", "重新加载"))
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 36)
+                            .background(AntigravityTheme.surfaceElevated)
+                            .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityIdentifier("chat-btn-load-unhydrated-history")
+                    .accessibilityIdentifier("btn-chat-reload-empty")
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -604,7 +652,8 @@ public struct CascadeChatViewController: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .padding(.top, 12)
-                .accessibilityIdentifier("chat-unhydrated-history-card")
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("chat-empty-history-card")
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
@@ -634,6 +683,33 @@ public struct CascadeChatViewController: View {
                 .padding(.top, 12)
                 .accessibilityIdentifier("chat-empty-ready-card")
             }
+            }
+        }
+    }
+
+    private func triggerRetryOrReconnect() {
+        if !store.isDeviceNetworkReachable || !isActiveSessionHostOnline {
+            Task {
+                if !isActiveSessionCloud,
+                   let originId = store.activeSummary?.originInstanceUuid ?? activeProjectWorkspace?.originInstanceUuid,
+                   !originId.isEmpty {
+                    let hostLabel = store.resolvedHostName(
+                        forInstanceUuid: originId,
+                        fallback: store.activeSummary?.originHostName ?? activeProjectWorkspace?.hostName
+                    )
+                    let hostReachable = await store.refreshConversationsForHostScope(
+                        .localHost(id: originId, name: hostLabel),
+                        forceFullSync: true
+                    )
+                    if hostReachable {
+                        store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
+                    }
+                } else {
+                    await store.reconnectNow(userInitiated: true)
+                }
+            }
+        } else {
+            store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
         }
     }
 

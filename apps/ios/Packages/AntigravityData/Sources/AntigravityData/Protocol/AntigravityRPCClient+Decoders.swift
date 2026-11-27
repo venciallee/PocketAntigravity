@@ -474,15 +474,23 @@ extension AntigravityRPCClient {
 
         // Decode userInput (string or nested object `{"userResponse": ...}` / `{"items": [{"text": ...}]}`)
         var userText: String? = nonEmptyString(obj["userInput"]?.stringValue)
-        var mentions: [String] = obj["attachedMentions"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            ?? nonEmptyString(obj["user_input"]?.stringValue)
+        var mentions: [String] = (obj["attachedMentions"]?.arrayValue ?? obj["attached_mentions"]?.arrayValue)?
+            .compactMap(\.stringValue) ?? []
         var recordedMode: CascadeExecutionMode?
         var recordedModelId: String?
 
-        if let uiObj = obj["userInput"]?.objectValue {
+        if let uiObj = (obj["userInput"] ?? obj["user_input"])?.objectValue {
             let itemsJoined = uiObj["items"]?.arrayValue?
-                .compactMap { nonEmptyString($0.objectValue?["text"]?.stringValue) }
+                .compactMap { el -> String? in
+                    guard let itemObj = el.objectValue else { return nil }
+                    return nonEmptyString(itemObj["text"]?.stringValue)
+                        ?? nonEmptyString(itemObj["item"]?.objectValue?["text"]?.stringValue)
+                        ?? nonEmptyString(itemObj["chunk"]?.objectValue?["text"]?.stringValue)
+                }
                 .joined(separator: "\n")
             userText = nonEmptyString(uiObj["userResponse"]?.stringValue)
+                ?? nonEmptyString(uiObj["user_response"]?.stringValue)
                 ?? nonEmptyString(uiObj["query"]?.stringValue)
                 ?? nonEmptyString(uiObj["text"]?.stringValue)
                 ?? nonEmptyString(uiObj["prompt"]?.stringValue)
@@ -493,7 +501,8 @@ extension AntigravityRPCClient {
                     if let fileObj = item.objectValue?["item"]?.objectValue?["file"]?.objectValue {
                         if let fileLabel = nonEmptyString(fileObj["label"]?.stringValue) {
                             if !mentions.contains(fileLabel) { mentions.append(fileLabel) }
-                        } else if let uri = nonEmptyString(fileObj["absoluteUri"]?.stringValue) {
+                        } else if let uri = nonEmptyString(fileObj["absoluteUri"]?.stringValue)
+                            ?? nonEmptyString(fileObj["absolute_uri"]?.stringValue) {
                             let base = (uri.replacingOccurrences(of: "file://", with: "") as NSString).lastPathComponent
                             let chip = base.hasPrefix("@") ? base : "@\(base)"
                             if !base.isEmpty && !mentions.contains(chip) { mentions.append(chip) }
@@ -504,25 +513,27 @@ extension AntigravityRPCClient {
             if let mediaArr = uiObj["media"]?.arrayValue {
                 for (idx, mediaVal) in mediaArr.enumerated() {
                     guard let mediaObj = mediaVal.objectValue else { continue }
+                    let mime = mediaObj["mimeType"]?.stringValue ?? mediaObj["mime_type"]?.stringValue ?? ""
                     let label = nonEmptyString(mediaObj["description"]?.stringValue)
                         ?? nonEmptyString(mediaObj["uri"]?.stringValue).map { ($0 as NSString).lastPathComponent }
-                        ?? ((mediaObj["mimeType"]?.stringValue ?? "").hasPrefix("image/") ? "image-\(idx + 1)" : "media-\(idx + 1)")
+                        ?? (mime.hasPrefix("image/") ? "image-\(idx + 1)" : "media-\(idx + 1)")
                     if !label.isEmpty && !mentions.contains(label) {
                         mentions.append(label)
                     }
                 }
             }
-            if let userCfg = (uiObj["userConfig"] ?? uiObj["lastUserConfig"])?.objectValue,
-               let plannerCfg = userCfg["plannerConfig"]?.objectValue {
+            if let userCfg = (uiObj["userConfig"] ?? uiObj["user_config"] ?? uiObj["lastUserConfig"] ?? uiObj["last_user_config"])?.objectValue,
+               let plannerCfg = (userCfg["plannerConfig"] ?? userCfg["planner_config"])?.objectValue {
                 if let convObj = plannerCfg["conversational"]?.objectValue {
-                    if let agentic = convObj["agenticMode"]?.boolValue {
+                    if let agentic = convObj["agenticMode"]?.boolValue ?? convObj["agentic_mode"]?.boolValue {
                         recordedMode = agentic ? .planning : .fast
                     }
                 }
-                let reqModelObj = plannerCfg["requestedModel"]?.objectValue
+                let reqModelObj = (plannerCfg["requestedModel"] ?? plannerCfg["requested_model"])?.objectValue
                 recordedModelId = nonEmptyString(reqModelObj?["model"]?.stringValue)
                     ?? nonEmptyString(reqModelObj?["alias"]?.stringValue)
                     ?? nonEmptyString(plannerCfg["planModel"]?.stringValue)
+                    ?? nonEmptyString(plannerCfg["plan_model"]?.stringValue)
                 if recordedModelId == "MODEL_UNSPECIFIED" {
                     recordedModelId = nil
                 }
@@ -534,15 +545,22 @@ extension AntigravityRPCClient {
 
         // Decode plannerResponse & notifyUser
         var plannerPayload: PlannerResponsePayload?
-        if let pr = obj["plannerResponse"]?.objectValue {
+        if let pr = (obj["plannerResponse"] ?? obj["planner_response"])?.objectValue {
             let text = nonEmptyString(pr["modifiedResponse"]?.stringValue)
+                ?? nonEmptyString(pr["modified_response"]?.stringValue)
                 ?? nonEmptyString(pr["response"]?.stringValue)
                 ?? nonEmptyString(pr["text"]?.stringValue)
                 ?? nonEmptyString(pr["content"]?.stringValue)
                 ?? nonEmptyString(pr["message"]?.stringValue)
                 ?? ""
             let thinking = nonEmptyString(pr["thinking"]?.stringValue)
-            let duration = parseDurationSeconds(pr["thinkingDurationSeconds"] ?? pr["thinkingDuration"])
+                ?? nonEmptyString(pr["thought"]?.stringValue)
+            let duration = parseDurationSeconds(
+                pr["thinkingDurationSeconds"]
+                    ?? pr["thinking_duration_seconds"]
+                    ?? pr["thinkingDuration"]
+                    ?? pr["thinking_duration"]
+            )
             if !text.isEmpty || thinking != nil || stepStatus == .inProgress || stepStatus == .pending {
                 plannerPayload = PlannerResponsePayload(
                     response: text,
@@ -553,11 +571,16 @@ extension AntigravityRPCClient {
                     stepType = .plannerResponse
                 }
             }
-        } else if let nu = obj["notifyUser"]?.objectValue {
+        } else if let nu = (obj["notifyUser"] ?? obj["notify_user"])?.objectValue {
             let notifyText = nonEmptyString(nu["notificationContent"]?.stringValue)
+                ?? nonEmptyString(nu["notification_content"]?.stringValue)
                 ?? nonEmptyString(nu["message"]?.stringValue)
                 ?? nonEmptyString(nu["reviewContent"]?.stringValue)
-            let paths = (nu["pathsToReview"]?.arrayValue ?? nu["reviewAbsoluteUris"]?.arrayValue)?
+                ?? nonEmptyString(nu["review_content"]?.stringValue)
+            let paths = (nu["pathsToReview"]?.arrayValue
+                ?? nu["paths_to_review"]?.arrayValue
+                ?? nu["reviewAbsoluteUris"]?.arrayValue
+                ?? nu["review_absolute_uris"]?.arrayValue)?
                 .compactMap(\.stringValue) ?? []
             if notifyText != nil || !paths.isEmpty {
                 plannerPayload = PlannerResponsePayload(
@@ -1446,26 +1469,36 @@ extension AntigravityRPCClient {
         _ event: [String: JSONValue],
         cascadeId: String
     ) -> AgentStateStepsUpdate {
-        let updateObj = event["update"]?.objectValue ?? event
+        let updateObj = event["update"]?.objectValue
+            ?? event["agentStateUpdate"]?.objectValue
+            ?? event["agent_state_update"]?.objectValue
+            ?? event["stateUpdate"]?.objectValue
+            ?? event["state_update"]?.objectValue
+            ?? event
         let runStatus = nonEmptyString(updateObj["status"]?.stringValue)
             ?? nonEmptyString(updateObj["executableStatus"]?.stringValue)
             ?? nonEmptyString(updateObj["executable_status"]?.stringValue)
 
         let mainTraj = updateObj["mainTrajectoryUpdate"]?.objectValue
             ?? updateObj["main_trajectory_update"]?.objectValue
+            ?? updateObj["mainTrajectory"]?.objectValue
+            ?? updateObj["main_trajectory"]?.objectValue
         let stepsUpdate = mainTraj?["stepsUpdate"]?.objectValue
             ?? mainTraj?["steps_update"]?.objectValue
             ?? updateObj["stepsUpdate"]?.objectValue
             ?? updateObj["steps_update"]?.objectValue
+        let nestedTraj = mainTraj?["trajectory"]?.objectValue ?? updateObj["trajectory"]?.objectValue
 
         let hasMainTrajectoryUpdate = mainTraj != nil
             || stepsUpdate != nil
-            || updateObj["trajectory"]?.objectValue != nil
+            || nestedTraj != nil
             || updateObj["steps"]?.arrayValue != nil
 
         let rawSteps = stepsUpdate?["steps"]?.arrayValue
+            ?? stepsUpdate?["stepUpdates"]?.arrayValue
+            ?? stepsUpdate?["step_updates"]?.arrayValue
+            ?? nestedTraj?["steps"]?.arrayValue
             ?? mainTraj?["steps"]?.arrayValue
-            ?? updateObj["trajectory"]?.objectValue?["steps"]?.arrayValue
             ?? updateObj["steps"]?.arrayValue
             ?? []
 
@@ -1481,16 +1514,27 @@ extension AntigravityRPCClient {
             return nil
         }
 
+        let baseOffset = parseIntValue(stepsUpdate?["offset"])
+            ?? parseIntValue(stepsUpdate?["startIndex"])
+            ?? parseIntValue(stepsUpdate?["start_index"])
+            ?? parseIntValue(stepsUpdate?["stepOffset"])
+            ?? parseIntValue(stepsUpdate?["step_offset"])
+            ?? 0
+
         let totalLength = parseIntValue(stepsUpdate?["totalLength"])
             ?? parseIntValue(stepsUpdate?["total_length"])
             ?? parseIntValue(mainTraj?["totalLength"])
             ?? parseIntValue(mainTraj?["total_length"])
+            ?? parseIntValue(nestedTraj?["totalLength"])
+            ?? parseIntValue(nestedTraj?["total_length"])
+            ?? parseIntValue(updateObj["totalLength"])
+            ?? parseIntValue(updateObj["total_length"])
 
         let useExplicitIndices = !indices.isEmpty && indices.count == rawSteps.count
         var decoded: [CascadeStep] = []
         decoded.reserveCapacity(rawSteps.count)
         for (idx, stepVal) in rawSteps.enumerated() {
-            let targetIdx = useExplicitIndices ? indices[idx] : idx
+            let targetIdx = useExplicitIndices ? indices[idx] : (baseOffset + idx)
             if var step = decodeJSONStep(stepVal, cascadeId: cascadeId, fallbackIndex: targetIdx) {
                 if useExplicitIndices && step.stepIndex != targetIdx {
                     step.stepIndex = targetIdx

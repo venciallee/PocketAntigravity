@@ -1359,4 +1359,87 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithText("Host Offline: MacBook Pro", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("btn-reconnect-host").assertIsDisplayed()
     }
+
+    @Test
+    fun atc34_existingCloudConversationNeverShowsSilentBlankCanvasWhenEmptyOrOffline() {
+        val hostUuid = "macbook-relay-cloud-test"
+        val cloudCid = "v1/default/jetski_remote_agents_3p_devbox/xcode-signing"
+        val coordinator = AntigravityCoreCoordinator(
+            preferencesStore = dev.antigravity.shared.platform.InMemoryPreferencesStore(),
+            projectionStorage = dev.antigravity.shared.domain.InMemoryProjectionStorage(),
+            autoPreloadConversations = false,
+            enableForegroundHeartbeatLoop = false,
+        )
+        val pairedHost = dev.antigravity.shared.model.RemoteHostInstance(
+            instanceId = hostUuid,
+            hostname = "MacBook Pro",
+            channel = dev.antigravity.shared.model.RemoteConnectionChannel.CLOUD_RELAY,
+            endpointUrl = "https://antigravity.google.com/r/$hostUuid",
+            isOnline = true,
+        )
+        coordinator.connectionStore.seedVerificationConnection(
+            activeHost = pairedHost,
+            knownHosts = listOf(pairedHost),
+            statusText = "Connected · MacBook Pro",
+        )
+        coordinator.conversationSyncStore.seedFixtureData(
+            workspaces = emptyList(),
+            projects = emptyList(),
+            summaries = listOf(
+                dev.antigravity.shared.model.CascadeSummary(
+                    cascadeId = cloudCid,
+                    title = "Xcode签名丢失原因分析",
+                    projectSlug = "venciallee/PocketAntigravity",
+                    workspaceUri = "cloud://venciallee/PocketAntigravity",
+                    branchName = "main",
+                    status = dev.antigravity.shared.model.CortexStepStatus.DONE,
+                    stepCount = 4,
+                    currentStepIndex = 4,
+                    totalSteps = 4,
+                    updatedAtEpochMs = 1_740_000_000_000L,
+                    isCloud = true,
+                    originHostName = "Antigravity",
+                    hasResolvedTitle = true,
+                )
+            ),
+        )
+        coordinator.chatStore.setActiveCascade(cloudCid)
+
+        var retryTapCount = 0
+        composeRule.setContent {
+            dev.antigravity.android.core.ui.theme.AntigravityTheme {
+                dev.antigravity.android.ui.chat.CascadeChatScreen(
+                    coordinator = coordinator,
+                    onBack = {},
+                    onOpenDiffReview = {},
+                    onOpenPlanReview = {},
+                    onOpenAddContext = {},
+                    onOpenModelAndMode = {},
+                    onOpenOverview = {},
+                    onOpenSideQuestion = {},
+                    onOpenSwarmBoard = {},
+                    onOpenVoiceMode = {},
+                    onBiometricPrompt = { _, _ -> },
+                    onRetryLoadSteps = { retryTapCount += 1 },
+                )
+            }
+        }
+
+        // 1. Online existing Cloud conversation with 0 loaded steps must show Reload recovery card (NOT blank screen)
+        composeRule.onNodeWithTag("chat-empty-history-card").assertIsDisplayed()
+        composeRule.onNodeWithText("No conversation history loaded", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-chat-reload-empty").performClick()
+        assertEquals(1, retryTapCount)
+
+        // 2. When all Desktop Relay hosts go offline, Cloud conversation must truthfully show offline card + Retry
+        coordinator.connectionStore.markInstanceOffline(
+            instanceUuid = hostUuid,
+            errorMessage = "MacBook Pro is offline",
+        )
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("chat-empty-history-card").assertIsDisplayed()
+        composeRule.onNodeWithText("Antigravity Desktop host offline", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-chat-reload-empty").performClick()
+        assertEquals(2, retryTapCount)
+    }
 }

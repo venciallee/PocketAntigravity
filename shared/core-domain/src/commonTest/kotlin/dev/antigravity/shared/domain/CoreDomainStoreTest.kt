@@ -1940,4 +1940,69 @@ class CoreDomainStoreTest {
             coordinator.close()
         }
     }
+
+    @Test
+    fun testSyncStepsWithNullClientPreservesConnectingStateAndSurfacesOfflineErrorWhenDisconnected() = runTest {
+        withContext(Dispatchers.Default) {
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = InMemoryPreferencesStore(),
+                projectionStorage = InMemoryProjectionStorage(),
+                autoPreloadConversations = false,
+                enableForegroundHeartbeatLoop = false,
+            )
+            val cloudId = "v1/default/jetski_remote_agents_3p_devbox/xcode-signing"
+            val macHost = RemoteHostInstance(
+                instanceId = "uuid-offline-mac",
+                hostname = "MacBook Pro",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/uuid-offline-mac",
+                isOnline = false,
+            )
+            coordinator.conversationSyncStore.seedFixtureData(
+                workspaces = emptyList(),
+                projects = emptyList(),
+                summaries = listOf(
+                    CascadeSummary(
+                        cascadeId = cloudId,
+                        title = "Xcode签名丢失原因分析",
+                        projectSlug = "venciallee/PocketAntigravity",
+                        workspaceUri = "cloud://venciallee/PocketAntigravity",
+                        branchName = "main",
+                        status = CortexStepStatus.DONE,
+                        stepCount = 6,
+                        currentStepIndex = 6,
+                        totalSteps = 6,
+                        updatedAtEpochMs = 1_740_000_000_000L,
+                        isCloud = true,
+                        originHostName = "Antigravity",
+                        hasResolvedTitle = true,
+                    )
+                ),
+            )
+            // Paired & offline (`activeClient() == null`, `isConnecting == false`) -> must throw 503 & set stepLoadErrorText
+            coordinator.connectionStore.seedVerificationConnection(
+                activeHost = macHost,
+                knownHosts = listOf(macHost),
+                statusText = "Offline · MacBook Pro",
+            )
+            coordinator.connectionStore.markInstanceOffline(
+                instanceUuid = macHost.instanceId,
+                errorMessage = "MacBook Pro is offline",
+            )
+            var thrown: Throwable? = null
+            try {
+                coordinator.syncSteps(cascadeId = cloudId, knownStepCount = 6, isCloud = true)
+            } catch (e: Throwable) {
+                thrown = e
+            }
+            assertNotNull(thrown, "Syncing uncached existing Cloud conversation with null client while offline must throw 503 instead of returning silent empty")
+            assertFalse(coordinator.chatState.value.isLoadingSteps)
+            assertNotNull(coordinator.chatState.value.stepLoadErrorText)
+            assertTrue(
+                coordinator.chatState.value.stepLoadErrorText.orEmpty().contains("offline", ignoreCase = true),
+                "Expected clear offline message, got: ${coordinator.chatState.value.stepLoadErrorText}",
+            )
+            coordinator.close()
+        }
+    }
 }

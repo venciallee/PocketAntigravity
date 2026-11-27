@@ -939,6 +939,7 @@ public class AntigravityCoreCoordinator(
         instanceUuidOverride: String?,
         forceRefresh: Boolean,
     ): List<CascadeStep> {
+        chatStore.setActiveCascade(cascadeId)
         val client = connectionStore.activeClient()
         if (client == null) {
             val cached = chatStore.loadCachedSteps(cascadeId)
@@ -949,8 +950,36 @@ public class AntigravityCoreCoordinator(
                     steps = cached,
                     persist = false,
                 )
+                chatStore.setLoadingSteps(cascadeId, false)
+                return cached
             }
-            return cached
+            val conn = connectionStore.state.value
+            if (conn.isConnecting) {
+                chatStore.setLoadingSteps(cascadeId, true)
+                return emptyList()
+            }
+            if (conn.hasPairedBackend) {
+                val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+                val isBrandNewEmpty = cascadeId.startsWith("cascade-new-") ||
+                    (summary != null && summary.stepCount == 0 && summary.needsTitleHydration)
+                if (!isBrandNewEmpty) {
+                    val offlineMsg = when {
+                        !conn.isDeviceNetworkReachable ->
+                            "No internet connection and this conversation has not been cached on this device yet."
+                        isCloud ->
+                            "All paired Antigravity Desktop hosts are currently offline and this conversation has not been cached on this device yet."
+                        else -> {
+                            val hostLabel = summary?.originHostName ?: conn.activeHost?.hostname ?: "Antigravity Desktop"
+                            "$hostLabel is currently offline and this conversation has not been cached on this device yet."
+                        }
+                    }
+                    chatStore.setLoadingSteps(cascadeId, false)
+                    chatStore.setStepLoadError(offlineMsg)
+                    throw AntigravityRpcError.HttpError(503, offlineMsg)
+                }
+            }
+            chatStore.setLoadingSteps(cascadeId, false)
+            return emptyList()
         }
         chatStore.setActiveCascade(cascadeId)
         preemptNonTargetPreloads(keepCascadeId = cascadeId)
