@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -1468,5 +1469,193 @@ class AdaptiveTrajectorySyncTest {
         ).decodeToString()
         assertTrue(protoBody.contains("""["accept-encoding","gzip"]"""), "Expected gzip accept-encoding in proxy request: $protoBody")
         assertTrue(protoBody.contains("""["accept","application/proto"]"""), "Expected application/proto accept header: $protoBody")
+    }
+
+    @Test
+    fun testCloudStreamAgentStateUpdatesDoesNotAbortOnEmptyZeroStubAndTriesBackendVariant() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-cloud-stub-1"
+            val cloudCascadeId = "v1/default/jetski_remote_agents_3p_devbox/xcode-signing-analysis"
+            var streamAttempt = 0
+            val seenBackends = mutableListOf<String?>()
+            val json = Json { ignoreUnknownKeys = true }
+
+            val emptyStubFrame = """{"update":{"conversationId":"$cloudCascadeId","mainTrajectoryUpdate":{"stepsUpdate":{"totalLength":0}}}}"""
+            val emptyStreamBytes = ConnectEnvelope.encode(emptyStubFrame.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val emptyBoqChunk = """["${emptyStreamBytes.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val realStepsFrame = """{"update":{"conversationId":"$cloudCascadeId","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Xcode签名丢失原因分析"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"根因是 xcodegen 重新生成覆盖了自动签名配置。"}}]}}}}"""
+            val realStreamBytes = ConnectEnvelope.encode(realStepsFrame.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val realBoqChunk = """["${realStreamBytes.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyText = ((request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)).decodeToString()
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.34.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        streamAttempt += 1
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val b64Inner = (jspbArr[2] as JsonPrimitive).content
+                        val framed = CloudRelayJspbCodec.decodeBase64Flexible(b64Inner) ?: ByteArray(0)
+                        val innerJsonStr = if (framed.size > 5) framed.copyOfRange(5, framed.size).decodeToString() else "{}"
+                        val innerObj = json.parseToJsonElement(innerJsonStr) as JsonObject
+                        val backendVal = (innerObj["backend"] as? JsonPrimitive)?.contentOrNull
+                        seenBackends.add(backendVal)
+                        val respChunk = if (backendVal == "BACKEND_TYPE_REMOTE_AICODE") realBoqChunk else emptyBoqChunk
+                        respond(
+                            content = respChunk,
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json+protobuf"))
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(
+                cascadeId = cloudCascadeId,
+                knownStepCount = 2,
+                isCloud = true,
+            )
+            assertEquals(2, steps.size)
+            assertEquals("Xcode签名丢失原因分析", steps[0].userInput)
+            assertTrue(steps[1].plannerResponse?.response?.contains("自动签名配置") == true)
+            assertEquals(listOf(null, "BACKEND_TYPE_REMOTE_AICODE"), seenBackends)
+        }
+    }
+
+    @Test
+    fun testDormantCloudTrajectoryRetriesStreamAgentStateUpdatesAfterLoadTrajectoryWake() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-cloud-dormant-wake"
+            val cloudCascadeId = "v1/default/jetski_remote_agents_3p_devbox/dormant-cloud-wake"
+            var isWoken = false
+            var loadCalls = 0
+            var streamCalls = 0
+            val json = Json { ignoreUnknownKeys = true }
+
+            val emptyStreamBytes = ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val emptyBoqChunk = """["${emptyStreamBytes.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val wokeFrame = """{"update":{"conversationId":"$cloudCascadeId","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"唤醒历史云端对话"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"已成功从云端恢复历史轨迹。"}}]}}}}"""
+            val wokeStreamBytes = ConnectEnvelope.encode(wokeFrame.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val wokeBoqChunk = """["${wokeStreamBytes.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyText = ((request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)).decodeToString()
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.34.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        streamCalls += 1
+                        respond(
+                            content = if (isWoken) wokeBoqChunk else emptyBoqChunk,
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val rpcPath = (jspbArr[1] as JsonPrimitive).content
+                        if (rpcPath.endsWith("/LoadTrajectory")) {
+                            loadCalls += 1
+                            isWoken = true
+                            val okB64 = "{}".encodeToByteArray().toByteString().base64()
+                            respond(
+                                content = """["$okB64",[["content-type","application/json"]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            // Legacy GetCascadeTrajectorySteps / GetCascadeTrajectory return 404 on Antigravity 2.x Cloud
+                            respond(
+                                content = """[5,"not_found: trajectory not found"]""",
+                                status = HttpStatusCode.NotFound,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(
+                cascadeId = cloudCascadeId,
+                knownStepCount = 2,
+                isCloud = true,
+            )
+            assertTrue(loadCalls >= 1, "Expected LoadTrajectory wake call")
+            assertTrue(streamCalls >= 2, "Expected StreamAgentStateUpdates retry after LoadTrajectory wake")
+            assertEquals(2, steps.size)
+            assertEquals("唤醒历史云端对话", steps[0].userInput)
+            assertEquals("已成功从云端恢复历史轨迹。", steps[1].plannerResponse?.response)
+        }
+    }
+
+    @Test
+    fun testDecodeAgentStateStepsUpdateHandlesAlternativeWrappersAndSnakeCaseSteps() {
+        val json = Json { ignoreUnknownKeys = true }
+        val raw = json.parseToJsonElement(
+            """
+            {
+              "agentStateUpdate": {
+                "mainTrajectory": {
+                  "trajectory": {
+                    "total_length": 4,
+                    "steps": [
+                      {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "user_input": {"items": [{"item": {"text": "为什么进来显示空白"}}]}},
+                      {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE", "planner_response": {"modified_response": "已定位根因并修复"}}
+                    ]
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        ) as JsonObject
+
+        val decoded = JsonStepAndSummaryDecoder.decodeAgentStateStepsUpdate(raw, cascadeId = "v1/alt")
+        assertTrue(decoded.hasMainTrajectoryUpdate)
+        assertEquals(4, decoded.totalLength)
+        assertEquals(2, decoded.steps.size)
+        assertEquals("为什么进来显示空白", decoded.steps[0].userInput)
+        assertEquals("已定位根因并修复", decoded.steps[1].plannerResponse?.response)
     }
 }

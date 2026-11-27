@@ -495,6 +495,20 @@ public class CascadeChatDomainStore(
         _state.update { it.copy(stepLoadErrorText = message?.takeIf { s -> s.isNotBlank() }) }
     }
 
+    public fun setLoadingSteps(cascadeId: String, isLoading: Boolean) {
+        _state.update { prev ->
+            if (prev.activeCascadeId != cascadeId) {
+                prev
+            } else {
+                val hasSteps = !prev.stepsByCascadeId[cascadeId].isNullOrEmpty()
+                prev.copy(
+                    isLoadingSteps = if (isLoading) !hasSteps else false,
+                    stepLoadErrorText = if (isLoading) null else prev.stepLoadErrorText,
+                )
+            }
+        }
+    }
+
     @Throws(Throwable::class)
     public suspend fun syncSteps(
         client: AntigravityKmpRpcClient,

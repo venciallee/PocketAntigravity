@@ -910,6 +910,62 @@ final class KmpEnginePortTests: XCTestCase {
             "Retrying a failed send must not duplicate the user bubble"
         )
     }
+
+    @MainActor
+    func testColdStartWithAttachedKmpEngineDoesNotReturnFakeEmptyStepsBeforeHandshake() async throws {
+        let engine = RecordingKmpEngineDouble()
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+        defer { store.suspendNetworkingForBackground() }
+
+        let cloudId = "v1/default/jetski_remote_agents_3p_devbox/xcode-signing"
+        store.summaries = [
+            CascadeSummary(
+                cascadeId: cloudId,
+                title: "Xcode签名丢失原因分析",
+                projectSlug: "venciallee/PocketAntigravity",
+                workspaceUri: "cloud://venciallee/PocketAntigravity",
+                branchName: "main",
+                status: .done,
+                stepCount: 5,
+                currentStepIndex: 5,
+                totalSteps: 5,
+                updatedAt: Date(),
+                relativeTimeLabel: "5m",
+                statusSubtitle: "Done · 5 steps",
+                isCloud: true,
+                originHostName: "Antigravity",
+                hasResolvedTitle: true
+            )
+        ]
+
+        // 1. Pre-handshake connecting state with kmpEngine attached (just like AntigravityApp cold launch):
+        // must keep `isLoadingSteps == true` and NOT invoke `kmpEngine.syncSteps` before handshake finishes.
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = false
+        store.isConnectingToBackend = true
+        store.connectionLifecyclePhase = .connecting
+        store.selectCascade(cloudId)
+        try? await Task.sleep(nanoseconds: 80_000_000)
+
+        let callsDuringConnect = await engine.syncStepsCalls.count
+        XCTAssertEqual(callsDuringConnect, 0, "Pre-handshake cold start must not call kmpEngine.syncSteps while activeClient is nil")
+        XCTAssertTrue(store.isLoadingSteps, "Uncached Cloud conversation must remain in loading state while connecting")
+        XCTAssertNil(store.stepLoadErrorText)
+
+        // 2. Once connecting settles to offline (all Desktop Relay hosts offline), opening uncached Cloud chat
+        // must surface an explicit offline error instead of clearing loading into a silent blank screen.
+        store.isConnectingToBackend = false
+        store.connectionLifecyclePhase = .offlineBackoff(attempt: 1, nextRetrySeconds: 5)
+        store.syncStepsForCascade(cloudId, pollUntilIdle: true, forceRefresh: true)
+        for _ in 0..<40 where store.stepLoadErrorText == nil {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertFalse(store.isLoadingSteps)
+        XCTAssertTrue(
+            store.stepLoadErrorText?.lowercased().contains("offline") == true,
+            "Uncached Cloud conversation while all hosts are offline must show offline guidance, got: \(String(describing: store.stepLoadErrorText))"
+        )
+    }
 }
 
 private actor UnregisteredRelayKmpEngineDouble: AntigravityKmpEnginePort {

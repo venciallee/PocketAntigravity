@@ -68,7 +68,7 @@ extension AntigravitySessionStore {
     public func isSummaryHostOnline(_ summary: CascadeSummary?) -> Bool {
         guard hasPairedBackend else { return true }
         guard isDeviceNetworkReachable else { return false }
-        if summary?.isCloud == true {
+        if let summary, isSummaryCloudRuntime(summary) {
             if activeHost.channel == .cloudRelay && !availableRelayInstances.isEmpty {
                 return availableRelayInstances.contains(where: \.status.isReachable)
             }
@@ -78,6 +78,11 @@ extension AntigravitySessionStore {
             instanceId: summary?.originInstanceUuid,
             hostname: summary?.originHostName
         )
+    }
+
+    /// Returns `true` when `cascadeId` was newly created locally in this session and has not synced server steps yet.
+    public func isLocallyCreatedEmptyCascade(_ cascadeId: String) -> Bool {
+        locallyCreatedEmptyCascadeIds.contains(cascadeId)
     }
 
     /// True while a scoped conversation/workspace refresh is in flight for the currently selected host scope.

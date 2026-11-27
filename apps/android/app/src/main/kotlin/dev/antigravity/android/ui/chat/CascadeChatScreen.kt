@@ -626,7 +626,13 @@ fun CascadeChatScreen(
             }
         } else if (!coordinator.isVerificationMode && displayItems.isEmpty()) {
             val isNoInternet = connectionState.hasPairedBackend && !connectionState.isDeviceNetworkReachable
-            val isOfflinePaired = !resolvedIsCloud && connectionState.hasPairedBackend && !isActiveSessionHostOnline
+            val isOfflinePaired = connectionState.hasPairedBackend && !isActiveSessionHostOnline
+            val isBrandNewEmpty = activeCascadeId.startsWith("cascade-new-") ||
+                (activeSummary == null && chatState.activeSteps.isEmpty()) ||
+                (activeSummary != null &&
+                    activeSummary.stepCount == 0 &&
+                    activeSummary.needsTitleHydration &&
+                    chatState.activeSteps.isEmpty())
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -635,35 +641,157 @@ fun CascadeChatScreen(
                 contentAlignment = Alignment.TopCenter,
             ) {
                 if (isNoInternet || isOfflinePaired) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = colors.surfaceCard,
-                        border = BorderStroke(1.dp, colors.cardBorder),
-                        modifier = Modifier.testTag("chat-offline-status-pill"),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    if (!isBrandNewEmpty && chatState.activeSteps.isEmpty()) {
+                        AntigravitySurfaceCard(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                                .testTag("chat-empty-history-card"),
+                            contentPadding = PaddingValues(18.dp),
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(colors.statusError),
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(colors.statusError),
+                                    )
+                                    Text(
+                                        text = when {
+                                            isNoInternet -> tr("No internet connection", "无网络连接")
+                                            resolvedIsCloud -> tr("Antigravity Desktop host offline", "Antigravity 桌面主机离线")
+                                            else -> tr("Host offline", "主机离线")
+                                        },
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = colors.inkReading,
+                                    )
+                                }
+                                Text(
+                                    text = if (isNoInternet) {
+                                        tr(
+                                            "This conversation has not been cached on this device yet. Reconnect to load its history.",
+                                            "此对话尚未缓存到当前设备，恢复网络后即可加载历史记录。",
+                                        )
+                                    } else {
+                                        tr(
+                                            "This conversation has not been cached on this device yet. Bring an Antigravity Desktop host online, then tap Retry.",
+                                            "此对话尚未缓存到当前设备。请确保 Antigravity 桌面端在线后点击重试。",
+                                        )
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colors.inkSecondary,
+                                )
+                                FilledTonalButton(
+                                    onClick = {
+                                        coordinator.chatStore.clearStepLoadError()
+                                        onRetryLoadSteps()
+                                    },
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
+                                        contentColor = colors.accentPeriwinkle,
+                                    ),
+                                    modifier = Modifier.testTag("btn-chat-reload-empty"),
+                                ) {
+                                    Text(
+                                        text = tr("Retry", "重试"),
+                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = colors.surfaceCard,
+                            border = BorderStroke(1.dp, colors.cardBorder),
+                            modifier = Modifier.testTag("chat-offline-status-pill"),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(colors.statusError),
+                                )
+                                Text(
+                                    text = when {
+                                        isNoInternet -> tr("No internet · Messages will queue", "无网络 · 消息将排队等待发送")
+                                        chatState.pendingOutboxCount > 0 -> tr(
+                                            "Host offline · ${chatState.pendingOutboxCount} queued",
+                                            "主机离线 · ${chatState.pendingOutboxCount} 条排队中",
+                                        )
+                                        else -> tr("Host offline · Messages will send on reconnect", "主机离线 · 重连后自动发送")
+                                    },
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                    color = colors.inkSecondary,
+                                )
+                            }
+                        }
+                    }
+                } else if ((connectionState.hasPairedBackend || connectionState.isConnected) && !isBrandNewEmpty) {
+                    val rawStepCount = chatState.activeSteps.size
+                    AntigravitySurfaceCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .testTag("chat-empty-history-card"),
+                        contentPadding = PaddingValues(18.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = if (rawStepCount > 0) {
+                                    tr("No visible messages in this conversation", "该对话暂无可显示的消息")
+                                } else {
+                                    tr("No conversation history loaded", "未加载到对话记录")
+                                },
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = colors.inkReading,
                             )
                             Text(
-                                text = when {
-                                    isNoInternet -> tr("No internet · Messages will queue", "无网络 · 消息将排队等待发送")
-                                    chatState.pendingOutboxCount > 0 -> tr(
-                                        "Host offline · ${chatState.pendingOutboxCount} queued",
-                                        "主机离线 · ${chatState.pendingOutboxCount} 条排队中",
+                                text = if (rawStepCount > 0) {
+                                    tr(
+                                        "$rawStepCount internal steps were synced from $effectiveHeaderHostLabel. Tap Reload to refresh.",
+                                        "已从 $effectiveHeaderHostLabel 同步 $rawStepCount 条内部步骤，可点击重新加载刷新。",
                                     )
-                                    else -> tr("Host offline · Messages will send on reconnect", "主机离线 · 重连后自动发送")
+                                } else {
+                                    tr(
+                                        "$effectiveHeaderHostLabel returned no trajectory steps for this conversation yet. Tap Reload to try again.",
+                                        "$effectiveHeaderHostLabel 暂未返回此对话的执行轨迹，可点击重新加载重试。",
+                                    )
                                 },
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                style = MaterialTheme.typography.bodySmall,
                                 color = colors.inkSecondary,
                             )
+                            FilledTonalButton(
+                                onClick = {
+                                    coordinator.chatStore.clearStepLoadError()
+                                    onRetryLoadSteps()
+                                },
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = colors.accentPeriwinkle.copy(alpha = 0.16f),
+                                    contentColor = colors.accentPeriwinkle,
+                                ),
+                                modifier = Modifier.testTag("btn-chat-reload-empty"),
+                            ) {
+                                Text(
+                                    text = tr("Reload", "重新加载"),
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                )
+                            }
                         }
                     }
                 }

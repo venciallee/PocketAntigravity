@@ -3205,7 +3205,8 @@ public class AntigravityKmpRpcClient(
                     cascadeId = cascadeId,
                     isRemoteCloud = true,
                     targetUuid = targetUuid,
-                    timeoutMs = 5_000L,
+                    knownStepCount = knownStepCount,
+                    timeoutMs = 8_000L,
                 )
                 if (!streamedSteps.isNullOrEmpty()) {
                     stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
@@ -3295,6 +3296,7 @@ public class AntigravityKmpRpcClient(
         // Path 2: Adaptive JSON (`GetCascadeTrajectorySteps` + `LoadTrajectory` + `GetCascadeTrajectory`)
         // for Cloud fallback or local sessions, with zero hardcoded step thresholds and per-host runtime ceiling learning.
         var adaptiveError: Throwable? = null
+        var didWakeViaLoadTrajectory = false
         val adaptiveSteps = try {
             fetchStepsViaAdaptiveJson(
                 cascadeId = cascadeId,
@@ -3303,6 +3305,7 @@ public class AntigravityKmpRpcClient(
                 targetUuid = targetUuid,
                 wakeKey = wakeKey,
                 initialError = lastError,
+                onLoadTrajectorySucceeded = { didWakeViaLoadTrajectory = true },
             )
         } catch (e: AntigravityRpcError.Unauthorized) {
             throw e
@@ -3317,16 +3320,22 @@ public class AntigravityKmpRpcClient(
             return adaptiveSteps
         }
 
-        // Path 3 (Local Antigravity 2.x Fallback): If local checkpoint RPCs failed (`not_found`)
-        // or returned empty on a session that may have live un-checkpointed turns or SQLite-backed
-        // state, fall back to `StreamAgentStateUpdates` before surfacing an error.
-        if (!isRemoteCloud && (adaptiveError != null || knownStepCount > 0)) {
+        // Path 3 (Antigravity 2.x Stream Fallback & Post-Wake Cloud Retry):
+        // - For local chats: if checkpoint RPCs failed (`not_found`) or returned empty on a session
+        //   with live un-checkpointed turns or SQLite-backed state, fall back to `StreamAgentStateUpdates`.
+        // - For dormant Cloud chats: if `LoadTrajectory` just succeeded in waking the conversation into
+        //   daemon memory during Path 2 while legacy unary RPCs still returned empty/404, retry
+        //   `StreamAgentStateUpdates` now that the trajectory is warm.
+        val shouldRetryAgentStateStream = (!isRemoteCloud && (adaptiveError != null || knownStepCount > 0)) ||
+            (isRemoteCloud && didWakeViaLoadTrajectory)
+        if (shouldRetryAgentStateStream) {
             try {
                 val streamedSteps = fetchStepsViaAgentStateStream(
                     cascadeId = cascadeId,
-                    isRemoteCloud = false,
+                    isRemoteCloud = isRemoteCloud,
                     targetUuid = targetUuid,
-                    timeoutMs = 3_500L,
+                    knownStepCount = knownStepCount,
+                    timeoutMs = if (isRemoteCloud) 5_000L else 4_000L,
                 )
                 if (!streamedSteps.isNullOrEmpty()) {
                     stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
@@ -3355,7 +3364,8 @@ public class AntigravityKmpRpcClient(
         cascadeId: String,
         isRemoteCloud: Boolean,
         targetUuid: String?,
-        timeoutMs: Long = 5_000L,
+        knownStepCount: Int = 0,
+        timeoutMs: Long = 8_000L,
     ): List<CascadeStep>? {
         val profile = stateMutex.withLock {
             getOrCreateProfileLocked(hostCapabilityKey(targetUuid))
@@ -3381,11 +3391,33 @@ public class AntigravityKmpRpcClient(
                     put("backend", "BACKEND_TYPE_REMOTE_AICODE")
                 }
             )
+        } else if (isRemoteCloud && "backendType" !in strippedFields) {
+            payloadVariants.add(
+                buildJsonObject {
+                    put("conversationId", cascadeId)
+                    put("subscriberId", "pocket-${randomUuidV4()}")
+                    put("backendType", "BACKEND_TYPE_REMOTE_AICODE")
+                }
+            )
         }
 
-        val settleWindowMs = minOf(350L, maxOf(100L, timeoutMs / 4))
+        val partialStepsSettleWindowMs = if (isRemoteCloud) {
+            minOf(1_200L, maxOf(250L, timeoutMs / 4))
+        } else {
+            minOf(450L, maxOf(150L, timeoutMs / 4))
+        }
+        val emptyZeroGraceWindowMs = if (isRemoteCloud) {
+            minOf(1_500L, maxOf(250L, timeoutMs / 4))
+        } else {
+            minOf(600L, maxOf(150L, timeoutMs / 4))
+        }
         var lastError: Throwable? = null
-        for (variant in payloadVariants) {
+        var variantIndex = 0
+        var appendedBackendTypeFallback = false
+        while (variantIndex < payloadVariants.size) {
+            val variant = payloadVariants[variantIndex]
+            val isLastVariant = variantIndex == payloadVariants.lastIndex
+            variantIndex += 1
             val stepsByIndex = linkedMapOf<Int, CascadeStep>()
             var reportedTotalLength: Int? = null
             var sawMainTrajectory = false
@@ -3422,31 +3454,50 @@ public class AntigravityKmpRpcClient(
                                     settleJob?.cancel()
                                     throw SnapshotCompleteSignal()
                                 }
-                                if (sawMainTrajectory && totalLen == 0) {
-                                    settleJob?.cancel()
-                                    throw SnapshotCompleteSignal()
-                                }
-                                if (stepsByIndex.isNotEmpty() || sawMainTrajectory) {
+                                if (stepsByIndex.isNotEmpty()) {
+                                    // Partial sparse snapshot received; wait briefly for remaining frames before settling.
                                     settleJob?.cancel()
                                     val targetCollector = collectorJob
                                     settleJob = launch {
-                                        delay(settleWindowMs)
+                                        delay(partialStepsSettleWindowMs)
                                         targetCollector?.cancel(SnapshotSettleCancel())
                                     }
+                                } else if (sawMainTrajectory && totalLen == 0) {
+                                    if (!isRemoteCloud && knownStepCount == 0) {
+                                        settleJob?.cancel()
+                                        throw SnapshotCompleteSignal()
+                                    }
+                                    // Cloud/historical trajectories often emit an initial `totalLength: 0` stub frame
+                                    // before remote steps hydrate; allow a bounded grace window for Frame 2.
+                                    if (settleJob == null || settleJob?.isActive != true) {
+                                        val targetCollector = collectorJob
+                                        settleJob = launch {
+                                            delay(emptyZeroGraceWindowMs)
+                                            targetCollector?.cancel(SnapshotSettleCancel())
+                                        }
+                                    }
                                 }
+                                // Never arm a short kill timer when `stepsByIndex` is still empty and `totalLen != 0`
+                                // (metadata-only Frame 1 on Cloud Relay frequently precedes steps by >350ms).
                             }
                         }
                         collectorJob.join()
                         settleJob?.cancel()
                     }
                 }
-                if (stepsByIndex.isNotEmpty() || (sawMainTrajectory && reportedTotalLength == 0)) {
+                if (stepsByIndex.isNotEmpty()) {
                     mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
                     return stepsByIndex.values.sortedBy { it.stepIndex }
                 }
+                if (sawMainTrajectory && reportedTotalLength == 0 && (!isRemoteCloud || isLastVariant)) {
+                    mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
+                    return emptyList()
+                }
             } catch (_: SnapshotCompleteSignal) {
                 mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
-                return stepsByIndex.values.sortedBy { it.stepIndex }
+                if (stepsByIndex.isNotEmpty() || !isRemoteCloud || isLastVariant) {
+                    return stepsByIndex.values.sortedBy { it.stepIndex }
+                }
             } catch (e: AntigravityRpcError.Unauthorized) {
                 throw e
             } catch (e: CancellationException) {
@@ -3456,17 +3507,33 @@ public class AntigravityKmpRpcClient(
                     mutateCapabilityProfile(targetUuid) { it.recordMethodUnsupported("StreamAgentStateUpdates") }
                     return null
                 }
+                var unknownField: String? = null
                 if (e is AntigravityRpcError.HttpError) {
-                    ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body)?.let { unknownField ->
+                    unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body)
+                    unknownField?.let { field ->
                         mutateCapabilityProfile(targetUuid) {
-                            it.recordStrippedField(unknownField, forMethod = "StreamAgentStateUpdates")
+                            it.recordStrippedField(field, forMethod = "StreamAgentStateUpdates")
                         }
                     }
+                }
+                if (isRemoteCloud &&
+                    unknownField.equals("backend", ignoreCase = true) &&
+                    !appendedBackendTypeFallback &&
+                    "backendType" !in strippedFields
+                ) {
+                    appendedBackendTypeFallback = true
+                    payloadVariants.add(
+                        buildJsonObject {
+                            put("conversationId", cascadeId)
+                            put("subscriberId", "pocket-${randomUuidV4()}")
+                            put("backendType", "BACKEND_TYPE_REMOTE_AICODE")
+                        }
+                    )
                 }
                 lastError = e
                 val shouldTryNext = e is AntigravityRpcError.HttpError && (
                     e.statusCode == 400 ||
-                        ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body) != null ||
+                        unknownField != null ||
                         ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(e.statusCode, e.body)
                     )
                 if (!shouldTryNext) {
@@ -3487,6 +3554,7 @@ public class AntigravityKmpRpcClient(
         targetUuid: String?,
         wakeKey: String,
         initialError: Throwable? = null,
+        onLoadTrajectorySucceeded: () -> Unit = {},
     ): List<CascadeStep> {
         var lastError: Throwable? = initialError
         val learnedCeiling = learnedJsonStepCeiling(targetUuid)
@@ -3562,14 +3630,17 @@ public class AntigravityKmpRpcClient(
 
         var firstResp: JsonObject? = null
         try {
-            firstResp = callUnaryJson(
+            val resp = callUnaryJson(
                 method = "GetCascadeTrajectorySteps",
                 body = reqBody,
                 instanceUuidOverride = targetUuid,
                 allowCrossHostFailover = isRemoteCloud,
                 allowStripUnknownFields = !isRemoteCloud,
             )
-            lastError = null
+            firstResp = resp
+            if ((resp["steps"] as? JsonArray)?.isNotEmpty() == true) {
+                lastError = null
+            }
         } catch (e: AntigravityRpcError.Unauthorized) {
             throw e
         } catch (e: CancellationException) {
@@ -3625,6 +3696,7 @@ public class AntigravityKmpRpcClient(
         } else if (firstResp == null || knownStepCount > 0 || !alreadyWoken) {
             try {
                 loadTrajectory(cascadeId, isRemoteCloud, targetUuid)
+                onLoadTrajectorySucceeded()
             } catch (e: AntigravityRpcError.Unauthorized) {
                 throw e
             } catch (e: CancellationException) {
@@ -3647,7 +3719,6 @@ public class AntigravityKmpRpcClient(
                         allowCrossHostFailover = isRemoteCloud,
                         allowStripUnknownFields = !isRemoteCloud,
                     )
-                    lastError = null
                     val retryCount = (retryResp["steps"] as? JsonArray)?.size ?: knownStepCount
                     val retryCeiling = extractJsonTruncationCeiling(retryResp, fallbackStepCount = retryCount)
                     if (retryCeiling != null) {
@@ -3656,12 +3727,24 @@ public class AntigravityKmpRpcClient(
                     val candidateSteps = (retryResp["steps"] as? JsonArray)?.toList().orEmpty()
                     if (candidateSteps.isNotEmpty()) {
                         rawSteps = candidateSteps
+                        lastError = null
                         activeCloudField = variant
                         stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
                         variant?.let { recordPreferredCloudBackendField("GetCascadeTrajectorySteps", targetUuid, it) }
                         break
-                    } else if (!isRemoteCloud) {
-                        break
+                    } else {
+                        val onlyUnknownFieldError = initialError == null &&
+                            knownStepCount == 0 &&
+                            lastError is AntigravityRpcError.HttpError &&
+                            ProtocolCompatibilityEngine.extractUnknownProtoFieldName(
+                                (lastError as AntigravityRpcError.HttpError).body
+                            ) != null
+                        if (onlyUnknownFieldError) {
+                            lastError = null
+                        }
+                        if (!isRemoteCloud) {
+                            break
+                        }
                     }
                 } catch (e: AntigravityRpcError.Unauthorized) {
                     throw e
