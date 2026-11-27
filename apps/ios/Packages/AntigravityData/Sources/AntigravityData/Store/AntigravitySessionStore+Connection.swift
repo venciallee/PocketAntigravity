@@ -1722,7 +1722,7 @@ extension AntigravitySessionStore {
             lastStreamReopenAttemptAt = .distantPast
             settledEmptyTitleCascadeIds.removeAll()
             preloadAttemptedAtByCascadeId.removeAll()
-            ensureSummaryEnvelopeStreamRunning()
+            ensureActiveSummaryStreamRunning()
             if case .cascadeChat(let cid) = activeRoute, !cid.isEmpty, stepPollingTask == nil {
                 syncStepsForCascade(cid, pollUntilIdle: true)
             }

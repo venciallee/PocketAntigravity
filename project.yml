@@ -7,9 +7,12 @@ options:
   xcodeVersion: "16.1"
   generateEmptyDirectories: true
 
+configFiles:
+  Debug: apps/ios/Config/LocalSigning.xcconfig
+  Release: apps/ios/Config/LocalSigning.xcconfig
+
 settings:
   base:
-    ANTIGRAVITY_BUNDLE_PREFIX: com.thousandtimes.agpocket
     MARKETING_VERSION: "2.0.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"

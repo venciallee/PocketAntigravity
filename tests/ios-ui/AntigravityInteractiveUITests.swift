@@ -834,6 +834,10 @@ final class AntigravityInteractiveUITests: XCTestCase {
             heroGreeting.waitForExistence(timeout: 5),
             "Tapping top-left Back button on Conversation page must return to Home"
         )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["composer-queued-messages-strip"].exists,
+            "Home composer must never display queued follow-up messages strip from conversation"
+        )
 
         sidebarButton.tap()
         XCTAssertTrue(reviewRow.waitForExistence(timeout: 5))
@@ -843,6 +847,10 @@ final class AntigravityInteractiveUITests: XCTestCase {
         XCTAssertTrue(
             heroGreeting.waitForExistence(timeout: 5),
             "Swiping left-to-right from the left edge on Conversation page must pop back to Home"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["composer-queued-messages-strip"].exists,
+            "Home composer must never display queued follow-up messages strip after swipe back"
         )
 
         sidebarButton.tap()

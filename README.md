@@ -142,21 +142,24 @@ Contributions of all kinds are welcome — from Apple Watch & Android hardware f
 
 ### Building & Running iOS & Apple Watch in Xcode (macOS)
 
-`PocketAntigravity.xcodeproj` and `AntigravityShared.xcframework` are generated locally and excluded from Git. After cloning or running `git pull`, always sync the Xcode project before building:
+`PocketAntigravity.xcodeproj` and `AntigravityShared.xcframework` are generated locally and excluded from Git. Machine-local Xcode signing (`DEVELOPMENT_TEAM` and optional `ANTIGRAVITY_BUNDLE_PREFIX`) is stored in gitignored `local.signing.xcconfig` (included via [`apps/ios/Config/LocalSigning.xcconfig`](apps/ios/Config/LocalSigning.xcconfig)), so your Team selection persists automatically across `git pull`, `xcodegen`, and `--clean`.
 
 ```bash
 # 1. Build/refresh KMP XCFramework + regenerate PocketAntigravity.xcodeproj and open Xcode
-#    (Includes both `AGPocket` iOS and `AGPocketWatch` watchOS 11+ schemes)
+#    (Includes both `AGPocket` iOS and `AGPocketWatch` watchOS 11+ schemes; auto-preserves/detects local signing)
 bash scripts/sync-xcode.sh --open
 
-# (Optional) Install git hooks so future `git pull` / branch switches auto-sync Xcode
+# (Optional) Persist your Apple Team ID (and optional custom Bundle Prefix) explicitly once
+bash scripts/sync-xcode.sh --team YOUR_10_CHAR_TEAM_ID
+
+# (Optional) Install git hooks so future `git pull` / branch switches auto-sync Xcode without losing signing
 bash scripts/sync-xcode.sh --install-hooks
 
 # (Optional) Wipe stale pre-monorepo .xcodeproj & DerivedData, or build pure-Swift without JDK
 bash scripts/sync-xcode.sh --clean --open
 bash scripts/sync-xcode.sh --swift-only --open
 
-# Build, sign & install directly onto a connected physical iPhone
+# Build, sign & install directly onto a connected physical iPhone (also saves working signing to local.signing.xcconfig)
 bash scripts/install-on-iphone.sh
 ```
 

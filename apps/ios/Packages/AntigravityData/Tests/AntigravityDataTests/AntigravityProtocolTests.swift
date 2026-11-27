@@ -4563,6 +4563,233 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertFalse(store.isLocalHostOnline(instanceId: removedUuid, hostname: "Old Mac mini"))
     }
 
+    func testEmptyBodyProxyCommandTupleDecodesWithoutFalse502AndListInstancesOnlineAliases() throws {
+        // 1. Empty-body JSPB tuple `[null, [["content-type","application/json"]]]` must decode cleanly (NOT throw HTTP 502)
+        let emptyWithHeaders = ")]}'\n" + #"[null,[["content-type","application/json"],["x-test","ok"]]]"#
+        let decodedWithHeaders = try CloudRelayJSPBCodec.decodeProxyCommandResponse(Data(emptyWithHeaders.utf8))
+        XCTAssertTrue(decodedWithHeaders.payload.isEmpty)
+        XCTAssertEqual(decodedWithHeaders.headers["content-type"], "application/json")
+        XCTAssertEqual(decodedWithHeaders.headers["x-test"], "ok")
+
+        let emptyNoHeaders = ")]}'\n[null,[]]"
+        let decodedEmpty = try CloudRelayJSPBCodec.decodeProxyCommandResponse(Data(emptyNoHeaders.utf8))
+        XCTAssertTrue(decodedEmpty.payload.isEmpty)
+        XCTAssertTrue(decodedEmpty.headers.isEmpty)
+
+        // 2. Real Boq error trailer `[null, [9, "instance not registered"]]` must still throw HTTP 502
+        let boqError = ")]}'\n" + #"[null,[9,"instance not registered"]]"#
+        XCTAssertThrowsError(try CloudRelayJSPBCodec.decodeProxyCommandResponse(Data(boqError.utf8))) { error in
+            guard case AntigravityRPCError.httpError(let code, _) = error else {
+                XCTFail("Expected HTTP 502 error, got \(error)")
+                return
+            }
+            XCTAssertEqual(code, 502)
+        }
+
+        // 3. Forward-compatible ListInstances online status aliases & string-form metadata
+        let aliasList = ")]}'\n" + #"[[["uuid-online","Venciallee","ONLINE",null,"2.34.0"],["uuid-active",["dark-ray","2.34.0",true],"ACTIVE",null],["uuid-offline",["old-mac","2.34.0",true],"OFFLINE",null]],5]"#
+        let instances = try CloudRelayJSPBCodec.decodeListInstancesResponse(Data(aliasList.utf8))
+        XCTAssertEqual(instances.count, 3)
+        XCTAssertEqual(instances[0].name, "Venciallee")
+        XCTAssertEqual(instances[0].version, "2.34.0")
+        XCTAssertEqual(instances[0].status, .connected)
+        XCTAssertEqual(instances[1].status, .connected)
+        XCTAssertEqual(instances[2].status, .disconnected)
+    }
+
+    func testRelayProbeToleratesTransient504EmptyBodyDesktop501AndPropagates401() async throws {
+        let miniUuid = "1111-mac-mini-v2"
+        let vencialleeUuid = "2222-venciallee-v2"
+        let darkRayUuid = "3333-dark-ray-v2"
+        let validKey = "AI" + "zaSyTRANSIENTPROBE0000000000000000000"
+        let darkRayMode = AtomicTestString("504")
+        let darkRayAttempts = AtomicTestInt(0)
+
+        MockRelayURLProtocol.state.setResponder { urlString, _, body in
+            if urlString.contains("/ListInstances") {
+                let payload = ")]}'\n[[[\"\(miniUuid)\",[\"mac-mini\",\"2.34.0\",1],1,[1740000000,0]],[\"\(vencialleeUuid)\",[\"Venciallee\",\"2.34.0\",1],1,[1740000000,0]],[\"\(darkRayUuid)\",[\"dark-ray\",\"2.34.0\",1],1,[1740000000,0]]],5]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(payload.utf8))
+            }
+            if urlString.contains("/ProxyCommand") {
+                let bodyText = String(data: body, encoding: .utf8) ?? ""
+                if bodyText.contains(vencialleeUuid) {
+                    // Empty-body JSPB header tuple on first probe (valid Desktop empty response)
+                    return (200, ["Content-Type": "application/json+protobuf"], Data(")]}'\n[null,[[\"content-type\",\"application/json\"]]]".utf8))
+                }
+                if bodyText.contains(darkRayUuid) {
+                    let count = darkRayAttempts.increment()
+                    let mode = darkRayMode.get()
+                    if mode == "401" {
+                        return (401, ["Content-Type": "application/json+protobuf"], Data("UNAUTHENTICATED".utf8))
+                    }
+                    if mode == "501" {
+                        return (501, ["Content-Type": "application/json+protobuf"], Data("unimplemented".utf8))
+                    }
+                    if mode == "flaky-then-ok" && count % 2 == 0 {
+                        let b64 = Data("{}".utf8).base64EncodedString()
+                        return (200, ["Content-Type": "application/json+protobuf"], Data(")]}'\n[\"\(b64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                    }
+                    return (504, ["Content-Type": "application/json+protobuf"], Data("gateway timeout".utf8))
+                }
+                let b64 = Data("{}".utf8).base64EncodedString()
+                return (200, ["Content-Type": "application/json+protobuf"], Data(")]}'\n[\"\(b64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+            }
+            return (404, [:], Data())
+        }
+
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: sessionConfig)
+        defer {
+            MockRelayURLProtocol.state.setResponder(nil)
+            mockSession.invalidateAndCancel()
+        }
+
+        let miniHost = RemoteHostInstance(
+            instanceId: miniUuid,
+            hostname: "mac-mini",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(miniUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: miniHost,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            authUser: "0",
+            resolvedInstanceUuid: miniUuid,
+            relayApiKey: validKey,
+            urlSession: mockSession
+        )
+
+        // 1. Lightweight heartbeat strike 1: venciallee (empty body) is CONNECTED, dark-ray (1 transient 504) stays CONNECTED
+        let strike1 = try await client.probeHostReachability(allowCrossHostFallback: false, verifyEndToEnd: false)
+        XCTAssertEqual(strike1.availableRelayInstances.first(where: { $0.uuid == miniUuid })?.status, .connected)
+        XCTAssertEqual(strike1.availableRelayInstances.first(where: { $0.uuid == vencialleeUuid })?.status, .connected)
+        XCTAssertEqual(strike1.availableRelayInstances.first(where: { $0.uuid == darkRayUuid })?.status, .connected)
+
+        // 2. Lightweight heartbeat strike 2: 2nd consecutive 504 downgrades silent dark-ray to DISCONNECTED
+        let strike2 = try await client.probeHostReachability(allowCrossHostFallback: false, verifyEndToEnd: false)
+        XCTAssertEqual(strike2.availableRelayInstances.first(where: { $0.uuid == darkRayUuid })?.status, .disconnected)
+
+        // 3. Desktop HTTP 501 proves tunnel liveness and brings dark-ray back to CONNECTED
+        darkRayMode.set("501")
+        let recovered = try await client.probeHostReachability(allowCrossHostFallback: false, verifyEndToEnd: false)
+        XCTAssertEqual(recovered.availableRelayInstances.first(where: { $0.uuid == darkRayUuid })?.status, .connected)
+
+        // 4. Explicit verifyEndToEnd = true retries once on transient 504 and keeps dark-ray CONNECTED when retry succeeds
+        darkRayMode.set("flaky-then-ok")
+        // Ensure next attempt is odd (fails) followed by even (succeeds)
+        if darkRayAttempts.get() % 2 == 1 {
+            _ = darkRayAttempts.increment()
+        }
+        let verifiedAfterRetry = try await client.probeHostReachability(allowCrossHostFallback: false, verifyEndToEnd: true)
+        XCTAssertEqual(verifiedAfterRetry.availableRelayInstances.first(where: { $0.uuid == darkRayUuid })?.status, .connected)
+
+        // 5. HTTP 401 Unauthorized must propagate instead of silently marking dark-ray disconnected
+        darkRayMode.set("401")
+        do {
+            _ = try await client.probeHostReachability(allowCrossHostFallback: false, verifyEndToEnd: true)
+            XCTFail("Expected AntigravityRPCError.unauthorized to propagate")
+        } catch AntigravityRPCError.unauthorized {
+            // Expected
+        }
+    }
+
+    @MainActor
+    func testFederatedSyncTimeoutPreservesOnlinePeersAndStoreHandlesDuplicateNamesAndTransientRefresh() async throws {
+        let miniUuid = "1111-fed-mini-v2"
+        let slowPeerUuid = "2222-fed-slow-v2"
+        let unregPeerUuid = "3333-fed-unreg-v2"
+        let validKey = "AI" + "zaSyFEDTIMEOUT00000000000000000000000"
+        let failListWith504 = AtomicTestInt(0)
+
+        MockRelayURLProtocol.state.setResponder { urlString, _, body in
+            if urlString.contains("/ListInstances") {
+                if failListWith504.get() == 1 {
+                    return (504, ["Content-Type": "application/json+protobuf"], Data("list timeout".utf8))
+                }
+                let payload = ")]}'\n[[[\"\(miniUuid)\",[\"mac-mini\",\"2.34.0\",1],1,[1740000000,0]],[\"\(slowPeerUuid)\",[\"Venciallee\",\"2.34.0\",1],1,[1740000000,0]],[\"\(unregPeerUuid)\",[\"dead-mac\",\"2.34.0\",1],1,[1740000000,0]]],5]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(payload.utf8))
+            }
+            if urlString.contains("/ProxyCommand") {
+                let bodyText = String(data: body, encoding: .utf8) ?? ""
+                if bodyText.contains(slowPeerUuid) {
+                    return (504, ["Content-Type": "application/json+protobuf"], Data("upstream timeout".utf8))
+                }
+                if bodyText.contains(unregPeerUuid) {
+                    let errBody = #"[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED"]]]"#
+                    return (400, ["Content-Type": "application/json+protobuf"], Data(errBody.utf8))
+                }
+                let b64 = Data(#"{"workspaces":[],"trajectorySummaries":{}}"#.utf8).base64EncodedString()
+                return (200, ["Content-Type": "application/json+protobuf"], Data(")]}'\n[\"\(b64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+            }
+            return (404, [:], Data())
+        }
+
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: sessionConfig)
+        defer {
+            MockRelayURLProtocol.state.setResponder(nil)
+            mockSession.invalidateAndCancel()
+        }
+
+        let miniHost = RemoteHostInstance(
+            instanceId: miniUuid,
+            hostname: "mac-mini",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(miniUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: miniHost,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            authUser: "0",
+            resolvedInstanceUuid: miniUuid,
+            relayApiKey: validKey,
+            urlSession: mockSession
+        )
+
+        // 1. Federated sync: slow peer hitting 504 stays CONNECTED while INSTANCE_NOT_REGISTERED peer becomes DISCONNECTED
+        let federated = try await client.fetchFederatedWorkspacesAndSummaries(
+            timeoutInterval: 5.0,
+            includeLocal: true,
+            includeCloud: false,
+            includeJetboxSnapshot: false
+        )
+        XCTAssertTrue(federated.succeededInstanceUuids.contains(miniUuid))
+        XCTAssertEqual(federated.availableRelayInstances.first(where: { $0.uuid == slowPeerUuid })?.status, .connected)
+        XCTAssertEqual(federated.availableRelayInstances.first(where: { $0.uuid == unregPeerUuid })?.status, .disconnected)
+
+        // 2. Store isLocalHostOnline prefers reachable instance when duplicate hostname entries exist
+        let store = AntigravitySessionStore.makeLiveStore()
+        store.isVerificationMode = false
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.isDeviceNetworkReachable = true
+        store.activeHost = miniHost
+        store.rpcClient = client
+        store.hosts = [
+            miniHost,
+            RemoteHostInstance(instanceId: "old-venciallee", hostname: "Venciallee", channel: .cloudRelay, endpointURL: miniHost.endpointURL, isOnline: false),
+            RemoteHostInstance(instanceId: slowPeerUuid, hostname: "Venciallee", channel: .cloudRelay, endpointURL: miniHost.endpointURL, isOnline: true)
+        ]
+        store.availableRelayInstances = [
+            RelayInstanceInfo(uuid: miniUuid, name: "mac-mini", version: "2.34.0", status: .connected),
+            RelayInstanceInfo(uuid: "old-venciallee", name: "Venciallee", version: "2.34.0", status: .disconnected),
+            RelayInstanceInfo(uuid: slowPeerUuid, name: "Venciallee", version: "2.34.0", status: .connected)
+        ]
+        XCTAssertTrue(store.isLocalHostOnline(instanceId: nil, hostname: "Venciallee"))
+
+        // 3. Single transient 504 during refreshAvailableRelayHosts must NOT wipe online hosts offline on strike 1
+        _ = failListWith504.increment()
+        await store.refreshAvailableRelayHosts(verifyEndToEnd: true)
+        XCTAssertTrue(store.isLiveBackendConnected)
+        XCTAssertTrue(store.activeHost.isOnline)
+        XCTAssertTrue(store.isLocalHostOnline(instanceId: miniUuid, hostname: "mac-mini"))
+        XCTAssertTrue(store.isLocalHostOnline(instanceId: slowPeerUuid, hostname: "Venciallee"))
+    }
+
     @MainActor
     func testTC25_ActiveChatStepSyncForegroundAndReentryRecovery() async {
         MockRelayURLProtocol.state.setResponder { urlString, _, _ in

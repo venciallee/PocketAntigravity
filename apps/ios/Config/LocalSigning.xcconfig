@@ -1,0 +1,8 @@
+// Default bundle identifier prefix (overridable via gitignored local.signing.xcconfig at repo root).
+ANTIGRAVITY_BUNDLE_PREFIX = com.thousandtimes.agpocket
+
+// Optional machine-local Xcode signing overrides (gitignored; persists across `git pull`, `xcodegen`, and `--clean`).
+// Managed automatically by `scripts/sync-xcode.sh` & `scripts/install-on-iphone.sh`, or edit `local.signing.xcconfig`:
+//   DEVELOPMENT_TEAM = YOUR_10_CHAR_TEAM_ID
+//   ANTIGRAVITY_BUNDLE_PREFIX = com.yourname.agpocket
+#include? "../../../local.signing.xcconfig"
