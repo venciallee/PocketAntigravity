@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import AntigravityData
 #if canImport(os)
 import os
 #endif
@@ -9,22 +10,31 @@ import Speech
 #if canImport(AVFoundation)
 import AVFoundation
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Native iOS live speech-to-text manager powered by `SFSpeechRecognizer` and `AVAudioEngine`.
 /// Bridges real microphone dictation into `ChatComposerView`, `VoiceModeSheetView`, and `StructuredQuestionCardView`.
 ///
-/// All Objective-C callback APIs (`SFSpeechRecognizer.requestAuthorization`, `recognitionTask`,
-/// `AVAudioInputNode.installTap`, and audio session notifications) are bridged through explicit
-/// `nonisolated static` helpers so Swift 6 strict concurrency never synthesizes a `@MainActor`
-/// runtime assertion on Speech/CoreAudio background threads.
+/// - Resolves the speech recognizer locale via `VoiceLocaleResolver` (explicit user override ->
+///   in-app `AppLanguage` -> OS `Locale.preferredLanguages` -> active keyboard) so Chinese speech
+///   never mis-defaults to `Locale.current` (`en_CN`/`en_US`) when the bundle has no `.lproj`.
+/// - Bridges every Objective-C callback API (`SFSpeechRecognizer.requestAuthorization`,
+///   `recognitionTask`, `AVAudioInputNode.installTap`, and audio session notifications) through
+///   `nonisolated static` helpers so Swift 6 never asserts `@MainActor` on Speech/CoreAudio threads.
 @MainActor
 @Observable
 public final class VoiceInputManager {
+    private static let preferredLanguageDefaultsKey = "antigravity.voice.dictationLanguage"
+
     public var isRecording: Bool = false
     public var isStarting: Bool = false
     public var liveTranscript: String = ""
     public var errorMessage: String? = nil
     public var authorizationGranted: Bool = false
+    public var preferredLanguage: VoiceDictationLanguage
+    public var activeLocaleIdentifier: String? = nil
 
     #if canImport(Speech) && canImport(AVFoundation) && os(iOS)
     private var audioEngine: AVAudioEngine?
@@ -38,7 +48,10 @@ public final class VoiceInputManager {
     private var startTask: Task<Void, Never>?
     private var recordingSessionToken: UUID = UUID()
 
-    public init() {}
+    public init() {
+        let savedRaw = UserDefaults.standard.string(forKey: Self.preferredLanguageDefaultsKey)
+        self.preferredLanguage = VoiceDictationLanguage.fromTag(savedRaw)
+    }
 
     /// Appends live dictation text onto any existing user draft cleanly without wiping typed content.
     public nonisolated static func mergeTranscript(prefix: String, transcript: String) -> String {
@@ -53,11 +66,45 @@ public final class VoiceInputManager {
         return prefix + " " + trimmedTranscript
     }
 
+    public func activeLanguageBadgeLabel(for appLanguage: AppLanguage) -> String {
+        if let activeLocaleIdentifier {
+            return VoiceLocaleResolver.shortDisplayLabel(forLocaleTag: activeLocaleIdentifier)
+        }
+        if preferredLanguage != .auto {
+            return preferredLanguage.shortBadgeLabel(for: appLanguage)
+        }
+        let candidates = VoiceLocaleResolver.buildCandidateLocaleTags(
+            preference: preferredLanguage,
+            appLanguage: appLanguage,
+            systemPreferredLanguages: Locale.preferredLanguages,
+            activeKeyboardLanguage: activeKeyboardPrimaryLanguage(),
+            fallbackLocaleTag: Locale.current.identifier
+        )
+        return VoiceLocaleResolver.shortDisplayLabel(forLocaleTag: candidates.first)
+    }
+
+    public func selectLanguage(
+        _ language: VoiceDictationLanguage,
+        appLanguage: AppLanguage = .english,
+        restartOnTranscriptUpdate: (@MainActor (String) -> Void)? = nil
+    ) {
+        preferredLanguage = language
+        UserDefaults.standard.set(language.rawValue, forKey: Self.preferredLanguageDefaultsKey)
+        activeLocaleIdentifier = language.bcp47Tag
+        if (isRecording || isStarting), let restartOnTranscriptUpdate {
+            stopRecording()
+            toggleRecording(appLanguage: appLanguage, onTranscriptUpdate: restartOnTranscriptUpdate)
+        }
+    }
+
     public func clearError() {
         errorMessage = nil
     }
 
-    public func toggleRecording(onTranscriptUpdate: @escaping @MainActor (String) -> Void) {
+    public func toggleRecording(
+        appLanguage: AppLanguage = .english,
+        onTranscriptUpdate: @escaping @MainActor (String) -> Void
+    ) {
         if isRecording || isStarting {
             stopRecording()
         } else {
@@ -70,13 +117,17 @@ public final class VoiceInputManager {
             startTask = Task { @MainActor [weak self] in
                 await self?.startRecordingInternal(
                     sessionToken: sessionToken,
+                    appLanguage: appLanguage,
                     onTranscriptUpdate: onTranscriptUpdate
                 )
             }
         }
     }
 
-    public func startRecording(onTranscriptUpdate: @escaping @MainActor (String) -> Void) async {
+    public func startRecording(
+        appLanguage: AppLanguage = .english,
+        onTranscriptUpdate: @escaping @MainActor (String) -> Void
+    ) async {
         let sessionToken = UUID()
         recordingSessionToken = sessionToken
         isStarting = true
@@ -86,12 +137,14 @@ public final class VoiceInputManager {
         startTask = nil
         await startRecordingInternal(
             sessionToken: sessionToken,
+            appLanguage: appLanguage,
             onTranscriptUpdate: onTranscriptUpdate
         )
     }
 
     private func startRecordingInternal(
         sessionToken: UUID,
+        appLanguage: AppLanguage,
         onTranscriptUpdate: @escaping @MainActor (String) -> Void
     ) async {
         defer {
@@ -103,7 +156,10 @@ public final class VoiceInputManager {
         #if canImport(Speech) && canImport(AVFoundation) && os(iOS)
         guard Self.hasRequiredPrivacyDescriptions() else {
             authorizationGranted = false
-            errorMessage = "Voice dictation requires Microphone & Speech Recognition permissions in app configuration."
+            errorMessage = appLanguage.t(
+                "Voice dictation requires Microphone & Speech Recognition permissions in app configuration.",
+                "语音输入需要在应用配置中声明麦克风与语音识别权限。"
+            )
             return
         }
 
@@ -113,7 +169,10 @@ public final class VoiceInputManager {
         }
         guard speechStatus == .authorized else {
             authorizationGranted = false
-            errorMessage = "Enable Speech Recognition in Settings to dictate prompts."
+            errorMessage = appLanguage.t(
+                "Enable Speech Recognition in Settings to dictate prompts.",
+                "请在系统设置中开启语音识别权限以使用语音输入。"
+            )
             return
         }
 
@@ -123,17 +182,29 @@ public final class VoiceInputManager {
         }
         guard micAllowed else {
             authorizationGranted = false
-            errorMessage = "Enable Microphone access in Settings to dictate prompts."
+            errorMessage = appLanguage.t(
+                "Enable Microphone access in Settings to dictate prompts.",
+                "请在系统设置中开启麦克风权限以使用语音输入。"
+            )
             return
         }
         authorizationGranted = true
 
         tearDownActiveAudio()
 
-        guard let recognizer = Self.resolveSpeechRecognizer(), recognizer.isAvailable else {
-            errorMessage = "Speech recognizer is temporarily unavailable on this device."
+        let keyboardLang = activeKeyboardPrimaryLanguage()
+        guard let recognizer = Self.resolveSpeechRecognizer(
+            preference: preferredLanguage,
+            appLanguage: appLanguage,
+            activeKeyboardLanguage: keyboardLang
+        ), recognizer.isAvailable else {
+            errorMessage = appLanguage.t(
+                "Speech recognizer is temporarily unavailable on this device.",
+                "当前设备的语音识别服务暂不可用。"
+            )
             return
         }
+        activeLocaleIdentifier = recognizer.locale.identifier
 
         do {
             let session = AVAudioSession.sharedInstance()
@@ -144,7 +215,10 @@ public final class VoiceInputManager {
             let hasInputPort = !session.currentRoute.inputs.isEmpty
                 || !(session.availableInputs?.isEmpty ?? true)
             guard session.isInputAvailable, hasInputPort else {
-                errorMessage = "No microphone input is available on this device."
+                errorMessage = appLanguage.t(
+                    "No microphone input is available on this device.",
+                    "当前设备没有可用的麦克风输入。"
+                )
                 tearDownActiveAudio()
                 return
             }
@@ -159,7 +233,10 @@ public final class VoiceInputManager {
                   outputFormat.channelCount > 0 else {
                 engine.stop()
                 engine.reset()
-                errorMessage = "Microphone audio input is temporarily unavailable. Please try again."
+                errorMessage = appLanguage.t(
+                    "Microphone audio input is temporarily unavailable. Please try again.",
+                    "麦克风音频输入暂不可用，请重试。"
+                )
                 tearDownActiveAudio()
                 return
             }
@@ -167,6 +244,7 @@ public final class VoiceInputManager {
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
             request.taskHint = .dictation
+            request.addsPunctuation = true
             let requestBox = AudioRequestBox(request)
 
             Self.installRealtimeAudioTap(
@@ -212,18 +290,27 @@ public final class VoiceInputManager {
                            !isFinal,
                            !hadTranscript,
                            !Self.isBenignCancellationError(code: errorCode) {
-                            self.errorMessage = "Voice recognition stopped: \(errDesc)"
+                            self.errorMessage = appLanguage.t(
+                                "Voice recognition stopped: \(errDesc)",
+                                "语音识别已停止：\(errDesc)"
+                            )
                         }
                     }
                 }
             }
         } catch {
-            errorMessage = "Unable to start microphone capture: \(error.localizedDescription)"
+            errorMessage = appLanguage.t(
+                "Unable to start microphone capture: \(error.localizedDescription)",
+                "无法启动麦克风采集：\(error.localizedDescription)"
+            )
             tearDownActiveAudio()
             isRecording = false
         }
         #else
-        errorMessage = "Speech dictation requires an iOS device with microphone access."
+        errorMessage = appLanguage.t(
+            "Speech dictation requires an iOS device with microphone access.",
+            "语音输入需要在支持麦克风的 iOS 设备上使用。"
+        )
         #endif
     }
 
@@ -262,6 +349,38 @@ public final class VoiceInputManager {
         }
         #endif
     }
+
+    private func activeKeyboardPrimaryLanguage() -> String? {
+        #if canImport(UIKit) && os(iOS)
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for scene in scenes {
+            for window in scene.windows where window.isKeyWindow {
+                if let responder = Self.findFirstResponder(in: window),
+                   let primary = responder.textInputMode?.primaryLanguage,
+                   !primary.isEmpty,
+                   primary.lowercased() != "dictation",
+                   primary.lowercased() != "emoji" {
+                    return primary
+                }
+            }
+        }
+        #endif
+        return nil
+    }
+
+    #if canImport(UIKit) && os(iOS)
+    private static func findFirstResponder(in view: UIView) -> UIView? {
+        if view.isFirstResponder {
+            return view
+        }
+        for subview in view.subviews {
+            if let found = findFirstResponder(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+    #endif
 
     #if canImport(Speech) && canImport(AVFoundation) && os(iOS)
     private final class AudioRequestBox: @unchecked Sendable {
@@ -378,20 +497,41 @@ public final class VoiceInputManager {
         }
     }
 
-    private nonisolated static func resolveSpeechRecognizer() -> SFSpeechRecognizer? {
-        if let current = SFSpeechRecognizer(locale: Locale.current), current.isAvailable {
-            return current
+    private nonisolated static func resolveSpeechRecognizer(
+        preference: VoiceDictationLanguage,
+        appLanguage: AppLanguage,
+        activeKeyboardLanguage: String?
+    ) -> SFSpeechRecognizer? {
+        let candidates = VoiceLocaleResolver.buildCandidateLocaleTags(
+            preference: preference,
+            appLanguage: appLanguage,
+            systemPreferredLanguages: Locale.preferredLanguages,
+            activeKeyboardLanguage: activeKeyboardLanguage,
+            fallbackLocaleTag: Locale.current.identifier
+        )
+        let supportedTags = Set(SFSpeechRecognizer.supportedLocales().map(\.identifier))
+
+        if let bestSupported = VoiceLocaleResolver.resolveBestLocaleTag(
+            candidates: candidates,
+            supportedLocaleTags: supportedTags
+        ), let recognizer = SFSpeechRecognizer(locale: Locale(identifier: bestSupported)), recognizer.isAvailable {
+            return recognizer
         }
-        for identifier in Locale.preferredLanguages {
-            if let candidate = SFSpeechRecognizer(locale: Locale(identifier: identifier)), candidate.isAvailable {
-                return candidate
+
+        for candidate in candidates {
+            if let matchedTag = VoiceLocaleResolver.resolveBestLocaleTag(
+                candidates: [candidate],
+                supportedLocaleTags: supportedTags
+            ), let recognizer = SFSpeechRecognizer(locale: Locale(identifier: matchedTag)), recognizer.isAvailable {
+                return recognizer
+            }
+            if let direct = SFSpeechRecognizer(locale: Locale(identifier: candidate)), direct.isAvailable {
+                return direct
             }
         }
+
         if let defaultRecognizer = SFSpeechRecognizer(), defaultRecognizer.isAvailable {
             return defaultRecognizer
-        }
-        if let enUS = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), enUS.isAvailable {
-            return enUS
         }
         return nil
     }

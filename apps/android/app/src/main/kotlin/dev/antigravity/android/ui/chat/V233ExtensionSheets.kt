@@ -76,6 +76,7 @@ import dev.antigravity.android.core.ui.components.StatusDot
 import dev.antigravity.android.core.ui.components.statusColorFor
 import dev.antigravity.android.core.ui.theme.AntigravityDesignTokens
 import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
+import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.CortexStepStatus
@@ -899,6 +900,7 @@ fun VoiceModeSheet(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val appLanguage = LocalAppLanguage.current
     val orchState by coordinator.orchestrationStore.state.collectAsState()
     val voiceState = orchState.voiceState
     val voiceController = rememberVoiceDictationController()
@@ -910,6 +912,7 @@ fun VoiceModeSheet(
     }
 
     var turnDraft by remember { mutableStateOf("") }
+    var voiceLanguageMenuExpanded by remember { mutableStateOf(false) }
     val voices = listOf("Kore", "Aoede", "Puck", "Charon", "Fenrir")
 
     Surface(
@@ -980,8 +983,8 @@ fun VoiceModeSheet(
                     }
                     Text(
                         text = when {
-                            voiceController.isRecording -> "Listening..."
-                            voiceController.isStarting -> "Starting microphone..."
+                            voiceController.isRecording -> tr("Listening...", "正在聆听...")
+                            voiceController.isStarting -> tr("Starting microphone...", "正在启动麦克风...")
                             else -> voiceState.statusLabel
                         },
                         style = MaterialTheme.typography.titleSmall,
@@ -990,7 +993,30 @@ fun VoiceModeSheet(
                     Row(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        Box {
+                            AntigravityChip(
+                                label = voiceController.activeLanguageBadgeLabel(appLanguage),
+                                selected = true,
+                                onClick = { voiceLanguageMenuExpanded = true },
+                                modifier = Modifier.testTag("menu-voice-language"),
+                            )
+                            VoiceLanguageDropdownMenu(
+                                expanded = voiceLanguageMenuExpanded,
+                                selectedLanguage = voiceController.preferredLanguage,
+                                onDismiss = { voiceLanguageMenuExpanded = false },
+                                onSelect = { chosen ->
+                                    voiceLanguageMenuExpanded = false
+                                    voiceController.selectLanguage(
+                                        language = chosen,
+                                        appLanguage = appLanguage,
+                                        existingDraft = turnDraft,
+                                        onDraftUpdated = { turnDraft = it },
+                                    )
+                                },
+                            )
+                        }
                         voices.forEach { voice ->
                             AntigravityChip(
                                 label = voice,
@@ -1131,7 +1157,10 @@ fun VoiceModeSheet(
                         if (!voiceController.isRecording && !voiceController.isStarting && voiceState.isMuted) {
                             coordinator.orchestrationStore.toggleVoiceMute()
                         }
-                        voiceController.toggleRecording(existingDraft = turnDraft) { updated ->
+                        voiceController.toggleRecording(
+                            existingDraft = turnDraft,
+                            appLanguage = appLanguage,
+                        ) { updated ->
                             turnDraft = updated
                         }
                     },
