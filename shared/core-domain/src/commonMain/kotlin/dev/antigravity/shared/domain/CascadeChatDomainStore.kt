@@ -124,10 +124,32 @@ public class CascadeChatDomainStore(
     private val inFlightOutboxIds = mutableSetOf<String>()
     private val fetchMutex = Mutex()
     private val inFlightStepFetches = linkedMapOf<String, CompletableDeferred<List<CascadeStep>>>()
+    private val activeSyncGenerationByCascadeId = MutableStateFlow<Map<String, Long>>(emptyMap())
+    private var nextSyncGeneration: Long = 0L
     private val syncedMarkersByCascadeId = MutableStateFlow<Map<String, SyncedTrajectoryMarker>>(emptyMap())
 
     public fun setActiveCascade(cascadeId: String) {
-        _state.update { it.copy(activeCascadeId = cascadeId, stepLoadErrorText = null) }
+        _state.update { prev ->
+            if (prev.activeCascadeId == cascadeId) {
+                prev.copy(stepLoadErrorText = null)
+            } else {
+                prev.copy(
+                    activeCascadeId = cascadeId,
+                    isLoadingSteps = false,
+                    stepLoadErrorText = null,
+                )
+            }
+        }
+    }
+
+    public fun clearLoadingState(cascadeId: String? = null) {
+        _state.update { prev ->
+            if (cascadeId == null || prev.activeCascadeId == cascadeId) {
+                prev.copy(isLoadingSteps = false)
+            } else {
+                prev
+            }
+        }
     }
 
     public fun injectDebugSteps(extraSteps: List<CascadeStep>) {
@@ -422,9 +444,11 @@ public class CascadeChatDomainStore(
             ownedDeferred.completeExceptionally(e)
             throw e
         } finally {
-            fetchMutex.withLock {
-                if (inFlightStepFetches[cascadeId] === ownedDeferred) {
-                    inFlightStepFetches.remove(cascadeId)
+            withContext(NonCancellable) {
+                fetchMutex.withLock {
+                    if (inFlightStepFetches[cascadeId] === ownedDeferred) {
+                        inFlightStepFetches.remove(cascadeId)
+                    }
                 }
             }
         }
@@ -475,6 +499,7 @@ public class CascadeChatDomainStore(
                 isCloud = isCloud,
                 instanceUuidOverride = instanceUuidOverride,
                 existingSteps = if (requireRemoteRefresh) emptyList() else baselineSteps,
+                isBackgroundPreload = true,
             )
         }
         if (remoteSteps.isNotEmpty()) {
@@ -507,6 +532,12 @@ public class CascadeChatDomainStore(
         forceRefresh: Boolean = false,
     ): List<CascadeStep> {
         if (cascadeId.isEmpty()) return emptyList()
+        val generation = fetchMutex.withLock {
+            nextSyncGeneration += 1L
+            val gen = nextSyncGeneration
+            activeSyncGenerationByCascadeId.update { it + (cascadeId to gen) }
+            gen
+        }
         var existingSteps = _state.value.stepsByCascadeId[cascadeId].orEmpty()
         if (existingSteps.isEmpty()) {
             val cached = projectionStorage.loadSteps(cascadeId)
@@ -524,19 +555,15 @@ public class CascadeChatDomainStore(
             }
         }
 
-        // Idle cached fast-path (0 RTT): if the conversation is terminal/idle and cached steps
-        // already satisfy `knownStepCount` with no pending/in-progress/waiting steps, render
-        // immediately without issuing a redundant full-history RPC on re-entry.
-        val isExplicitTerminalSummary = summaryStatus == CortexStepStatus.DONE ||
-            summaryStatus == CortexStepStatus.ERROR ||
-            summaryStatus == CortexStepStatus.CANCELLED
+        // Idle cached fast-path (0 RTT): if the conversation is terminal or idle (`CASCADE_RUN_STATUS_IDLE`
+        // maps to `CortexStepStatus.UNSPECIFIED`) and cached steps already satisfy `knownStepCount`
+        // with no pending/in-progress/waiting steps, render immediately with 0 RTT even after cold restart.
         val isActiveSummary = summaryStatus == CortexStepStatus.IN_PROGRESS ||
             summaryStatus == CortexStepStatus.PENDING ||
             summaryStatus == CortexStepStatus.WAITING ||
             summaryStatus == CortexStepStatus.BLOCKED
         val marker = syncedMarkersByCascadeId.value[cascadeId]
-        val canSkipIdleRefresh = isExplicitTerminalSummary ||
-            (marker != null && !isActiveSummary && summaryStatus != null)
+        val canSkipIdleRefresh = summaryStatus != null && !isActiveSummary
         if (!forceRefresh &&
             existingSteps.isNotEmpty() &&
             canSkipIdleRefresh &&
@@ -589,7 +616,7 @@ public class CascadeChatDomainStore(
                 syncedMarkersByCascadeId.update { it + (cascadeId to nextMarker) }
             }
             _state.update {
-                if (it.activeCascadeId == cascadeId) {
+                if (it.activeCascadeId == cascadeId && activeSyncGenerationByCascadeId.value[cascadeId] == generation) {
                     it.copy(isLoadingSteps = false, stepLoadErrorText = null)
                 } else {
                     it
@@ -597,11 +624,20 @@ public class CascadeChatDomainStore(
             }
             remoteSteps
         } catch (e: CancellationException) {
+            if (activeSyncGenerationByCascadeId.value[cascadeId] == generation) {
+                _state.update {
+                    if (it.activeCascadeId == cascadeId) {
+                        it.copy(isLoadingSteps = false)
+                    } else {
+                        it
+                    }
+                }
+            }
             throw e
         } catch (e: Throwable) {
             val formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(e)
             _state.update {
-                if (it.activeCascadeId == cascadeId) {
+                if (it.activeCascadeId == cascadeId && activeSyncGenerationByCascadeId.value[cascadeId] == generation) {
                     val hasExistingSteps = !it.stepsByCascadeId[cascadeId].isNullOrEmpty()
                     it.copy(
                         isLoadingSteps = false,

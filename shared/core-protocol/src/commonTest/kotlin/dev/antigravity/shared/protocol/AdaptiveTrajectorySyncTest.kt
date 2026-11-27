@@ -1466,7 +1466,328 @@ class AdaptiveTrajectorySyncTest {
             payload = byteArrayOf(0x0A, 0x01, 0x61),
             contentType = "application/proto",
         ).decodeToString()
-        assertTrue(protoBody.contains("""["accept-encoding","gzip"]"""), "Expected gzip accept-encoding in proxy request: $protoBody")
+        assertTrue(protoBody.contains("""["accept-encoding","gzip"]"""), "Expected gzip accept-encoding in unary proxy request: $protoBody")
         assertTrue(protoBody.contains("""["accept","application/proto"]"""), "Expected application/proto accept header: $protoBody")
+
+        val streamBody = CloudRelayJspbCodec.encodeProxyCommandRequest(
+            targetInstanceUuid = "uuid-test",
+            rpcPath = "/exa.language_server_pb.LanguageServerService/StreamAgentStateUpdates",
+            payload = ConnectEnvelope.encode("""{"conversationId":"v1/c"}""".encodeToByteArray()),
+            contentType = "application/connect+json",
+            isStreaming = true,
+        ).decodeToString()
+        assertFalse(streamBody.contains("""["accept-encoding","gzip"]"""), "Streaming StreamProxyCommand must NOT send accept-encoding:gzip: $streamBody")
+    }
+
+    @Test
+    fun testCloudRelayBinaryProtoJsonErrorInside200OkFallsBackAndCachesUnsupported() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-relay-proto-415"
+            var protoCalls = 0
+            var jsonCalls = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.34.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = bytes.decodeToString()
+                        val isProto = bodyText.contains(""""content-type","application/proto"""")
+                        if (isProto) {
+                            protoCalls += 1
+                            // Cloud Relay returns outer HTTP 200 wrapping inner Connect JSON 415 error
+                            respond(
+                                content = encodeJspbProxyResponse("""{"code":"invalid_argument","message":"unsupported media type application/proto"}"""),
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            jsonCalls += 1
+                            respond(
+                                content = encodeJspbProxyResponse(buildJsonStepsPayload(0 until 3)),
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val first = client.fetchAllTrajectorySteps(cascadeId = "cas-relay-proto-1", knownStepCount = 3, isCloud = false)
+            assertEquals(3, first.size)
+            assertEquals(1, protoCalls)
+            assertEquals(1, jsonCalls)
+
+            // Second fetch must remember binary protobuf is unsupported and go directly to JSON
+            protoCalls = 0
+            jsonCalls = 0
+            val second = client.fetchAllTrajectorySteps(cascadeId = "cas-relay-proto-2", knownStepCount = 3, isCloud = false)
+            assertEquals(3, second.size)
+            assertEquals(0, protoCalls, "Unsupported binary protobuf over Cloud Relay must be cached per host")
+            assertEquals(1, jsonCalls)
+        }
+    }
+
+    @Test
+    fun testLargeHistoricalBinaryTrajectorySkipsFullTailJsonRepairAndCachesHousekeepingType() = runTest {
+        fun buildTrajectoryWithUnknown(totalSteps: Int, unknownIdx: Int, unknownWireType: Int): ByteArray {
+            val out = ArrayList<Byte>()
+            for (i in 0 until totalSteps) {
+                val stepBytes = when (i) {
+                    unknownIdx -> encodeVarintField(1, unknownWireType) +
+                        encodeVarintField(4, 3) +
+                        encodeLd(95, "housekeeping-$i".encodeToByteArray())
+                    else -> if (i % 2 == 0) {
+                        encodeVarintField(1, 14) +
+                            encodeVarintField(4, 3) +
+                            encodeLd(19, encodeLd(1, "User #$i".encodeToByteArray()))
+                    } else {
+                        encodeVarintField(1, 15) +
+                            encodeVarintField(4, 3) +
+                            encodeLd(20, encodeLd(1, "Answer #$i".encodeToByteArray()))
+                    }
+                }
+                out.addAll(encodeLd(1, stepBytes).toList())
+            }
+            return out.toByteArray()
+        }
+
+        val large40Binary = buildTrajectoryWithUnknown(totalSteps = 40, unknownIdx = 2, unknownWireType = 995)
+        val small5Binary = buildTrajectoryWithUnknown(totalSteps = 5, unknownIdx = 3, unknownWireType = 996)
+        var protoCalls = 0
+        var jsonCalls = 0
+        var serveSmall = false
+
+        val engine = MockEngine { request ->
+            val ct = request.body.contentType?.toString()
+                ?: request.headers[HttpHeaders.ContentType].orEmpty()
+            if (ct.contains("application/proto")) {
+                protoCalls += 1
+                respond(
+                    content = if (serveSmall) small5Binary else large40Binary,
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/proto"),
+                )
+            } else {
+                jsonCalls += 1
+                respond(
+                    content = """{"steps":[{"type":"CORTEX_STEP_TYPE_CONVERSATION_HISTORY","status":"CORTEX_STEP_STATUS_DONE"},{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"User #4"}}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            }
+        }
+
+        val client = AntigravityKmpRpcClient(
+            host = testHost("mac-bounded-repair"),
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(engine),
+        )
+
+        // 1. 40-step trajectory with unknown non-waiting step at index 2 (tailSpan=38 > 24) -> 0 JSON repair RPCs
+        val largeSteps = client.fetchAllTrajectorySteps(cascadeId = "cas-large-40", knownStepCount = 40)
+        assertEquals(40, largeSteps.size)
+        assertEquals(1, protoCalls)
+        assertEquals(0, jsonCalls, "Large historical trajectory must not download multi-MB full-tail JSON for non-waiting unknown wire types")
+
+        // 2. Small trajectory (tailSpan <= 24) probes once, learns STEP_TYPE_996 is housekeeping, and skips on subsequent chats
+        serveSmall = true
+        protoCalls = 0
+        jsonCalls = 0
+        val smallFirst = client.fetchAllTrajectorySteps(cascadeId = "cas-small-hk-1", knownStepCount = 5)
+        assertEquals(5, smallFirst.size)
+        assertEquals(1, protoCalls)
+        assertEquals(1, jsonCalls)
+
+        protoCalls = 0
+        jsonCalls = 0
+        val smallSecond = client.fetchAllTrajectorySteps(cascadeId = "cas-small-hk-2", knownStepCount = 5)
+        assertEquals(5, smallSecond.size)
+        assertEquals(1, protoCalls)
+        assertEquals(0, jsonCalls, "Learned housekeeping wire type must skip JSON repair on subsequent trajectories")
+    }
+
+    @Test
+    fun testLocal2xDormantTrajectoryShortCircuitsToStreamWithoutDuplicateWakeOrJsonProbes() = runTest {
+        withContext(Dispatchers.Default) {
+            val localCid = "cas-local-2x-fast-stream"
+            val frame1 = """{"update":{"conversationId":"$localCid","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Open history fast"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Loaded in 1 stream RTT"}}]}}}}"""
+            val streamPayload = ConnectEnvelope.encode(frame1.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+
+            var loadTrajectoryCalls = 0
+            var jsonStepsCalls = 0
+            var protoStepsCalls = 0
+            var streamCalls = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val ct = request.body.contentType?.toString()
+                    ?: request.headers[HttpHeaders.ContentType].orEmpty()
+                when {
+                    path.endsWith("/LoadTrajectory") -> {
+                        loadTrajectoryCalls += 1
+                        respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    }
+                    path.endsWith("/GetCascadeTrajectorySteps") -> {
+                        if (ct.contains("application/proto")) {
+                            protoStepsCalls += 1
+                        } else {
+                            jsonStepsCalls += 1
+                        }
+                        respond(
+                            content = """{"code":"not_found","message":"trajectory not found"}""",
+                            status = HttpStatusCode.NotFound,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    }
+                    path.endsWith("/StreamAgentStateUpdates") -> {
+                        streamCalls += 1
+                        respond(
+                            content = streamPayload,
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/connect+json"),
+                        )
+                    }
+                    else -> respond(
+                        content = """{"code":"not_found","message":"not found"}""",
+                        status = HttpStatusCode.NotFound,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = testHost("mac-2x-shortcircuit"),
+                csrfToken = "test-csrf",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(cascadeId = localCid, knownStepCount = 2, isCloud = false)
+            assertEquals(2, steps.size)
+            assertEquals("Loaded in 1 stream RTT", steps[1].plannerResponse?.response)
+            assertEquals(1, loadTrajectoryCalls, "Must not call LoadTrajectory twice across Path 1 and Path 2")
+            assertEquals(0, jsonStepsCalls, "Must skip doomed JSON GetCascadeTrajectorySteps probes when proto already confirmed 404 after wake")
+            assertEquals(2, protoStepsCalls, "Expected initial proto attempt + single post-wake retry")
+            assertEquals(1, streamCalls, "Must jump directly to StreamAgentStateUpdates")
+        }
+    }
+
+    @Test
+    fun testCloudStreamAuthoritativeEmptySkipsLegacyFallbackRpcs() = runTest {
+        withContext(Dispatchers.Default) {
+            val cloudCid = "v1/cloud-authoritative-empty"
+            val emptyFrame = """{"update":{"conversationId":"$cloudCid","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[],"totalLength":0,"steps":[]}}}}"""
+            val streamPayload = ConnectEnvelope.encode(emptyFrame.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+
+            var streamCalls = 0
+            var legacyCalls = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                if (path.endsWith("/StreamAgentStateUpdates")) {
+                    streamCalls += 1
+                    respond(
+                        content = streamPayload,
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/connect+json"),
+                    )
+                } else {
+                    legacyCalls += 1
+                    respond("""{"code":"not_found"}""", HttpStatusCode.NotFound, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = testHost("cloud-empty-fast"),
+                csrfToken = "test-csrf",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(cascadeId = cloudCid, knownStepCount = 0, isCloud = true)
+            assertTrue(steps.isEmpty())
+            assertEquals(1, streamCalls)
+            assertEquals(0, legacyCalls, "Authoritative empty Cloud snapshot must NOT fall through to legacy GetCascadeTrajectorySteps/LoadTrajectory probes")
+        }
+    }
+
+    @Test
+    fun testCloudRelayMultiWindowPeerProbeRunsInParallel() = runTest {
+        withContext(Dispatchers.Default) {
+            val primaryUuid = "inst-par-primary"
+            val peer1 = "inst-par-peer-1"
+            val peer2 = "inst-par-peer-2"
+            val peer3 = "inst-par-peer-3"
+            val cloudCid = "v1/cloud-par-peer"
+            val winnerFrame = """{"update":{"conversationId":"$cloudCid","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0],"totalLength":1,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Found on peer 3 in parallel"}}]}}}}"""
+            val winnerStream = ConnectEnvelope.encode(winnerFrame.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val winnerB64 = winnerStream.toByteString().base64()
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$primaryUuid",["Primary","2.34.0",true],1,[1740000000,0]],["$peer1",["Window 1","2.34.0",true],1,[1740000001,0]],["$peer2",["Window 2","2.34.0",true],1,[1740000002,0]],["$peer3",["Window 3","2.34.0",true],1,[1740000003,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        val (targetUuid, _, _) = decodeProxyCommandInner(bytes.decodeToString())
+                        when (targetUuid) {
+                            peer3 -> respond(
+                                content = """[["$winnerB64",[["content-type","application/connect+json"]]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                            peer1, peer2 -> {
+                                kotlinx.coroutines.delay(150)
+                                respond("""[5,"not_found: trajectory not found"]""", HttpStatusCode.NotFound, headersOf(HttpHeaders.ContentType, "application/json+protobuf"))
+                            }
+                            else -> respond("""[5,"not_found: trajectory not found"]""", HttpStatusCode.NotFound, headersOf(HttpHeaders.ContentType, "application/json+protobuf"))
+                        }
+                    }
+                    else -> respond("""[5,"not_found: trajectory not found"]""", HttpStatusCode.NotFound, headersOf(HttpHeaders.ContentType, "application/json+protobuf"))
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = primaryUuid,
+                    hostname = "Primary",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$primaryUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(cascadeId = cloudCid, knownStepCount = 1, isCloud = true)
+            assertEquals(1, steps.size)
+            assertEquals("Found on peer 3 in parallel", steps.first().userInput)
+        }
     }
 }

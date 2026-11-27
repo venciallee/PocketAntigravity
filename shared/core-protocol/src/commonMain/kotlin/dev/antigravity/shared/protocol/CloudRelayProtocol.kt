@@ -648,7 +648,9 @@ public object CloudRelayJspbCodec {
             add(listOf("x-jetski-remote-control-user-agent", remoteUserAgent))
             add(listOf("content-type", contentType))
             add(listOf("connect-protocol-version", "1"))
-            add(listOf("accept-encoding", "gzip"))
+            if (!isStreaming) {
+                add(listOf("accept-encoding", "gzip"))
+            }
             if (contentType.equals("application/proto", ignoreCase = true)) {
                 add(listOf("accept", "application/proto"))
             }

@@ -562,6 +562,8 @@ public final class AntigravitySessionStore {
     @ObservationIgnored internal var activeStepSyncCascadeId: String? = nil
     @ObservationIgnored internal var activeStepSyncPollsUntilIdle: Bool = false
     @ObservationIgnored internal var activeForegroundStepSyncCount: Int = 0
+    @ObservationIgnored internal var isFetchingStepsInFlight: Bool = false
+    @ObservationIgnored internal var pendingStreamResyncCascadeId: String? = nil
     @ObservationIgnored internal var inFlightPreloadTasksByCascadeId: [String: Task<[CascadeStep], Never>] = [:]
     @ObservationIgnored internal var syncedStepsMarkerByCascadeId: [String: (stepCount: Int, updatedAt: Date)] = [:]
     internal var lastNetworkStatus: NetworkReachabilityStatus? = nil
@@ -648,11 +650,17 @@ public final class AntigravitySessionStore {
 
                         let stepCountAdvanced = merged.stepCount > existing.stepCount
                         let timestampAdvanced = incoming.updatedAt.timeIntervalSince(existing.updatedAt) > 0.5
-                        let statusChanged = merged.status != existing.status
                         let isActivelyRunningOrWaiting = merged.status == .inProgress
                             || merged.status == .pending
                             || merged.status == .waiting
                             || merged.status == .blocked
+                        let wasActivelyRunningOrWaiting = existing.status == .inProgress
+                            || existing.status == .pending
+                            || existing.status == .waiting
+                            || existing.status == .blocked
+                        let isTerminalFailureStatus = merged.status == .error || merged.status == .cancelled
+                        let meaningfulStatusChanged = merged.status != existing.status
+                            && (isActivelyRunningOrWaiting || wasActivelyRunningOrWaiting || isTerminalFailureStatus)
                         let hasNewActivity = stepCountAdvanced || timestampAdvanced
 
                         if hasNewActivity {
@@ -684,7 +692,9 @@ public final class AntigravitySessionStore {
                         )
                         byId[cid] = merged
 
-                        if cid == self.activeCascadeId && (stepCountAdvanced || statusChanged || (timestampAdvanced && isActivelyRunningOrWaiting)) {
+                        let existingLoadedStepsCount = self.stepsByCascadeId[cid]?.count ?? 0
+                        let hasUnfetchedSteps = stepCountAdvanced && merged.stepCount > existingLoadedStepsCount
+                        if cid == self.activeCascadeId && (hasUnfetchedSteps || meaningfulStatusChanged || (timestampAdvanced && isActivelyRunningOrWaiting)) {
                             shouldSyncActiveChat = true
                         }
                     } else {
@@ -699,7 +709,14 @@ public final class AntigravitySessionStore {
                         }
                         byId[cid] = fresh
                         if cid == self.activeCascadeId {
-                            shouldSyncActiveChat = true
+                            let loadedCount = self.stepsByCascadeId[cid]?.count ?? 0
+                            let freshIsActive = fresh.status == .inProgress
+                                || fresh.status == .pending
+                                || fresh.status == .waiting
+                                || fresh.status == .blocked
+                            if loadedCount == 0 || fresh.stepCount > loadedCount || freshIsActive {
+                                shouldSyncActiveChat = true
+                            }
                         }
                     }
                 }
@@ -727,7 +744,8 @@ public final class AntigravitySessionStore {
                     self.syncStepsForCascade(
                         self.activeCascadeId,
                         pollUntilIdle: self.activeRoute == .cascadeChat(self.activeCascadeId),
-                        forceRefresh: true
+                        forceRefresh: true,
+                        cancelInFlight: false
                     )
                 }
             }

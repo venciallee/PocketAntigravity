@@ -1858,6 +1858,215 @@ final class AntigravityCompatibilityTests: XCTestCase {
         let text = (String(data: encoded, encoding: .utf8) ?? "").replacingOccurrences(of: "\\/", with: "/")
         XCTAssertTrue(text.contains("[\"accept-encoding\",\"gzip\"]"), "Missing gzip accept-encoding header: \(text)")
         XCTAssertTrue(text.contains("[\"accept\",\"application/proto\"]"), "Missing application/proto accept header: \(text)")
+
+        let streamEncoded = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
+            targetInstanceUuid: "uuid-test",
+            rpcPath: "/exa.language_server_pb.LanguageServerService/StreamAgentStateUpdates",
+            payload: ConnectEnvelope.encode(payload: Data("{\"conversationId\":\"v1/c\"}".utf8)),
+            contentType: "application/connect+json",
+            isStreaming: true
+        )
+        let streamText = (String(data: streamEncoded, encoding: .utf8) ?? "").replacingOccurrences(of: "\\/", with: "/")
+        XCTAssertFalse(streamText.contains("[\"accept-encoding\",\"gzip\"]"), "Streaming StreamProxyCommand must NOT send accept-encoding:gzip: \(streamText)")
+    }
+
+    func testSwiftCloudRelayProtoJsonErrorInside200OkFallsBackAndCachesUnsupported() async throws {
+        let instanceUuid = "inst-swift-proto-415"
+        let probe = CompatTrajectoryProbeState()
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.34.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let bodyText = (String(data: bodyData, encoding: .utf8) ?? "").replacingOccurrences(of: "\\/", with: "/")
+                if bodyText.contains("\"content-type\",\"application/proto\"") {
+                    probe.recordProto()
+                    let errB64 = Data("{\"code\":\"invalid_argument\",\"message\":\"unsupported media type application/proto\"}".utf8).base64EncodedString()
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                    return (resp, Data("[\"\(errB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                } else {
+                    probe.recordJSON(stepOffset: 0)
+                    let okJson = "{\"steps\":[{\"type\":\"CORTEX_STEP_TYPE_USER_INPUT\",\"status\":\"CORTEX_STEP_STATUS_DONE\",\"userInput\":{\"text\":\"Hello\"}},{\"type\":\"CORTEX_STEP_TYPE_PLANNER_RESPONSE\",\"status\":\"CORTEX_STEP_STATUS_DONE\",\"plannerResponse\":{\"response\":\"World\"}}]}"
+                    let okB64 = Data(okJson.utf8).base64EncodedString()
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                    return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                }
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: instanceUuid,
+            hostname: "MacBook Pro",
+            channel: .cloudRelay,
+            endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(
+            host: host,
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let first = try await client.fetchAllTrajectorySteps(cascadeId: "cas-swift-415-1", knownStepCount: 2, isCloud: false)
+        XCTAssertEqual(first.count, 2)
+        XCTAssertEqual(probe.protoCount(), 1)
+        XCTAssertEqual(probe.jsonCount(), 1)
+
+        probe.resetCounts()
+        let second = try await client.fetchAllTrajectorySteps(cascadeId: "cas-swift-415-2", knownStepCount: 2, isCloud: false)
+        XCTAssertEqual(second.count, 2)
+        XCTAssertEqual(probe.protoCount(), 0, "Unsupported binary protobuf over Cloud Relay must be cached per host")
+        XCTAssertEqual(probe.jsonCount(), 1)
+    }
+
+    func testSwiftLargeHistoricalBinaryTrajectorySkipsFullTailJsonRepair() async throws {
+        var binaryPayload = Data()
+        func makeVarint(_ field: UInt64, _ val: UInt64) -> Data {
+            var d = Data()
+            d.append(contentsOf: ProtobufStepCodec.encodeVarint((field << 3) | 0))
+            d.append(contentsOf: ProtobufStepCodec.encodeVarint(val))
+            return d
+        }
+        func makeLd(_ field: UInt64, _ payload: Data) -> Data {
+            var d = Data()
+            d.append(contentsOf: ProtobufStepCodec.encodeVarint((field << 3) | 2))
+            d.append(contentsOf: ProtobufStepCodec.encodeVarint(UInt64(payload.count)))
+            d.append(payload)
+            return d
+        }
+        for i in 0..<40 {
+            let step: Data
+            if i == 2 {
+                step = makeVarint(1, 995) + makeVarint(4, 3) + makeLd(95, Data("hk".utf8))
+            } else if i % 2 == 0 {
+                step = makeVarint(1, 14) + makeVarint(4, 3) + makeLd(19, makeLd(1, Data("User #\(i)".utf8)))
+            } else {
+                step = makeVarint(1, 15) + makeVarint(4, 3) + makeLd(20, makeLd(1, Data("Reply #\(i)".utf8)))
+            }
+            binaryPayload.append(makeLd(1, step))
+        }
+        let frozen = binaryPayload
+        let probe = CompatTrajectoryProbeState()
+
+        let session = makeMockSession { req in
+            let ct = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if ct.contains("application/proto") {
+                probe.recordProto()
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/proto"])!
+                return (resp, frozen)
+            } else {
+                probe.recordJSON(stepOffset: 0)
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+                return (resp, Data("{\"steps\":[]}".utf8))
+            }
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "swift-large-bounded",
+            hostname: "Swift Bounded Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18809")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+        let steps = try await client.fetchAllTrajectorySteps(cascadeId: "cas-swift-40", knownStepCount: 40)
+        XCTAssertEqual(steps.count, 40)
+        XCTAssertEqual(probe.protoCount(), 1)
+        XCTAssertEqual(probe.jsonCount(), 0, "Large historical trajectory must skip blocking full-tail JSON repair")
+    }
+
+    func testSwiftLocal2xDormantTrajectoryShortCircuitsToStreamWithoutDuplicateWake() async throws {
+        let localCid = "cas-swift-local-2x-fast"
+        let frameJson = "{\"update\":{\"conversationId\":\"\(localCid)\",\"mainTrajectoryUpdate\":{\"stepsUpdate\":{\"indices\":[0,1],\"totalLength\":2,\"steps\":[{\"type\":\"CORTEX_STEP_TYPE_USER_INPUT\",\"status\":\"CORTEX_STEP_STATUS_DONE\",\"userInput\":{\"text\":\"Fast load\"}},{\"type\":\"CORTEX_STEP_TYPE_PLANNER_RESPONSE\",\"status\":\"CORTEX_STEP_STATUS_DONE\",\"plannerResponse\":{\"response\":\"Streamed directly\"}}]}}}}"
+        var streamBytes = Data()
+        streamBytes.append(ConnectEnvelope.encode(payload: Data(frameJson.utf8)))
+        streamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let frozenStream = streamBytes
+
+        let counter = CompatRequestCounter()
+        let probe = CompatTrajectoryProbeState()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let ct = req.value(forHTTPHeaderField: "Content-Type") ?? ""
+            counter.record(path: path)
+            if path.hasSuffix("/LoadTrajectory") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+                return (resp, Data("{}".utf8))
+            }
+            if path.hasSuffix("/GetCascadeTrajectorySteps") {
+                if ct.contains("application/proto") {
+                    probe.recordProto()
+                } else {
+                    probe.recordJSON(stepOffset: 0)
+                }
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+                return (resp, Data("{\"code\":\"not_found\",\"message\":\"trajectory not found\"}".utf8))
+            }
+            if path.hasSuffix("/StreamAgentStateUpdates") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/connect+json"])!
+                return (resp, frozenStream)
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "swift-local-2x-fast",
+            hostname: "Swift 2.x Mac",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18810")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+        let steps = try await client.fetchAllTrajectorySteps(cascadeId: localCid, knownStepCount: 2, isCloud: false)
+        XCTAssertEqual(steps.count, 2)
+        XCTAssertEqual(steps[1].plannerResponse?.response, "Streamed directly")
+        XCTAssertEqual(counter.count(forSuffix: "/LoadTrajectory"), 1, "Must not call LoadTrajectory twice")
+        XCTAssertEqual(probe.jsonCount(), 0, "Must skip doomed JSON GetCascadeTrajectorySteps probes")
+        XCTAssertEqual(counter.count(forSuffix: "/StreamAgentStateUpdates"), 1)
+    }
+
+    func testSwiftCloudAuthoritativeEmptyStreamSkipsLegacyFallback() async throws {
+        let cloudCid = "v1/swift-cloud-empty"
+        let emptyJson = "{\"update\":{\"conversationId\":\"\(cloudCid)\",\"mainTrajectoryUpdate\":{\"stepsUpdate\":{\"indices\":[],\"totalLength\":0,\"steps\":[]}}}}"
+        var streamBytes = Data()
+        streamBytes.append(ConnectEnvelope.encode(payload: Data(emptyJson.utf8)))
+        streamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let frozenStream = streamBytes
+
+        let counter = CompatRequestCounter()
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            counter.record(path: path)
+            if path.hasSuffix("/StreamAgentStateUpdates") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/connect+json"])!
+                return (resp, frozenStream)
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let host = RemoteHostInstance(
+            instanceId: "swift-cloud-empty-host",
+            hostname: "Cloud Host",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:18811")!,
+            isOnline: true
+        )
+        let client = AntigravityRPCClient(host: host, csrfToken: "test-csrf", urlSession: session)
+        let steps = try await client.fetchAllTrajectorySteps(cascadeId: cloudCid, knownStepCount: 0, isCloud: true)
+        XCTAssertTrue(steps.isEmpty)
+        XCTAssertEqual(counter.count(forSuffix: "/StreamAgentStateUpdates"), 1)
+        XCTAssertEqual(counter.count(forSuffix: "/GetCascadeTrajectorySteps"), 0)
+        XCTAssertEqual(counter.count(forSuffix: "/LoadTrajectory"), 0)
     }
 }
 

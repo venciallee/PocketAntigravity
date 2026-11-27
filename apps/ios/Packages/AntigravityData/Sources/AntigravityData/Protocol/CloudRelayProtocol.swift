@@ -942,9 +942,11 @@ public enum CloudRelayJSPBCodec: Sendable {
             ["x-is-streaming", isStreaming ? "true" : "false"],
             ["x-jetski-remote-control-user-agent", remoteUserAgent],
             ["content-type", contentType],
-            ["connect-protocol-version", "1"],
-            ["accept-encoding", "gzip"]
+            ["connect-protocol-version", "1"]
         ]
+        if !isStreaming {
+            headerPairs.append(["accept-encoding", "gzip"])
+        }
         if contentType.caseInsensitiveCompare("application/proto") == .orderedSame {
             headerPairs.append(["accept", "application/proto"])
         }
