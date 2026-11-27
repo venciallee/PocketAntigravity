@@ -796,14 +796,19 @@ public enum CloudRelayJSPBCodec: Sendable {
                 return RelayInstanceStatus(rawStatusCode: code)
             }
             if let rawStr = value?.stringValue?.uppercased() {
-                if rawStr.contains("CONNECTED") && !rawStr.contains("DISCONNECTED") {
-                    return .connected
+                if rawStr.contains("DISCONNECTED") || rawStr.contains("OFFLINE") {
+                    return .disconnected
                 }
                 if rawStr.contains("IDLE") {
                     return .idle
                 }
-                if rawStr.contains("DISCONNECTED") || rawStr.contains("OFFLINE") {
-                    return .disconnected
+                if rawStr.contains("CONNECTED")
+                    || rawStr.contains("ONLINE")
+                    || rawStr.contains("ACTIVE")
+                    || rawStr.contains("READY")
+                    || rawStr.contains("RUNNING")
+                    || rawStr.contains("BUSY") {
+                    return .connected
                 }
             }
             return .unknown
@@ -856,15 +861,19 @@ public enum CloudRelayJSPBCodec: Sendable {
                 let metadataVal: JSONValue? = row.count > 1 ? row[1] : nil
                 let metadataArr = metadataVal?.arrayValue
                 let metadataObj = metadataVal?.objectValue
+                let metadataStr = metadataVal?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
 
                 let arrName = metadataArr?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let objName = firstNonEmptyString(in: metadataObj, keys: preferredNameKeys)
-                let resolvedName = objName ?? arrName
+                let resolvedName = objName ?? arrName ?? metadataStr
                 let name = (resolvedName?.isEmpty == false) ? resolvedName! : rawUuid
 
                 let arrVersion: String? = (metadataArr != nil && metadataArr!.count > 1) ? metadataArr![1].stringValue : nil
                 let objVersion = firstNonEmptyString(in: metadataObj, keys: versionKeys)
-                let version = objVersion ?? arrVersion ?? ""
+                let trailingVersion: String? = (metadataStr != nil && row.count > 4)
+                    ? row[4].stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : nil
+                let version = objVersion ?? arrVersion ?? trailingVersion ?? ""
 
                 let supportsChunking: Bool = {
                     if let b = metadataObj?["supportsChunking"]?.boolValue { return b }
@@ -909,7 +918,8 @@ public enum CloudRelayJSPBCodec: Sendable {
                 let chunkFlag = metadataObj?["supportsChunking"]?.boolValue
                     ?? metadataObj?["supports_chunking"]?.boolValue
                 let supportsChunking = chunkFlag ?? true
-                let status = obj["status"] != nil ? decodeStatus(obj["status"]) : .connected
+                let rawStatus = obj["status"] ?? obj["connectionStatus"] ?? obj["connection_status"]
+                let status = rawStatus != nil ? decodeStatus(rawStatus) : .connected
                 let tsVal = obj["updatedAt"] ?? obj["updated_at"] ?? obj["lastSeen"] ?? obj["last_seen"]
                 let updatedAt = decodeTimestamp(tsVal)
 
@@ -1016,6 +1026,17 @@ public enum CloudRelayJSPBCodec: Sendable {
         return data
     }
 
+    private static func isInnerHeaderPairList(_ pairsValue: JSONValue?) -> Bool {
+        guard let pairs = pairsValue?.arrayValue else { return false }
+        return pairs.allSatisfy { pairVal in
+            guard let pair = pairVal.arrayValue, pair.count >= 2 else { return false }
+            if case .string = pair[0], case .string = pair[1] {
+                return true
+            }
+            return false
+        }
+    }
+
     private static func parseInnerHeaderPairs(_ pairsValue: JSONValue?) -> [String: String] {
         guard let pairs = pairsValue?.arrayValue else { return [:] }
         var headers: [String: String] = [:]
@@ -1032,6 +1053,7 @@ public enum CloudRelayJSPBCodec: Sendable {
 
     /// Decodes `ProxyCommandResponse` JSPB tuple:
     /// - Standard: `[ "<base64ResponseBytes>", [ ["accept-encoding", "gzip"], ["content-type", "application/json"] ] ]`
+    /// - Empty body with headers: `[ null, [ ["content-type", "application/json"] ] ]`
     /// - Nested Boq wrapper: `[ [ "<base64ResponseBytes>", [ ... ] ], trailer ]`
     /// - Chunked response (`supportsChunking == true`): `[ "<b64Part1>", [ ... ] ]\n[ "<b64Part2>", [] ]`
     public static func decodeProxyCommandResponse(
@@ -1048,8 +1070,13 @@ public enum CloudRelayJSPBCodec: Sendable {
                 throw AntigravityRPCError.decodingError("Expected JSPB array in ProxyCommandResponse")
             }
 
-            // Check if Boq returned `[null, errorTrailer]` when upstream RPC failed
+            // Distinguish empty-body header tuples `[null, [["content-type", ...]]]` from Boq error trailers `[null, [code, "msg"]]`
             if rootArray.first == .null, rootArray.count >= 2 {
+                let second = rootArray[1]
+                let hasTrailingNonNull = rootArray.dropFirst(2).contains { $0 != .null }
+                if !hasTrailingNonNull && isInnerHeaderPairList(second) {
+                    return (Data(), parseInnerHeaderPairs(second))
+                }
                 let errSummary = String(data: unwrapped, encoding: .utf8) ?? "Cloud Relay RPC error"
                 throw AntigravityRPCError.httpError(statusCode: 502, body: errSummary)
             }

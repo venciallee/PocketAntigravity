@@ -25,9 +25,13 @@ public actor AntigravityRPCClient {
     internal var didRunOriginApiKeyDiscovery: Bool = false
     internal var didForceRefreshInvalidApiKey: Bool = false
     internal var preferredCloudInstanceUuid: String? = nil
-    internal static let endToEndFreshnessWindowSeconds: TimeInterval = 45.0
+    internal static let endToEndFreshnessWindowSeconds: TimeInterval = 120.0
+    internal static let livenessProbeTimeoutSeconds: TimeInterval = 8.0
+    internal static let transientProbeOfflineThreshold: Int = 2
+    internal static let explicitVerifyRetryDelayNanoseconds: UInt64 = 350_000_000
     internal var cachedRelayInstances: [RelayInstanceInfo] = []
     internal var lastEndToEndVerifiedAtByUuid: [String: Date] = [:]
+    internal var consecutiveTransientProbeFailuresByUuid: [String: Int] = [:]
     internal var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
     internal var cachedLocalProjectNameById: [String: String] = [:]
     internal var cachedLocalProjectIdByName: [String: String] = [:]
@@ -43,6 +47,12 @@ public actor AntigravityRPCClient {
     internal var learnedWireStepTypeByHost: [String: CortexStepType] = [:]
     internal var learnedHousekeepingWireKeys: Set<String> = []
     internal var stepOffsetIgnoredHosts: Set<String> = []
+
+    internal enum RelayLivenessOutcome: Sendable, Equatable {
+        case alive
+        case definitelyOffline
+        case transientFailure
+    }
 
     internal enum CloudTrajectoryBackendField: String, Sendable {
         case backend = "backend"
@@ -1164,6 +1174,7 @@ public actor AntigravityRPCClient {
                 responseHeaders: http.allHeaderFields
             )
             self.lastEndToEndVerifiedAtByUuid[targetUuid] = Date()
+            self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: targetUuid)
             return (decoded.payload, decoded.headers, targetUuid)
         }
 
@@ -1189,6 +1200,7 @@ public actor AntigravityRPCClient {
             let isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error)
             if isInstanceUnregistered {
                 self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
+                self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: initialTargetUuid)
                 self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
                     inst.uuid == initialTargetUuid ? inst.withStatus(.disconnected) : inst
                 }
