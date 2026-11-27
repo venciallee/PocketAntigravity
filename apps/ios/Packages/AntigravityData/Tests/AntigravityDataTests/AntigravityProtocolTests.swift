@@ -4565,6 +4565,21 @@ final class AntigravityProtocolTests: XCTestCase {
 
     @MainActor
     func testTC25_ActiveChatStepSyncForegroundAndReentryRecovery() async {
+        MockRelayURLProtocol.state.setResponder { urlString, _, _ in
+            if urlString.contains("/ProxyCommand") || urlString.contains("GetCascadeTrajectorySteps") {
+                let inner = Data("{\"steps\":[]}".utf8).base64EncodedString()
+                let jspb = ")]}'\n[\"\(inner)\",[[\"content-type\",\"application/json\"]]]"
+                return (200, ["Content-Type": "application/json+protobuf"], Data(jspb.utf8))
+            }
+            return (200, [:], Data())
+        }
+        defer { MockRelayURLProtocol.state.setResponder(nil) }
+
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockRelayURLProtocol.self]
+        let mockSession = URLSession(configuration: sessionConfig)
+        defer { mockSession.invalidateAndCancel() }
+
         let store = AntigravitySessionStore.makeLiveStore()
         store.hasPairedBackend = true
         store.isLiveBackendConnected = true
@@ -4583,10 +4598,10 @@ final class AntigravityProtocolTests: XCTestCase {
             authUser: "0",
             resolvedInstanceUuid: "rec-uuid-1",
             relayApiKey: "AIzaSyTestKey0000000000000000000000000",
-            urlSession: URLSession.shared
+            urlSession: mockSession
         )
 
-        let cid = "cas-sync-recovery"
+        let cid = "cid-sync-recovery"
         let summary = CascadeSummary(
             cascadeId: cid,
             title: "Recovery Test Chat",
