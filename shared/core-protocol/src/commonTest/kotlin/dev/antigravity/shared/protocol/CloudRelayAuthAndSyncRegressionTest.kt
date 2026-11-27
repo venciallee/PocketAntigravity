@@ -917,4 +917,235 @@ class CloudRelayAuthAndSyncRegressionTest {
             )
         }
     }
+
+    @Test
+    fun testEmptyBodyProxyCommandTupleDecodesWithoutFalse502AndListInstancesOnlineAliases() {
+        // 1. Valid empty-body JSPB header tuples must decode as empty payload (NOT throw HTTP 502)
+        val emptyWithHeaders = ")]}'\n" + """[null,[["content-type","application/json"],["x-test","ok"]]]"""
+        val decoded = CloudRelayJspbCodec.decodeProxyCommandResponse(emptyWithHeaders.encodeToByteArray())
+        assertTrue(decoded.payload.isEmpty())
+        assertEquals("application/json", decoded.headers["content-type"])
+        assertEquals("ok", decoded.headers["x-test"])
+
+        val emptyNoHeaders = ")]}'\n[null,[]]"
+        val decodedEmpty = CloudRelayJspbCodec.decodeProxyCommandResponse(emptyNoHeaders.encodeToByteArray())
+        assertTrue(decodedEmpty.payload.isEmpty())
+        assertTrue(decodedEmpty.headers.isEmpty())
+
+        // 2. Genuine Boq error trailer `[null, [9, "instance not registered"]]` must still throw HTTP 502
+        val boqError = ")]}'\n" + """[null,[9,"instance not registered"]]"""
+        var threw502 = false
+        try {
+            CloudRelayJspbCodec.decodeProxyCommandResponse(boqError.encodeToByteArray())
+        } catch (e: AntigravityRpcError.HttpError) {
+            threw502 = (e.statusCode == 502)
+        }
+        assertTrue(threw502, "Boq error trailer must still throw HTTP 502")
+
+        // 3. Forward-compatible ListInstances online status strings, string-form metadata, and omitted JsonObject status
+        val aliasList = ")]}'\n" + """[[["uuid-online","Venciallee","ONLINE",null,"2.34.0"],["uuid-active",["dark-ray","2.34.0",true],"ACTIVE",null],["uuid-offline",["old-mac","2.34.0",true],"OFFLINE",null]],5]"""
+        val instances = CloudRelayJspbCodec.decodeListInstancesResponse(aliasList.encodeToByteArray())
+        assertEquals(3, instances.size)
+        assertEquals("Venciallee", instances[0].name)
+        assertEquals("2.34.0", instances[0].version)
+        assertEquals(RelayInstanceStatus.CONNECTED, instances[0].status)
+        assertEquals(RelayInstanceStatus.CONNECTED, instances[1].status)
+        assertEquals(RelayInstanceStatus.DISCONNECTED, instances[2].status)
+
+        val omittedObjStatus = """{"instances":[{"uuid":"uuid-obj-v2","name":"Venciallee"}]}"""
+        val objInstances = CloudRelayJspbCodec.decodeListInstancesResponse(omittedObjStatus.encodeToByteArray())
+        assertEquals(1, objInstances.size)
+        assertEquals(RelayInstanceStatus.CONNECTED, objInstances[0].status)
+    }
+
+    @Test
+    fun testRelayProbeToleratesTransient504EmptyBodyDesktop501AndPropagates401() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyTRANSIENTPROBE0000000000000000000"
+            val miniUuid = "11111111-mac-mini-v2"
+            val vencialleeUuid = "22222222-venciallee-v2"
+            val darkRayUuid = "33333333-dark-ray-v2"
+            var darkRayMode = "504"
+            var darkRayAttempts = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$miniUuid",["mac-mini","2.34.0",true],1,[1740000000,0]],["$vencialleeUuid",["Venciallee","2.34.0",true],1,[1740000000,0]],["$darkRayUuid",["dark-ray","2.34.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = request.body.toByteArray().decodeToString()
+                        when {
+                            bodyText.contains(vencialleeUuid) -> respond(
+                                content = """)]}'\n[null,[["content-type","application/json"]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                            bodyText.contains(darkRayUuid) -> {
+                                darkRayAttempts += 1
+                                when {
+                                    darkRayMode == "401" -> respond(
+                                        content = "UNAUTHENTICATED",
+                                        status = HttpStatusCode.Unauthorized,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                    darkRayMode == "501" -> respond(
+                                        content = "unimplemented",
+                                        status = HttpStatusCode.NotImplemented,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                    darkRayMode == "flaky-then-ok" && darkRayAttempts % 2 == 0 -> respond(
+                                        content = """["e30=",[["content-type","application/json"]]]""",
+                                        status = HttpStatusCode.OK,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                    else -> respond(
+                                        content = "gateway timeout",
+                                        status = HttpStatusCode.GatewayTimeout,
+                                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                    )
+                                }
+                            }
+                            else -> respond(
+                                content = """["e30=",[["content-type","application/json"]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = miniUuid,
+                hostname = "mac-mini",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$miniUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                resolvedInstanceUuid = miniUuid,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            // 1. Strike 1 lightweight heartbeat: empty-body venciallee is CONNECTED; single 504 dark-ray stays CONNECTED
+            val strike1 = client.probeHostReachability(allowCrossHostFallback = false, verifyEndToEnd = false)
+            assertEquals(RelayInstanceStatus.CONNECTED, strike1.availableRelayInstances.first { it.uuid == miniUuid }.status)
+            assertEquals(RelayInstanceStatus.CONNECTED, strike1.availableRelayInstances.first { it.uuid == vencialleeUuid }.status)
+            assertEquals(RelayInstanceStatus.CONNECTED, strike1.availableRelayInstances.first { it.uuid == darkRayUuid }.status)
+
+            // 2. Strike 2 lightweight heartbeat: 2nd consecutive 504 downgrades silent dark-ray to DISCONNECTED
+            val strike2 = client.probeHostReachability(allowCrossHostFallback = false, verifyEndToEnd = false)
+            assertEquals(RelayInstanceStatus.DISCONNECTED, strike2.availableRelayInstances.first { it.uuid == darkRayUuid }.status)
+
+            // 3. Desktop HTTP 501 proves tunnel liveness and brings dark-ray back to CONNECTED
+            darkRayMode = "501"
+            val recovered = client.probeHostReachability(allowCrossHostFallback = false, verifyEndToEnd = false)
+            assertEquals(RelayInstanceStatus.CONNECTED, recovered.availableRelayInstances.first { it.uuid == darkRayUuid }.status)
+
+            // 4. Explicit verifyEndToEnd = true retries once on transient 504 and keeps dark-ray CONNECTED when retry succeeds
+            darkRayMode = "flaky-then-ok"
+            if (darkRayAttempts % 2 == 1) {
+                darkRayAttempts += 1
+            }
+            val verifiedAfterRetry = client.probeHostReachability(allowCrossHostFallback = false, verifyEndToEnd = true)
+            assertEquals(RelayInstanceStatus.CONNECTED, verifiedAfterRetry.availableRelayInstances.first { it.uuid == darkRayUuid }.status)
+
+            // 5. HTTP 401 Unauthorized propagates instead of silently downgrading host to DISCONNECTED
+            darkRayMode = "401"
+            var threwUnauthorized = false
+            try {
+                client.probeHostReachability(allowCrossHostFallback = false, verifyEndToEnd = true)
+            } catch (_: AntigravityRpcError.Unauthorized) {
+                threwUnauthorized = true
+            }
+            assertTrue(threwUnauthorized, "HTTP 401 must propagate as AntigravityRpcError.Unauthorized")
+        }
+    }
+
+    @Test
+    fun testFederatedSyncAndVerifyConnectionPreserveOnlinePeerOnTransient504() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyFEDTIMEOUT00000000000000000000000"
+            val miniUuid = "11111111-fed-mini-v2"
+            val slowPeerUuid = "22222222-fed-slow-v2"
+            val unregPeerUuid = "33333333-fed-unreg-v2"
+            val boqUnregistered = """[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$miniUuid",["mac-mini","2.34.0",true],1,[1740000000,0]],["$slowPeerUuid",["Venciallee","2.34.0",true],1,[1740000000,0]],["$unregPeerUuid",["dead-mac","2.34.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = request.body.toByteArray().decodeToString()
+                        when {
+                            bodyText.contains(slowPeerUuid) -> respond(
+                                content = "upstream timeout",
+                                status = HttpStatusCode.GatewayTimeout,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                            bodyText.contains(unregPeerUuid) -> respond(
+                                content = boqUnregistered,
+                                status = HttpStatusCode.BadRequest,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                            else -> {
+                                val payload = """{"workspaces":[],"trajectorySummaries":{}}"""
+                                val b64 = okio.ByteString.of(*payload.encodeToByteArray()).base64()
+                                respond(
+                                    content = """["$b64",[["content-type","application/json"]]]""",
+                                    status = HttpStatusCode.OK,
+                                    headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                )
+                            }
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = miniUuid,
+                hostname = "mac-mini",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$miniUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                resolvedInstanceUuid = miniUuid,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            // verifyConnection: slow peer timing out stays CONNECTED and triggers deferred hydration (initialSyncCompleted = false),
+            // while definitively unregistered peer becomes DISCONNECTED.
+            val handshake = client.verifyConnection(allowCrossHostFallback = true)
+            assertTrue(handshake.isSelectedHostOnline)
+            assertTrue(miniUuid in handshake.succeededInstanceUuids)
+            assertFalse(handshake.initialSyncCompleted, "Partial peer timeout must leave initialSyncCompleted=false so deferred sync hydrates slow peer")
+            assertEquals(
+                RelayInstanceStatus.CONNECTED,
+                handshake.availableRelayInstances.first { it.uuid == slowPeerUuid }.status,
+            )
+            assertEquals(
+                RelayInstanceStatus.DISCONNECTED,
+                handshake.availableRelayInstances.first { it.uuid == unregPeerUuid }.status,
+            )
+        }
+    }
 }
