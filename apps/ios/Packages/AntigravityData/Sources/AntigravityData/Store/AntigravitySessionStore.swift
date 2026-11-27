@@ -314,10 +314,6 @@ public final class AntigravitySessionStore {
     public var locallyCreatedEmptyCascadeIds: Set<String> = []
     public var lastNotificationEvent: (id: String, title: String, body: String, cascadeId: String)? = nil
 
-    public func isLocallyCreatedEmptyCascade(_ cascadeId: String) -> Bool {
-        locallyCreatedEmptyCascadeIds.contains(cascadeId)
-    }
-
     // MARK: - Live Backend Connectivity & Auth State
     public var isVerificationMode: Bool = false
     public var isInitialSessionCheckComplete: Bool = false
