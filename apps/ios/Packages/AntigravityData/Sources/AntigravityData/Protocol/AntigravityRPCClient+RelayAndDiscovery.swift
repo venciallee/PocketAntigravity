@@ -391,9 +391,13 @@ extension AntigravityRPCClient {
         }
 
         // Only allow direct-UUID fallback when ListInstances genuinely succeeded (HTTP 200) with empty results,
-        // AND prove liveness via a short ProxyCommand probe so an unregistered/offline host is never fabricated as `.connected`.
+        // AND prove liveness via a ProxyCommand probe so an unregistered/offline host is never fabricated as `.connected`.
         if anySucceededCall && lastError == nil && firstNonEmptyResult == nil && !isWildcardTarget && (rawTarget.hasSuffix("-v2") || rawTarget.count >= 32) {
-            let isAlive = await probeRelayInstanceLiveness(instanceUuid: rawTarget, timeoutInterval: 4.0)
+            let probeOutcome = try await probeRelayInstanceLiveness(
+                instanceUuid: rawTarget,
+                timeoutInterval: Self.livenessProbeTimeoutSeconds
+            )
+            let isAlive = (probeOutcome == .alive)
             let directInfo = RelayInstanceInfo(
                 uuid: rawTarget,
                 name: fallbackFamilyName ?? rawTarget,
@@ -429,10 +433,29 @@ extension AntigravityRPCClient {
         return elapsed >= 0 && elapsed < Self.endToEndFreshnessWindowSeconds
     }
 
+    private static func extractLeadingBoqStatusCode(from body: String) -> Int? {
+        var cleaned = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix(")]}'") {
+            cleaned = String(cleaned.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let data = cleaned.data(using: .utf8),
+              let arr = (try? JSONSerialization.jsonObject(with: data)) as? [Any],
+              let first = arr.first else {
+            return nil
+        }
+        if let intVal = first as? Int {
+            return intVal
+        }
+        if let num = first as? NSNumber {
+            return num.intValue
+        }
+        return nil
+    }
+
     internal func probeRelayInstanceLiveness(
         instanceUuid: String,
-        timeoutInterval: TimeInterval = 4.0
-    ) async -> Bool {
+        timeoutInterval: TimeInterval = AntigravityRPCClient.livenessProbeTimeoutSeconds
+    ) async throws -> RelayLivenessOutcome {
         do {
             _ = try await callCloudRelayProxyCommand(
                 method: "GetWorkspaceInfos",
@@ -444,18 +467,55 @@ extension AntigravityRPCClient {
                 ignoreCachedOfflineStatus: true
             )
             lastEndToEndVerifiedAtByUuid[instanceUuid] = Date()
-            return true
-        } catch let AntigravityRPCError.httpError(code, body) {
-            let alive = code == 404 && !ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: code, body: body)
-            if alive {
-                lastEndToEndVerifiedAtByUuid[instanceUuid] = Date()
-            } else {
+            consecutiveTransientProbeFailuresByUuid.removeValue(forKey: instanceUuid)
+            return .alive
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let err as AntigravityRPCError {
+            if case .unauthorized = err {
                 lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
+                throw err
             }
-            return alive
+            if case .httpError(let code, let body) = err {
+                if ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: code, body: body) {
+                    lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
+                    return .definitelyOffline
+                }
+                if SAPISIDHashGenerator.isInvalidApiKeyError(statusCode: code, responseBody: body) {
+                    lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
+                    return .transientFailure
+                }
+                if [404, 405, 415, 500, 501].contains(code) {
+                    lastEndToEndVerifiedAtByUuid[instanceUuid] = Date()
+                    consecutiveTransientProbeFailuresByUuid.removeValue(forKey: instanceUuid)
+                    return .alive
+                }
+                if code == 400 {
+                    let boqCode = Self.extractLeadingBoqStatusCode(from: body)
+                    if boqCode == 9 {
+                        let lower = body.lowercased()
+                        let isTunnelOffline = lower.contains("instance")
+                            || lower.contains("tunnel")
+                            || lower.contains("offline")
+                            || lower.contains("disconnect")
+                            || lower.contains("register")
+                        lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
+                        return isTunnelOffline ? .definitelyOffline : .transientFailure
+                    }
+                    if boqCode == 4 || boqCode == 14 {
+                        lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
+                        return .transientFailure
+                    }
+                    lastEndToEndVerifiedAtByUuid[instanceUuid] = Date()
+                    consecutiveTransientProbeFailuresByUuid.removeValue(forKey: instanceUuid)
+                    return .alive
+                }
+            }
+            lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
+            return .transientFailure
         } catch {
             lastEndToEndVerifiedAtByUuid.removeValue(forKey: instanceUuid)
-            return false
+            return .transientFailure
         }
     }
 
@@ -664,7 +724,25 @@ extension AntigravityRPCClient {
             }
             switch softOutcome {
             case .completed(let softResult):
-                initialSyncCompleted = !softResult.succeededInstanceUuids.isEmpty || softResult.cloudSucceeded
+                let expectedReachableUuids: Set<String> = {
+                    guard includeLocalForSync else { return [] }
+                    if let targetUuidForSync {
+                        return Set(
+                            softResult.availableRelayInstances
+                                .filter { $0.uuid == targetUuidForSync && $0.status.isReachable }
+                                .map(\.uuid)
+                        )
+                    }
+                    return Set(
+                        softResult.availableRelayInstances
+                            .filter(\.status.isReachable)
+                            .map(\.uuid)
+                    )
+                }()
+                let allTargetedReachableHydrated = expectedReachableUuids.isEmpty
+                    || expectedReachableUuids.isSubset(of: softResult.succeededInstanceUuids)
+                initialSyncCompleted = (!softResult.succeededInstanceUuids.isEmpty || softResult.cloudSucceeded)
+                    && allTargetedReachableHydrated
                 handshakeDiagBox.record("sync:ok(sum=\(softResult.summaries.count),ws=\(softResult.workspaces.count))")
                 if let currentSelected = selectedUuid,
                    !softResult.succeededInstanceUuids.contains(currentSelected),
@@ -745,10 +823,11 @@ extension AntigravityRPCClient {
     /// Single-request lightweight reachability probe used by foreground idle heartbeats
     /// and exponential-backoff offline recovery so mobile radios avoid multi-RPC fan-out.
     /// - Cloud Relay (`verifyEndToEnd == false`): sends only `ApiService/ListInstances` (a few hundred bytes, zero `ProxyCommand` fan-out),
-    ///   automatically escalating to a single short-timeout liveness probe if a previously disconnected/zombie instance reappears as CONNECTED.
+    ///   automatically escalating to a liveness probe if a previously disconnected/zombie instance reappears as CONNECTED
+    ///   or if an instance has not proven ProxyCommand liveness within `endToEndFreshnessWindowSeconds`.
+    ///   Only `definitelyOffline` (`INSTANCE_NOT_REGISTERED`) downgrades on strike 1; transient timeouts require 2 consecutive failures.
     /// - Cloud Relay (`verifyEndToEnd == true`, e.g. Settings refresh / offline recovery): verifies each `status.isReachable` Relay instance
-    ///   end-to-end with a short-timeout `GetWorkspaceInfos` `ProxyCommand` (`allowCrossHostFailover: false`) so stale/zombie
-    ///   Relay entries are truthfully downgraded to `.disconnected`.
+    ///   end-to-end with `GetWorkspaceInfos` (`allowCrossHostFailover: false`), retrying once after a brief backoff on transient failures.
     /// - Direct LAN: sends a single short-timeout `GetWorkspaceInfos` probe (HTTP 404 still proves server + auth liveness).
     public func probeHostReachability(
         timeoutInterval: TimeInterval? = nil,
@@ -771,6 +850,9 @@ extension AntigravityRPCClient {
             for key in Array(lastEndToEndVerifiedAtByUuid.keys) where !reachableNowIds.contains(key) {
                 lastEndToEndVerifiedAtByUuid.removeValue(forKey: key)
             }
+            for key in Array(consecutiveTransientProbeFailuresByUuid.keys) where !reachableNowIds.contains(key) {
+                consecutiveTransientProbeFailuresByUuid.removeValue(forKey: key)
+            }
             let instancesToVerify: [RelayInstanceInfo] = {
                 guard !instances.isEmpty else { return [] }
                 let candidateReachable = instances.filter(\.status.isReachable)
@@ -782,20 +864,61 @@ extension AntigravityRPCClient {
                 }
             }()
             if !instancesToVerify.isEmpty {
-                let perHostTimeout = min(effectiveTimeout, 4.5)
-                var failedUuids = Set<String>()
-                await withTaskGroup(of: (String, Bool).self) { group in
+                let perHostTimeout = min(effectiveTimeout, Self.livenessProbeTimeoutSeconds)
+                let probeOutcomes: [(String, RelayLivenessOutcome)] = try await withThrowingTaskGroup(
+                    of: (String, RelayLivenessOutcome).self
+                ) { group in
                     for inst in instancesToVerify {
+                        let wasPrevDisconnected = prevDisconnectedIds.contains(inst.uuid)
                         group.addTask {
-                            let alive = await self.probeRelayInstanceLiveness(
+                            var outcome = try await self.probeRelayInstanceLiveness(
                                 instanceUuid: inst.uuid,
                                 timeoutInterval: perHostTimeout
                             )
-                            return (inst.uuid, alive)
+                            if outcome == .transientFailure && verifyEndToEnd && !wasPrevDisconnected {
+                                try await Task.sleep(nanoseconds: Self.explicitVerifyRetryDelayNanoseconds)
+                                outcome = try await self.probeRelayInstanceLiveness(
+                                    instanceUuid: inst.uuid,
+                                    timeoutInterval: perHostTimeout
+                                )
+                            }
+                            return (inst.uuid, outcome)
                         }
                     }
-                    for await (uuid, ok) in group where !ok {
+                    var collected: [(String, RelayLivenessOutcome)] = []
+                    for try await pair in group {
+                        collected.append(pair)
+                    }
+                    return collected
+                }
+
+                var failedUuids = Set<String>()
+                for (uuid, outcome) in probeOutcomes {
+                    switch outcome {
+                    case .alive:
+                        consecutiveTransientProbeFailuresByUuid.removeValue(forKey: uuid)
+                    case .definitelyOffline:
+                        consecutiveTransientProbeFailuresByUuid.removeValue(forKey: uuid)
+                        lastEndToEndVerifiedAtByUuid.removeValue(forKey: uuid)
                         failedUuids.insert(uuid)
+                    case .transientFailure:
+                        if prevDisconnectedIds.contains(uuid) {
+                            failedUuids.insert(uuid)
+                        } else if verifyEndToEnd {
+                            // Explicit end-to-end verification already failed both initial probe and retry.
+                            consecutiveTransientProbeFailuresByUuid.removeValue(forKey: uuid)
+                            lastEndToEndVerifiedAtByUuid.removeValue(forKey: uuid)
+                            failedUuids.insert(uuid)
+                        } else {
+                            let nextCount = (consecutiveTransientProbeFailuresByUuid[uuid] ?? 0) + 1
+                            if nextCount >= Self.transientProbeOfflineThreshold {
+                                consecutiveTransientProbeFailuresByUuid.removeValue(forKey: uuid)
+                                lastEndToEndVerifiedAtByUuid.removeValue(forKey: uuid)
+                                failedUuids.insert(uuid)
+                            } else {
+                                consecutiveTransientProbeFailuresByUuid[uuid] = nextCount
+                            }
+                        }
                     }
                 }
                 if !failedUuids.isEmpty {
@@ -812,11 +935,11 @@ extension AntigravityRPCClient {
             let reachable = instances.filter(\.status.isReachable)
             if reachable.isEmpty {
                 if instances.isEmpty, let directUuid = resolvedInstanceUuid, !directUuid.isEmpty {
-                    let isAlive = await probeRelayInstanceLiveness(
+                    let directOutcome = try await probeRelayInstanceLiveness(
                         instanceUuid: directUuid,
-                        timeoutInterval: min(effectiveTimeout, 4.5)
+                        timeoutInterval: min(effectiveTimeout, Self.livenessProbeTimeoutSeconds)
                     )
-                    if isAlive {
+                    if directOutcome == .alive {
                         let elapsedMs = max(1, Int(Date().timeIntervalSince(start) * 1000.0))
                         return HostReachabilityProbeResult(
                             latencyMs: elapsedMs,
@@ -827,8 +950,12 @@ extension AntigravityRPCClient {
                             isSelectedHostOnline: true
                         )
                     }
-                    self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
-                        inst.uuid == directUuid ? inst.withStatus(.disconnected) : inst
+                    if directOutcome == .definitelyOffline {
+                        self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
+                            inst.uuid == directUuid ? inst.withStatus(.disconnected) : inst
+                        }
+                        self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: directUuid)
+                        self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: directUuid)
                     }
                 }
                 throw AntigravityRPCError.httpError(
@@ -1047,9 +1174,18 @@ extension AntigravityRPCClient {
                 )
                 : ([], false)
 
-            var resultsByUuid: [String: (ok: Bool, ws: [WorkspaceInfo], mem: [CascadeSummary], jb: [CascadeSummary])] = [:]
+            struct LocalFetchEntry: Sendable {
+                let ok: Bool
+                let ws: [WorkspaceInfo]
+                let mem: [CascadeSummary]
+                let jb: [CascadeSummary]
+                let isDefinitelyUnregistered: Bool
+                let unauthorizedError: AntigravityRPCError?
+            }
+
+            var resultsByUuid: [String: LocalFetchEntry] = [:]
             if !localInstancesToQuery.isEmpty {
-                await withTaskGroup(of: (String, Bool, [WorkspaceInfo], [CascadeSummary], [CascadeSummary]).self) { group in
+                await withTaskGroup(of: (String, LocalFetchEntry).self) { group in
                     for inst in localInstancesToQuery {
                         group.addTask {
                             async let wsOutcomeTask = self.fetchWorkspaceInfosOutcome(
@@ -1057,7 +1193,7 @@ extension AntigravityRPCClient {
                                 originHostName: inst.name,
                                 timeoutInterval: timeoutInterval
                             )
-                            async let memTask = self.getAllCascadeTrajectories(
+                            async let memTask = self.fetchTrajectoriesResult(
                                 instanceUuidOverride: inst.uuid,
                                 originHostName: inst.name,
                                 timeoutInterval: timeoutInterval
@@ -1072,15 +1208,43 @@ extension AntigravityRPCClient {
                                 : []
 
                             let wsOutcome = await wsOutcomeTask
-                            let memResult = try? await memTask
+                            let memOutcome = await memTask
                             let jbLocal = await jbLocalTask
-                            let instOk = wsOutcome.ok || memResult != nil || !jbLocal.isEmpty
-                            return (inst.uuid, instOk, wsOutcome.ws, memResult ?? [], jbLocal)
+                            let memList: [CascadeSummary]
+                            let memOk: Bool
+                            let memUnregistered: Bool
+                            let memAuthError: AntigravityRPCError?
+                            switch memOutcome {
+                            case .success(let list):
+                                memList = list
+                                memOk = true
+                                memUnregistered = false
+                                memAuthError = nil
+                            case .failure(let err):
+                                memList = []
+                                memOk = false
+                                memUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(err)
+                                if let rpcErr = err as? AntigravityRPCError, case .unauthorized = rpcErr {
+                                    memAuthError = rpcErr
+                                } else {
+                                    memAuthError = nil
+                                }
+                            }
+                            let instOk = wsOutcome.ok || memOk || !jbLocal.isEmpty
+                            let entry = LocalFetchEntry(
+                                ok: instOk,
+                                ws: wsOutcome.ws,
+                                mem: memList,
+                                jb: jbLocal,
+                                isDefinitelyUnregistered: wsOutcome.isDefinitelyUnregistered || memUnregistered,
+                                unauthorizedError: wsOutcome.unauthorizedError ?? memAuthError
+                            )
+                            return (inst.uuid, entry)
                         }
                     }
 
-                    for await (instUuid, instOk, wsList, memList, jbLocalList) in group {
-                        resultsByUuid[instUuid] = (instOk, wsList, memList, jbLocalList)
+                    for await (instUuid, entry) in group {
+                        resultsByUuid[instUuid] = entry
                     }
                 }
             }
@@ -1104,17 +1268,29 @@ extension AntigravityRPCClient {
             let cloudOutcome = await cloudOutcomeTask
             let updatedCloudProjects = self.cachedCloudProjectsById
 
+            var firstAuthError: AntigravityRPCError? = nil
             if !localInstancesToQuery.isEmpty {
                 // Merge in deterministic priority order (`preferredUuid` first) so shared-disk windows on the same Mac
                 // never randomly steal `originInstanceUuid` from the active host.
-                var failedLocalUuids = Set<String>()
+                var definitelyOfflineUuids = Set<String>()
+                var transientFailedUuids = Set<String>()
                 for inst in localInstancesToQuery {
                     guard let entry = resultsByUuid[inst.uuid] else { continue }
+                    if firstAuthError == nil, let authErr = entry.unauthorizedError {
+                        firstAuthError = authErr
+                    }
                     if entry.ok {
                         anyInstanceSucceeded = true
                         succeededInstanceUuids.insert(inst.uuid)
                     } else {
-                        failedLocalUuids.insert(inst.uuid)
+                        let alreadyMarkedOffline = self.cachedRelayInstances.contains {
+                            $0.uuid == inst.uuid && !$0.status.isReachable
+                        }
+                        if entry.isDefinitelyUnregistered || alreadyMarkedOffline {
+                            definitelyOfflineUuids.insert(inst.uuid)
+                        } else {
+                            transientFailedUuids.insert(inst.uuid)
+                        }
                     }
                     for ws in entry.ws {
                         let wsKey = "\(ws.isCloud ? "cloud" : (ws.originInstanceUuid ?? inst.uuid))|\(ws.workspaceUri)"
@@ -1131,15 +1307,19 @@ extension AntigravityRPCClient {
                         )
                     }
                 }
-                if !failedLocalUuids.isEmpty {
-                    for uuid in failedLocalUuids {
+                if !definitelyOfflineUuids.isEmpty {
+                    for uuid in definitelyOfflineUuids {
                         self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: uuid)
+                        self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: uuid)
                     }
                     if !self.cachedRelayInstances.isEmpty {
                         self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
-                            failedLocalUuids.contains(inst.uuid) ? inst.withStatus(.disconnected) : inst
+                            definitelyOfflineUuids.contains(inst.uuid) ? inst.withStatus(.disconnected) : inst
                         }
                     }
+                }
+                for uuid in transientFailedUuids {
+                    self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: uuid)
                 }
             }
 
@@ -1156,6 +1336,10 @@ extension AntigravityRPCClient {
                         )
                     }
                 }
+            }
+
+            if !anyInstanceSucceeded && !cloudSucceeded && cloudProjects.isEmpty, let firstAuthError {
+                throw firstAuthError
             }
 
             if targetInstanceUuid == nil && includeLocal && !anyInstanceSucceeded && cloudProjects.isEmpty && !reachableInstances.isEmpty {
@@ -1249,19 +1433,29 @@ extension AntigravityRPCClient {
         instanceUuidOverride: String?,
         originHostName: String?,
         timeoutInterval: TimeInterval?
-    ) async -> (ok: Bool, ws: [WorkspaceInfo]) {
+    ) async -> (ok: Bool, ws: [WorkspaceInfo], isDefinitelyUnregistered: Bool, unauthorizedError: AntigravityRPCError?) {
         do {
             let ws = try await getWorkspaceInfos(
                 instanceUuidOverride: instanceUuidOverride,
                 originHostName: originHostName,
                 timeoutInterval: timeoutInterval
             )
-            return (true, ws)
-        } catch let AntigravityRPCError.httpError(code, body)
-            where code == 404 && !ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: code, body: body) {
-            return (true, [])
+            return (true, ws, false, nil)
+        } catch let err as AntigravityRPCError {
+            if case .unauthorized = err {
+                return (false, [], false, err)
+            }
+            if case .httpError(let code, let body) = err {
+                if ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: code, body: body) {
+                    return (false, [], true, nil)
+                }
+                if [404, 405, 415, 501].contains(code) {
+                    return (true, [], false, nil)
+                }
+            }
+            return (false, [], false, nil)
         } catch {
-            return (false, [])
+            return (false, [], false, nil)
         }
     }
 
@@ -1346,6 +1540,7 @@ extension AntigravityRPCClient {
                 let perHostTimeout = min(timeoutInterval ?? 8.0, 8.0)
 
                 var instOk = false
+                var definitelyUnregistered = false
                 var authError: AntigravityRPCError? = nil
                 let wsList: [WorkspaceInfo]
                 do {
@@ -1358,7 +1553,9 @@ extension AntigravityRPCClient {
                 } catch let err as AntigravityRPCError {
                     if case .unauthorized = err {
                         authError = err
-                    } else if case .httpError(let code, _) = err, code == 404 {
+                    } else if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(err) {
+                        definitelyUnregistered = true
+                    } else if case .httpError(let code, _) = err, [404, 405, 415, 501].contains(code) {
                         instOk = true
                     }
                     wsList = []
@@ -1393,19 +1590,32 @@ extension AntigravityRPCClient {
                     if case AntigravityRPCError.unauthorized = err {
                         throw err
                     }
+                    if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(err) {
+                        definitelyUnregistered = true
+                    }
                     memList = []
                 }
                 if !jbLocal.isEmpty {
                     instOk = true
                 }
 
-                if !cachedRelayInstances.isEmpty {
-                    self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
-                        guard inst.uuid == resolvedUuid else { return inst }
-                        if instOk {
+                if instOk {
+                    self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: resolvedUuid)
+                    if !cachedRelayInstances.isEmpty {
+                        self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
+                            guard inst.uuid == resolvedUuid else { return inst }
                             return inst.status.isReachable ? inst : inst.withStatus(.connected)
-                        } else {
-                            return inst.status.isReachable ? inst.withStatus(.disconnected) : inst
+                        }
+                    }
+                } else {
+                    self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: resolvedUuid)
+                    if definitelyUnregistered {
+                        self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: resolvedUuid)
+                        if !cachedRelayInstances.isEmpty {
+                            self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
+                                guard inst.uuid == resolvedUuid else { return inst }
+                                return inst.status.isReachable ? inst.withStatus(.disconnected) : inst
+                            }
                         }
                     }
                 }

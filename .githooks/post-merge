@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Auto-sync gitignored PocketAntigravity.xcodeproj on macOS after `git pull` / `git merge`
+# (Preserves machine-local signing automatically via gitignored `local.signing.xcconfig`.)
 # Install once with: bash scripts/sync-xcode.sh --install-hooks
 set -euo pipefail
 
@@ -12,7 +13,7 @@ ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -d "$ROOT_DIR/PocketAntigravity.xcodeproj" || -d "$ROOT_DIR/iOSAntigravity.xcodeproj" ]] || exit 0
 
 CHANGED="$(git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD 2>/dev/null || true)"
-if printf '%s\n' "$CHANGED" | grep -Eq '^(project\.yml|apps/ios/|tests/ios-ui/|shared/|gradle/|build\.gradle\.kts|settings\.gradle\.kts|gradle\.properties)'; then
+if printf '%s\n' "$CHANGED" | grep -Eq '^(project\.yml|apps/ios/|tests/ios-ui/|tests/watchos-ui/|shared/|gradle/|build\.gradle\.kts|settings\.gradle\.kts|gradle\.properties)'; then
   echo "[post-merge] iOS/KMP project files changed — syncing PocketAntigravity.xcodeproj..."
   bash "$ROOT_DIR/scripts/sync-xcode.sh" || echo "[post-merge] Warning: sync-xcode.sh failed; run 'bash scripts/sync-xcode.sh --clean --open' manually."
 fi

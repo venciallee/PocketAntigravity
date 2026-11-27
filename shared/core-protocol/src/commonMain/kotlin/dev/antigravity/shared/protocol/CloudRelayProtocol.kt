@@ -516,9 +516,14 @@ public object CloudRelayJspbCodec {
             prim.intOrNull?.let { return RelayInstanceStatus.fromRawCode(it) }
             val upper = prim.contentOrNull?.uppercase().orEmpty()
             return when {
-                upper.contains("CONNECTED") && !upper.contains("DISCONNECTED") -> RelayInstanceStatus.CONNECTED
-                upper.contains("IDLE") -> RelayInstanceStatus.IDLE
                 upper.contains("DISCONNECTED") || upper.contains("OFFLINE") -> RelayInstanceStatus.DISCONNECTED
+                upper.contains("IDLE") -> RelayInstanceStatus.IDLE
+                upper.contains("CONNECTED") ||
+                    upper.contains("ONLINE") ||
+                    upper.contains("ACTIVE") ||
+                    upper.contains("READY") ||
+                    upper.contains("RUNNING") ||
+                    upper.contains("BUSY") -> RelayInstanceStatus.CONNECTED
                 else -> RelayInstanceStatus.UNKNOWN
             }
         }
@@ -552,14 +557,18 @@ public object CloudRelayJspbCodec {
                     val metadataVal = item.getOrNull(1)
                     val metadataArr = metadataVal as? JsonArray
                     val metadataObj = metadataVal as? JsonObject
+                    val metadataStr = (metadataVal as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
 
                     val arrName = (metadataArr?.getOrNull(0) as? JsonPrimitive)?.contentOrNull?.trim()
                     val objName = firstNonEmptyString(metadataObj, preferredNameKeys)
-                    val name = (objName ?: arrName)?.takeIf { it.isNotEmpty() } ?: uuid
+                    val name = (objName ?: arrName ?: metadataStr)?.takeIf { it.isNotEmpty() } ?: uuid
 
                     val arrVersion = (metadataArr?.getOrNull(1) as? JsonPrimitive)?.contentOrNull?.trim()
                     val objVersion = firstNonEmptyString(metadataObj, versionKeys)
-                    val version = objVersion ?: arrVersion ?: ""
+                    val trailingVersion = if (metadataStr != null) {
+                        (item.getOrNull(4) as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
+                    } else null
+                    val version = objVersion ?: arrVersion ?: trailingVersion ?: ""
 
                     val supportsChunking = when {
                         (metadataObj?.get("supportsChunking") as? JsonPrimitive)?.booleanOrNull != null ->
@@ -606,7 +615,8 @@ public object CloudRelayJspbCodec {
                         ?: (metadataObj?.get("supports_chunking") as? JsonPrimitive)?.booleanOrNull
                         ?: true
 
-                    val status = decodeStatus(item["status"] ?: item["connectionStatus"] ?: item["connection_status"])
+                    val rawStatus = item["status"] ?: item["connectionStatus"] ?: item["connection_status"]
+                    val status = if (rawStatus != null) decodeStatus(rawStatus) else RelayInstanceStatus.CONNECTED
                     val updatedAtEpochMs = decodeTimestampEpochMs(item["updatedAt"] ?: item["updated_at"])
 
                     RelayInstanceInfo(
@@ -712,6 +722,11 @@ public object CloudRelayJspbCodec {
             val rootArray = parsedRoot as? JsonArray
                 ?: throw AntigravityRpcError.DecodingError("Expected JSPB array in ProxyCommandResponse")
             if (rootArray.firstOrNull() is JsonNull && rootArray.size >= 2) {
+                val second = rootArray[1]
+                val hasTrailingNonNull = rootArray.drop(2).any { it !is JsonNull }
+                if (!hasTrailingNonNull && isInnerHeaderPairList(second)) {
+                    return DecodedProxyCommandResponse(ByteArray(0), parseInnerHeaderPairs(second))
+                }
                 throw AntigravityRpcError.HttpError(502, unwrapped.decodeToString())
             }
             val firstString = (rootArray.firstOrNull() as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -750,6 +765,16 @@ public object CloudRelayJspbCodec {
             if (text != stripped) return extractStreamProxyPayloads(text)
         }
         return emptyList()
+    }
+
+    private fun isInnerHeaderPairList(element: JsonElement?): Boolean {
+        val pairs = element as? JsonArray ?: return false
+        return pairs.all { pairEl ->
+            val pair = pairEl as? JsonArray ?: return@all false
+            pair.size >= 2 &&
+                (pair[0] as? JsonPrimitive)?.isString == true &&
+                (pair[1] as? JsonPrimitive)?.isString == true
+        }
     }
 
     private fun parseInnerHeaderPairs(element: JsonElement?): Map<String, String> {

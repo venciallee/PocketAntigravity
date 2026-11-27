@@ -63,6 +63,7 @@ VERSION_BUMP_KEYS = (
 # Files with app-wide blast radius that automatically escalate to FULL verification.
 GLOBAL_FULL_ESCALATION_PATTERNS: list[tuple[str, str]] = [
     ("project.yml", "Xcode project/target/entitlements configuration changed"),
+    ("apps/ios/Config/*", "Xcode project xcconfig / local signing include configuration changed"),
     ("apps/ios/Packages/AntigravityData/Package.swift", "SwiftPM manifest changed"),
     ("apps/ios/App/Application/AntigravityApp.swift", "App root entry point changed"),
     ("apps/ios/App/Application/DebugSceneFactory.swift", "All 13 --ui-verify scene fixtures registry changed"),
