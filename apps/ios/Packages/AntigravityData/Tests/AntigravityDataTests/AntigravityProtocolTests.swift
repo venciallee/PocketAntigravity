@@ -4563,6 +4563,7 @@ final class AntigravityProtocolTests: XCTestCase {
         XCTAssertFalse(store.isLocalHostOnline(instanceId: removedUuid, hostname: "Old Mac mini"))
     }
 
+    @MainActor
     func testTC25_ActiveChatStepSyncForegroundAndReentryRecovery() async {
         let store = AntigravitySessionStore.makeESDDVerificationStore()
         store.hasPairedBackend = true
