@@ -380,6 +380,115 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(protoSteps[0].fallbackSummary, "Quantum Debugger Snapshot")
         XCTAssertTrue(protoSteps[0].isUnrecognizedForwardStep)
         XCTAssertTrue(protoSteps[0].hasRenderableChatContent)
+
+        // 3. Unknown JSON step with 2-level nested payload still extracts readable summary
+        let deepNestedJSON: JSONValue = .object([
+            "stepIndex": .int(13),
+            "type": .string("CORTEX_STEP_TYPE_FUTURE_DEEP_TOOL"),
+            "status": .string("CORTEX_STEP_STATUS_DONE"),
+            "futureDeepTool": .object([
+                "enabled": .bool(true),
+                "details": .object([
+                    "message": .string("Deep nested payload rendered")
+                ])
+            ])
+        ])
+        let deepStep = try XCTUnwrap(
+            AntigravityRPCClient.decodeJSONStep(deepNestedJSON, cascadeId: "cas-fwd", fallbackIndex: 13)
+        )
+        XCTAssertEqual(deepStep.type, .unspecified)
+        XCTAssertTrue(deepStep.isUnrecognizedForwardStep)
+        XCTAssertEqual(deepStep.fallbackSummary, "Deep nested payload rendered")
+    }
+
+    @MainActor
+    func testErrorMessageStepDecodesNestedJsonProtobufLegacyCacheAndReconcilesStreaming() throws {
+        // 1. Upstream JSON CORTEX_STEP_TYPE_ERROR_MESSAGE with nested errorMessage.error and status DONE
+        let nestedErrJSON: JSONValue = .object([
+            "stepIndex": .int(1),
+            "type": .string("CORTEX_STEP_TYPE_ERROR_MESSAGE"),
+            "status": .string("CORTEX_STEP_STATUS_DONE"),
+            "errorMessage": .object([
+                "shouldShowModel": .bool(true),
+                "error": .object([
+                    "userErrorMessage": .string("Model quota reached for Gemini 4 Neon."),
+                    "shortError": .string("RESOURCE_EXHAUSTED"),
+                    "fullError": .string("rpc error: code = ResourceExhausted desc = quota exhausted"),
+                    "httpStatusCode": .int(429)
+                ])
+            ])
+        ])
+        let errStep = try XCTUnwrap(
+            AntigravityRPCClient.decodeJSONStep(nestedErrJSON, cascadeId: "cas-err", fallbackIndex: 1)
+        )
+        XCTAssertEqual(errStep.type, .errorMessage)
+        XCTAssertEqual(errStep.status, .error)
+        XCTAssertTrue(errStep.isErrorMessageStep)
+        XCTAssertFalse(errStep.isUnrecognizedForwardStep)
+        XCTAssertTrue(errStep.hasRenderableChatContent)
+        XCTAssertEqual(errStep.errorMessage?.message, "Model quota reached for Gemini 4 Neon.")
+        XCTAssertEqual(errStep.errorMessage?.detail, "rpc error: code = ResourceExhausted desc = quota exhausted")
+        XCTAssertEqual(errStep.errorMessage?.errorCode, "HTTP 429")
+
+        // 2. Empty errorMessage payload still decodes as .errorMessage + .error (never UnknownStepFallbackCard)
+        let emptyErrJSON: JSONValue = .object([
+            "stepIndex": .int(2),
+            "type": .string("CORTEX_STEP_TYPE_ERROR_MESSAGE"),
+            "status": .string("CORTEX_STEP_STATUS_DONE"),
+            "errorMessage": .object([:])
+        ])
+        let emptyErrStep = try XCTUnwrap(
+            AntigravityRPCClient.decodeJSONStep(emptyErrJSON, cascadeId: "cas-err", fallbackIndex: 2)
+        )
+        XCTAssertEqual(emptyErrStep.type, .errorMessage)
+        XCTAssertEqual(emptyErrStep.status, .error)
+        XCTAssertTrue(emptyErrStep.isErrorMessageStep)
+        XCTAssertFalse(emptyErrStep.isUnrecognizedForwardStep)
+        XCTAssertTrue(emptyErrStep.hasRenderableChatContent)
+        XCTAssertNotNil(emptyErrStep.errorMessage)
+
+        // 3. Legacy offline-cached step from older build (type = .unspecified, rawTypeName = CORTEX_STEP_TYPE_ERROR_MESSAGE)
+        let legacyCached = CascadeStep(
+            cascadeId: "cas-err",
+            stepIndex: 3,
+            type: .unspecified,
+            status: .done,
+            rawTypeName: "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+        )
+        XCTAssertTrue(legacyCached.isErrorMessageStep)
+        XCTAssertFalse(legacyCached.isUnrecognizedForwardStep)
+        XCTAssertTrue(legacyCached.hasRenderableChatContent)
+
+        // 4. Binary Protobuf field 24 (CortexStepErrorMessage) with nested CortexErrorDetails submessage at field 1
+        var innerDetails = Data()
+        innerDetails.append(encodeStringField(1, string: "Upstream model timed out"))
+        innerDetails.append(encodeStringField(2, string: "DEADLINE_EXCEEDED after 60s"))
+        let errSubmsg = encodeLengthField(1, payload: innerDetails)
+        var protoStepBytes = Data()
+        protoStepBytes.append(encodeVarintField(1, value: 17)) // CORTEX_STEP_TYPE_ERROR_MESSAGE
+        protoStepBytes.append(encodeVarintField(4, value: 3))  // DONE
+        protoStepBytes.append(encodeLengthField(24, payload: errSubmsg))
+        let decodedProto = ProtobufStepCodec.decodeStepsResponse(
+            encodeLengthField(1, payload: protoStepBytes),
+            cascadeId: "cas-err",
+            startingIndex: 4
+        )
+        XCTAssertEqual(decodedProto.count, 1)
+        XCTAssertEqual(decodedProto[0].type, .errorMessage)
+        XCTAssertEqual(decodedProto[0].status, .error)
+        XCTAssertTrue(decodedProto[0].isErrorMessageStep)
+        XCTAssertEqual(decodedProto[0].errorMessage?.message, "Upstream model timed out")
+        XCTAssertEqual(decodedProto[0].errorMessage?.detail, "DEADLINE_EXCEEDED after 60s")
+
+        // 5. Summary streaming reconciliation terminates cleanly to .error when last step is ERROR_MESSAGE
+        let userStep = CascadeStep(cascadeId: "cas-err", stepIndex: 0, type: .userInput, status: .done, userInput: "hi")
+        let reconciled = AntigravitySessionStore.reconcileSummaryStreamingStatus(
+            currentStatus: .inProgress,
+            remoteSteps: [userStep, errStep],
+            withinOptimisticSendWindow: true
+        )
+        XCTAssertEqual(reconciled.status, .error)
+        XCTAssertFalse(reconciled.stillActive)
     }
 
     func testUnknownProtobufRequestedInteractionGuardsUnsafeApproveAndRepairsViaJSON() async throws {

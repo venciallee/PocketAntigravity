@@ -118,6 +118,7 @@ public enum CortexStepType: Int, Codable, Sendable, CaseIterable {
     case mcpToolCall = 133
     case backgroundTask = 134
     case sideQuestion = 135
+    case errorMessage = 136
 
     public var jsonName: String {
         switch self {
@@ -149,6 +150,7 @@ public enum CortexStepType: Int, Codable, Sendable, CaseIterable {
         case .mcpToolCall: return "CORTEX_STEP_TYPE_MCP_TOOL_CALL"
         case .backgroundTask: return "CORTEX_STEP_TYPE_BACKGROUND_TASK"
         case .sideQuestion: return "CORTEX_STEP_TYPE_SIDE_QUESTION"
+        case .errorMessage: return "CORTEX_STEP_TYPE_ERROR_MESSAGE"
         }
     }
 
@@ -370,6 +372,22 @@ public struct SearchPayload: Codable, Sendable, Equatable {
     }
 }
 
+public struct ErrorMessagePayload: Codable, Sendable, Equatable {
+    public var message: String
+    public var detail: String?
+    public var errorCode: String?
+
+    public init(
+        message: String = "",
+        detail: String? = nil,
+        errorCode: String? = nil
+    ) {
+        self.message = message
+        self.detail = detail
+        self.errorCode = errorCode
+    }
+}
+
 /// Represents a single step in a Cascade trajectory (`gemini_coder.Step`).
 public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
     public var id: String { "\(cascadeId)-\(stepIndex)" }
@@ -387,6 +405,7 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
     public var codeAction: CodeActionPayload?
     public var viewFile: ViewFilePayload?
     public var search: SearchPayload?
+    public var errorMessage: ErrorMessagePayload?
     public var requestedInteraction: RequestedInteraction?
     public var recordedExecutionMode: CascadeExecutionMode?
     public var recordedModelId: String?
@@ -415,6 +434,7 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         codeAction: CodeActionPayload? = nil,
         viewFile: ViewFilePayload? = nil,
         search: SearchPayload? = nil,
+        errorMessage: ErrorMessagePayload? = nil,
         requestedInteraction: RequestedInteraction? = nil,
         recordedExecutionMode: CascadeExecutionMode? = nil,
         recordedModelId: String? = nil,
@@ -440,6 +460,7 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         self.codeAction = codeAction
         self.viewFile = viewFile
         self.search = search
+        self.errorMessage = errorMessage
         self.requestedInteraction = requestedInteraction
         self.recordedExecutionMode = recordedExecutionMode
         self.recordedModelId = recordedModelId
@@ -454,7 +475,7 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case cascadeId, stepIndex, type, status, createdAt, userInput, attachedMentions, isQueuedInOutbox
-        case plannerResponse, taskBoundary, runCommand, codeAction, viewFile, search, requestedInteraction
+        case plannerResponse, taskBoundary, runCommand, codeAction, viewFile, search, errorMessage, requestedInteraction
         case recordedExecutionMode, recordedModelId, subagent, dynamicWorkflow, swarmBoard, mcpToolCall
         case voiceSummary, rawTypeName, fallbackSummary
     }
@@ -475,6 +496,7 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         self.codeAction = try c.decodeIfPresent(CodeActionPayload.self, forKey: .codeAction)
         self.viewFile = try c.decodeIfPresent(ViewFilePayload.self, forKey: .viewFile)
         self.search = try c.decodeIfPresent(SearchPayload.self, forKey: .search)
+        self.errorMessage = try c.decodeIfPresent(ErrorMessagePayload.self, forKey: .errorMessage)
         self.requestedInteraction = try c.decodeIfPresent(RequestedInteraction.self, forKey: .requestedInteraction)
         self.recordedExecutionMode = try c.decodeIfPresent(CascadeExecutionMode.self, forKey: .recordedExecutionMode)
         self.recordedModelId = try c.decodeIfPresent(String.self, forKey: .recordedModelId)
@@ -603,10 +625,18 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
         )
     }
 
+    /// `true` when this step represents a standard upstream `CORTEX_STEP_TYPE_ERROR_MESSAGE` step
+    /// (including legacy offline-cached steps decoded before explicit `errorMessage` support).
+    public var isErrorMessageStep: Bool {
+        type == .errorMessage
+            || errorMessage != nil
+            || (type == .unspecified && (rawTypeName ?? "").uppercased().contains("ERROR_MESSAGE"))
+    }
+
     /// `true` when this step represents a newer Desktop `CortexStepType` unknown to this app build
     /// that carries user-visible metadata (`rawTypeName` or `fallbackSummary`) and should render a fallback card.
     public var isUnrecognizedForwardStep: Bool {
-        guard type == .unspecified else { return false }
+        guard type == .unspecified, !isErrorMessageStep else { return false }
         let hasProse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if hasProse { return false }
         let hasRawType = !(rawTypeName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -618,7 +648,7 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
     /// Filters out internal Desktop housekeeping steps (`CHECKPOINT`, `EPHEMERAL_MESSAGE`, empty tool-call wrappers),
     /// while keeping unrecognized future Desktop step types visible via a fallback card instead of silently vanishing.
     public var hasRenderableChatContent: Bool {
-        if isWaitingForUser || requestedInteraction != nil {
+        if isWaitingForUser || requestedInteraction != nil || isErrorMessageStep {
             return true
         }
         if voiceSummary != nil || subagent != nil || dynamicWorkflow != nil || swarmBoard != nil || mcpToolCall != nil {
@@ -632,6 +662,8 @@ public struct CascadeStep: Codable, Sendable, Equatable, Identifiable {
             let hasResponse = !(plannerResponse?.response ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let hasThinking = !(plannerResponse?.thinking ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return hasResponse || hasThinking || status == .inProgress || status == .pending
+        case .errorMessage:
+            return true
         case .taskBoundary:
             return taskBoundary != nil
         case .runCommand:

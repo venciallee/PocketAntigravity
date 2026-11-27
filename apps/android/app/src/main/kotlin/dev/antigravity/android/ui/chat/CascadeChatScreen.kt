@@ -50,6 +50,7 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -763,7 +764,12 @@ private fun CascadeStepItemView(
             )
         }
 
-        // 3. Forward-Compatible Unknown Step Card (non-waiting)
+        // 3. First-Class Error Message Step Card (CORTEX_STEP_TYPE_ERROR_MESSAGE)
+        step.isErrorMessageStep -> {
+            ErrorMessageStepCard(step = step)
+        }
+
+        // 4. Forward-Compatible Unknown Step Card (non-waiting)
         step.isUnrecognizedForwardStep -> {
             UnknownForwardStepCard(step = step)
         }
@@ -1385,6 +1391,149 @@ private fun GenericFallbackInteractionCard(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(tr("Allow Once", "允许一次"), style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+}
+
+/**
+ * First-class error card rendered for upstream `CORTEX_STEP_TYPE_ERROR_MESSAGE` steps
+ * (including legacy offline-cached steps decoded before explicit `errorMessage` support).
+ */
+@Composable
+private fun ErrorMessageStepCard(step: CascadeStep) {
+    val colors = LocalAntigravityColors.current
+    var isDetailExpanded by remember(step.id) { mutableStateOf(false) }
+
+    val primaryMessage = remember(step.errorMessage, step.fallbackSummary, step.plannerResponse) {
+        listOf(
+            step.errorMessage?.message,
+            step.fallbackSummary,
+            step.plannerResponse?.response,
+        ).firstNotNullOfOrNull { candidate ->
+            val cleaned = candidate
+                ?.trim()
+                ?.removePrefix("⚠️")
+                ?.trim()
+            cleaned?.takeIf { it.isNotEmpty() }
+        }
+    }
+
+    val detailText = remember(step.errorMessage, primaryMessage) {
+        step.errorMessage?.detail
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != primaryMessage }
+    }
+
+    val badgeLabel = step.errorMessage?.errorCode
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: tr("ERROR", "错误")
+
+    AntigravitySurfaceCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("step-error-${step.stepIndex}"),
+        containerColor = colors.surfaceCard,
+        borderColor = colors.statusError.copy(alpha = 0.35f),
+        cornerRadius = 14.dp,
+        contentPadding = PaddingValues(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Warning,
+                contentDescription = null,
+                tint = colors.statusError,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = tr("Error", "出错了"),
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = colors.statusError,
+                modifier = Modifier.weight(1f),
+            )
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = colors.statusError.copy(alpha = 0.14f),
+            ) {
+                Text(
+                    text = badgeLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                    ),
+                    color = colors.statusError,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (primaryMessage != null) {
+            MarkdownContentView(markdown = primaryMessage)
+        } else {
+            Text(
+                text = tr(
+                    "Antigravity Desktop encountered an error while processing this turn.",
+                    "Antigravity 桌面端在处理本轮请求时遇到错误。",
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkSecondary,
+            )
+        }
+
+        if (detailText != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { isDetailExpanded = !isDetailExpanded }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = if (isDetailExpanded) {
+                        tr("Hide details", "收起详情")
+                    } else {
+                        tr("Show details", "查看详情")
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.inkSecondary,
+                )
+                Icon(
+                    imageVector = if (isDetailExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = null,
+                    tint = colors.inkSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            if (isDetailExpanded) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = colors.surfaceSubtleBox,
+                ) {
+                    Text(
+                        text = detailText,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp,
+                        ),
+                        color = colors.inkSecondary,
+                        modifier = Modifier.padding(8.dp),
+                    )
+                }
             }
         }
     }

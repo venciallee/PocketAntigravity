@@ -118,7 +118,8 @@ public enum class CortexStepType(public val rawValue: Int) {
     SWARM_BOARD(132),
     MCP_TOOL_CALL(133),
     BACKGROUND_TASK(134),
-    SIDE_QUESTION(135);
+    SIDE_QUESTION(135),
+    ERROR_MESSAGE(136);
 
     public val jsonName: String
         get() = "CORTEX_STEP_TYPE_$name"
@@ -236,6 +237,13 @@ public data class SearchPayload(
 )
 
 @Serializable
+public data class ErrorMessagePayload(
+    public val message: String = "",
+    public val detail: String? = null,
+    public val errorCode: String? = null,
+)
+
+@Serializable
 public data class CascadeStep(
     public val cascadeId: String,
     public val stepIndex: Int,
@@ -251,6 +259,7 @@ public data class CascadeStep(
     public val codeAction: CodeActionPayload? = null,
     public val viewFile: ViewFilePayload? = null,
     public val search: SearchPayload? = null,
+    public val errorMessage: ErrorMessagePayload? = null,
     public val requestedInteraction: RequestedInteraction? = null,
     public val recordedExecutionMode: CascadeExecutionMode? = null,
     public val recordedModelId: String? = null,
@@ -264,14 +273,21 @@ public data class CascadeStep(
 ) {
     public val id: String get() = "$cascadeId-$stepIndex"
 
+    public val isErrorMessageStep: Boolean
+        get() = type == CortexStepType.ERROR_MESSAGE ||
+            errorMessage != null ||
+            (type == CortexStepType.UNSPECIFIED &&
+                rawTypeName?.uppercase()?.contains("ERROR_MESSAGE") == true)
+
     public val isUnrecognizedForwardStep: Boolean
         get() = type == CortexStepType.UNSPECIFIED &&
+            !isErrorMessageStep &&
             (!rawTypeName.isNullOrBlank() || !fallbackSummary.isNullOrBlank())
 
     public val hasRenderableChatContent: Boolean
         get() {
             if (status == CortexStepStatus.WAITING || requestedInteraction != null) return true
-            if (isUnrecognizedForwardStep) return true
+            if (isErrorMessageStep || isUnrecognizedForwardStep) return true
             if (voiceSummary != null || subagent != null || dynamicWorkflow != null ||
                 swarmBoard != null || mcpToolCall != null
             ) {
@@ -285,6 +301,7 @@ public data class CascadeStep(
                         !plannerResponse?.thinking.isNullOrBlank() ||
                         status == CortexStepStatus.IN_PROGRESS ||
                         status == CortexStepStatus.PENDING
+                CortexStepType.ERROR_MESSAGE -> true
                 CortexStepType.TASK_BOUNDARY -> taskBoundary != null
                 CortexStepType.RUN_COMMAND -> runCommand != null
                 CortexStepType.CODE_ACTION -> codeAction != null

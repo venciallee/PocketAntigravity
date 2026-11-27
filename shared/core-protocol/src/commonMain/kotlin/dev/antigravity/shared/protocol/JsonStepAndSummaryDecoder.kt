@@ -12,6 +12,7 @@ import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.CortexStepType
 import dev.antigravity.shared.model.DownloadUrlInteractionSpec
 import dev.antigravity.shared.model.DynamicWorkflowPayload
+import dev.antigravity.shared.model.ErrorMessagePayload
 import dev.antigravity.shared.model.ExecuteUrlInteractionSpec
 import dev.antigravity.shared.model.FilePermissionInteractionSpec
 import dev.antigravity.shared.model.McpToolCallPayload
@@ -562,7 +563,7 @@ public object JsonStepAndSummaryDecoder {
         val stepIndex = obj.int("stepIndex") ?: fallbackIndex
         val rawTypePrim = obj["type"] as? JsonPrimitive
         var stepType = resolveStepType(rawTypePrim)
-        val stepStatus = resolveStepStatus(obj["status"])
+        var stepStatus = resolveStepStatus(obj["status"])
 
         var userText: String? = nonEmpty(obj.str("userInput"))
         val mentions = obj.arr("attachedMentions")
@@ -910,6 +911,23 @@ public object JsonStepAndSummaryDecoder {
             if (stepType == CortexStepType.UNSPECIFIED) stepType = CortexStepType.MCP_TOOL_CALL
         }
 
+        var errorMessagePayload: ErrorMessagePayload? = null
+        val errElem = obj["errorMessage"] ?: obj["error_message"]
+        if (errElem != null || stepType == CortexStepType.ERROR_MESSAGE) {
+            errorMessagePayload = extractErrorMessagePayload(errElem)
+            if (stepType == CortexStepType.UNSPECIFIED && errElem != null) {
+                stepType = CortexStepType.ERROR_MESSAGE
+            }
+        }
+        if (stepType == CortexStepType.ERROR_MESSAGE) {
+            if (errorMessagePayload == null) {
+                errorMessagePayload = ErrorMessagePayload()
+            }
+            if (stepStatus == CortexStepStatus.DONE || stepStatus == CortexStepStatus.UNSPECIFIED) {
+                stepStatus = CortexStepStatus.ERROR
+            }
+        }
+
         if ((stepType == CortexStepType.PLANNER_RESPONSE || stepType == CortexStepType.NOTIFY_USER) &&
             plannerPayload == null &&
             (stepStatus == CortexStepStatus.IN_PROGRESS || stepStatus == CortexStepStatus.PENDING)
@@ -954,6 +972,7 @@ public object JsonStepAndSummaryDecoder {
             codeAction = codeActionPayload,
             viewFile = viewFilePayload,
             search = searchPayload,
+            errorMessage = errorMessagePayload,
             requestedInteraction = interaction,
             recordedExecutionMode = recordedMode,
             recordedModelId = recordedModelId,
@@ -1099,25 +1118,121 @@ public object JsonStepAndSummaryDecoder {
         return null
     }
 
+    private fun extractErrorMessagePayload(element: JsonElement?): ErrorMessagePayload {
+        if (element == null) return ErrorMessagePayload()
+        if (element is JsonPrimitive) {
+            return ErrorMessagePayload(message = nonEmpty(element.contentOrNull).orEmpty())
+        }
+        val errObj = element as? JsonObject ?: return ErrorMessagePayload()
+        val nestedErr = errObj.obj("error")
+            ?: errObj.obj("errorDetails")
+            ?: errObj.obj("error_details")
+            ?: errObj.obj("details")
+            ?: errObj.obj("cortexError")
+            ?: errObj.obj("cortex_error")
+        val scopes = listOfNotNull(nestedErr, errObj)
+
+        fun firstString(vararg keys: String): String? {
+            for (scope in scopes) {
+                for (key in keys) {
+                    val prim = scope[key] as? JsonPrimitive ?: continue
+                    if (prim.isString) {
+                        nonEmpty(prim.contentOrNull)?.let { return it }
+                    }
+                }
+            }
+            return null
+        }
+
+        fun firstErrorCode(): String? {
+            val codeKeys = listOf(
+                "httpStatusCode", "http_status_code",
+                "errorCode", "error_code",
+                "statusCode", "status_code",
+                "grpcCode", "grpc_code",
+                "code",
+            )
+            for (scope in scopes) {
+                for (key in codeKeys) {
+                    val prim = scope[key] as? JsonPrimitive ?: continue
+                    val raw = nonEmpty(prim.contentOrNull) ?: continue
+                    val upper = raw.uppercase()
+                    if (raw == "0" || upper == "OK" || upper.endsWith("_UNSPECIFIED")) continue
+                    return if (key.contains("http", ignoreCase = true) && raw.all { it.isDigit() }) {
+                        "HTTP $raw"
+                    } else {
+                        raw
+                    }
+                }
+            }
+            return null
+        }
+
+        val userMsg = firstString("userErrorMessage", "user_error_message")
+        val shortErr = firstString("shortError", "short_error")
+        val plainMsg = firstString(
+            "message", "errorMessage", "error_message",
+            "text", "reason", "description", "summary", "error",
+        )
+        val fullErr = firstString(
+            "fullError", "full_error", "details", "rawError", "raw_error", "stackTrace", "stack_trace",
+        )
+        val code = firstErrorCode()
+
+        val primary = userMsg
+            ?: shortErr
+            ?: plainMsg
+            ?: fullErr
+            ?: extractSummaryFromUnknownObject(errObj, maxDepth = 3)
+            ?: ""
+
+        val detail = when {
+            fullErr != null && fullErr != primary -> fullErr
+            shortErr != null && shortErr != primary && userMsg != null -> shortErr
+            else -> null
+        }
+
+        return ErrorMessagePayload(
+            message = primary,
+            detail = detail,
+            errorCode = code,
+        )
+    }
+
     private fun extractFallbackSummaryFromUnknownStep(obj: JsonObject): String? {
         for ((key, value) in obj) {
             if (key == "metadata" || key == "requestedInteraction") continue
             val nested = value as? JsonObject ?: continue
-            extractSummaryFromUnknownObject(nested)?.let { return it }
+            extractSummaryFromUnknownObject(nested, maxDepth = 3)?.let { return it }
         }
-        return extractSummaryFromUnknownObject(obj)
+        return extractSummaryFromUnknownObject(obj, maxDepth = 2)
     }
 
-    private fun extractSummaryFromUnknownObject(obj: JsonObject): String? {
-        val preferredKeys = listOf("summary", "title", "description", "message", "text", "label", "reason", "prompt", "content", "name")
+    private fun extractSummaryFromUnknownObject(obj: JsonObject, maxDepth: Int = 2): String? {
+        val preferredKeys = listOf(
+            "userErrorMessage", "user_error_message",
+            "shortError", "short_error",
+            "summary", "title", "description", "message", "text", "label", "reason", "prompt", "content", "name",
+            "fullError", "full_error",
+        )
         for (k in preferredKeys) {
-            nonEmpty(obj.str(k))?.let { return it.take(240) }
+            val prim = obj[k] as? JsonPrimitive ?: continue
+            if (prim.isString) {
+                nonEmpty(prim.contentOrNull)?.let { return it.take(240) }
+            }
         }
         for ((key, value) in obj) {
             if (key == "type" || key == "status" || key == "cascadeId" || key == "stepIndex") continue
             val prim = value as? JsonPrimitive ?: continue
             if (prim.isString) {
                 nonEmpty(prim.contentOrNull)?.let { return it.take(240) }
+            }
+        }
+        if (maxDepth > 0) {
+            for ((key, value) in obj) {
+                if (key == "metadata" || key == "requestedInteraction") continue
+                val nested = value as? JsonObject ?: continue
+                extractSummaryFromUnknownObject(nested, maxDepth = maxDepth - 1)?.let { return it }
             }
         }
         return null
@@ -1242,6 +1357,7 @@ public object JsonStepAndSummaryDecoder {
             raw.contains("DYNAMIC_WORKFLOW") -> CortexStepType.DYNAMIC_WORKFLOW
             raw.contains("SWARM") -> CortexStepType.SWARM_BOARD
             raw.contains("MCP") -> CortexStepType.MCP_TOOL_CALL
+            raw.contains("ERROR_MESSAGE") -> CortexStepType.ERROR_MESSAGE
             raw.contains("ASK_QUESTION") || raw.contains("COMMAND_STATUS") -> CortexStepType.COMMAND_STATUS
             else -> CortexStepType.UNSPECIFIED
         }
