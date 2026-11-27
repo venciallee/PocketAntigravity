@@ -1,5 +1,6 @@
 package dev.antigravity.shared.protocol
 
+import dev.antigravity.shared.model.CascadeStep
 import dev.antigravity.shared.model.CortexStepStatus
 import dev.antigravity.shared.model.CortexStepType
 import dev.antigravity.shared.model.RemoteConnectionChannel
@@ -1468,5 +1469,211 @@ class AdaptiveTrajectorySyncTest {
         ).decodeToString()
         assertTrue(protoBody.contains("""["accept-encoding","gzip"]"""), "Expected gzip accept-encoding in proxy request: $protoBody")
         assertTrue(protoBody.contains("""["accept","application/proto"]"""), "Expected application/proto accept header: $protoBody")
+    }
+
+    @Test
+    fun testTailFirstFastPaintEmitsRecentSliceBeforeFullBackfillAndCachesOffsetIgnoringHost() = runTest {
+        fun encodeVarint(value: Int): ByteArray {
+            var v = value
+            val out = mutableListOf<Byte>()
+            while (v > 0x7F) {
+                out.add(((v and 0x7F) or 0x80).toByte())
+                v = v ushr 7
+            }
+            out.add((v and 0x7F).toByte())
+            return out.toByteArray()
+        }
+
+        fun encodeTagLen(tag: Int, payload: ByteArray): ByteArray =
+            encodeVarint(tag) + encodeVarint(payload.size) + payload
+
+        fun buildSliceBinarySteps(indices: IntRange): ByteArray {
+            val out = mutableListOf<Byte>()
+            for (idx in indices) {
+                val inner = if (idx % 2 == 0) {
+                    val text = "User #$idx".encodeToByteArray()
+                    val ui = encodeTagLen(0x0A, text)
+                    byteArrayOf(0x08, 0x05, 0x10, 0x03) + encodeTagLen(0x2A, ui)
+                } else {
+                    val text = "Reply #$idx".encodeToByteArray()
+                    val pr = encodeTagLen(0x0A, text)
+                    byteArrayOf(0x08, 0x0A, 0x10, 0x03) + encodeTagLen(0x7A, pr)
+                }
+                for (b in encodeTagLen(0x0A, inner)) out.add(b)
+            }
+            return out.toByteArray()
+        }
+
+        fun decodeProtoStepOffset(req: ByteArray): Int {
+            var pos = 0
+            while (pos < req.size) {
+                val tag = req[pos++].toInt() and 0xFF
+                val fieldNum = tag ushr 3
+                val wireType = tag and 0x07
+                if (wireType == 2) {
+                    var len = 0
+                    var shift = 0
+                    while (pos < req.size) {
+                        val b = req[pos++].toInt() and 0xFF
+                        len = len or ((b and 0x7F) shl shift)
+                        if ((b and 0x80) == 0) break
+                        shift += 7
+                    }
+                    pos += len
+                } else if (wireType == 0) {
+                    var v = 0
+                    var shift = 0
+                    while (pos < req.size) {
+                        val b = req[pos++].toInt() and 0xFF
+                        v = v or ((b and 0x7F) shl shift)
+                        if ((b and 0x80) == 0) break
+                        shift += 7
+                    }
+                    if (fieldNum == 2) return v
+                }
+            }
+            return 0
+        }
+
+        // Case 1: Host honors stepOffset -> first partial emit delivers 48-step tail (52..99), second fills 0..99
+        val requestedOffsets = mutableListOf<Int>()
+        val partialSnapshots = mutableListOf<List<CascadeStep>>()
+        val engine = MockEngine { request ->
+            val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            val offset = decodeProtoStepOffset(bytes)
+            requestedOffsets.add(offset)
+            respond(
+                content = buildSliceBinarySteps(offset until 100),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/proto"),
+            )
+        }
+        val client = AntigravityKmpRpcClient(
+            host = testHost("mac-tail-fast"),
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(engine),
+        )
+        val full = client.fetchAllTrajectorySteps(
+            cascadeId = "cas-long-100",
+            knownStepCount = 100,
+            onPartialSteps = { partialSnapshots.add(it) },
+        )
+        assertEquals(100, full.size)
+        assertEquals(listOf(52, 0), requestedOffsets, "Long uncached chat must fetch tail 52..99 first, then backfill 0..99")
+        assertTrue(partialSnapshots.isNotEmpty(), "Expected immediate partial paint callback")
+        assertEquals(48, partialSnapshots.first().size, "First partial paint must contain the 48 tail steps")
+        assertEquals(52, partialSnapshots.first().first().stepIndex)
+        assertEquals(99, partialSnapshots.first().last().stepIndex)
+
+        // Case 2: Host ignores stepOffset -> returns all 100 steps in 1 RTT without wasting a second request
+        val ignoredOffsets = mutableListOf<Int>()
+        val ignoredEngine = MockEngine { request ->
+            val bytes = (request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)
+            ignoredOffsets.add(decodeProtoStepOffset(bytes))
+            respond(
+                content = buildSliceBinarySteps(0 until 100),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/proto"),
+            )
+        }
+        val ignoredClient = AntigravityKmpRpcClient(
+            host = testHost("mac-tail-ignored"),
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(ignoredEngine),
+        )
+        val ignoredPartials = mutableListOf<List<CascadeStep>>()
+        val fullSingleRtt = ignoredClient.fetchAllTrajectorySteps(
+            cascadeId = "cas-long-ignored",
+            knownStepCount = 100,
+            onPartialSteps = { ignoredPartials.add(it) },
+        )
+        assertEquals(100, fullSingleRtt.size)
+        assertEquals(listOf(52), ignoredOffsets, "Host ignoring stepOffset must finish in 1 RTT without a redundant second fetch")
+        assertEquals(0, fullSingleRtt.first().stepIndex)
+        assertEquals(99, fullSingleRtt.last().stepIndex)
+    }
+
+    @Test
+    fun testStreamAgentStateUpdatesEmitsRealTimeFramesWithStatusAndMergesSparseIndices() = runTest {
+        val cid = "cas-live-stream-1"
+        val frame1 = ConnectEnvelope.encode(
+            """{"update":{"status":"CASCADE_RUN_STATUS_RUNNING","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"items":[{"text":"Optimize loading"}]}}]}}}}""".encodeToByteArray()
+        )
+        val frame2 = ConnectEnvelope.encode(
+            """{"update":{"status":"CASCADE_RUN_STATUS_IDLE","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Done streaming!"}}]}}}}""".encodeToByteArray()
+        )
+        val endFrame = ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+        val combined = frame1 + frame2 + endFrame
+
+        val engine = MockEngine { request ->
+            if (request.url.encodedPath.endsWith("/StreamAgentStateUpdates")) {
+                respond(
+                    content = combined,
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/connect+json"),
+                )
+            } else {
+                respond("", HttpStatusCode.NotFound)
+            }
+        }
+
+        val client = AntigravityKmpRpcClient(
+            host = testHost("mac-live-stream"),
+            csrfToken = "test-csrf",
+            httpClientOverride = HttpClient(engine),
+        )
+        val updates = mutableListOf<AgentStateLiveUpdate>()
+        client.streamAgentStateUpdates(cascadeId = cid).collect { updates.add(it) }
+
+        assertEquals(2, updates.size, "Expected 2 real-time frames emitted progressively")
+        assertEquals("CASCADE_RUN_STATUS_RUNNING", updates[0].runStatus)
+        assertEquals(1, updates[0].steps.size)
+        assertFalse(updates[0].isSnapshotComplete)
+
+        assertEquals("CASCADE_RUN_STATUS_IDLE", updates[1].runStatus)
+        assertEquals(2, updates[1].steps.size)
+        assertTrue(updates[1].isSnapshotComplete)
+        assertEquals("Optimize loading", updates[1].steps[0].userInput)
+        assertEquals("Done streaming!", updates[1].steps[1].plannerResponse?.response)
+    }
+
+    @Test
+    fun testZeroBoxingConnectAndCloudRelayStreamParsersHandleChunkedMultiFramePayloads() {
+        val payloadA = """{"step":1,"msg":"${"A".repeat(4096)}"}""".encodeToByteArray()
+        val payloadB = """{"step":2,"msg":"${"B".repeat(2048)}"}""".encodeToByteArray()
+        val framed = ConnectEnvelope.encode(payloadA) + ConnectEnvelope.encode(payloadB)
+
+        // Feed in tiny 73-byte slices to stress cursor compaction & buffer growth
+        val connectParser = ConnectStreamParser()
+        val parsedFrames = mutableListOf<ConnectEnvelopeFrame>()
+        var offset = 0
+        while (offset < framed.size) {
+            val end = minOf(framed.size, offset + 73)
+            parsedFrames.addAll(connectParser.feed(framed.copyOfRange(offset, end)))
+            offset = end
+        }
+        assertEquals(2, parsedFrames.size)
+        assertEquals(payloadA.decodeToString(), parsedFrames[0].payload.decodeToString())
+        assertEquals(payloadB.decodeToString(), parsedFrames[1].payload.decodeToString())
+        assertFalse(connectParser.hasBufferedBytes)
+
+        // Stress StreamingBase64Decoder + CloudRelayJspbStreamParser in small chunks
+        val innerB64 = okio.ByteString.of(*framed).base64()
+        val jspbStream = ")]}'\n[[[\"$innerB64\",[]]]]".encodeToByteArray()
+        val outerB64 = okio.ByteString.of(*jspbStream).base64().encodeToByteArray()
+        val b64Decoder = StreamingBase64Decoder()
+        val jspbParser = CloudRelayJspbStreamParser()
+        val chunks = mutableListOf<ByteArray>()
+        var pos = 0
+        while (pos < outerB64.size) {
+            val end = minOf(outerB64.size, pos + 137)
+            val decoded = b64Decoder.feed(outerB64.copyOfRange(pos, end))
+            chunks.addAll(jspbParser.feed(decoded))
+            pos = end
+        }
+        chunks.addAll(jspbParser.feed(b64Decoder.flush()))
+        assertEquals(1, chunks.size)
+        assertEquals(framed.size, chunks[0].size)
+        assertTrue(framed.contentEquals(chunks[0]))
     }
 }

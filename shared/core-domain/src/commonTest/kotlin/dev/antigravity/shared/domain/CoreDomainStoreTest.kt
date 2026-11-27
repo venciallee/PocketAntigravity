@@ -1632,6 +1632,142 @@ class CoreDomainStoreTest {
     }
 
     @Test
+    fun testReconcileLiveRunStatusUpdatesSummaryInRealTime() = runTest {
+        val syncStore = ConversationSyncStore(
+            scope = this,
+            projectionStorage = InMemoryProjectionStorage(),
+        )
+        val cid = "cas-live-status-1"
+        syncStore.upsertSummary(
+            CascadeSummary(
+                cascadeId = cid,
+                title = "New Conversation",
+                hasResolvedTitle = false,
+                workspaceUri = "file:///Users/dev/app",
+                projectSlug = "app",
+                status = CortexStepStatus.DONE,
+                stepCount = 1,
+                currentStepIndex = 1,
+                totalSteps = 1,
+                updatedAtEpochMs = 1_740_000_000_000L,
+            )
+        )
+
+        val step0 = CascadeStep(
+            cascadeId = cid,
+            stepIndex = 0,
+            type = CortexStepType.USER_INPUT,
+            status = CortexStepStatus.DONE,
+            userInput = "Speed up chat history loading",
+        )
+        val step1Running = CascadeStep(
+            cascadeId = cid,
+            stepIndex = 1,
+            type = CortexStepType.PLANNER_RESPONSE,
+            status = CortexStepStatus.IN_PROGRESS,
+            plannerResponse = dev.antigravity.shared.model.PlannerResponsePayload(response = "Working on it..."),
+        )
+
+        // Frame 1: actively streaming
+        val running = syncStore.reconcileLiveRunStatus(cid, listOf(step0, step1Running), runStatus = "CASCADE_RUN_STATUS_RUNNING")
+        assertTrue(running)
+        val midSummary = syncStore.state.value.summaries.first { it.cascadeId == cid }
+        assertEquals(CortexStepStatus.IN_PROGRESS, midSummary.status)
+        assertEquals(2, midSummary.stepCount)
+        assertTrue(midSummary.hasResolvedTitle)
+        assertTrue(midSummary.title.contains("Speed up chat history loading"))
+
+        // Frame 2: completed
+        val step1Done = step1Running.copy(status = CortexStepStatus.DONE)
+        val stillRunning = syncStore.reconcileLiveRunStatus(cid, listOf(step0, step1Done), runStatus = "CASCADE_RUN_STATUS_IDLE")
+        assertFalse(stillRunning)
+        val finalSummary = syncStore.state.value.summaries.first { it.cascadeId == cid }
+        assertEquals(CortexStepStatus.DONE, finalSummary.status)
+        assertEquals(2, finalSummary.stepCount)
+    }
+
+    @Test
+    fun testStartLiveChatStreamAppliesRealTimeStepsAndRunStatus() = runTest {
+        withContext(Dispatchers.Default) {
+            val cid = "cas-coordinator-stream-1"
+            val frame1 = dev.antigravity.shared.protocol.ConnectEnvelope.encode(
+                """{"update":{"status":"CASCADE_RUN_STATUS_RUNNING","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"items":[{"text":"Live check"}]}}]}}}}""".encodeToByteArray()
+            )
+            val frame2 = dev.antigravity.shared.protocol.ConnectEnvelope.encode(
+                """{"update":{"status":"CASCADE_RUN_STATUS_IDLE","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Instant reply"}}]}}}}""".encodeToByteArray()
+            )
+            val endFrame = dev.antigravity.shared.protocol.ConnectEnvelope.encode(
+                "{}".encodeToByteArray(),
+                flags = dev.antigravity.shared.protocol.ConnectEnvelopeFlags.END_STREAM,
+            )
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/GetWorkspaceInfos") -> respond(
+                        content = """{"workspaces":[{"workspaceUri":"file:///Users/dev/app","displayName":"app"}]}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                    path.endsWith("/GetAllCascadeTrajectories") -> respond(
+                        content = """{"trajectorySummaries":{"$cid":{"summary":"Live check","stepCount":1,"status":"CASCADE_RUN_STATUS_RUNNING","workspaces":[{"workspaceFolderAbsoluteUri":"file:///Users/dev/app"}]}}}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                    path.endsWith("/StreamAgentStateUpdates") -> respond(
+                        content = frame1 + frame2 + endFrame,
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/connect+json"),
+                    )
+                    else -> respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                preferencesStore = InMemoryPreferencesStore(),
+                projectionStorage = InMemoryProjectionStorage(),
+                autoPreloadConversations = false,
+                enableForegroundHeartbeatLoop = false,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+            coordinator.connectDirectLan(
+                endpointUrlString = "http://127.0.0.1:42421",
+                csrfToken = "test-csrf",
+                startSummaryStream = false,
+            )
+
+            coordinator.chatStore.setActiveCascade(cid)
+            coordinator.startLiveChatStream(cascadeId = cid)
+
+            var observed = emptyList<CascadeStep>()
+            for (i in 0 until 40) {
+                observed = coordinator.chatState.value.stepsByCascadeId[cid].orEmpty()
+                if (observed.size == 2) break
+                kotlinx.coroutines.delay(50L)
+            }
+            coordinator.stopLiveChatStream()
+
+            assertEquals(2, observed.size, "Expected live chat stream to deliver both steps")
+            assertEquals("Instant reply", observed[1].plannerResponse?.response)
+            val summary = coordinator.syncState.value.summaries.firstOrNull { it.cascadeId == cid }
+            assertEquals(CortexStepStatus.DONE, summary?.status)
+            assertEquals(2, summary?.stepCount)
+            coordinator.close()
+        }
+    }
+
+    @Test
     fun testConnectionStateIsLocalHostOnlinePrefersOnlineDuplicateAndTransient504DoesNotWipeOnlineHosts() = runTest {
         withContext(Dispatchers.Default) {
             val miniUuid = "1111-dom-mini-v2"
