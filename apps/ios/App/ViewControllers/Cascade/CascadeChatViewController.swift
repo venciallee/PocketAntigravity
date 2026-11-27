@@ -353,6 +353,12 @@ public struct CascadeChatViewController: View {
                 store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)
             }
         }
+        .onDisappear {
+            if case .cascadeChat = store.activeRoute {
+                return
+            }
+            store.stopLiveChatStream()
+        }
     }
 
     @ViewBuilder

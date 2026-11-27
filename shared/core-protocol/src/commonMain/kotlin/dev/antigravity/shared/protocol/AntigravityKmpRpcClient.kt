@@ -127,6 +127,19 @@ public data class RelayResolutionResult(
 )
 
 /**
+ * Incremental frame emitted by [AntigravityKmpRpcClient.streamAgentStateUpdates] for real-time
+ * message and run-status synchronization.
+ */
+@Serializable
+public data class AgentStateLiveUpdate(
+    public val cascadeId: String,
+    public val steps: List<CascadeStep>,
+    public val totalLength: Int? = null,
+    public val runStatus: String? = null,
+    public val isSnapshotComplete: Boolean = false,
+)
+
+/**
  * Kotlin Multiplatform Connect-RPC & Google Cloud Relay transport client powered by Ktor
  * (`ktor-client-okhttp` on JVM/Android, `ktor-client-darwin` on iOS with SHA-256 pinning & LAN TOFU).
  *
@@ -266,16 +279,36 @@ public class AntigravityKmpRpcClient(
             val parser = ConnectStreamParser()
             val frames = parser.feed(data).filter { !it.isEndStream }
             if (frames.isEmpty()) return data
-            val out = ArrayList<Byte>(data.size)
+            if (frames.size == 1) {
+                val frame = frames[0]
+                val decoded = if (frame.isCompressed) {
+                    CloudRelayJspbCodec.decompressPayloadIfNeeded(frame.payload)
+                } else {
+                    frame.payload
+                }
+                return if (decoded.isEmpty()) data else decoded
+            }
+            val decodedParts = ArrayList<ByteArray>(frames.size)
+            var totalSize = 0
             for (frame in frames) {
                 val decoded = if (frame.isCompressed) {
                     CloudRelayJspbCodec.decompressPayloadIfNeeded(frame.payload)
                 } else {
                     frame.payload
                 }
-                for (b in decoded) out.add(b)
+                if (decoded.isNotEmpty()) {
+                    decodedParts.add(decoded)
+                    totalSize += decoded.size
+                }
             }
-            return if (out.isEmpty()) data else out.toByteArray()
+            if (totalSize == 0) return data
+            val out = ByteArray(totalSize)
+            var pos = 0
+            for (part in decodedParts) {
+                part.copyInto(out, destinationOffset = pos)
+                pos += part.size
+            }
+            return out
         }
 
         internal fun randomUuidV4(): String {
@@ -2877,6 +2910,8 @@ public class AntigravityKmpRpcClient(
         endIndex: Int = 0,
         instanceUuidOverride: String? = null,
         allowCrossHostFailover: Boolean = false,
+        repairUnknownSteps: Boolean = true,
+        onDecodedBeforeRepair: (suspend (List<CascadeStep>) -> Unit)? = null,
     ): List<CascadeStep> {
         val reqBytes = ProtobufStepCodec.encodeGetStepsRequest(cascadeId, startIndex, endIndex)
         if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
@@ -2889,6 +2924,10 @@ public class AntigravityKmpRpcClient(
             )
             val unwrapped = unwrapConnectFramedPayloadIfNeeded(rawBytes)
             val decoded = ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId, startingIndex = startIndex)
+            if (decoded.isNotEmpty() && onDecodedBeforeRepair != null) {
+                onDecodedBeforeRepair(decoded)
+            }
+            if (!repairUnknownSteps) return decoded
             return repairUnrecognizedWireStepsIfNeeded(
                 steps = decoded,
                 cascadeId = cascadeId,
@@ -2914,6 +2953,10 @@ public class AntigravityKmpRpcClient(
         }
         val unwrapped = unwrapConnectFramedPayloadIfNeeded(data)
         val decoded = ProtobufStepCodec.decodeStepsResponse(unwrapped, cascadeId, startingIndex = startIndex)
+        if (decoded.isNotEmpty() && onDecodedBeforeRepair != null) {
+            onDecodedBeforeRepair(decoded)
+        }
+        if (!repairUnknownSteps) return decoded
         return repairUnrecognizedWireStepsIfNeeded(
             steps = decoded,
             cascadeId = cascadeId,
@@ -3209,6 +3252,7 @@ public class AntigravityKmpRpcClient(
         isCloud: Boolean = false,
         instanceUuidOverride: String? = null,
         existingSteps: List<CascadeStep> = emptyList(),
+        onPartialSteps: (suspend (List<CascadeStep>) -> Unit)? = null,
     ): List<CascadeStep> {
         val isRemoteCloud = isRemoteCloudCascade(cascadeId, isCloud)
         val pinnedTarget = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
@@ -3246,7 +3290,14 @@ public class AntigravityKmpRpcClient(
                 }
             }
             try {
-                val steps = fetchStepsFromSingleInstance(cascadeId, knownStepCount, isRemoteCloud, primaryTarget)
+                val steps = fetchStepsFromSingleInstance(
+                    cascadeId = cascadeId,
+                    knownStepCount = knownStepCount,
+                    isRemoteCloud = isRemoteCloud,
+                    targetUuid = primaryTarget,
+                    existingStepsCount = existingSteps.size,
+                    onPartialSteps = onPartialSteps,
+                )
                 if (steps.isNotEmpty()) {
                     recordPinnedInstanceForCascade(cascadeId, primaryTarget)
                     return steps
@@ -3276,7 +3327,14 @@ public class AntigravityKmpRpcClient(
                 for (peer in peers) {
                     probedUuids.add(peer.uuid)
                     try {
-                        val peerSteps = fetchStepsFromSingleInstance(cascadeId, knownStepCount, isRemoteCloud, peer.uuid)
+                        val peerSteps = fetchStepsFromSingleInstance(
+                            cascadeId = cascadeId,
+                            knownStepCount = knownStepCount,
+                            isRemoteCloud = isRemoteCloud,
+                            targetUuid = peer.uuid,
+                            existingStepsCount = existingSteps.size,
+                            onPartialSteps = onPartialSteps,
+                        )
                         if (peerSteps.isNotEmpty()) {
                             recordPinnedInstanceForCascade(cascadeId, peer.uuid)
                             if (instanceUuidOverride == null && !isRemoteCloud) {
@@ -3325,6 +3383,8 @@ public class AntigravityKmpRpcClient(
         knownStepCount: Int,
         isRemoteCloud: Boolean,
         targetUuid: String?,
+        existingStepsCount: Int = 0,
+        onPartialSteps: (suspend (List<CascadeStep>) -> Unit)? = null,
     ): List<CascadeStep> {
         val wakeKey = "${targetUuid ?: "direct"}|$cascadeId"
         var lastError: Throwable? = null
@@ -3342,6 +3402,7 @@ public class AntigravityKmpRpcClient(
                     targetUuid = targetUuid,
                     knownStepCount = knownStepCount,
                     timeoutMs = 8_000L,
+                    onPartialSteps = onPartialSteps,
                 )
                 if (!streamedSteps.isNullOrEmpty()) {
                     stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
@@ -3360,59 +3421,79 @@ public class AntigravityKmpRpcClient(
 
         // Path 1 (Local PC Default): Binary Protobuf (`application/proto`) first.
         // Saves ~65% mobile bandwidth, avoids server-side JSON truncation dynamically,
-        // wakes dormant disk sessions on empty OR 404 `not_found`, and repairs unknown wire types via JSON.
+        // paints recent tail steps immediately on long uncached chats, emits before JSON repair,
+        // and wakes dormant disk sessions on empty OR 404 `not_found`.
         if (!isRemoteCloud && !isBinaryProtobufStepsUnsupported(targetUuid)) {
-            var shouldWakeAndRetryProto = false
-            try {
-                val protoSteps = fetchTrajectoryStepsProtobuf(
-                    cascadeId = cascadeId,
-                    startIndex = 0,
-                    endIndex = knownStepCount,
-                    instanceUuidOverride = targetUuid,
-                    allowCrossHostFailover = false,
-                )
-                if (protoSteps.isNotEmpty()) {
-                    stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                    return protoSteps
-                }
-                val alreadyWoken = stateMutex.withLock { wakeKey in wokenInstanceCascadeKeys }
-                shouldWakeAndRetryProto = knownStepCount > 0 || !alreadyWoken
-            } catch (e: AntigravityRpcError.Unauthorized) {
-                throw e
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                if (isBinaryProtobufUnsupportedError(e)) {
-                    recordBinaryProtobufStepsUnsupported(targetUuid)
-                } else {
-                    lastError = e
-                    if (ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
-                        shouldWakeAndRetryProto = true
-                    }
-                }
-            }
+            val hostKey = stateMutex.withLock { hostCapabilityKey(targetUuid) }
+            val offsetIgnored = stateMutex.withLock { hostKey in stepOffsetIgnoredHosts }
+            var tailFastPainted = false
 
-            if (shouldWakeAndRetryProto) {
+            // Two-phase tail-first fast paint for long uncached conversations (>= 80 steps):
+            // Fetch only the latest 48 steps first (~5-15% of payload) so the chat opens instantly,
+            // then backfill the complete 0..N trajectory in phase 2.
+            if (onPartialSteps != null && existingStepsCount == 0 && knownStepCount >= 80 && !offsetIgnored) {
+                val tailOffset = max(0, knownStepCount - 48)
                 try {
-                    loadTrajectory(cascadeId, isCloud = false, instanceUuidOverride = targetUuid)
+                    val tailSteps = fetchTrajectoryStepsProtobuf(
+                        cascadeId = cascadeId,
+                        startIndex = tailOffset,
+                        endIndex = knownStepCount,
+                        instanceUuidOverride = targetUuid,
+                        allowCrossHostFailover = false,
+                        repairUnknownSteps = false,
+                    )
+                    if (tailSteps.isNotEmpty()) {
+                        val serverIgnoredOffset = tailOffset > 0 && tailSteps.size >= knownStepCount
+                        if (serverIgnoredOffset) {
+                            stateMutex.withLock {
+                                stepOffsetIgnoredHosts.add(hostKey)
+                                wokenInstanceCascadeKeys.add(wakeKey)
+                            }
+                            val normalized = tailSteps.mapIndexed { idx, step ->
+                                if (step.stepIndex == idx) step else step.copy(stepIndex = idx)
+                            }
+                            onPartialSteps(normalized)
+                            return repairUnrecognizedWireStepsIfNeeded(
+                                steps = normalized,
+                                cascadeId = cascadeId,
+                                instanceUuidOverride = targetUuid,
+                                allowCrossHostFailover = false,
+                            )
+                        }
+                        tailFastPainted = true
+                        stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                        onPartialSteps(tailSteps)
+                    }
                 } catch (e: AntigravityRpcError.Unauthorized) {
                     throw e
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Throwable) {
-                    // Best-effort wake; still retry Binary Protobuf and fall through to Path 2 if needed.
+                } catch (e: Throwable) {
+                    if (isBinaryProtobufUnsupportedError(e)) {
+                        recordBinaryProtobufStepsUnsupported(targetUuid)
+                    }
+                    // Fall through cleanly to normal full fetch + wake path below.
                 }
+            }
+
+            if (!isBinaryProtobufStepsUnsupported(targetUuid)) {
+                var shouldWakeAndRetryProto = false
                 try {
-                    val retryProtoSteps = fetchTrajectoryStepsProtobuf(
+                    val protoSteps = fetchTrajectoryStepsProtobuf(
                         cascadeId = cascadeId,
                         startIndex = 0,
                         endIndex = knownStepCount,
                         instanceUuidOverride = targetUuid,
                         allowCrossHostFailover = false,
+                        onDecodedBeforeRepair = onPartialSteps,
                     )
-                    if (retryProtoSteps.isNotEmpty()) {
+                    if (protoSteps.isNotEmpty()) {
                         stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
-                        return retryProtoSteps
+                        return protoSteps
+                    }
+                    if (!tailFastPainted) {
+                        val alreadyWoken = stateMutex.withLock { wakeKey in wokenInstanceCascadeKeys }
+                        shouldWakeAndRetryProto = knownStepCount > 0 || !alreadyWoken
                     }
                 } catch (e: AntigravityRpcError.Unauthorized) {
                     throw e
@@ -3423,6 +3504,45 @@ public class AntigravityKmpRpcClient(
                         recordBinaryProtobufStepsUnsupported(targetUuid)
                     } else {
                         lastError = e
+                        if (ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
+                            shouldWakeAndRetryProto = true
+                        }
+                    }
+                }
+
+                if (shouldWakeAndRetryProto) {
+                    try {
+                        loadTrajectory(cascadeId, isCloud = false, instanceUuidOverride = targetUuid)
+                    } catch (e: AntigravityRpcError.Unauthorized) {
+                        throw e
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        // Best-effort wake; still retry Binary Protobuf and fall through to Path 2 if needed.
+                    }
+                    try {
+                        val retryProtoSteps = fetchTrajectoryStepsProtobuf(
+                            cascadeId = cascadeId,
+                            startIndex = 0,
+                            endIndex = knownStepCount,
+                            instanceUuidOverride = targetUuid,
+                            allowCrossHostFailover = false,
+                            onDecodedBeforeRepair = onPartialSteps,
+                        )
+                        if (retryProtoSteps.isNotEmpty()) {
+                            stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                            return retryProtoSteps
+                        }
+                    } catch (e: AntigravityRpcError.Unauthorized) {
+                        throw e
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        if (isBinaryProtobufUnsupportedError(e)) {
+                            recordBinaryProtobufStepsUnsupported(targetUuid)
+                        } else {
+                            lastError = e
+                        }
                     }
                 }
             }
@@ -3471,6 +3591,7 @@ public class AntigravityKmpRpcClient(
                     targetUuid = targetUuid,
                     knownStepCount = knownStepCount,
                     timeoutMs = if (isRemoteCloud) 5_000L else 4_000L,
+                    onPartialSteps = onPartialSteps,
                 )
                 if (!streamedSteps.isNullOrEmpty()) {
                     stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
@@ -3490,9 +3611,137 @@ public class AntigravityKmpRpcClient(
     }
 
     /**
+     * Subscribes to Antigravity 2.x's live `StreamAgentStateUpdates` server-streaming RPC for [cascadeId],
+     * merging sparse `indices` + `steps` on top of [initialSteps] and emitting [AgentStateLiveUpdate]
+     * on every incoming frame for real-time message and run-status synchronization.
+     */
+    public fun streamAgentStateUpdates(
+        cascadeId: String,
+        isCloud: Boolean = false,
+        instanceUuidOverride: String? = null,
+        initialSteps: List<CascadeStep> = emptyList(),
+    ): Flow<AgentStateLiveUpdate> = flow {
+        val isRemoteCloud = isRemoteCloudCascade(cascadeId, isCloud)
+        val pinnedTarget = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            pinnedInstanceForCascade(cascadeId)
+        } else {
+            null
+        }
+        val targetUuid = if (channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            selectReachableRelayUuid(pinnedTarget ?: instanceUuidOverride, allowCrossHostFailover = isRemoteCloud)
+                ?: throw AntigravityRpcError.HttpError(503, "Selected Antigravity Desktop host is offline")
+        } else {
+            instanceUuidOverride
+        }
+
+        val profile = stateMutex.withLock {
+            getOrCreateProfileLocked(hostCapabilityKey(targetUuid))
+        }
+        if (profile.isMethodKnownUnsupported("StreamAgentStateUpdates")) {
+            throw AntigravityRpcError.HttpError(501, "StreamAgentStateUpdates is not supported on this host")
+        }
+
+        val strippedFields = profile.strippedFieldsByMethod["StreamAgentStateUpdates"].orEmpty()
+        val payloadVariants = mutableListOf<JsonObject>()
+        payloadVariants.add(
+            buildJsonObject {
+                put("conversationId", cascadeId)
+                put("subscriberId", "pocket-${randomUuidV4()}")
+            }
+        )
+        if (isRemoteCloud && "backend" !in strippedFields) {
+            payloadVariants.add(
+                buildJsonObject {
+                    put("conversationId", cascadeId)
+                    put("subscriberId", "pocket-${randomUuidV4()}")
+                    put("backend", "BACKEND_TYPE_REMOTE_AICODE")
+                }
+            )
+        }
+
+        var lastError: Throwable? = null
+        for (variant in payloadVariants) {
+            val stepsByIndex = linkedMapOf<Int, CascadeStep>()
+            for (step in initialSteps) {
+                stepsByIndex[step.stepIndex] = step
+            }
+            var reportedTotalLength: Int? = null
+            var emittedAnyFrame = false
+            try {
+                subscribeEnvelopeStream(
+                    method = "StreamAgentStateUpdates",
+                    body = variant,
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = isRemoteCloud,
+                ).collect { frameObj ->
+                    val decoded = JsonStepAndSummaryDecoder.decodeAgentStateStepsUpdate(
+                        obj = frameObj,
+                        cascadeId = cascadeId,
+                    )
+                    if (decoded.totalLength != null) {
+                        reportedTotalLength = decoded.totalLength
+                    }
+                    for (step in decoded.steps) {
+                        stepsByIndex[step.stepIndex] = step
+                    }
+                    val totalLen = reportedTotalLength
+                    if (totalLen != null && totalLen >= 0) {
+                        stepsByIndex.keys.removeAll { it >= totalLen }
+                    }
+                    if (decoded.steps.isNotEmpty() || decoded.hasMainTrajectoryUpdate || decoded.runStatus != null) {
+                        if (!emittedAnyFrame) {
+                            emittedAnyFrame = true
+                            mutateCapabilityProfile(targetUuid) { it.recordMethodSupported("StreamAgentStateUpdates") }
+                            recordPinnedInstanceForCascade(cascadeId, targetUuid)
+                        }
+                        val sorted = stepsByIndex.values.sortedBy { it.stepIndex }
+                        val complete = (totalLen != null && sorted.size >= totalLen) ||
+                            (decoded.hasMainTrajectoryUpdate && totalLen == 0)
+                        emit(
+                            AgentStateLiveUpdate(
+                                cascadeId = cascadeId,
+                                steps = sorted,
+                                totalLength = totalLen,
+                                runStatus = decoded.runStatus,
+                                isSnapshotComplete = complete,
+                            )
+                        )
+                    }
+                }
+                if (emittedAnyFrame) return@flow
+            } catch (e: AntigravityRpcError.Unauthorized) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                    mutateCapabilityProfile(targetUuid) { it.recordMethodUnsupported("StreamAgentStateUpdates") }
+                    throw e
+                }
+                if (e is AntigravityRpcError.HttpError) {
+                    ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body)?.let { unknownField ->
+                        mutateCapabilityProfile(targetUuid) {
+                            it.recordStrippedField(unknownField, forMethod = "StreamAgentStateUpdates")
+                        }
+                    }
+                }
+                lastError = e
+                val shouldTryNext = !emittedAnyFrame && e is AntigravityRpcError.HttpError && (
+                    e.statusCode == 400 ||
+                        ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body) != null ||
+                        ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(e.statusCode, e.body)
+                    )
+                if (!shouldTryNext) throw e
+            }
+        }
+        lastError?.let { throw it }
+    }
+
+    /**
      * Reads the initial trajectory snapshot from Antigravity 2.x's authoritative
      * `StreamAgentStateUpdates` server-streaming Connect-RPC (`mainTrajectoryUpdate.stepsUpdate`),
      * merging sparse `indices` + `steps` up to `totalLength` and immediately closing the stream.
+     * Invokes [onPartialSteps] progressively as frames arrive so UI renders on Frame 1.
      * Returns `null` when this host does not implement `StreamAgentStateUpdates` (negative-cached).
      */
     private suspend fun fetchStepsViaAgentStateStream(
@@ -3501,6 +3750,7 @@ public class AntigravityKmpRpcClient(
         targetUuid: String?,
         knownStepCount: Int = 0,
         timeoutMs: Long = 8_000L,
+        onPartialSteps: (suspend (List<CascadeStep>) -> Unit)? = null,
     ): List<CascadeStep>? {
         val profile = stateMutex.withLock {
             getOrCreateProfileLocked(hostCapabilityKey(targetUuid))
@@ -3539,7 +3789,7 @@ public class AntigravityKmpRpcClient(
         val partialStepsSettleWindowMs = if (isRemoteCloud) {
             minOf(1_200L, maxOf(250L, timeoutMs / 4))
         } else {
-            minOf(450L, maxOf(150L, timeoutMs / 4))
+            minOf(180L, maxOf(80L, timeoutMs / 8))
         }
         val emptyZeroGraceWindowMs = if (isRemoteCloud) {
             minOf(1_500L, maxOf(250L, timeoutMs / 4))
@@ -3557,6 +3807,7 @@ public class AntigravityKmpRpcClient(
             var reportedTotalLength: Int? = null
             var sawMainTrajectory = false
             var settleJob: Job? = null
+            var lastPartialEmitMs = 0L
             try {
                 withSafeTimeoutOrNull(timeoutMs) {
                     coroutineScope {
@@ -3590,6 +3841,13 @@ public class AntigravityKmpRpcClient(
                                     throw SnapshotCompleteSignal()
                                 }
                                 if (stepsByIndex.isNotEmpty()) {
+                                    if (onPartialSteps != null) {
+                                        val nowMs = currentTimeMillis()
+                                        if (lastPartialEmitMs == 0L || (nowMs - lastPartialEmitMs) >= 60L) {
+                                            lastPartialEmitMs = nowMs
+                                            onPartialSteps(stepsByIndex.values.sortedBy { it.stepIndex })
+                                        }
+                                    }
                                     // Partial sparse snapshot received; wait briefly for remaining frames before settling.
                                     settleJob?.cancel()
                                     val targetCollector = collectorJob
@@ -5907,7 +6165,7 @@ public class AntigravityKmpRpcClient(
                     }
 
                     val channelReader = response.bodyAsChannel()
-                    val buf = ByteArray(4096)
+                    val buf = ByteArray(32768)
                     while (!done) {
                         val read = channelReader.readAvailable(buf, 0, buf.size)
                         if (read < 0) break
@@ -6002,7 +6260,7 @@ public class AntigravityKmpRpcClient(
                 }
                 val connectParser = ConnectStreamParser()
                 val channelReader = response.bodyAsChannel()
-                val buf = ByteArray(4096)
+                val buf = ByteArray(32768)
 
                 var done = false
                 while (!done) {

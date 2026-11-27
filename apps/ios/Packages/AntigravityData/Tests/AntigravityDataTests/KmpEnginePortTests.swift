@@ -966,6 +966,162 @@ final class KmpEnginePortTests: XCTestCase {
             "Uncached Cloud conversation while all hosts are offline must show offline guidance, got: \(String(describing: store.stepLoadErrorText))"
         )
     }
+
+    @MainActor
+    func testKmpIncrementalDeltaSyncAndLiveChatUpdateStatusReconciliation() async throws {
+        let cid = "kmp-ios-delta-live-1"
+        let baseDate = Date(timeIntervalSince1970: 1_740_000_000)
+        let cachedSteps: [CascadeStep] = [
+            CascadeStep(
+                cascadeId: cid,
+                stepIndex: 0,
+                type: .userInput,
+                status: .done,
+                createdAt: baseDate,
+                userInput: "Question 0"
+            ),
+            CascadeStep(
+                cascadeId: cid,
+                stepIndex: 1,
+                type: .plannerResponse,
+                status: .done,
+                createdAt: baseDate.addingTimeInterval(2),
+                plannerResponse: PlannerResponsePayload(response: "Answer 1")
+            ),
+            CascadeStep(
+                cascadeId: cid,
+                stepIndex: 2,
+                type: .userInput,
+                status: .done,
+                createdAt: baseDate.addingTimeInterval(4),
+                userInput: "Follow up 2"
+            )
+        ]
+        let deltaTail: [CascadeStep] = [
+            cachedSteps[2],
+            CascadeStep(
+                cascadeId: cid,
+                stepIndex: 3,
+                type: .plannerResponse,
+                status: .done,
+                createdAt: baseDate.addingTimeInterval(6),
+                plannerResponse: PlannerResponsePayload(response: "Delta Answer 3")
+            )
+        ]
+
+        let engine = DeltaAndLiveStreamKmpEngineDouble(deltaToReturn: deltaTail)
+        let store = AntigravitySessionStore.makeLiveStore(kmpEngine: engine)
+        store.hasPairedBackend = true
+        store.isLiveBackendConnected = true
+        store.isDeviceNetworkReachable = true
+        let host = RemoteHostInstance(
+            instanceId: "mac-delta-1",
+            hostname: "MacBook Pro",
+            channel: .directHost,
+            endpointURL: URL(string: "http://127.0.0.1:42421")!,
+            isOnline: true
+        )
+        store.activeHost = host
+        store.hosts = [host]
+        store.summaries = [
+            CascadeSummary(
+                cascadeId: cid,
+                title: "Question 0",
+                projectSlug: "app",
+                workspaceUri: "file:///Users/dev/app",
+                status: .inProgress,
+                stepCount: 4,
+                updatedAt: baseDate.addingTimeInterval(6),
+                originInstanceUuid: "mac-delta-1",
+                originHostName: "MacBook Pro"
+            )
+        ]
+        store.stepsByCascadeId[cid] = cachedSteps
+        store.activeCascadeId = cid
+
+        // 1. Syncing with cached 3 steps must use fetchBinaryStepDelta(startIndex: 2) and skip full syncSteps!
+        store.syncStepsForCascade(cid, pollUntilIdle: false)
+        for _ in 0..<40 {
+            if (store.stepsByCascadeId[cid]?.count ?? 0) == 4 { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let deltaOffsets = await engine.deltaStartIndices
+        let fullCalls = await engine.fullSyncCalls
+        XCTAssertEqual(deltaOffsets, [2], "Cold-start incremental sync must request delta starting at anchor stepIndex 2")
+        XCTAssertEqual(fullCalls, 0, "Successful incremental delta must avoid full syncSteps reload")
+        XCTAssertEqual(store.stepsByCascadeId[cid]?.count, 4)
+        XCTAssertEqual(store.stepsByCascadeId[cid]?.last?.plannerResponse?.response, "Delta Answer 3")
+
+        // 2. Real-time KmpLiveChatUpdate preserves cached prefix on tail slice and updates live runStatus immediately
+        let tailSliceUpdate = KmpLiveChatUpdate(
+            cascadeId: cid,
+            steps: [
+                CascadeStep(
+                    cascadeId: cid,
+                    stepIndex: 4,
+                    type: .plannerResponse,
+                    status: .inProgress,
+                    createdAt: baseDate.addingTimeInterval(8),
+                    plannerResponse: PlannerResponsePayload(response: "Streaming token...")
+                )
+            ],
+            totalLength: 5,
+            runStatus: "CASCADE_RUN_STATUS_RUNNING",
+            isSnapshotComplete: false
+        )
+        store.applyKmpLiveChatUpdate(tailSliceUpdate)
+        XCTAssertEqual(store.stepsByCascadeId[cid]?.count, 5, "Tail slice must merge onto cached prefix without dropping steps 0..3")
+        XCTAssertEqual(store.stepsByCascadeId[cid]?.first?.userInput, "Question 0")
+        XCTAssertEqual(store.stepsByCascadeId[cid]?.last?.plannerResponse?.response, "Streaming token...")
+        XCTAssertEqual(store.summaries.first(where: { $0.cascadeId == cid })?.status, .inProgress)
+        XCTAssertFalse(store.isLoadingSteps)
+    }
+}
+
+private actor DeltaAndLiveStreamKmpEngineDouble: AntigravityKmpEnginePort {
+    nonisolated var engineName: String { "DeltaAndLiveStreamKmpEngineDouble" }
+    let deltaToReturn: [CascadeStep]
+    var deltaStartIndices: [Int] = []
+    var fullSyncCalls: Int = 0
+
+    init(deltaToReturn: [CascadeStep]) {
+        self.deltaToReturn = deltaToReturn
+    }
+
+    func connectDirectLan(endpointURLString: String, csrfToken: String, certSHA256: String?, hostName: String, isRestoringSavedSession: Bool) async throws -> BackendHandshakeResult {
+        throw AntigravityRPCError.invalidEndpoint
+    }
+    func connectCloudRelay(relayURLString: String, sessionCookie: String, authUser: String?, resolvedInstanceUuid: String?, relayApiKey: String?, hostName: String, isRestoringSavedSession: Bool, strictTargetMatch: Bool) async throws -> BackendHandshakeResult {
+        throw AntigravityRPCError.invalidEndpoint
+    }
+    func probeHostReachability(allowCrossHostFallback: Bool) async throws -> HostReachabilityProbeResult {
+        HostReachabilityProbeResult(latencyMs: 5, availableRelayInstances: [], activeRelayInstance: nil, isSelectedHostOnline: true)
+    }
+    func refreshWorkspacesAndSummaries(hostScope: AgentsHostFilterScope, skipRelayListRefresh: Bool) async throws -> KmpFederatedSyncResult {
+        KmpFederatedSyncResult(workspaces: [], summaries: [])
+    }
+    func syncSteps(cascadeId: String, knownStepCount: Int, isCloud: Bool, instanceUuidOverride: String?) async throws -> [CascadeStep] {
+        fullSyncCalls += 1
+        return []
+    }
+    func fetchBinaryStepDelta(cascadeId: String, startIndex: Int, knownStepCount: Int, instanceUuidOverride: String?) async throws -> [CascadeStep] {
+        deltaStartIndices.append(startIndex)
+        return deltaToReturn
+    }
+    func startConversation(workspaceUri: String, initialPrompt: String, modelId: String, cloudProjectId: String?, isCloud: Bool, instanceUuidOverride: String?) async throws -> String { "" }
+    func sendMessage(cascadeId: String, message: String, workspaceUri: String, attachments: [ComposerAttachmentChip], modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode, agentPersona: String, isCloud: Bool, cloudProjectId: String?, permissionPreset: AgentPermissionPreset?, instanceUuidOverride: String?, isOptimisticDraft: Bool) async throws -> KmpSendMessageResult {
+        KmpSendMessageResult(resolvedCascadeId: cascadeId, dispatchedLive: true, queuedInOutbox: false)
+    }
+    func resolveWaitingInteraction(step: CascadeStep, decision: InteractionDecision, workspaceUri: String?, instanceUuidOverride: String?) async throws -> CascadeUserInteractionPayload {
+        throw AntigravityRPCError.interactionRejected
+    }
+    func cancelActiveTurn(cascadeId: String, instanceUuidOverride: String?) async throws {}
+    func replayPendingOutbox(modelId: String, effort: ThinkingEffortLevel, mode: CascadeExecutionMode) async -> Int { 0 }
+    func switchToRelayInstance(_ instance: RelayInstanceInfo) async {}
+    nonisolated func summaryUpdatesStream() -> AsyncStream<[CascadeSummary]> { AsyncStream { _ in } }
+    nonisolated func onBackground() {}
+    func onForeground() async {}
+    func disconnectAndClearCredentials() async {}
 }
 
 private actor UnregisteredRelayKmpEngineDouble: AntigravityKmpEnginePort {

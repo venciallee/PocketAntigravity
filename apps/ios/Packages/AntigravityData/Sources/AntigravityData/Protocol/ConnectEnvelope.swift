@@ -132,17 +132,35 @@ public struct ConnectEnvelopeFrame: Sendable, Equatable {
 /// and yields complete `ConnectEnvelopeFrame` frames.
 public struct ConnectStreamParser: Sendable {
     private var buffer = Data()
+    private var readOffset: Int = 0
 
     public init() {}
 
     public var hasBufferedBytes: Bool {
-        !buffer.isEmpty
+        buffer.count > readOffset
     }
 
     public mutating func feedByte(_ byte: UInt8) -> ConnectEnvelopeFrame? {
         buffer.append(byte)
-        guard buffer.count >= 5 else { return nil }
-        let startIndex = buffer.startIndex
+        return extractNextFrame()
+    }
+
+    public mutating func feed(_ chunk: Data) -> [ConnectEnvelopeFrame] {
+        if !chunk.isEmpty {
+            buffer.append(chunk)
+        }
+        var frames: [ConnectEnvelopeFrame] = []
+        while let frame = extractNextFrame() {
+            frames.append(frame)
+        }
+        compactBufferIfNeeded()
+        return frames
+    }
+
+    private mutating func extractNextFrame() -> ConnectEnvelopeFrame? {
+        let available = buffer.count - readOffset
+        guard available >= 5 else { return nil }
+        let startIndex = buffer.startIndex + readOffset
         let flagByte = buffer[startIndex]
         let b1 = UInt32(buffer[startIndex + 1]) << 24
         let b2 = UInt32(buffer[startIndex + 2]) << 16
@@ -150,14 +168,19 @@ public struct ConnectStreamParser: Sendable {
         let b4 = UInt32(buffer[startIndex + 4])
         let payloadLength = Int(b1 | b2 | b3 | b4)
 
-        guard buffer.count >= 5 + payloadLength else {
+        guard available >= 5 + payloadLength else {
             return nil
         }
 
         let payloadStart = startIndex + 5
         let payloadEnd = payloadStart + payloadLength
         let payload = Data(buffer[payloadStart..<payloadEnd])
-        buffer.removeSubrange(startIndex..<payloadEnd)
+        readOffset += 5 + payloadLength
+
+        if readOffset == buffer.count {
+            buffer.removeAll(keepingCapacity: buffer.count <= 262_144)
+            readOffset = 0
+        }
 
         return ConnectEnvelopeFrame(
             flags: ConnectEnvelopeFrame.Flags(rawValue: flagByte),
@@ -165,36 +188,13 @@ public struct ConnectStreamParser: Sendable {
         )
     }
 
-    public mutating func feed(_ chunk: Data) -> [ConnectEnvelopeFrame] {
-        buffer.append(chunk)
-        var frames: [ConnectEnvelopeFrame] = []
-
-        while buffer.count >= 5 {
-            let startIndex = buffer.startIndex
-            let flagByte = buffer[startIndex]
-            let b1 = UInt32(buffer[startIndex + 1]) << 24
-            let b2 = UInt32(buffer[startIndex + 2]) << 16
-            let b3 = UInt32(buffer[startIndex + 3]) << 8
-            let b4 = UInt32(buffer[startIndex + 4])
-            let payloadLength = Int(b1 | b2 | b3 | b4)
-
-            guard buffer.count >= 5 + payloadLength else {
-                break
-            }
-
-            let payloadStart = startIndex + 5
-            let payloadEnd = payloadStart + payloadLength
-            let payload = Data(buffer[payloadStart..<payloadEnd])
-            buffer.removeSubrange(startIndex..<payloadEnd)
-
-            frames.append(
-                ConnectEnvelopeFrame(
-                    flags: ConnectEnvelopeFrame.Flags(rawValue: flagByte),
-                    payload: payload
-                )
-            )
+    private mutating func compactBufferIfNeeded() {
+        if readOffset == buffer.count {
+            buffer.removeAll(keepingCapacity: buffer.count <= 262_144)
+            readOffset = 0
+        } else if readOffset > 65_536 && readOffset * 2 >= buffer.count {
+            buffer = Data(buffer[(buffer.startIndex + readOffset)...])
+            readOffset = 0
         }
-
-        return frames
     }
 }
