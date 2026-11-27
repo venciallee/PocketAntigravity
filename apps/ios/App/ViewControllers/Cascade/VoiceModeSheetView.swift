@@ -104,6 +104,34 @@ public struct VoiceModeSheetView: View {
                         .padding(.vertical, 6)
                         .background(AntigravityTheme.surfaceElevated, in: Capsule())
                 }
+
+                Menu {
+                    ForEach(VoiceDictationLanguage.allCases) { option in
+                        Button {
+                            let prefix = manualPromptText
+                            voiceManager.selectLanguage(
+                                option,
+                                appLanguage: lang
+                            ) { spoken in
+                                manualPromptText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: spoken)
+                            }
+                        } label: {
+                            if voiceManager.preferredLanguage == option {
+                                Label(option.localizedTitle(for: lang), systemImage: "checkmark")
+                            } else {
+                                Text(option.localizedTitle(for: lang))
+                            }
+                        }
+                    }
+                } label: {
+                    Label(voiceManager.activeLanguageBadgeLabel(for: lang), systemImage: "globe")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AntigravityTheme.inkReading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(AntigravityTheme.surfaceElevated, in: Capsule())
+                }
+                .accessibilityIdentifier("menu_voice_language")
             }
         }
         .frame(maxWidth: .infinity)
@@ -214,7 +242,7 @@ public struct VoiceModeSheetView: View {
                         store.toggleVoiceMute()
                     }
                     let prefix = manualPromptText
-                    voiceManager.toggleRecording { spoken in
+                    voiceManager.toggleRecording(appLanguage: lang) { spoken in
                         manualPromptText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: spoken)
                     }
                 } label: {

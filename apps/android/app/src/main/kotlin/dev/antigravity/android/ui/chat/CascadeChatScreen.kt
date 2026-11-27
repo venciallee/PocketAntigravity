@@ -1,8 +1,10 @@
 package dev.antigravity.android.ui.chat
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -446,15 +448,15 @@ fun CascadeChatScreen(
                     onRemoveChip = { coordinator.workspaceStore.removeComposerChip(it) },
                     modelLabel = modelDisplayName,
                     permissionLabel = permissionLabel,
-                    isVoiceRecording = voiceController.isRecording,
-                    isVoiceStarting = voiceController.isStarting,
-                    voiceErrorMessage = voiceController.errorMessage,
-                    onDismissVoiceError = { voiceController.clearError() },
+                    voiceController = voiceController,
                     onAddContext = onOpenAddContext,
                     onOpenModelAndMode = onOpenModelAndMode,
                     onOpenPermissionsPreset = onOpenPermissionsPreset,
                     onOpenVoice = {
-                        voiceController.toggleRecording(existingDraft = chatState.draftInputText) { updated ->
+                        voiceController.toggleRecording(
+                            existingDraft = chatState.draftInputText,
+                            appLanguage = lang,
+                        ) { updated ->
                             coordinator.chatStore.setDraftInputText(updated)
                         }
                     },
@@ -1722,6 +1724,7 @@ private fun VoiceSummaryCard(summary: VoiceCallTranscriptSummary) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatComposerCard(
     draftText: String,
@@ -1730,10 +1733,7 @@ private fun ChatComposerCard(
     onRemoveChip: (String) -> Unit,
     modelLabel: String,
     permissionLabel: String,
-    isVoiceRecording: Boolean = false,
-    isVoiceStarting: Boolean = false,
-    voiceErrorMessage: String? = null,
-    onDismissVoiceError: () -> Unit = {},
+    voiceController: VoiceDictationController,
     onAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
     onOpenPermissionsPreset: () -> Unit,
@@ -1742,6 +1742,10 @@ private fun ChatComposerCard(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val appLanguage = LocalAppLanguage.current
+    val isVoiceRecording = voiceController.isRecording
+    val isVoiceStarting = voiceController.isStarting
+    val voiceErrorMessage = voiceController.errorMessage
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -1763,6 +1767,12 @@ private fun ChatComposerCard(
                 )
             }
 
+            VoiceListeningLanguageBar(
+                controller = voiceController,
+                existingDraft = draftText,
+                onDraftUpdated = onDraftChange,
+            )
+
             if (!voiceErrorMessage.isNullOrBlank()) {
                 Text(
                     text = voiceErrorMessage,
@@ -1771,7 +1781,7 @@ private fun ChatComposerCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 2.dp)
-                        .clickable(onClick = onDismissVoiceError)
+                        .clickable(onClick = { voiceController.clearError() })
                         .testTag("composer-voice-error"),
                 )
             }
@@ -1885,21 +1895,43 @@ private fun ChatComposerCard(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                IconButton(
-                    onClick = onOpenVoice,
-                    modifier = Modifier
-                        .size(34.dp)
-                        .testTag("composer-btn-voice"),
-                ) {
-                    Icon(
-                        imageVector = if (isVoiceRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                        contentDescription = if (isVoiceRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
-                        tint = when {
-                            isVoiceRecording -> colors.statusError
-                            isVoiceStarting -> colors.accentPeriwinkle
-                            else -> colors.inkLabel
+                var chatVoiceMenuExpanded by remember { mutableStateOf(false) }
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .combinedClickable(
+                                onClick = onOpenVoice,
+                                onLongClick = { chatVoiceMenuExpanded = true },
+                            )
+                            .testTag("composer-btn-voice"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (isVoiceRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                            contentDescription = if (isVoiceRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
+                            tint = when {
+                                isVoiceRecording -> colors.statusError
+                                isVoiceStarting -> colors.accentPeriwinkle
+                                else -> colors.inkLabel
+                            },
+                            modifier = Modifier.size(if (isVoiceRecording) 17.dp else 20.dp),
+                        )
+                    }
+                    VoiceLanguageDropdownMenu(
+                        expanded = chatVoiceMenuExpanded,
+                        selectedLanguage = voiceController.preferredLanguage,
+                        onDismiss = { chatVoiceMenuExpanded = false },
+                        onSelect = { chosen ->
+                            chatVoiceMenuExpanded = false
+                            voiceController.selectLanguage(
+                                language = chosen,
+                                appLanguage = appLanguage,
+                                existingDraft = draftText,
+                                onDraftUpdated = onDraftChange,
+                            )
                         },
-                        modifier = Modifier.size(if (isVoiceRecording) 17.dp else 20.dp),
                     )
                 }
 

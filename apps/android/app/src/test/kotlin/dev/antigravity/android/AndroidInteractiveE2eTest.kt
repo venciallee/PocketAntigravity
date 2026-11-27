@@ -988,6 +988,16 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("composer-voice-error").performClick()
         composeRule.waitForIdle()
         assertEquals(0, composeRule.onAllNodesWithTag("composer-voice-error").fetchSemanticsNodes().size)
+
+        // 4. Verify Android VoiceDictationController honors AppLanguage.ZH_HANS & explicit language persistence
+        val controller = dev.antigravity.android.ui.chat.VoiceDictationController(app)
+        controller.selectLanguage(dev.antigravity.shared.model.VoiceDictationLanguage.AUTO)
+        assertEquals("zh-CN", controller.resolveSpeechLocaleTag(AppLanguage.ZH_HANS))
+        controller.selectLanguage(dev.antigravity.shared.model.VoiceDictationLanguage.ZH_CN)
+        assertEquals("zh-CN", controller.resolveSpeechLocaleTag(AppLanguage.ENGLISH))
+        val reloaded = dev.antigravity.android.ui.chat.VoiceDictationController(app)
+        assertEquals(dev.antigravity.shared.model.VoiceDictationLanguage.ZH_CN, reloaded.preferredLanguage)
+        reloaded.selectLanguage(dev.antigravity.shared.model.VoiceDictationLanguage.AUTO)
     }
 
     @Test

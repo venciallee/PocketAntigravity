@@ -195,7 +195,10 @@ fun StructuredQuestionScreen(
                                     )
                                     freeformReply = ""
                                 } else {
-                                    voiceController.toggleRecording(existingDraft = freeformReply) { updated ->
+                                    voiceController.toggleRecording(
+                                        existingDraft = freeformReply,
+                                        appLanguage = lang,
+                                    ) { updated ->
                                         freeformReply = updated
                                     }
                                 }

@@ -409,7 +409,7 @@ public struct StructuredQuestionCardView: View {
                         submitFreeformReply()
                     } else {
                         let prefix = freeformReplyText
-                        voiceManager.toggleRecording { transcript in
+                        voiceManager.toggleRecording(appLanguage: lang) { transcript in
                             freeformReplyText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
                         }
                     }
@@ -425,6 +425,27 @@ public struct StructuredQuestionCardView: View {
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    Section(lang.t("Voice Dictation Language", "语音识别语言")) {
+                        ForEach(VoiceDictationLanguage.allCases) { option in
+                            Button {
+                                let prefix = freeformReplyText
+                                voiceManager.selectLanguage(
+                                    option,
+                                    appLanguage: lang
+                                ) { transcript in
+                                    freeformReplyText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
+                                }
+                            } label: {
+                                if voiceManager.preferredLanguage == option {
+                                    Label(option.localizedTitle(for: lang), systemImage: "checkmark")
+                                } else {
+                                    Text(option.localizedTitle(for: lang))
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .padding(.leading, 16)
             .padding(.trailing, 6)
