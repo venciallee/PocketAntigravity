@@ -1,13 +1,16 @@
 package dev.antigravity.android.ui.chat
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Resources
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -61,6 +64,7 @@ import java.util.Locale
 
 private const val VOICE_PREFS_NAME = "antigravity_voice_prefs"
 private const val KEY_DICTATION_LANGUAGE = "dictation_language"
+private const val KEY_LAST_DETECTED_LOCALE = "last_detected_locale"
 
 /**
  * Pure helper matching iOS `VoiceInputManager.mergeTranscript(prefix:transcript:)`:
@@ -81,11 +85,15 @@ internal fun mergeDictatedTranscript(prefix: String, transcript: String): String
 /**
  * Crash-safe native Android speech-to-text controller backed by [SpeechRecognizer].
  *
- * - Resolves normalized BCP-47 speech locale via KMP [VoiceLocaleResolver] (explicit override ->
- *   in-app [AppLanguage] -> OS preferred locales -> active IME keyboard -> fallback) so Chinese
- *   speech never falls back to English due to `zh-Hans-CN` script subtags or app-locale mismatch.
- * - Guards runtime `RECORD_AUDIO` permission, [SpeechRecognizer.isRecognitionAvailable],
- *   main-thread confinement, OEM IPC exceptions, monotonic session generations, and dispose cleanup.
+ * - Resolves normalized BCP-47 speech locale via KMP [VoiceLocaleResolver] using conversation/draft
+ *   context, in-app [AppLanguage], OS preferred locales, active & installed IME languages, and
+ *   last auto-detected locale so bilingual Chinese/English users never need to manually switch.
+ * - On Android 14+ (API 34+), enables native `EXTRA_ENABLE_LANGUAGE_DETECTION` +
+ *   `EXTRA_ENABLE_LANGUAGE_SWITCH` (`LANGUAGE_SWITCH_BALANCED`) with `onLanguageDetection` feedback
+ *   and automatic single-locale fallback if an OEM recognizer lacks downloaded switch models.
+ * - Guards runtime `RECORD_AUDIO` permission, post-permission audio settle delay, cold-start
+ *   `ERROR_RECOGNIZER_BUSY` retry, [SpeechRecognizer.isRecognitionAvailable], main-thread
+ *   confinement, OEM IPC exceptions, monotonic session generations, and dispose cleanup.
  */
 @Stable
 class VoiceDictationController(
@@ -107,12 +115,17 @@ class VoiceDictationController(
         private set
     var activeLocaleTag: String? by mutableStateOf(null)
         private set
+    var lastDetectedLocaleTag: String? by mutableStateOf(
+        prefs.getString(KEY_LAST_DETECTED_LOCALE, null)?.trim()?.takeIf { it.isNotEmpty() },
+    )
+        private set
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var sessionGeneration: Long = 0L
     private var lastTranscript: String = ""
     private var pendingPrefix: String = ""
     private var pendingAppLanguage: AppLanguage = AppLanguage.ENGLISH
+    private var pendingContextTextHint: String? = null
     private var pendingOnDraftUpdated: ((String) -> Unit)? = null
     internal var requestAudioPermissionLauncher: (() -> Unit)? = null
 
@@ -120,25 +133,39 @@ class VoiceDictationController(
         errorMessage = null
     }
 
-    fun activeLanguageBadgeLabel(appLanguage: AppLanguage): String {
-        val resolved = activeLocaleTag ?: resolveSpeechLocaleTag(appLanguage)
-        return VoiceLocaleResolver.shortDisplayLabelForLocale(resolved)
+    fun activeLanguageBadgeLabel(
+        appLanguage: AppLanguage,
+        contextTextHint: String? = null,
+    ): String {
+        if (preferredLanguage != VoiceDictationLanguage.AUTO) {
+            return preferredLanguage.shortBadgeLabel(appLanguage)
+        }
+        val resolved = activeLocaleTag ?: resolveSpeechLocaleTag(
+            appLanguage = appLanguage,
+            contextTextHint = contextTextHint ?: pendingContextTextHint,
+        )
+        val shortLang = VoiceLocaleResolver.shortDisplayLabelForLocale(resolved)
+        val autoPrefix = appLanguage.t("Auto", "自动")
+        return if (shortLang == "Auto") autoPrefix else "$autoPrefix · $shortLang"
     }
 
     fun selectLanguage(
         language: VoiceDictationLanguage,
         appLanguage: AppLanguage = AppLanguage.ENGLISH,
         existingDraft: String = "",
+        contextTextHint: String? = null,
         onDraftUpdated: ((String) -> Unit)? = null,
     ) {
         preferredLanguage = language
         prefs.edit().putString(KEY_DICTATION_LANGUAGE, language.tag).apply()
-        activeLocaleTag = language.bcp47Tag ?: resolveSpeechLocaleTag(appLanguage)
+        val effectiveHint = contextTextHint ?: pendingContextTextHint
+        activeLocaleTag = language.bcp47Tag ?: resolveSpeechLocaleTag(appLanguage, effectiveHint)
         if ((isRecording || isStarting) && onDraftUpdated != null) {
             stopRecording()
             toggleRecording(
                 existingDraft = existingDraft,
                 appLanguage = appLanguage,
+                contextTextHint = effectiveHint,
                 onDraftUpdated = onDraftUpdated,
             )
         }
@@ -147,6 +174,7 @@ class VoiceDictationController(
     fun toggleRecording(
         existingDraft: String,
         appLanguage: AppLanguage = AppLanguage.ENGLISH,
+        contextTextHint: String? = null,
         onDraftUpdated: (String) -> Unit,
     ) {
         if (isRecording || isStarting) {
@@ -157,6 +185,7 @@ class VoiceDictationController(
         lastTranscript = ""
         pendingPrefix = existingDraft
         pendingAppLanguage = appLanguage
+        pendingContextTextHint = contextTextHint ?: existingDraft.takeIf { it.isNotBlank() }
         pendingOnDraftUpdated = onDraftUpdated
 
         val granted = ContextCompat.checkSelfPermission(
@@ -197,7 +226,17 @@ class VoiceDictationController(
             )
             return
         }
-        startRecognizerOnMainThread()
+        // Give the system permission overlay ~120ms to release focus/audio state before binding
+        // SpeechRecognizer so first-tap recognition never races with dialog dismissal.
+        val generationAtGrant = sessionGeneration
+        mainHandler.postDelayed(
+            {
+                if (isStarting && sessionGeneration == generationAtGrant) {
+                    startRecognizerOnMainThread()
+                }
+            },
+            120L,
+        )
     }
 
     fun stopRecording() {
@@ -214,17 +253,99 @@ class VoiceDictationController(
         stopRecording()
     }
 
-    internal fun resolveSpeechLocaleTag(appLanguage: AppLanguage): String {
+    internal fun resolveCandidateLocaleTags(
+        appLanguage: AppLanguage,
+        contextTextHint: String? = pendingContextTextHint,
+    ): List<String> {
         val systemLocales = readSystemPreferredLanguages()
         val keyboardLang = readActiveImeLanguage()
-        val candidates = VoiceLocaleResolver.buildCandidateLocaleTags(
+        val installedImes = readInstalledImeLanguages()
+        return VoiceLocaleResolver.buildCandidateLocaleTags(
             preference = preferredLanguage,
             appLanguage = appLanguage,
             systemPreferredLanguages = systemLocales,
             activeKeyboardLanguage = keyboardLang,
+            installedKeyboardLanguages = installedImes,
+            contextTextHint = contextTextHint,
+            lastDetectedLocaleTag = lastDetectedLocaleTag,
             fallbackLocaleTag = Locale.getDefault().toLanguageTag(),
         )
-        return candidates.firstOrNull() ?: "en-US"
+    }
+
+    internal fun resolveSpeechLocaleTag(
+        appLanguage: AppLanguage,
+        contextTextHint: String? = pendingContextTextHint,
+    ): String = resolveCandidateLocaleTags(appLanguage, contextTextHint).firstOrNull() ?: "en-US"
+
+    @SuppressLint("InlinedApi")
+    internal fun buildRecognizerIntent(
+        appLanguage: AppLanguage,
+        contextTextHint: String? = pendingContextTextHint,
+        enableApi34AutoSwitch: Boolean = true,
+        sdkInt: Int = Build.VERSION.SDK_INT,
+    ): Pair<Intent, String> {
+        val candidates = resolveCandidateLocaleTags(appLanguage, contextTextHint)
+        val resolvedLocaleTag = candidates.firstOrNull() ?: "en-US"
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, resolvedLocaleTag)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, resolvedLocaleTag)
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
+
+            if (preferredLanguage == VoiceDictationLanguage.AUTO &&
+                enableApi34AutoSwitch &&
+                sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+            ) {
+                val allowedLanguages = VoiceLocaleResolver.buildAutoDetectionAllowedLocales(
+                    candidates = candidates,
+                    includeBilingualFallback = false,
+                    maxCount = 4,
+                )
+                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+                if (allowedLanguages.isNotEmpty()) {
+                    putStringArrayListExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
+                        ArrayList(allowedLanguages),
+                    )
+                }
+                if (allowedLanguages.size >= 2) {
+                    putExtra(
+                        RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
+                        RecognizerIntent.LANGUAGE_SWITCH_BALANCED,
+                    )
+                    putStringArrayListExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
+                        ArrayList(allowedLanguages),
+                    )
+                }
+            }
+        }
+        return intent to resolvedLocaleTag
+    }
+
+    private fun rememberDetectedLocale(localeTag: String) {
+        val trimmed = localeTag.trim()
+        if (trimmed.isEmpty()) return
+        lastDetectedLocaleTag = trimmed
+        prefs.edit().putString(KEY_LAST_DETECTED_LOCALE, trimmed).apply()
+    }
+
+    private fun rememberDetectedLocaleFromTranscript(text: String, activeLocale: String) {
+        val inferred = VoiceLocaleResolver.inferLocaleTagFromText(text)
+        if (inferred != null) {
+            val activeNorm = activeLocale.replace('_', '-').lowercase()
+            if (inferred.startsWith("zh") && (activeNorm.startsWith("zh") || activeNorm.startsWith("yue"))) {
+                rememberDetectedLocale(activeLocale)
+            } else {
+                rememberDetectedLocale(inferred)
+            }
+        } else {
+            rememberDetectedLocale(activeLocale)
+        }
     }
 
     private fun readSystemPreferredLanguages(): List<String> = runCatching {
@@ -246,9 +367,34 @@ class VoiceDictationController(
             ?: subtype.locale.takeIf { it.isNotBlank() }
     }.getOrNull()
 
-    private fun startRecognizerOnMainThread() {
+    @Suppress("DEPRECATION")
+    private fun readInstalledImeLanguages(): List<String> = runCatching {
+        val imm = appContext.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            ?: return@runCatching emptyList()
+        val result = LinkedHashSet<String>()
+        for (imi in imm.enabledInputMethodList.orEmpty()) {
+            val subtypes = runCatching {
+                imm.getEnabledInputMethodSubtypeList(imi, true)
+            }.getOrDefault(emptyList())
+            for (subtype in subtypes) {
+                val tag = subtype.languageTag.takeIf { it.isNotBlank() }
+                    ?: subtype.locale.takeIf { it.isNotBlank() }
+                if (!tag.isNullOrBlank()) {
+                    result.add(tag)
+                }
+            }
+        }
+        result.toList()
+    }.getOrDefault(emptyList())
+
+    private fun startRecognizerOnMainThread(
+        enableApi34AutoSwitch: Boolean = true,
+        retriedColdBusy: Boolean = false,
+        retriedWithoutAutoSwitch: Boolean = false,
+    ) {
         val generation = ++sessionGeneration
         val appLanguage = pendingAppLanguage
+        val contextHint = pendingContextTextHint
         isStarting = true
         runOnMainThread {
             if (generation != sessionGeneration) return@runOnMainThread
@@ -281,7 +427,15 @@ class VoiceDictationController(
                 return@runOnMainThread
             }
 
-            val resolvedLocaleTag = resolveSpeechLocaleTag(appLanguage)
+            val (intent, resolvedLocaleTag) = buildRecognizerIntent(
+                appLanguage = appLanguage,
+                contextTextHint = contextHint,
+                enableApi34AutoSwitch = enableApi34AutoSwitch,
+            )
+            val api34AutoSwitchActive = preferredLanguage == VoiceDictationLanguage.AUTO &&
+                enableApi34AutoSwitch &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+            val startedElapsedMs = SystemClock.elapsedRealtime()
             activeLocaleTag = resolvedLocaleTag
             speechRecognizer = recognizer
             val prefix = pendingPrefix
@@ -304,9 +458,63 @@ class VoiceDictationController(
                         isStarting = false
                     }
 
+                    override fun onLanguageDetection(results: Bundle) {
+                        if (generation != sessionGeneration) return
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            val detected = results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
+                                ?.trim()
+                                ?.takeIf { it.isNotEmpty() }
+                            if (detected != null) {
+                                activeLocaleTag = detected
+                                rememberDetectedLocale(detected)
+                            }
+                        }
+                    }
+
                     override fun onError(error: Int) {
                         if (generation != sessionGeneration) return
                         val hadTranscript = lastTranscript.isNotBlank()
+
+                        // 1. OEM fallback: if API 34+ language-switch extras fail because an offline
+                        //    pack is missing on the device, immediately retry once in single-locale mode.
+                        if (!hadTranscript &&
+                            api34AutoSwitchActive &&
+                            !retriedWithoutAutoSwitch &&
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                            (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                                error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)
+                        ) {
+                            startRecognizerOnMainThread(
+                                enableApi34AutoSwitch = false,
+                                retriedColdBusy = retriedColdBusy,
+                                retriedWithoutAutoSwitch = true,
+                            )
+                            return
+                        }
+
+                        // 2. Cold-start OEM recognizer-busy race within first 800ms -> retry once after 180ms.
+                        val elapsedMs = SystemClock.elapsedRealtime() - startedElapsedMs
+                        if (!hadTranscript &&
+                            !retriedColdBusy &&
+                            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY &&
+                            elapsedMs < 800L
+                        ) {
+                            tearDownRecognizerLocked()
+                            mainHandler.postDelayed(
+                                {
+                                    if (generation == sessionGeneration) {
+                                        startRecognizerOnMainThread(
+                                            enableApi34AutoSwitch = enableApi34AutoSwitch,
+                                            retriedColdBusy = true,
+                                            retriedWithoutAutoSwitch = retriedWithoutAutoSwitch,
+                                        )
+                                    }
+                                },
+                                180L,
+                            )
+                            return
+                        }
+
                         stopRecording()
                         if (!hadTranscript && !isBenignSpeechError(error)) {
                             errorMessage = humanReadableSpeechError(error, appLanguage)
@@ -318,6 +526,7 @@ class VoiceDictationController(
                         val text = extractBestTranscript(results)
                         if (!text.isNullOrBlank()) {
                             lastTranscript = text
+                            rememberDetectedLocaleFromTranscript(text, activeLocaleTag ?: resolvedLocaleTag)
                             onUpdate?.invoke(mergeDictatedTranscript(prefix, text))
                         }
                         stopRecording()
@@ -335,17 +544,6 @@ class VoiceDictationController(
                     override fun onEvent(eventType: Int, params: Bundle?) = Unit
                 },
             )
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
-                )
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, resolvedLocaleTag)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, resolvedLocaleTag)
-                putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
-            }
 
             val started = runCatching {
                 recognizer.startListening(intent)
@@ -463,6 +661,7 @@ internal fun VoiceListeningLanguageBar(
     existingDraft: String,
     onDraftUpdated: (String) -> Unit,
     modifier: Modifier = Modifier,
+    contextTextHint: String? = null,
 ) {
     if (!controller.isRecording && !controller.isStarting) return
     val colors = LocalAntigravityColors.current
@@ -513,7 +712,7 @@ internal fun VoiceListeningLanguageBar(
                         modifier = Modifier.size(13.dp),
                     )
                     Text(
-                        text = controller.activeLanguageBadgeLabel(appLanguage),
+                        text = controller.activeLanguageBadgeLabel(appLanguage, contextTextHint),
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -538,6 +737,7 @@ internal fun VoiceListeningLanguageBar(
                         language = chosen,
                         appLanguage = appLanguage,
                         existingDraft = existingDraft,
+                        contextTextHint = contextTextHint,
                         onDraftUpdated = onDraftUpdated,
                     )
                 },

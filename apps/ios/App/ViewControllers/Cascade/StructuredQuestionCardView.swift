@@ -405,11 +405,18 @@ public struct StructuredQuestionCardView: View {
 
                 Button {
                     let hasTypedText = !freeformReplyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    if hasTypedText && !voiceManager.isRecording && !voiceManager.isStarting {
+                    if hasTypedText && !voiceManager.isRecording && !voiceManager.isStarting && !voiceManager.isRefining {
                         submitFreeformReply()
                     } else {
                         let prefix = freeformReplyText
-                        voiceManager.toggleRecording(appLanguage: lang) { transcript in
+                        let contextHint = [freeformReplyText, activeStep.prompt]
+                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                            .filter { !$0.isEmpty }
+                            .joined(separator: " ")
+                        voiceManager.toggleRecording(
+                            appLanguage: lang,
+                            contextTextHint: contextHint.isEmpty ? nil : contextHint
+                        ) { transcript in
                             freeformReplyText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
                         }
                     }
@@ -420,7 +427,13 @@ public struct StructuredQuestionCardView: View {
                             .frame(width: 36, height: 36)
                         Image(systemName: voiceManager.isRecording ? "stop.fill" : "mic")
                             .font(.system(size: voiceManager.isRecording ? 12 : 15, weight: .medium))
-                            .foregroundStyle(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.inkLabel)
+                            .foregroundStyle(
+                                voiceManager.isRecording
+                                    ? AntigravityTheme.statusError
+                                    : (voiceManager.isStarting || voiceManager.isRefining
+                                        ? AntigravityTheme.accentPeriwinkle
+                                        : AntigravityTheme.inkLabel)
+                            )
                     }
                     .frame(width: AntigravityTheme.minTouchTargetPt, height: AntigravityTheme.minTouchTargetPt)
                 }
@@ -430,9 +443,14 @@ public struct StructuredQuestionCardView: View {
                         ForEach(VoiceDictationLanguage.allCases) { option in
                             Button {
                                 let prefix = freeformReplyText
+                                let contextHint = [freeformReplyText, activeStep.prompt]
+                                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                    .filter { !$0.isEmpty }
+                                    .joined(separator: " ")
                                 voiceManager.selectLanguage(
                                     option,
-                                    appLanguage: lang
+                                    appLanguage: lang,
+                                    contextTextHint: contextHint.isEmpty ? nil : contextHint
                                 ) { transcript in
                                     freeformReplyText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
                                 }
