@@ -143,6 +143,7 @@ fun AntigravityAppRoot(
 
     val settingsState by coordinator.settingsStore.state.collectAsState()
     val connectionState by coordinator.connectionState.collectAsState()
+    val chatState by coordinator.chatState.collectAsState()
     val syncState by coordinator.syncState.collectAsState()
     val workspaceState by coordinator.workspaceStore.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -243,6 +244,19 @@ fun AntigravityAppRoot(
     fun isCloudConversation(cascadeId: String, summary: CascadeSummary?): Boolean =
         coordinator.isSummaryCloudRuntime(cascadeId, summary)
 
+    LaunchedEffect(chatState.activeCascadeId, currentRoute) {
+        val route = currentRoute
+        val activeCid = chatState.activeCascadeId
+        if (!coordinator.isVerificationMode &&
+            route is AppRoute.CascadeChat &&
+            activeCid.isNotBlank() &&
+            activeCid != route.cascadeId &&
+            !chatState.stepsByCascadeId.containsKey(route.cascadeId)
+        ) {
+            currentRoute = AppRoute.CascadeChat(activeCid)
+        }
+    }
+
     val activeChatRouteId = (currentRoute as? AppRoute.CascadeChat)?.cascadeId
     val activeChatSummary = remember(activeChatRouteId, syncState.summaries) {
         if (activeChatRouteId.isNullOrBlank()) null
@@ -323,10 +337,15 @@ fun AntigravityAppRoot(
             navigateTo(AppRoute.NewConversationHome)
             return
         }
+        val matchedIsCloud = matchedProject?.runtime == ProjectRuntimeTarget.CLOUD
         val draftId = coordinator.createLocalDraftConversation(
             workspaceUri = matchedProject?.workspaceUri.orEmpty(),
             projectSlug = matchedProject?.id ?: projectId,
-            isCloud = matchedProject?.runtime == ProjectRuntimeTarget.CLOUD,
+            isCloud = if (matchedProject != null) matchedIsCloud else null,
+            cloudProjectId = matchedProject?.cloudProjectId,
+            originInstanceUuid = matchedProject?.originInstanceUuid,
+            originHostName = if (matchedIsCloud) "Antigravity" else matchedProject?.hostName,
+            branchName = matchedProject?.activeBranch,
         )
         navigateTo(AppRoute.CascadeChat(draftId))
     }

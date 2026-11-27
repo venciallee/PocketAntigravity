@@ -262,28 +262,46 @@ public struct CascadeChatViewController: View {
                 }
 
                 if !allDisplayItems.isEmpty, let errText = store.stepLoadErrorText {
-                    HStack(spacing: 8) {
+                    HStack(alignment: .center, spacing: 8) {
                         Circle()
                             .fill(AntigravityTheme.statusError)
                             .frame(width: 7, height: 7)
                         Text(errText)
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(AntigravityTheme.statusError)
-                            .lineLimit(2)
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
-                        Button(lang.t("Dismiss", "关闭")) {
-                            store.stepLoadErrorText = nil
+                        HStack(spacing: 10) {
+                            Button(lang.t("Retry", "重试")) {
+                                if store.activeFailedSend != nil {
+                                    store.retryLastFailedSend()
+                                } else {
+                                    store.stepLoadErrorText = nil
+                                    store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
+                                }
+                            }
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("chat-inline-error-retry")
+
+                            Button(lang.t("Dismiss", "关闭")) {
+                                store.stepLoadErrorText = nil
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(AntigravityTheme.textSecondary)
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("chat-inline-error-dismiss")
                         }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(AntigravityTheme.accentPeriwinkle)
-                        .buttonStyle(.plain)
+                        .fixedSize()
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(AntigravityTheme.surfaceCard)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(AntigravityTheme.cardBorder, lineWidth: 1)
+                            .stroke(AntigravityTheme.statusError.opacity(0.35), lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .padding(.horizontal, 14)

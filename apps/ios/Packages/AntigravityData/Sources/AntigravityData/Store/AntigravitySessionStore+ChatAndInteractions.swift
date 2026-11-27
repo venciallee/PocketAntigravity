@@ -200,8 +200,10 @@ extension AntigravitySessionStore {
         let skipUpgradeWait = materializedDirectly || skipUpgradeWait
 
         var currentSteps = stepsByCascadeId[activeCascadeId] ?? []
+        let hasNoPriorServerTurns = currentSteps.isEmpty || currentSteps.allSatisfy { $0.type == .userInput }
         let nextIndex = (currentSteps.map(\.stepIndex).max() ?? -1) + 1
         stepLoadErrorText = nil
+        lastFailedSendByCascadeId.removeValue(forKey: activeCascadeId)
 
         let userStep = CascadeStep(
             cascadeId: activeCascadeId,
@@ -354,25 +356,8 @@ extension AntigravitySessionStore {
                         isOptimisticDraft: isOptimistic
                     )
                     let resolvedId = outcome.resolvedCascadeId
-                    if let self, !resolvedId.isEmpty && resolvedId != targetCascadeId && isOptimistic {
-                        self.locallyCreatedEmptyCascadeIds.remove(targetCascadeId)
-                        self.locallyCreatedEmptyCascadeIds.remove(resolvedId)
-                        let existing = self.stepsByCascadeId.removeValue(forKey: targetCascadeId) ?? currentSteps
-                        self.stepsByCascadeId[resolvedId] = existing.map { step in
-                            var copy = step
-                            copy.cascadeId = resolvedId
-                            return copy
-                        }
-                        self.syncedConfigCascadeIds.insert(resolvedId)
-                        if let idx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
-                            self.summaries[idx].cascadeId = resolvedId
-                        }
-                        if self.activeCascadeId == targetCascadeId || self.activeCascadeId.isEmpty {
-                            self.activeCascadeId = resolvedId
-                            if case .cascadeChat = self.activeRoute {
-                                self.activeRoute = .cascadeChat(resolvedId)
-                            }
-                        }
+                    if let self, !resolvedId.isEmpty && resolvedId != targetCascadeId {
+                        self.migrateCascadeSession(from: targetCascadeId, to: resolvedId, fallbackSteps: currentSteps)
                         targetCascadeId = resolvedId
                     }
                     if !outcome.dispatchedLive {
@@ -401,15 +386,36 @@ extension AntigravitySessionStore {
                             }
                             return
                         }
-                        throw AntigravityRPCError.httpError(statusCode: 500, body: outcome.errorMessage ?? "Message dispatch failed")
+                        await storeRef.removeOutboxEntry(id: outboxEntry.id)
+                        if let self {
+                            self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
+                            self.optimisticActiveUntilByCascadeId.removeValue(forKey: targetCascadeId)
+                            let rawDetail = (outcome.errorMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                            let formatted = rawDetail.isEmpty ? "Message dispatch failed" : rawDetail
+                            self.stepLoadErrorText = Self.formatSendBannerMessage(formatted)
+                            self.lastFailedSendByCascadeId[targetCascadeId] = FailedSendSnapshot(
+                                cascadeId: targetCascadeId,
+                                stepIndex: nextIndex,
+                                message: messageBody,
+                                attachments: attachmentsSnapshot
+                            )
+                            if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
+                                self.summaries[sumIdx].status = .done
+                                self.summaries[sumIdx].statusSubtitle = "Send failed · Tap to retry"
+                            }
+                        }
+                        return
                     }
                     if let self, !targetCascadeId.isEmpty {
+                        self.lastFailedSendByCascadeId.removeValue(forKey: targetCascadeId)
                         self.syncedStepsMarkerByCascadeId.removeValue(forKey: targetCascadeId)
                         self.optimisticActiveUntilByCascadeId[targetCascadeId] = Date().addingTimeInterval(45)
                         self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true, forceRefresh: true)
                     }
                 } else if let clientRef {
+                    var didStartCascade = false
                     if targetCascadeId.isEmpty || targetCascadeId.hasPrefix("cas-") {
+                        didStartCascade = true
                         let createdId = try await clientRef.startCascade(
                             workspaceUri: workspaceUri,
                             initialPrompt: "",
@@ -418,25 +424,8 @@ extension AntigravitySessionStore {
                             isCloud: summaryIsCloud,
                             instanceUuidOverride: summaryOriginUuid
                         )
-                        if let self, !createdId.isEmpty {
-                            self.locallyCreatedEmptyCascadeIds.remove(targetCascadeId)
-                            self.locallyCreatedEmptyCascadeIds.remove(createdId)
-                            let existing = self.stepsByCascadeId.removeValue(forKey: targetCascadeId) ?? currentSteps
-                            self.stepsByCascadeId[createdId] = existing.map { step in
-                                var copy = step
-                                copy.cascadeId = createdId
-                                return copy
-                            }
-                            self.syncedConfigCascadeIds.insert(createdId)
-                            if let idx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
-                                self.summaries[idx].cascadeId = createdId
-                            }
-                            if self.activeCascadeId == targetCascadeId || self.activeCascadeId.isEmpty {
-                                self.activeCascadeId = createdId
-                                if case .cascadeChat = self.activeRoute {
-                                    self.activeRoute = .cascadeChat(createdId)
-                                }
-                            }
+                        if let self, !createdId.isEmpty && createdId != targetCascadeId {
+                            self.migrateCascadeSession(from: targetCascadeId, to: createdId, fallbackSteps: currentSteps)
                             targetCascadeId = createdId
                         }
                     }
@@ -447,25 +436,82 @@ extension AntigravitySessionStore {
                         self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true, forceRefresh: true)
                     }
 
-                    try await clientRef.sendUserCascadeMessage(
-                        cascadeId: targetCascadeId,
-                        message: messageBody,
-                        attachments: attachmentsSnapshot,
-                        modelId: cfg.modelId,
-                        effort: cfg.effort,
-                        mode: cfg.mode,
-                        agentPersona: cfg.agentPersona,
-                        isModelAlias: cfg.isModelAlias,
-                        isCloud: summaryIsCloud,
-                        permissionPreset: effectivePreset,
-                        instanceUuidOverride: summaryOriginUuid
-                    )
+                    do {
+                        try await clientRef.sendUserCascadeMessage(
+                            cascadeId: targetCascadeId,
+                            message: messageBody,
+                            attachments: attachmentsSnapshot,
+                            modelId: cfg.modelId,
+                            effort: cfg.effort,
+                            mode: cfg.mode,
+                            agentPersona: cfg.agentPersona,
+                            isModelAlias: cfg.isModelAlias,
+                            isCloud: summaryIsCloud,
+                            permissionPreset: effectivePreset,
+                            instanceUuidOverride: summaryOriginUuid
+                        )
+                    } catch {
+                        guard ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) else {
+                            throw error
+                        }
+                        if didStartCascade {
+                            // Brief settle delay in case the newly allocated cascade executor is still registering
+                            try await Task.sleep(nanoseconds: 350_000_000)
+                            try await clientRef.sendUserCascadeMessage(
+                                cascadeId: targetCascadeId,
+                                message: messageBody,
+                                attachments: attachmentsSnapshot,
+                                modelId: cfg.modelId,
+                                effort: cfg.effort,
+                                mode: cfg.mode,
+                                agentPersona: cfg.agentPersona,
+                                isModelAlias: cfg.isModelAlias,
+                                isCloud: summaryIsCloud,
+                                permissionPreset: effectivePreset,
+                                instanceUuidOverride: summaryOriginUuid
+                            )
+                        } else if hasNoPriorServerTurns {
+                            // Conversation had 0 prior server-persisted assistant/tool turns (evicted empty draft or prior
+                            // first-send failure): transparently allocate a fresh server cascade and send the message.
+                            let freshId = try await clientRef.startCascade(
+                                workspaceUri: workspaceUri,
+                                initialPrompt: "",
+                                modelId: cfg.modelId,
+                                cloudProjectId: summaryCloudProjId,
+                                isCloud: summaryIsCloud,
+                                instanceUuidOverride: summaryOriginUuid
+                            )
+                            if let self, !freshId.isEmpty && freshId != targetCascadeId {
+                                self.migrateCascadeSession(from: targetCascadeId, to: freshId, fallbackSteps: currentSteps)
+                                targetCascadeId = freshId
+                            }
+                            try await clientRef.sendUserCascadeMessage(
+                                cascadeId: targetCascadeId,
+                                message: messageBody,
+                                attachments: attachmentsSnapshot,
+                                modelId: cfg.modelId,
+                                effort: cfg.effort,
+                                mode: cfg.mode,
+                                agentPersona: cfg.agentPersona,
+                                isModelAlias: cfg.isModelAlias,
+                                isCloud: summaryIsCloud,
+                                permissionPreset: effectivePreset,
+                                instanceUuidOverride: summaryOriginUuid
+                            )
+                        } else {
+                            throw error
+                        }
+                    }
                 }
                 await storeRef.removeOutboxEntry(id: outboxEntry.id)
 
                 if let self {
                     self.lastBackendActivityAt = Date()
                     self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
+                    self.lastFailedSendByCascadeId.removeValue(forKey: targetCascadeId)
+                    if self.activeCascadeId == targetCascadeId {
+                        self.stepLoadErrorText = nil
+                    }
                     if self.hasPairedBackend && (!self.isLiveBackendConnected || !self.activeHost.isOnline) {
                         self.markBackendReconnected()
                     }
@@ -480,6 +526,7 @@ extension AntigravitySessionStore {
                     if stepsAdvanced && !targetCascadeId.isEmpty {
                         await storeRef.removeOutboxEntry(id: outboxEntry.id)
                         self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
+                        self.lastFailedSendByCascadeId.removeValue(forKey: targetCascadeId)
                         // Turn already started streaming on backend despite unary HTTP timeout; keep polling steps
                         self.syncStepsForCascade(targetCascadeId, pollUntilIdle: true, forceRefresh: true)
                     } else if Self.isBackendOfflineError(error) {
@@ -507,14 +554,98 @@ extension AntigravitySessionStore {
                         await storeRef.removeOutboxEntry(id: outboxEntry.id)
                         self.pendingOutboxCount = await storeRef.loadPendingOutbox().count
                         self.optimisticActiveUntilByCascadeId.removeValue(forKey: targetCascadeId)
-                        let formatted = ProtocolCompatibilityEngine.formatUserFacingRpcError(error)
-                        self.stepLoadErrorText = "Failed to send message: \(formatted)"
+                        let formatted = ProtocolCompatibilityEngine.formatUserFacingSendError(error)
+                        self.stepLoadErrorText = Self.formatSendBannerMessage(formatted)
+                        self.lastFailedSendByCascadeId[targetCascadeId] = FailedSendSnapshot(
+                            cascadeId: targetCascadeId,
+                            stepIndex: nextIndex,
+                            message: messageBody,
+                            attachments: attachmentsSnapshot
+                        )
                         if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
                             self.summaries[sumIdx].status = .done
                             self.summaries[sumIdx].statusSubtitle = "Send failed · Tap to retry"
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Retries the most recent failed live message send for `cascadeId` without duplicating its user bubble
+    /// and without discarding any new draft text the user has typed into the composer.
+    public func retryLastFailedSend(for cascadeId: String? = nil) {
+        let cid = (cascadeId?.isEmpty == false ? cascadeId! : activeCascadeId)
+        guard !cid.isEmpty, let failed = lastFailedSendByCascadeId.removeValue(forKey: cid) else {
+            if !cid.isEmpty {
+                stepLoadErrorText = nil
+                syncStepsForCascade(cid, pollUntilIdle: true, forceRefresh: true)
+            }
+            return
+        }
+        if var existing = stepsByCascadeId[cid],
+           let last = existing.last,
+           last.stepIndex == failed.stepIndex,
+           last.type == .userInput,
+           last.userInput == failed.message {
+            existing.removeLast()
+            stepsByCascadeId[cid] = existing
+        }
+        let preservedDraft = composerDraftText
+        let preservedAttachments = composerAttachments
+        let preservedWorkflow = composerWorkflowCommand
+        if activeCascadeId != cid {
+            activeCascadeId = cid
+        }
+        stepLoadErrorText = nil
+        composerWorkflowCommand = nil
+        composerDraftText = failed.message
+        composerAttachments = failed.attachments
+        sendCurrentDraft(bypassStreamingQueue: true, skipUpgradeWait: true)
+        composerDraftText = preservedDraft
+        composerAttachments = preservedAttachments
+        composerWorkflowCommand = preservedWorkflow
+    }
+
+    internal static func formatSendBannerMessage(_ detail: String) -> String {
+        let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Failed to send message." }
+        if trimmed.lowercased().hasPrefix("failed to send message:") {
+            return trimmed
+        }
+        return "Failed to send message: \(trimmed)"
+    }
+
+    private func migrateCascadeSession(from oldId: String, to newId: String, fallbackSteps: [CascadeStep]? = nil) {
+        guard !newId.isEmpty, oldId != newId else { return }
+        locallyCreatedEmptyCascadeIds.remove(oldId)
+        locallyCreatedEmptyCascadeIds.remove(newId)
+        syncedStepsMarkerByCascadeId.removeValue(forKey: oldId)
+        syncedStepsMarkerByCascadeId.removeValue(forKey: newId)
+        let existing = stepsByCascadeId.removeValue(forKey: oldId) ?? fallbackSteps
+        if let existing {
+            stepsByCascadeId[newId] = existing.map { step in
+                var copy = step
+                copy.cascadeId = newId
+                return copy
+            }
+        }
+        if let failed = lastFailedSendByCascadeId.removeValue(forKey: oldId) {
+            lastFailedSendByCascadeId[newId] = FailedSendSnapshot(
+                cascadeId: newId,
+                stepIndex: failed.stepIndex,
+                message: failed.message,
+                attachments: failed.attachments
+            )
+        }
+        syncedConfigCascadeIds.insert(newId)
+        if let idx = summaries.firstIndex(where: { $0.cascadeId == oldId }) {
+            summaries[idx].cascadeId = newId
+        }
+        if activeCascadeId == oldId || activeCascadeId.isEmpty {
+            activeCascadeId = newId
+            if case .cascadeChat = activeRoute {
+                activeRoute = .cascadeChat(newId)
             }
         }
     }
@@ -594,25 +725,8 @@ extension AntigravitySessionStore {
                         isOptimisticDraft: isOptimistic
                     )
                     let resolvedId = outcome.resolvedCascadeId
-                    if !resolvedId.isEmpty && resolvedId != targetCascadeId && isOptimistic {
-                        locallyCreatedEmptyCascadeIds.remove(targetCascadeId)
-                        locallyCreatedEmptyCascadeIds.remove(resolvedId)
-                        if let existing = stepsByCascadeId.removeValue(forKey: targetCascadeId) {
-                            stepsByCascadeId[resolvedId] = existing.map { step in
-                                var copy = step
-                                copy.cascadeId = resolvedId
-                                return copy
-                            }
-                        }
-                        if let idx = summaries.firstIndex(where: { $0.cascadeId == targetCascadeId }) {
-                            summaries[idx].cascadeId = resolvedId
-                        }
-                        if activeCascadeId == targetCascadeId || activeCascadeId.isEmpty {
-                            activeCascadeId = resolvedId
-                            if case .cascadeChat = activeRoute {
-                                activeRoute = .cascadeChat(resolvedId)
-                            }
-                        }
+                    if !resolvedId.isEmpty && resolvedId != targetCascadeId {
+                        migrateCascadeSession(from: targetCascadeId, to: resolvedId)
                         targetCascadeId = resolvedId
                     }
                     if !outcome.dispatchedLive {

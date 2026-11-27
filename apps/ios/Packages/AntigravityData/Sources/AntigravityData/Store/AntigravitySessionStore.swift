@@ -358,8 +358,31 @@ public final class AntigravitySessionStore {
             language: appearancePreferences.language
         )
     }
+    public struct FailedSendSnapshot: Sendable, Equatable {
+        public let cascadeId: String
+        public let stepIndex: Int
+        public let message: String
+        public let attachments: [ComposerAttachmentChip]
+
+        public init(
+            cascadeId: String,
+            stepIndex: Int,
+            message: String,
+            attachments: [ComposerAttachmentChip] = []
+        ) {
+            self.cascadeId = cascadeId
+            self.stepIndex = stepIndex
+            self.message = message
+            self.attachments = attachments
+        }
+    }
+
     public var isLoadingSteps: Bool = false
     public var stepLoadErrorText: String? = nil
+    public var lastFailedSendByCascadeId: [String: FailedSendSnapshot] = [:]
+    public var activeFailedSend: FailedSendSnapshot? {
+        lastFailedSendByCascadeId[activeCascadeId]
+    }
     public var cloudAgentWarmingUp: Bool = false
     public var connectionLifecyclePhase: ConnectionLifecyclePhase = .disconnected
     public var isDeviceNetworkReachable: Bool = true

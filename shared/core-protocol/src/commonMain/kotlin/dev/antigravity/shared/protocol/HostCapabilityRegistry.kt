@@ -572,10 +572,15 @@ public object ProtocolCompatibilityEngine {
      */
     public fun isTrajectoryNotFoundResponse(statusCode: Int, body: String): Boolean {
         val lower = body.lowercase()
+        val isAuthSessionError = lower.contains("google sign-in session") ||
+            lower.contains("auth session") ||
+            lower.contains("login session")
         if (lower.contains("trajectory not found") ||
             lower.contains("cascade not found") ||
             lower.contains("conversation not found") ||
-            lower.contains("unknown cascade")
+            lower.contains("unknown cascade") ||
+            (lower.contains("agent state") && lower.contains("not found")) ||
+            (!isAuthSessionError && lower.contains("session not found"))
         ) {
             return true
         }
@@ -678,6 +683,13 @@ public object ProtocolCompatibilityEngine {
         return cleaned
     }
 
+    private fun isAlreadyFormattedUserFacingMessage(text: String): Boolean {
+        val trimmed = text.trim()
+        return trimmed.startsWith("Antigravity Desktop is offline") ||
+            trimmed.startsWith("Conversation history could not be found on this host") ||
+            trimmed.startsWith("This conversation was not found on this host")
+    }
+
     /**
      * Formats an RPC/transport failure cleanly for UI presentation (never doubling `HTTP 404: HTTP 404:`
      * or leaking raw Boq JSON-array brackets like `[5,"not_found: ..."]`).
@@ -686,6 +698,9 @@ public object ProtocolCompatibilityEngine {
         val http = error as? AntigravityRpcError.HttpError
         if (http != null) {
             val detail = unwrapErrorDetail(http.body, statusCode = http.statusCode)
+            if (isAlreadyFormattedUserFacingMessage(detail)) {
+                return detail
+            }
             if (isInstanceNotRegisteredResponse(http.statusCode, http.body)) {
                 return "Antigravity Desktop is offline or unregistered on Cloud Relay. Ensure Antigravity Desktop is open with Remote Control enabled."
             }
@@ -699,6 +714,32 @@ public object ProtocolCompatibilityEngine {
             return if (detail.isNotEmpty()) "HTTP ${http.statusCode}: $detail" else "HTTP ${http.statusCode}"
         }
         return error.message?.takeIf { it.isNotBlank() } ?: "Failed to load trajectory steps"
+    }
+
+    /**
+     * Formats a message-send failure cleanly for UI presentation without conflating send failures
+     * with history-loading errors or double-wrapping already formatted errors.
+     */
+    public fun formatUserFacingSendError(error: Throwable): String {
+        val http = error as? AntigravityRpcError.HttpError
+        if (http != null) {
+            val detail = unwrapErrorDetail(http.body, statusCode = http.statusCode)
+            if (isAlreadyFormattedUserFacingMessage(detail)) {
+                return detail
+            }
+            if (isInstanceNotRegisteredResponse(http.statusCode, http.body)) {
+                return "Antigravity Desktop is offline or unregistered on Cloud Relay. Ensure Antigravity Desktop is open with Remote Control enabled."
+            }
+            if (isTrajectoryNotFoundResponse(http.statusCode, http.body)) {
+                return if (detail.isNotEmpty()) {
+                    "This conversation was not found on this host ($detail). Tap Retry or start a new chat."
+                } else {
+                    "This conversation was not found on this host. Tap Retry or start a new chat."
+                }
+            }
+            return if (detail.isNotEmpty()) "HTTP ${http.statusCode}: $detail" else "HTTP ${http.statusCode}"
+        }
+        return error.message?.takeIf { it.isNotBlank() } ?: "Message dispatch failed"
     }
 
     private fun collectJsonArrayStrings(arr: JsonArray, out: MutableList<String>, depth: Int = 0) {

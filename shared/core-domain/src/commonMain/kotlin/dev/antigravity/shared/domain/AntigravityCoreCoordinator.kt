@@ -308,30 +308,67 @@ public class AntigravityCoreCoordinator(
         workspaceUri: String = "",
         projectSlug: String = "",
         title: String = "New Conversation",
-        isCloud: Boolean = false,
+        isCloud: Boolean? = null,
+        cloudProjectId: String? = null,
+        originInstanceUuid: String? = null,
+        originHostName: String? = null,
+        branchName: String? = null,
     ): String {
         val draftId = "cascade-new-${dev.antigravity.shared.protocol.currentTimeMillis()}"
         val activeHost = connectionStore.state.value.activeHost
-        val resolvedProject = projectSlug.ifBlank {
-            conversationSyncStore.state.value.projects.firstOrNull()?.id ?: "workspace"
+        val allProjects = workspaceStore.state.value.projects + conversationSyncStore.state.value.projects
+        val trimmedSlug = projectSlug.trim()
+        val trimmedWorkspace = workspaceUri.trim()
+        val matchedProject = allProjects.firstOrNull { proj ->
+            (trimmedSlug.isNotEmpty() && proj.id == trimmedSlug) ||
+                (trimmedWorkspace.isNotEmpty() && proj.workspaceUri == trimmedWorkspace) ||
+                (trimmedSlug.isNotEmpty() && proj.name.equals(trimmedSlug, ignoreCase = true))
         }
-        val resolvedWorkspace = workspaceUri.ifBlank {
-            conversationSyncStore.state.value.projects.firstOrNull { it.id == resolvedProject }?.workspaceUri.orEmpty()
+        val resolvedProject = trimmedSlug.ifBlank {
+            matchedProject?.id ?: allProjects.firstOrNull()?.id ?: "workspace"
         }
+        val resolvedWorkspace = trimmedWorkspace.ifBlank {
+            matchedProject?.workspaceUri
+                ?: allProjects.firstOrNull { it.id == resolvedProject }?.workspaceUri.orEmpty()
+        }
+        val resolvedIsCloud = isCloud
+            ?: ((matchedProject?.runtime == ProjectRuntimeTarget.CLOUD)
+                || AntigravityCloudDetector.isCloudWorkspaceUri(resolvedWorkspace)
+                || resolvedProject.lowercase().startsWith("cloud:"))
+        val resolvedCloudProjectId = cloudProjectId?.takeIf { it.isNotBlank() }
+            ?: matchedProject?.cloudProjectId
+        val resolvedOriginUuid = originInstanceUuid?.takeIf { it.isNotBlank() }
+            ?: if (resolvedIsCloud) {
+                matchedProject?.takeIf { it.runtime == ProjectRuntimeTarget.CLOUD }?.originInstanceUuid
+            } else {
+                matchedProject?.originInstanceUuid ?: activeHost?.instanceId
+            }
+        val resolvedOriginHostName = originHostName?.takeIf { it.isNotBlank() }
+            ?: if (resolvedIsCloud) {
+                "Antigravity"
+            } else {
+                matchedProject?.hostName?.takeIf { it.isNotBlank() && it != "Cloud" }
+                    ?: activeHost?.hostname
+            }
+        val resolvedBranch = branchName?.takeIf { it.isNotBlank() }
+            ?: matchedProject?.activeBranch?.takeIf { it.isNotBlank() }
+            ?: "main"
         conversationSyncStore.upsertSummary(
             CascadeSummary(
                 cascadeId = draftId,
                 title = title,
                 projectSlug = resolvedProject,
                 workspaceUri = resolvedWorkspace,
+                branchName = resolvedBranch,
                 status = CortexStepStatus.UNSPECIFIED,
                 stepCount = 0,
                 currentStepIndex = 0,
                 totalSteps = 0,
                 statusSubtitle = "New conversation",
-                isCloud = isCloud,
-                originInstanceUuid = if (isCloud) null else activeHost?.instanceId,
-                originHostName = if (isCloud) "Antigravity" else activeHost?.hostname,
+                isCloud = resolvedIsCloud,
+                cloudProjectId = resolvedCloudProjectId,
+                originInstanceUuid = resolvedOriginUuid,
+                originHostName = resolvedOriginHostName,
                 updatedAtEpochMs = dev.antigravity.shared.protocol.currentTimeMillis(),
                 hasResolvedTitle = true,
             ),
@@ -1082,10 +1119,46 @@ public class AntigravityCoreCoordinator(
             isVerificationMode = isVerificationMode,
             isModelAlias = resolvedIsAlias,
         )
-        if (outcome.resolvedCascadeId != cascadeId) {
-            conversationSyncStore.replaceCascadeId(cascadeId, outcome.resolvedCascadeId)
+        applySendMessageOutcome(
+            originalCascadeId = cascadeId,
+            outcome = outcome,
+            isCloud = isCloud,
+            instanceUuidOverride = instanceUuidOverride,
+        )
+        return outcome
+    }
+
+    @Throws(Throwable::class)
+    public suspend fun retryLastFailedMessage(cascadeId: String): SendMessageOutcome? {
+        val effectiveCid = cascadeId.ifBlank { chatStore.state.value.activeCascadeId }
+        val failed = chatStore.state.value.lastFailedSendByCascadeId[effectiveCid] ?: return null
+        val client = connectionStore.activeClient()
+        val isReachable = connectionStore.state.value.isDeviceNetworkReachable
+        val outcome = chatStore.retryLastFailedSend(
+            client = client,
+            cascadeId = effectiveCid,
+            isDeviceNetworkReachable = isReachable,
+            isVerificationMode = isVerificationMode,
+        ) ?: return null
+        applySendMessageOutcome(
+            originalCascadeId = effectiveCid,
+            outcome = outcome,
+            isCloud = failed.isCloud,
+            instanceUuidOverride = failed.instanceUuidOverride,
+        )
+        return outcome
+    }
+
+    private fun applySendMessageOutcome(
+        originalCascadeId: String,
+        outcome: SendMessageOutcome,
+        isCloud: Boolean,
+        instanceUuidOverride: String?,
+    ) {
+        if (outcome.resolvedCascadeId.isNotBlank() && outcome.resolvedCascadeId != originalCascadeId) {
+            conversationSyncStore.replaceCascadeId(originalCascadeId, outcome.resolvedCascadeId)
         }
-        val effectiveCid = outcome.resolvedCascadeId.ifBlank { cascadeId }
+        val effectiveCid = outcome.resolvedCascadeId.ifBlank { originalCascadeId }
         val existingSummary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == effectiveCid }
         if (existingSummary != null) {
             val updatedSummary = when {
@@ -1116,7 +1189,6 @@ public class AntigravityCoreCoordinator(
                 errorMessage = outcome.errorMessage,
             )
         }
-        return outcome
     }
 
     @Throws(Throwable::class)

@@ -380,6 +380,7 @@ fun CascadeChatScreen(
                 }
 
                 if (displayItems.isNotEmpty() && !chatState.stepLoadErrorText.isNullOrBlank()) {
+                    val hasFailedSend = chatState.lastFailedSendByCascadeId[activeCascadeId] != null
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -406,18 +407,48 @@ fun CascadeChatScreen(
                                 text = chatState.stepLoadErrorText.orEmpty(),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colors.statusError,
-                                maxLines = 2,
+                                maxLines = 4,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
                             TextButton(
-                                onClick = { coordinator.chatStore.clearStepLoadError() },
+                                onClick = {
+                                    if (hasFailedSend) {
+                                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                            try {
+                                                val outcome = coordinator.retryLastFailedMessage(activeCascadeId)
+                                                if (outcome?.dispatchedLive == true) {
+                                                    onRetryLoadSteps()
+                                                }
+                                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                                throw e
+                                            } catch (_: Throwable) {
+                                                // Error state is already surfaced via chatStore.stepLoadErrorText
+                                            }
+                                        }
+                                    } else {
+                                        coordinator.chatStore.clearStepLoadError()
+                                        onRetryLoadSteps()
+                                    }
+                                },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("chat-inline-error-retry"),
+                            ) {
+                                Text(
+                                    text = tr("Retry", "重试"),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.accentPeriwinkle,
+                                )
+                            }
+                            TextButton(
+                                onClick = { coordinator.chatStore.clearStepLoadError() },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("chat-inline-error-dismiss"),
                             ) {
                                 Text(
                                     text = tr("Dismiss", "关闭"),
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = colors.accentPeriwinkle,
+                                    color = colors.inkSecondary,
                                 )
                             }
                         }

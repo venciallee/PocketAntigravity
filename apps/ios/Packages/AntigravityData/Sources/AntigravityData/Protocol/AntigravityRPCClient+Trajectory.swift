@@ -318,10 +318,11 @@ extension AntigravityRPCClient {
         existingSteps: [CascadeStep] = []
     ) async throws -> [CascadeStep] {
         let isRemoteCloud = Self.isRemoteCloudCascade(cascadeId: cascadeId, isCloud: isCloud)
+        let pinnedTarget = (channel == .cloudRelay) ? pinnedInstance(for: cascadeId) : nil
         let primaryTarget: String? = {
             if channel == .cloudRelay {
                 return selectReachableRelayUuid(
-                    preferred: instanceUuidOverride,
+                    preferred: pinnedTarget ?? instanceUuidOverride,
                     allowCrossHostFailover: isRemoteCloud
                 )
             }
@@ -358,6 +359,7 @@ extension AntigravityRPCClient {
                     targetUuid: primaryTarget
                 )
                 if !steps.isEmpty {
+                    recordPinnedInstance(for: cascadeId, instanceUuid: primaryTarget)
                     return steps
                 }
             } catch let AntigravityRPCError.unauthorized(msg) {
@@ -429,6 +431,7 @@ extension AntigravityRPCClient {
                             targetUuid: peer.uuid
                         )
                         if !peerSteps.isEmpty {
+                            recordPinnedInstance(for: cascadeId, instanceUuid: peer.uuid)
                             if instanceUuidOverride == nil && !isRemoteCloud {
                                 self.resolvedInstanceUuid = peer.uuid
                             }
@@ -1674,37 +1677,199 @@ extension AntigravityRPCClient {
     ) async throws -> String {
         let protoModel = Self.normalizeProtoModelEnum(modelId)
         let clientCid = UUID().uuidString.lowercased()
-        var payload: [String: JSONValue] = [
-            "cascadeId": .string(clientCid),
-            "metadata": .object([
-                "ideName": .string("antigravity-ios"),
-                "ideVersion": .string(Self.clientAppVersion)
-            ]),
-            "modelId": .string(protoModel)
-        ]
-        if let cloudProjectId, !cloudProjectId.isEmpty {
-            payload["backend"] = .string("BACKEND_TYPE_REMOTE_AICODE")
-            payload["projectEnvConfig"] = .object([
-                "projectId": .string(cloudProjectId),
-                "defaultProjectEnvironment": .object([:])
-            ])
-        } else if isCloud {
-            payload["backend"] = .string("BACKEND_TYPE_REMOTE_AICODE")
-        } else if !workspaceUri.isEmpty && !AntigravityCloudDetector.isGenericContainerURI(workspaceUri) {
-            payload["workspaceUris"] = .array([.string(workspaceUri)])
+        let isCloudRequest = isCloud || (cloudProjectId?.isEmpty == false)
+
+        func buildStartPayload(cloudField: CloudTrajectoryBackendField?) -> [String: JSONValue] {
+            var payload: [String: JSONValue] = [
+                "metadata": .object([
+                    "ideName": .string("antigravity-ios"),
+                    "ideVersion": .string(Self.clientAppVersion)
+                ]),
+                "modelId": .string(protoModel)
+            ]
+            if channel != .cloudRelay {
+                payload["cascadeId"] = .string(clientCid)
+            }
+            if let cloudProjectId, !cloudProjectId.isEmpty {
+                if let key = cloudField?.jsonKey {
+                    payload[key] = .string("BACKEND_TYPE_REMOTE_AICODE")
+                }
+                payload["projectEnvConfig"] = .object([
+                    "projectId": .string(cloudProjectId),
+                    "defaultProjectEnvironment": .object([:])
+                ])
+            } else if isCloud {
+                if let key = cloudField?.jsonKey {
+                    payload[key] = .string("BACKEND_TYPE_REMOTE_AICODE")
+                }
+            } else if !workspaceUri.isEmpty && !AntigravityCloudDetector.isGenericContainerURI(workspaceUri) {
+                payload["workspaceUris"] = .array([.string(workspaceUri)])
+            }
+            if !initialPrompt.isEmpty {
+                payload["initialUserInput"] = .string(initialPrompt)
+            }
+            return payload
         }
-        if !initialPrompt.isEmpty {
-            payload["initialUserInput"] = .string(initialPrompt)
+
+        let candidates: [CloudTrajectoryBackendField?] = isCloudRequest
+            ? orderedCloudBackendFields(for: "StartCascade", targetUuid: instanceUuidOverride).map { Optional($0) }
+            : [nil]
+
+        var lastError: Error? = nil
+        var res: [String: JSONValue]? = nil
+        for variant in candidates {
+            do {
+                res = try await callUnaryJSON(
+                    method: "StartCascade",
+                    body: buildStartPayload(cloudField: variant),
+                    instanceUuidOverride: instanceUuidOverride,
+                    allowCrossHostFailover: isCloudRequest,
+                    timeoutInterval: 45.0,
+                    allowStripUnknownFields: !isCloudRequest || variant?.jsonKey == nil
+                )
+                if let variant {
+                    recordPreferredCloudBackendField(variant, for: "StartCascade", targetUuid: instanceUuidOverride)
+                }
+                break
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch let AntigravityRPCError.httpError(statusCode, errBody) {
+                lastError = AntigravityRPCError.httpError(statusCode: statusCode, body: errBody)
+                if let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: errBody) {
+                    mutateCapabilityProfile(for: instanceUuidOverride) { profile in
+                        profile.recordStrippedField(unknownField, forMethod: "StartCascade")
+                    }
+                    let isBackendKey = unknownField.caseInsensitiveCompare("backend") == .orderedSame
+                        || unknownField.caseInsensitiveCompare("backendType") == .orderedSame
+                    if isBackendKey, let variant, variant != .none {
+                        continue
+                    }
+                    if !isBackendKey, isCloudRequest, let variant, variant != .none {
+                        res = try await callUnaryJSON(
+                            method: "StartCascade",
+                            body: buildStartPayload(cloudField: variant),
+                            instanceUuidOverride: instanceUuidOverride,
+                            allowCrossHostFailover: true,
+                            timeoutInterval: 45.0,
+                            allowStripUnknownFields: true
+                        )
+                        recordPreferredCloudBackendField(variant, for: "StartCascade", targetUuid: instanceUuidOverride)
+                        break
+                    }
+                }
+                throw AntigravityRPCError.httpError(statusCode: statusCode, body: errBody)
+            } catch {
+                throw error
+            }
         }
-        let res = try await callUnaryJSON(
-            method: "StartCascade",
-            body: payload,
-            instanceUuidOverride: instanceUuidOverride
-        )
-        if let returnedId = Self.nonEmptyString(res["cascadeId"]?.stringValue) {
+
+        guard let responseObj = res else {
+            throw lastError ?? AntigravityRPCError.httpError(statusCode: 502, body: "StartCascade failed")
+        }
+        if let returnedId = Self.extractServerCascadeId(from: responseObj) {
             return returnedId
         }
+        if channel == .cloudRelay {
+            throw AntigravityRPCError.httpError(statusCode: 502, body: "StartCascade did not return a conversation ID")
+        }
         return clientCid
+    }
+
+    private func sendUserCascadeMessageToSingleInstance(
+        cascadeId: String,
+        baseBody: [String: JSONValue],
+        isRemoteCloud: Bool,
+        targetUuid: String?,
+        allowCrossHostFailover: Bool
+    ) async throws {
+        do {
+            _ = try await callUnaryJSON(
+                method: "SendUserCascadeMessage",
+                body: baseBody,
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: allowCrossHostFailover,
+                timeoutInterval: 300.0
+            )
+            return
+        } catch let AntigravityRPCError.unauthorized(msg) {
+            throw AntigravityRPCError.unauthorized(msg)
+        } catch {
+            if error is CancellationError || !ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
+                throw error
+            }
+            // Wake dormant disk/remote trajectory into language_server memory before retrying.
+            do {
+                try await loadTrajectory(
+                    cascadeId: cascadeId,
+                    isCloud: isRemoteCloud,
+                    instanceUuidOverride: targetUuid
+                )
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch {
+                if error is CancellationError { throw error }
+                // Best-effort wake; still retry SendUserCascadeMessage (and Cloud backend variants below).
+            }
+
+            var retryError: Error? = nil
+            do {
+                _ = try await callUnaryJSON(
+                    method: "SendUserCascadeMessage",
+                    body: baseBody,
+                    instanceUuidOverride: targetUuid,
+                    allowCrossHostFailover: allowCrossHostFailover,
+                    timeoutInterval: 300.0
+                )
+                return
+            } catch let AntigravityRPCError.unauthorized(msg) {
+                throw AntigravityRPCError.unauthorized(msg)
+            } catch {
+                if error is CancellationError || !ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
+                    throw error
+                }
+                retryError = error
+            }
+
+            if isRemoteCloud {
+                let cloudVariants = orderedCloudBackendFields(for: "SendUserCascadeMessage", targetUuid: targetUuid)
+                    .filter { $0.jsonKey != nil }
+                for variant in cloudVariants {
+                    guard let key = variant.jsonKey else { continue }
+                    var taggedBody = baseBody
+                    taggedBody[key] = .string("BACKEND_TYPE_REMOTE_AICODE")
+                    do {
+                        _ = try await callUnaryJSON(
+                            method: "SendUserCascadeMessage",
+                            body: taggedBody,
+                            instanceUuidOverride: targetUuid,
+                            allowCrossHostFailover: allowCrossHostFailover,
+                            timeoutInterval: 300.0,
+                            allowStripUnknownFields: false
+                        )
+                        recordPreferredCloudBackendField(variant, for: "SendUserCascadeMessage", targetUuid: targetUuid)
+                        return
+                    } catch let AntigravityRPCError.unauthorized(msg) {
+                        throw AntigravityRPCError.unauthorized(msg)
+                    } catch let AntigravityRPCError.httpError(statusCode, errBody) {
+                        let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: errBody)
+                        if let unknownField {
+                            mutateCapabilityProfile(for: targetUuid) { profile in
+                                profile.recordStrippedField(unknownField, forMethod: "SendUserCascadeMessage")
+                            }
+                        }
+                        if unknownField != nil
+                            || statusCode == 400
+                            || ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(statusCode: statusCode, body: errBody) {
+                            continue
+                        }
+                        throw AntigravityRPCError.httpError(statusCode: statusCode, body: errBody)
+                    } catch {
+                        throw error
+                    }
+                }
+            }
+            throw retryError ?? error
+        }
     }
 
     /// Builds the upstream `cascadeConfig.plannerConfig.toolConfig` dictionary for a resolved `AgentPermissionPreset`.
@@ -1848,7 +2013,7 @@ extension AntigravityRPCClient {
             ? .object(["alias": .string(modelId)])
             : .object(["model": .string(protoModel)])
 
-        let isRemoteCloud = isCloud || cascadeId.hasPrefix("v1/")
+        let isRemoteCloud = Self.isRemoteCloudCascade(cascadeId: cascadeId, isCloud: isCloud)
         let effectivePermission = (permissionPreset ?? .inheritGlobal).resolvedForRuntime(isRemote: isRemoteCloud)
         let toolConfig = Self.buildToolConfig(for: effectivePermission)
 
@@ -1894,19 +2059,106 @@ extension AntigravityRPCClient {
             requestBody["media"] = .array(mediaItems)
         }
 
-        _ = try await callUnaryJSON(
-            method: "SendUserCascadeMessage",
-            body: requestBody,
-            instanceUuidOverride: instanceUuidOverride,
-            allowCrossHostFailover: isRemoteCloud,
-            timeoutInterval: 300.0
+        if channel != .cloudRelay {
+            try await sendUserCascadeMessageToSingleInstance(
+                cascadeId: cascadeId,
+                baseBody: requestBody,
+                isRemoteCloud: isRemoteCloud,
+                targetUuid: instanceUuidOverride,
+                allowCrossHostFailover: false
+            )
+            return
+        }
+
+        let pinnedTarget = pinnedInstance(for: cascadeId)
+        let primaryTarget = selectReachableRelayUuid(
+            preferred: pinnedTarget ?? instanceUuidOverride,
+            allowCrossHostFailover: isRemoteCloud
         )
+        let initialTarget = (primaryTarget?.isEmpty == false) ? primaryTarget : instanceUuidOverride
+
+        let primaryError: Error
+        do {
+            try await sendUserCascadeMessageToSingleInstance(
+                cascadeId: cascadeId,
+                baseBody: requestBody,
+                isRemoteCloud: isRemoteCloud,
+                targetUuid: initialTarget,
+                allowCrossHostFailover: isRemoteCloud
+            )
+            return
+        } catch let AntigravityRPCError.unauthorized(msg) {
+            throw AntigravityRPCError.unauthorized(msg)
+        } catch {
+            if error is CancellationError || !ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
+                throw error
+            }
+            primaryError = error
+        }
+
+        // Primary instance confirmed `not_found`. Probe reachable peer instances (all reachable
+        // peers for Cloud; same-host-family peers for Local).
+        let resolvedPrimary = initialTarget ?? resolvedInstanceUuid ?? ""
+        var probedUuids: Set<String> = []
+        if !resolvedPrimary.isEmpty {
+            probedUuids.insert(resolvedPrimary)
+        }
+        for pass in 0..<2 {
+            let instancesToSearch: [RelayInstanceInfo]
+            if pass == 0 {
+                instancesToSearch = cachedRelayInstances
+            } else {
+                guard let refreshed = try? await listRelayInstances(timeoutInterval: 4.0),
+                      !refreshed.isEmpty else {
+                    break
+                }
+                self.cachedRelayInstances = refreshed
+                instancesToSearch = refreshed
+            }
+            guard !instancesToSearch.isEmpty else { continue }
+            let seedUuid = resolvedPrimary.isEmpty ? (instanceUuidOverride ?? resolvedInstanceUuid) : resolvedPrimary
+            let familySeed = instancesToSearch.first(where: { $0.uuid == seedUuid })?.name
+                ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : "")
+            let peers = instancesToSearch.filter { inst in
+                guard inst.status.isReachable && !probedUuids.contains(inst.uuid) else { return false }
+                if isRemoteCloud { return true }
+                return !familySeed.isEmpty && inst.sameHostFamily(as: familySeed)
+            }
+            for peer in peers {
+                probedUuids.insert(peer.uuid)
+                do {
+                    try await sendUserCascadeMessageToSingleInstance(
+                        cascadeId: cascadeId,
+                        baseBody: requestBody,
+                        isRemoteCloud: isRemoteCloud,
+                        targetUuid: peer.uuid,
+                        allowCrossHostFailover: false
+                    )
+                    recordPinnedInstance(for: cascadeId, instanceUuid: peer.uuid)
+                    if instanceUuidOverride == nil && !isRemoteCloud {
+                        self.resolvedInstanceUuid = peer.uuid
+                    }
+                    return
+                } catch let AntigravityRPCError.unauthorized(msg) {
+                    throw AntigravityRPCError.unauthorized(msg)
+                } catch {
+                    if error is CancellationError || !ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
+                        throw error
+                    }
+                }
+            }
+        }
+
+        throw primaryError
     }
 
     public func handleCascadeUserInteraction(
         _ payload: CascadeUserInteractionPayload,
         instanceUuidOverride: String? = nil
     ) async throws {
+        let effectiveInstanceUuid = (channel == .cloudRelay)
+            ? (pinnedInstance(for: payload.cascadeId) ?? instanceUuidOverride)
+            : instanceUuidOverride
         var interactionObj: [String: JSONValue] = [
             "trajectoryId": .string(payload.cascadeId),
             "stepIndex": .int(payload.stepIndex)
@@ -1962,7 +2214,7 @@ extension AntigravityRPCClient {
             _ = try await callUnaryJSON(
                 method: "HandleCascadeUserInteraction",
                 body: ["interaction": .object(interactionObj)],
-                instanceUuidOverride: instanceUuidOverride
+                instanceUuidOverride: effectiveInstanceUuid
             )
         } catch let AntigravityRPCError.httpError(statusCode, errorBody)
             where statusCode == 400
@@ -2007,7 +2259,7 @@ extension AntigravityRPCClient {
             _ = try await callUnaryJSON(
                 method: "HandleCascadeUserInteraction",
                 body: ["interaction": .object(fallbackObj)],
-                instanceUuidOverride: instanceUuidOverride
+                instanceUuidOverride: effectiveInstanceUuid
             )
         }
     }
@@ -2027,10 +2279,13 @@ extension AntigravityRPCClient {
         cascadeId: String,
         instanceUuidOverride: String? = nil
     ) async throws {
+        let effectiveInstanceUuid = (channel == .cloudRelay)
+            ? (pinnedInstance(for: cascadeId) ?? instanceUuidOverride)
+            : instanceUuidOverride
         _ = try await callUnaryJSON(
             method: "CancelCascadeInvocation",
             body: ["cascadeId": .string(cascadeId)],
-            instanceUuidOverride: instanceUuidOverride
+            instanceUuidOverride: effectiveInstanceUuid
         )
     }
 
