@@ -562,7 +562,7 @@ public final class AntigravitySessionStore {
     @ObservationIgnored internal var activeStepSyncCascadeId: String? = nil
     @ObservationIgnored internal var activeStepSyncPollsUntilIdle: Bool = false
     @ObservationIgnored internal var activeForegroundStepSyncCount: Int = 0
-    @ObservationIgnored internal var isFetchingStepsInFlight: Bool = false
+    @ObservationIgnored internal var isSleepingBetweenStepPolls: Bool = false
     @ObservationIgnored internal var pendingStreamResyncCascadeId: String? = nil
     @ObservationIgnored internal var inFlightPreloadTasksByCascadeId: [String: Task<[CascadeStep], Never>] = [:]
     @ObservationIgnored internal var syncedStepsMarkerByCascadeId: [String: (stepCount: Int, updatedAt: Date)] = [:]

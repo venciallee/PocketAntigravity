@@ -854,7 +854,7 @@ extension AntigravitySessionStore {
         stepPollingTask = nil
         activeStepSyncCascadeId = nil
         activeStepSyncPollsUntilIdle = false
-        isFetchingStepsInFlight = false
+        isSleepingBetweenStepPolls = false
         pendingStreamResyncCascadeId = nil
 
         isConnectingToBackend = true
@@ -1219,7 +1219,7 @@ extension AntigravitySessionStore {
         activeStepSyncCascadeId = nil
         activeStepSyncPollsUntilIdle = false
         activeForegroundStepSyncCount = 0
-        isFetchingStepsInFlight = false
+        isSleepingBetweenStepPolls = false
         pendingStreamResyncCascadeId = nil
         isLoadingSteps = false
         for task in inFlightPreloadTasksByCascadeId.values {

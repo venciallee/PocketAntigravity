@@ -1091,10 +1091,11 @@ extension AntigravitySessionStore {
                 }
                 return
             }
-            if !cancelInFlight && isFetchingStepsInFlight {
-                // Never cancel an active foreground RPC because a push summary arrived mid-flight
+            if !cancelInFlight && !isSleepingBetweenStepPolls {
+                // Never cancel an active foreground step sync (disk cache read, preload coalescing,
+                // live RPC fetch, or projection persist) because a push summary arrived mid-flight
                 // (e.g. KMP `applyHydratedStepsMetadata` emitting right before returning steps).
-                // Record a deferred re-check once the in-flight RPC returns.
+                // Record a deferred re-check once the active iteration finishes.
                 pendingStreamResyncCascadeId = cascadeId
                 if pollUntilIdle {
                     activeStepSyncPollsUntilIdle = true
@@ -1107,7 +1108,7 @@ extension AntigravitySessionStore {
         stepPollingTask = nil
         activeStepSyncCascadeId = nil
         activeStepSyncPollsUntilIdle = false
-        isFetchingStepsInFlight = false
+        isSleepingBetweenStepPolls = false
         pendingStreamResyncCascadeId = nil
         stepSyncGeneration &+= 1
         let generation = stepSyncGeneration
@@ -1221,7 +1222,7 @@ extension AntigravitySessionStore {
                         self.activeForegroundStepSyncCount = max(0, self.activeForegroundStepSyncCount - 1)
                     }
                     if self.stepSyncGeneration == generation {
-                        self.isFetchingStepsInFlight = false
+                        self.isSleepingBetweenStepPolls = false
                         if self.pendingStreamResyncCascadeId == cascadeId {
                             self.pendingStreamResyncCascadeId = nil
                         }
@@ -1294,6 +1295,9 @@ extension AntigravitySessionStore {
                            cachedSteps: preloadedSteps,
                            summary: refreshedSummary
                        ) {
+                        if self.pendingStreamResyncCascadeId == cascadeId {
+                            self.pendingStreamResyncCascadeId = nil
+                        }
                         if let refreshedSummary {
                             self.syncedStepsMarkerByCascadeId[cascadeId] = (
                                 stepCount: max(refreshedSummary.stepCount, preloadedSteps.count),
@@ -1336,9 +1340,6 @@ extension AntigravitySessionStore {
                 let existingStepsSnapshot = self.stepsByCascadeId[cascadeId] ?? []
                 let useForceOnThisAttempt = forceRefresh && attempts == 1
                 var stillActive = false
-                if self.stepSyncGeneration == generation {
-                    self.isFetchingStepsInFlight = true
-                }
                 do {
                     let remoteSteps: [CascadeStep]
                     if let engine = self.kmpEngine {
@@ -1366,13 +1367,7 @@ extension AntigravitySessionStore {
                             existingSteps: useForceOnThisAttempt ? [] : existingStepsSnapshot
                         )
                     } else {
-                        if self.stepSyncGeneration == generation {
-                            self.isFetchingStepsInFlight = false
-                        }
                         break
-                    }
-                    if self.stepSyncGeneration == generation {
-                        self.isFetchingStepsInFlight = false
                     }
                     let liveRelaySnapshot: (instances: [RelayInstanceInfo], active: RelayInstanceInfo?)? =
                         (self.activeHost.channel == .cloudRelay && clientRef != nil)
@@ -1408,13 +1403,14 @@ extension AntigravitySessionStore {
                     }
 
                     let withinOptimisticWindow = (self.optimisticActiveUntilByCascadeId[cascadeId].map { $0 > Date() } ?? false)
+                    var stepsToPersist: [CascadeStep]? = nil
                     if !remoteSteps.isEmpty {
                         self.locallyCreatedEmptyCascadeIds.remove(cascadeId)
                         let stepsChanged = (self.stepsByCascadeId[cascadeId] ?? []) != remoteSteps
                         if stepsChanged {
                             self.stepsByCascadeId[cascadeId] = remoteSteps
                             self.harvestEmbedResources(from: remoteSteps)
-                            await storeRef.saveProjectedSteps(remoteSteps, for: cascadeId)
+                            stepsToPersist = remoteSteps
                         }
                         if !self.syncedConfigCascadeIds.contains(cascadeId),
                            let latestCfgStep = remoteSteps.last(where: {
@@ -1481,10 +1477,10 @@ extension AntigravitySessionStore {
                     if belongsToActiveHost {
                         self.connectionLifecyclePhase = stillActive ? .onlineStreaming : .onlineIdle
                     }
-                } catch {
-                    if self.stepSyncGeneration == generation {
-                        self.isFetchingStepsInFlight = false
+                    if let stepsToPersist {
+                        await storeRef.saveProjectedSteps(stepsToPersist, for: cascadeId)
                     }
+                } catch {
                     if !Task.isCancelled {
                         if !summaryIsCloud && ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
                             self.markLocalHostOffline(
@@ -1546,7 +1542,13 @@ extension AntigravitySessionStore {
                         channel: self.activeHost.channel,
                         isLowPowerMode: self.isLowPowerModeEnabled
                     )
+                    if self.stepSyncGeneration == generation {
+                        self.isSleepingBetweenStepPolls = true
+                    }
                     try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                    if self.stepSyncGeneration == generation {
+                        self.isSleepingBetweenStepPolls = false
+                    }
                 } else {
                     let streamCoversTarget: Bool = {
                         if summaryIsCloud {
@@ -1565,7 +1567,13 @@ extension AntigravitySessionStore {
                         // Idle chat with healthy push stream -> stop polling completely (0 idle RPCs)
                         break
                     }
+                    if self.stepSyncGeneration == generation {
+                        self.isSleepingBetweenStepPolls = true
+                    }
                     try? await Task.sleep(nanoseconds: UInt64(fallbackInterval * 1_000_000_000))
+                    if self.stepSyncGeneration == generation {
+                        self.isSleepingBetweenStepPolls = false
+                    }
                 }
             }
         }
