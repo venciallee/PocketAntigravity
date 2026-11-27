@@ -454,7 +454,7 @@ extension AntigravityRPCClient {
         return []
     }
 
-    private final class WakeFlagBox: @unchecked Sendable {
+    internal final class WakeFlagBox: @unchecked Sendable {
         private let lock = NSLock()
         private var woken = false
 
