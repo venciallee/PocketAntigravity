@@ -311,7 +311,12 @@ public final class AntigravitySessionStore {
     public var remoteSearchResults: [CascadeSummary] = []
     public var isSearchingAllConversations: Bool = false
     public var manuallyCancelledCascadeIds: Set<String> = []
+    public var locallyCreatedEmptyCascadeIds: Set<String> = []
     public var lastNotificationEvent: (id: String, title: String, body: String, cascadeId: String)? = nil
+
+    public func isLocallyCreatedEmptyCascade(_ cascadeId: String) -> Bool {
+        locallyCreatedEmptyCascadeIds.contains(cascadeId)
+    }
 
     // MARK: - Live Backend Connectivity & Auth State
     public var isVerificationMode: Bool = false
@@ -556,7 +561,6 @@ public final class AntigravitySessionStore {
     internal var backgroundPollCounter: Int = 0
     internal var lastAutomationsSyncAt: Date? = nil
     internal var syncedConfigCascadeIds: Set<String> = []
-    internal var locallyCreatedEmptyCascadeIds: Set<String> = []
     internal var stepSyncGeneration: UInt64 = 0
     @ObservationIgnored internal var displayItemsCacheByCascadeId: [String: [CascadeDisplayItem]] = [:]
     @ObservationIgnored internal var activeStepSyncCascadeId: String? = nil

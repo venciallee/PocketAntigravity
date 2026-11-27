@@ -247,7 +247,7 @@ public struct CascadeChatViewController: View {
                     if (store.hasPairedBackend || store.isLiveBackendConnected)
                         && !store.activeCascadeId.isEmpty
                         && (store.stepsByCascadeId[store.activeCascadeId] ?? []).isEmpty
-                        && !store.locallyCreatedEmptyCascadeIds.contains(store.activeCascadeId) {
+                        && !store.isLocallyCreatedEmptyCascade(store.activeCascadeId) {
                         store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
                     }
                     guard !allDisplayItems.isEmpty else { return }
@@ -351,7 +351,7 @@ public struct CascadeChatViewController: View {
             if (store.hasPairedBackend || store.isLiveBackendConnected)
                 && !store.activeCascadeId.isEmpty {
                 if (store.stepsByCascadeId[store.activeCascadeId] ?? []).isEmpty
-                    && !store.locallyCreatedEmptyCascadeIds.contains(store.activeCascadeId) {
+                    && !store.isLocallyCreatedEmptyCascade(store.activeCascadeId) {
                     store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true, forceRefresh: true)
                 } else if !store.hasActiveStepSync(for: store.activeCascadeId) {
                     store.syncStepsForCascade(store.activeCascadeId, pollUntilIdle: true)

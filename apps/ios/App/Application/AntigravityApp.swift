@@ -150,7 +150,7 @@ public struct AntigravityApp: App {
         case .active:
             applyUIKitWindowInterfaceStyle(resolvedColorScheme)
             if case .cascadeChat(let cid) = store.activeRoute, !cid.isEmpty {
-                if (store.stepsByCascadeId[cid] ?? []).isEmpty && !store.locallyCreatedEmptyCascadeIds.contains(cid) {
+                if (store.stepsByCascadeId[cid] ?? []).isEmpty && !store.isLocallyCreatedEmptyCascade(cid) {
                     store.isLoadingSteps = true
                 }
                 store.syncStepsForCascade(cid, pollUntilIdle: true, forceRefresh: (store.stepsByCascadeId[cid] ?? []).isEmpty)
