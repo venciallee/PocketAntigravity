@@ -125,7 +125,7 @@ if [[ -n "$DEVICE_LINE" ]]; then
   IFS='|' read -r PROBE_UDID _ _ _ <<< "$DEVICE_LINE"
 fi
 
-python3 - "$PROBE_UDID" "${TEAM_ID:-}" "${BUNDLE_PREFIX:-}" >"$SIGN_PLAN_FILE" <<'PY'
+python3 - "$PROBE_UDID" "${TEAM_ID:-}" "${BUNDLE_PREFIX:-}" "$ROOT_DIR/local.signing.xcconfig" >"$SIGN_PLAN_FILE" <<'PY'
 from datetime import datetime, timezone
 import hashlib
 import os
@@ -137,6 +137,21 @@ import sys
 from pathlib import Path
 
 device_udid, env_team, env_prefix = sys.argv[1].strip(), sys.argv[2].strip(), sys.argv[3].strip()
+local_xcconfig_path = Path(sys.argv[4])
+
+saved_team = ""
+saved_prefix = ""
+if local_xcconfig_path.is_file():
+    for raw_line in local_xcconfig_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        code = raw_line.split("//", 1)[0].strip()
+        if not code or "=" not in code:
+            continue
+        k, v = [p.strip() for p in code.split("=", 1)]
+        v = v.strip().strip('"').strip("'").strip()
+        if k == "DEVELOPMENT_TEAM" and re.fullmatch(r"[A-Z0-9]{10}", v.upper()):
+            saved_team = v.upper()
+        elif k == "ANTIGRAVITY_BUNDLE_PREFIX" and re.fullmatch(r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+", v):
+            saved_prefix = v
 
 # Derive a deterministic per-Mac unique prefix (`io.agy.dev<8hex>`) that never collides with corporate namespaces
 hw_seed = ""
@@ -155,7 +170,7 @@ if not hw_seed:
     hw_seed = f"{socket.gethostname()}:{os.path.expanduser('~')}"
 
 mac_hash = hashlib.sha256(hw_seed.encode("utf-8")).hexdigest()[:8]
-default_prefix = env_prefix or f"com.thousandtimes.agpocket.dev{mac_hash}"
+default_prefix = env_prefix or saved_prefix or f"com.thousandtimes.agpocket.dev{mac_hash}"
 
 if env_team and env_prefix:
     print(f"{env_team}|{env_prefix}|explicit TEAM_ID & BUNDLE_PREFIX")
@@ -314,6 +329,8 @@ xcode_account_team_set = set(xcode_personal_teams) | set(xcode_other_account_tea
 keychain_only_teams = [t for t in (dev_teams + other_teams) if t not in xcode_account_team_set]
 
 all_teams = []
+if saved_team and (not env_team or env_team == saved_team):
+    all_teams.append(saved_team)
 for tid in (xcode_personal_teams + xcode_other_account_teams + keychain_only_teams):
     if tid not in all_teams:
         all_teams.append(tid)
@@ -401,6 +418,13 @@ def enqueue_team_plans(tid: str, tier_label: str):
     # Automatic signing with unique per-Mac prefix
     add_plan(tid, default_prefix, describe_team(tid, f"{tier_label} · Automatic Signing"))
 
+# Priority 0: Saved machine-local signing in local.signing.xcconfig (if not overridden by conflicting env TEAM_ID)
+if saved_team and (not env_team or env_team == saved_team):
+    saved_first_prefix = env_prefix or saved_prefix or "com.thousandtimes.agpocket"
+    add_plan(saved_team, saved_first_prefix, describe_team(saved_team, "Saved local.signing.xcconfig"))
+    if not env_prefix and saved_first_prefix == "com.thousandtimes.agpocket":
+        add_plan(saved_team, f"com.thousandtimes.agpocket.dev{mac_hash}", describe_team(saved_team, "Saved Team · per-Mac Bundle ID"))
+
 # Priority 1: Signed-in Xcode Personal Teams (auto-read from Xcode Accounts — avoids corporate Keychain collisions!)
 for tid in xcode_personal_teams:
     enqueue_team_plans(tid, "Xcode Personal Team")
@@ -429,30 +453,63 @@ for tid, cand_p, reason in plans:
     print(f"{tid}|{cand_p}|{reason}")
 PY
 
-apply_xcodeproj_signing_defaults() {
+persist_local_signing_xcconfig() {
   local target_team="$1"
   local target_prefix="$2"
-  python3 - "$ROOT_DIR/PocketAntigravity.xcodeproj/project.pbxproj" "$target_team" "$target_prefix" <<'PY'
+  local only_if_missing="${3:-0}"
+  python3 - "$ROOT_DIR/local.signing.xcconfig" "$target_team" "$target_prefix" "$only_if_missing" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-pbx_path, team_id, bundle_prefix = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-if not pbx_path.is_file():
+DEFAULT_PREFIX = "com.thousandtimes.agpocket"
+xcconfig_path = Path(sys.argv[1])
+team_id = sys.argv[2].strip().upper()
+bundle_prefix = sys.argv[3].strip()
+only_if_missing = sys.argv[4] == "1"
+
+if not re.fullmatch(r"[A-Z0-9]{10}", team_id):
     sys.exit(0)
 
-txt = pbx_path.read_text(encoding="utf-8")
-if bundle_prefix:
-    txt = re.sub(r"ANTIGRAVITY_BUNDLE_PREFIX = [^;]+;", f"ANTIGRAVITY_BUNDLE_PREFIX = {bundle_prefix};", txt)
-if team_id:
-    if "DEVELOPMENT_TEAM =" in txt:
-        txt = re.sub(r"DEVELOPMENT_TEAM = [^;]*;", f"DEVELOPMENT_TEAM = {team_id};", txt)
-    else:
-        txt = txt.replace(
-            "CODE_SIGN_STYLE = Automatic;",
-            f"CODE_SIGN_STYLE = Automatic;\n\t\t\t\tDEVELOPMENT_TEAM = {team_id};",
-        )
-pbx_path.write_text(txt, encoding="utf-8")
+if xcconfig_path.is_file():
+    orig_lines = xcconfig_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    if only_if_missing:
+        for line in orig_lines:
+            code = line.split("//", 1)[0].strip()
+            if code.startswith("DEVELOPMENT_TEAM") and "=" in code:
+                existing = code.split("=", 1)[1].strip().strip('"').strip("'")
+                if re.fullmatch(r"[A-Z0-9]{10}", existing.upper()):
+                    sys.exit(0)
+else:
+    orig_lines = [
+        "// Machine-local Xcode signing overrides (gitignored; survives `git pull`, `xcodegen`, and `--clean`).",
+        "// Update anytime via: bash scripts/sync-xcode.sh --team <TEAM_ID> [--bundle-prefix <PREFIX>]",
+    ]
+
+out_lines = []
+replaced_team = False
+replaced_prefix = False
+for line in orig_lines:
+    code = line.split("//", 1)[0].strip()
+    if code and "=" in code:
+        key = code.split("=", 1)[0].strip()
+        if key == "DEVELOPMENT_TEAM":
+            out_lines.append(f"DEVELOPMENT_TEAM = {team_id}")
+            replaced_team = True
+            continue
+        if key == "ANTIGRAVITY_BUNDLE_PREFIX":
+            if bundle_prefix and bundle_prefix != DEFAULT_PREFIX:
+                out_lines.append(f"ANTIGRAVITY_BUNDLE_PREFIX = {bundle_prefix}")
+            replaced_prefix = True
+            continue
+    out_lines.append(line)
+
+if not replaced_team:
+    out_lines.append(f"DEVELOPMENT_TEAM = {team_id}")
+if bundle_prefix and bundle_prefix != DEFAULT_PREFIX and not replaced_prefix:
+    out_lines.append(f"ANTIGRAVITY_BUNDLE_PREFIX = {bundle_prefix}")
+
+xcconfig_path.write_text("\n".join(out_lines).rstrip() + "\n", encoding="utf-8")
 PY
 }
 
@@ -471,7 +528,7 @@ fi
 IFS='|' read -r FIRST_TEAM_ID FIRST_BUNDLE_PREFIX _ <<< "$FIRST_PLAN"
 TEAM_ID="$FIRST_TEAM_ID"
 BUNDLE_PREFIX="$FIRST_BUNDLE_PREFIX"
-apply_xcodeproj_signing_defaults "$TEAM_ID" "$BUNDLE_PREFIX"
+persist_local_signing_xcconfig "$TEAM_ID" "$BUNDLE_PREFIX" 1
 
 if [[ -z "$DEVICE_LINE" ]]; then
   echo "[!] No reachable paired physical iPhone detected."
@@ -504,7 +561,6 @@ while IFS='|' read -r -u 3 CAND_TEAM CAND_PREFIX CAND_REASON; do
   [[ -z "$CAND_TEAM" ]] && continue
   TEAM_ID="$CAND_TEAM"
   BUNDLE_PREFIX="$CAND_PREFIX"
-  apply_xcodeproj_signing_defaults "$TEAM_ID" "$BUNDLE_PREFIX"
   echo "[*] Trying Team ${TEAM_ID} · Bundle ${BUNDLE_PREFIX} (${CAND_REASON})..."
 
   : >"$ATTEMPT_LOG"
@@ -522,6 +578,8 @@ while IFS='|' read -r -u 3 CAND_TEAM CAND_PREFIX CAND_REASON; do
     build </dev/null >"$ATTEMPT_LOG" 2>&1; then
     cat "$ATTEMPT_LOG" >>"$BUILD_LOG"
     BUILD_SUCCEEDED=1
+    persist_local_signing_xcconfig "$TEAM_ID" "$BUNDLE_PREFIX" 0
+    echo "[+] Saved working signing settings (TEAM=${TEAM_ID}, BUNDLE_PREFIX=${BUNDLE_PREFIX}) to gitignored local.signing.xcconfig."
     break
   else
     cat "$ATTEMPT_LOG" >>"$BUILD_LOG"
@@ -536,8 +594,8 @@ done 3< "$SIGN_PLAN_FILE"
 rm -f "$ATTEMPT_LOG"
 
 if [[ "$BUILD_SUCCEEDED" -ne 1 ]]; then
-  # Restore top-priority team (e.g. Xcode Personal Team) in project.pbxproj before opening Xcode
-  apply_xcodeproj_signing_defaults "$FIRST_TEAM_ID" "$FIRST_BUNDLE_PREFIX"
+  # Ensure local.signing.xcconfig is seeded (if empty) with top-priority team before opening Xcode
+  persist_local_signing_xcconfig "$FIRST_TEAM_ID" "$FIRST_BUNDLE_PREFIX" 1
   echo ""
   EXPIRED_ACCOUNT="$(sed -n "s/.*Unable to log in with account '\([^']*\)'.*/\1/p" "$BUILD_LOG" | head -n 1 || true)"
   if [[ -n "$EXPIRED_ACCOUNT" ]]; then

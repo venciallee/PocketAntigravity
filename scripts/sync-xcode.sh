@@ -7,9 +7,10 @@
 # `git pull` / branch switches / refactors.
 #
 # Usage (macOS):
-#   bash scripts/sync-xcode.sh                  # Build/refresh KMP XCF + regenerate .xcodeproj
+#   bash scripts/sync-xcode.sh                  # Build/refresh KMP XCF + regenerate .xcodeproj (preserves local signing)
 #   bash scripts/sync-xcode.sh --open           # Sync and open PocketAntigravity.xcodeproj in Xcode
-#   bash scripts/sync-xcode.sh --clean --open   # Wipe stale .xcodeproj & DerivedData, then sync & open
+#   bash scripts/sync-xcode.sh --team ABCDE12345 # Save local DEVELOPMENT_TEAM once into gitignored local.signing.xcconfig
+#   bash scripts/sync-xcode.sh --clean --open   # Wipe stale .xcodeproj & DerivedData, then sync & open (keeps local signing)
 #   bash scripts/sync-xcode.sh --swift-only     # Fast Xcode sync without JDK/Gradle (pure-Swift fallback)
 #   bash scripts/sync-xcode.sh --rebuild-kmp    # Force rebuild of KMP AntigravityShared.xcframework
 #   bash scripts/sync-xcode.sh --install-hooks  # Auto-sync Xcode project after every `git pull`
@@ -24,6 +25,7 @@ XCF_REL="shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework"
 XCF_PATH="$ROOT_DIR/$XCF_REL"
 XCODEPROJ_PATH="$ROOT_DIR/PocketAntigravity.xcodeproj"
 LEGACY_XCODEPROJ_PATH="$ROOT_DIR/iOSAntigravity.xcodeproj"
+LOCAL_SIGNING_XCCONFIG="$ROOT_DIR/local.signing.xcconfig"
 
 OPEN_XCODE=0
 REBUILD_KMP=0
@@ -34,6 +36,8 @@ INSTALL_HOOKS=0
 SELF_TEST=0
 VERIFY_KMP_FOR_XCODE=0
 VERIFY_XCODEPROJ_ARG=""
+CLI_TEAM_ID=""
+CLI_BUNDLE_PREFIX=""
 
 usage() {
   cat <<'EOF'
@@ -41,6 +45,8 @@ Usage: bash scripts/sync-xcode.sh [options]
 
 Options:
   --open                         Open PocketAntigravity.xcodeproj in Xcode after syncing
+  --team <TEAM_ID>               Persist 10-char Apple DEVELOPMENT_TEAM into gitignored local.signing.xcconfig
+  --bundle-prefix <PREFIX>       Persist custom ANTIGRAVITY_BUNDLE_PREFIX into gitignored local.signing.xcconfig
   --clean                        Remove existing PocketAntigravity.xcodeproj and DerivedData before regenerating
   --rebuild-kmp                  Force rebuild of shared/umbrella/build/XCFrameworks/debug/AntigravityShared.xcframework
   --swift-only                   Skip Gradle KMP XCFramework build and generate a pure-Swift Xcode project
@@ -62,6 +68,28 @@ while [[ $# -gt 0 ]]; do
     --clean) CLEAN_PROJECT=1 ;;
     --install-hooks) INSTALL_HOOKS=1 ;;
     --self-test) SELF_TEST=1 ;;
+    --team)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo "[!] --team requires a 10-character Apple Team ID (e.g. --team ABCDE12345)" >&2
+        exit 2
+      fi
+      CLI_TEAM_ID="$2"
+      shift
+      ;;
+    --team=*)
+      CLI_TEAM_ID="${arg#*=}"
+      ;;
+    --bundle-prefix)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo "[!] --bundle-prefix requires a reverse-DNS identifier (e.g. --bundle-prefix com.yourname.agpocket)" >&2
+        exit 2
+      fi
+      CLI_BUNDLE_PREFIX="$2"
+      shift
+      ;;
+    --bundle-prefix=*)
+      CLI_BUNDLE_PREFIX="${arg#*=}"
+      ;;
     --verify-kmp-for-xcode)
       VERIFY_KMP_FOR_XCODE=1
       if [[ $# -ge 2 && "$2" != -* ]]; then
@@ -139,6 +167,7 @@ canonical_dirs = [
     "apps",
     "apps/ios",
     "apps/ios/App",
+    "apps/ios/Config",
     "apps/ios/Watch",
     "apps/ios/SharedUI",
     "apps/ios/Extensions",
@@ -306,6 +335,355 @@ if "apps/ios/Packages/AntigravityData" not in text:
 if re.search(r"(?<!apps/ios/)Packages/AntigravityData", text):
     sys.stderr.write("[!] Generated project.pbxproj still contains legacy Packages/AntigravityData reference.\n")
     sys.exit(1)
+if "LocalSigning.xcconfig" not in text:
+    sys.stderr.write("[!] Generated project.pbxproj is missing LocalSigning.xcconfig base configuration reference.\n")
+    sys.exit(1)
+PY
+}
+
+sync_local_signing_config() {
+  local pbx_path="$1"
+  local local_xcconfig="$2"
+  local explicit_team="$3"
+  local explicit_prefix="$4"
+  local allow_auto_detect="${5:-1}"
+  python3 - "$pbx_path" "$local_xcconfig" "$explicit_team" "$explicit_prefix" "$allow_auto_detect" <<'PY'
+from collections import Counter
+from datetime import datetime, timezone
+import os
+import plistlib
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+DEFAULT_BUNDLE_PREFIX = "com.thousandtimes.agpocket"
+TEAM_RE = re.compile(r"^[A-Z0-9]{10}$")
+BUNDLE_PREFIX_RE = re.compile(r"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
+DERIVED_BUNDLE_SUFFIXES = (
+    ".watchkitapp.uitests",
+    ".watchkitapp",
+    ".LiveActivity",
+    ".Share",
+    ".uitests",
+)
+
+pbx_path = Path(sys.argv[1]) if sys.argv[1] else None
+xcconfig_path = Path(sys.argv[2])
+explicit_team = sys.argv[3].strip().upper()
+explicit_prefix = sys.argv[4].strip()
+allow_auto_detect = sys.argv[5] == "1"
+
+if explicit_team and not TEAM_RE.fullmatch(explicit_team):
+    sys.stderr.write(
+        f"[!] Invalid Apple Team ID '{explicit_team}'. Expected 10 uppercase alphanumeric characters (e.g. ABCDE12345).\n"
+    )
+    sys.exit(2)
+
+if explicit_prefix and not BUNDLE_PREFIX_RE.fullmatch(explicit_prefix):
+    sys.stderr.write(
+        f"[!] Invalid bundle prefix '{explicit_prefix}'. Expected reverse-DNS format (e.g. com.yourname.agpocket).\n"
+    )
+    sys.exit(2)
+
+
+def strip_xcconfig_comment(line: str) -> str:
+    idx = line.find("//")
+    return line[:idx] if idx >= 0 else line
+
+
+def parse_local_xcconfig(path: Path) -> tuple[str, str, float]:
+    if not path.is_file():
+        return "", "", 0.0
+    team = ""
+    prefix = ""
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    for raw_line in text.splitlines():
+        code = strip_xcconfig_comment(raw_line).strip()
+        if not code or "=" not in code:
+            continue
+        key, val = [part.strip() for part in code.split("=", 1)]
+        val = val.strip().strip('"').strip("'").strip()
+        if key == "DEVELOPMENT_TEAM" and TEAM_RE.fullmatch(val.upper()):
+            team = val.upper()
+        elif key == "ANTIGRAVITY_BUNDLE_PREFIX" and BUNDLE_PREFIX_RE.fullmatch(val):
+            prefix = val
+    return team, prefix, path.stat().st_mtime
+
+
+def parse_pbxproj_signing(path: Path | None, existing_team: str) -> tuple[str, str, float]:
+    if not path or not path.is_file():
+        return "", "", 0.0
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    mtime = path.stat().st_mtime
+
+    team_hits = []
+    for pat in (
+        r'DEVELOPMENT_TEAM\s*=\s*"?([A-Za-z0-9]{10})"?\s*;',
+        r'DevelopmentTeam\s*=\s*"?([A-Za-z0-9]{10})"?\s*;',
+    ):
+        for m in re.finditer(pat, text):
+            tid = m.group(1).upper()
+            if TEAM_RE.fullmatch(tid):
+                team_hits.append(tid)
+
+    pbx_team = ""
+    if team_hits:
+        # If user switched a target to a new team inside Xcode GUI, prefer the changed team over the old one.
+        changed_hits = [t for t in team_hits if existing_team and t != existing_team]
+        pool = changed_hits if changed_hits else team_hits
+        pbx_team = Counter(pool).most_common(1)[0][0]
+
+    prefix_hits = []
+    for m in re.finditer(r'ANTIGRAVITY_BUNDLE_PREFIX\s*=\s*"?([^";\n]+)"?\s*;', text):
+        cand = m.group(1).strip()
+        if "$(" in cand or "${" in cand or cand == DEFAULT_BUNDLE_PREFIX:
+            continue
+        if BUNDLE_PREFIX_RE.fullmatch(cand):
+            prefix_hits.append(cand)
+
+    if not prefix_hits:
+        for m in re.finditer(r'PRODUCT_BUNDLE_IDENTIFIER\s*=\s*"?([^";\n]+)"?\s*;', text):
+            cand = m.group(1).strip()
+            if "$(" in cand or "${" in cand or cand == DEFAULT_BUNDLE_PREFIX:
+                continue
+            if any(cand.endswith(sfx) for sfx in DERIVED_BUNDLE_SUFFIXES):
+                continue
+            if BUNDLE_PREFIX_RE.fullmatch(cand):
+                prefix_hits.append(cand)
+
+    pbx_prefix = Counter(prefix_hits).most_common(1)[0][0] if prefix_hits else ""
+    return pbx_team, pbx_prefix, mtime
+
+
+def auto_detect_xcode_account_team() -> tuple[str, str]:
+    """Read signed-in Xcode Accounts (never Keychain-only corporate certs without an Xcode Account)."""
+    xcode_prefs = {}
+    try:
+        raw_plist = subprocess.check_output(
+            ["defaults", "export", "com.apple.dt.Xcode", "-"],
+            stderr=subprocess.DEVNULL,
+        )
+        if raw_plist:
+            xcode_prefs = plistlib.loads(raw_plist)
+    except Exception:
+        pass
+
+    if not xcode_prefs:
+        plist_path = Path.home() / "Library/Preferences/com.apple.dt.Xcode.plist"
+        if plist_path.is_file():
+            try:
+                xcode_prefs = plistlib.loads(plist_path.read_bytes())
+            except Exception:
+                xcode_prefs = {}
+
+    if not xcode_prefs:
+        return "", ""
+
+    active_apple_ids = set()
+    raw_accounts = xcode_prefs.get("DVTDeveloperAccountManagerAppleIDAccounts")
+    if isinstance(raw_accounts, list):
+        for acc in raw_accounts:
+            if isinstance(acc, dict):
+                uname = str(acc.get("username") or acc.get("accountName") or "").strip().lower()
+                if uname:
+                    active_apple_ids.add(uname)
+
+    team_meta: dict[str, dict[str, object]] = {}
+
+    def record_team(entry: dict, account_key: str = "") -> None:
+        if not isinstance(entry, dict):
+            return
+        tid = str(entry.get("teamID") or entry.get("teamId") or entry.get("identifier") or "").strip().upper()
+        if not TEAM_RE.fullmatch(tid):
+            return
+        tname = str(entry.get("teamName") or entry.get("name") or "").strip()
+        ttype = str(entry.get("teamType") or "").strip().lower()
+        is_free = bool(entry.get("isFreeProvisioningTeam"))
+        is_personal = is_free or ("personal" in tname.lower()) or (ttype in ("personal", "free"))
+        acct_norm = str(account_key or "").strip().lower()
+        is_active = (not active_apple_ids) or (not acct_norm) or (acct_norm in active_apple_ids)
+        if not is_active:
+            return
+        prev = team_meta.get(tid)
+        if prev is None:
+            team_meta[tid] = {"name": tname, "is_personal": is_personal}
+        else:
+            prev["is_personal"] = bool(prev["is_personal"]) or is_personal
+            if tname and not prev["name"]:
+                prev["name"] = tname
+
+    def walk_teams(obj: object, account_hint: str = "") -> None:
+        if isinstance(obj, dict):
+            if any(k in obj for k in ("teamID", "teamId")):
+                record_team(obj, account_hint)
+            for k, v in obj.items():
+                ks = str(k)
+                next_hint = ks if "@" in ks else account_hint
+                if isinstance(v, dict) and TEAM_RE.fullmatch(ks.upper()) and any(
+                    fld in v for fld in ("teamName", "name", "isFreeProvisioningTeam", "teamType")
+                ):
+                    merged = dict(v)
+                    merged.setdefault("teamID", ks.upper())
+                    record_team(merged, next_hint)
+                else:
+                    walk_teams(v, next_hint)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk_teams(item, account_hint)
+
+    for pref_key, pref_val in xcode_prefs.items():
+        ks = str(pref_key)
+        if ks.startswith("IDEProvisioning") or ks.startswith("DVTDeveloperAccount"):
+            walk_teams(pref_val, "")
+
+    if not team_meta:
+        return "", ""
+
+    # Prefer an active Xcode Account team that already has a cached unexpired Development profile for AG Pocket.
+    agpocket_profile_teams: set[str] = set()
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    for pdir in (
+        Path.home() / "Library/Developer/Xcode/UserData/Provisioning Profiles",
+        Path.home() / "Library/MobileDevice/Provisioning Profiles",
+    ):
+        if not pdir.is_dir():
+            continue
+        for mp in list(pdir.glob("*.mobileprovision")) + list(pdir.glob("*.provisionprofile")):
+            try:
+                raw = mp.read_bytes()
+                s = raw.find(b"<?xml")
+                e = raw.find(b"</plist>")
+                if s < 0 or e <= s:
+                    continue
+                pl = plistlib.loads(raw[s : e + len(b"</plist>")])
+                tids = pl.get("TeamIdentifier") or []
+                tid = str(tids[0]).strip().upper() if tids else ""
+                if tid not in team_meta:
+                    continue
+                exp = pl.get("ExpirationDate")
+                if isinstance(exp, datetime):
+                    exp_naive = exp.astimezone(timezone.utc).replace(tzinfo=None) if exp.tzinfo else exp
+                    if exp_naive <= now_utc:
+                        continue
+                ent = pl.get("Entitlements") or {}
+                if ent.get("get-task-allow") is not True:
+                    continue
+                app_id = str(ent.get("application-identifier") or "").lower()
+                if "agpocket" in app_id:
+                    agpocket_profile_teams.add(tid)
+            except Exception:
+                continue
+
+    ordered = sorted(
+        team_meta.keys(),
+        key=lambda tid: (
+            0 if tid in agpocket_profile_teams else 1,
+            0 if team_meta[tid]["is_personal"] else 1,
+            tid,
+        ),
+    )
+    chosen = ordered[0]
+    info = team_meta[chosen]
+    label = str(info.get("name") or ("Personal Team" if info["is_personal"] else "Xcode Account Team"))
+    return chosen, label
+
+
+def write_local_xcconfig(path: Path, team: str, prefix: str, update_prefix: bool) -> None:
+    if path.is_file():
+        orig_lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    else:
+        orig_lines = [
+            "// Machine-local Xcode signing overrides (gitignored; survives `git pull`, `xcodegen`, and `--clean`).",
+            "// Update anytime via: bash scripts/sync-xcode.sh --team <TEAM_ID> [--bundle-prefix <PREFIX>]",
+        ]
+
+    out_lines = []
+    replaced_team = False
+    replaced_prefix = False
+    for line in orig_lines:
+        code = strip_xcconfig_comment(line).strip()
+        if code and "=" in code:
+            key = code.split("=", 1)[0].strip()
+            if key == "DEVELOPMENT_TEAM" and team:
+                out_lines.append(f"DEVELOPMENT_TEAM = {team}")
+                replaced_team = True
+                continue
+            if key == "ANTIGRAVITY_BUNDLE_PREFIX" and update_prefix:
+                if prefix and prefix != DEFAULT_BUNDLE_PREFIX:
+                    out_lines.append(f"ANTIGRAVITY_BUNDLE_PREFIX = {prefix}")
+                replaced_prefix = True
+                continue
+        out_lines.append(line)
+
+    if team and not replaced_team:
+        out_lines.append(f"DEVELOPMENT_TEAM = {team}")
+    if update_prefix and prefix and prefix != DEFAULT_BUNDLE_PREFIX and not replaced_prefix:
+        out_lines.append(f"ANTIGRAVITY_BUNDLE_PREFIX = {prefix}")
+
+    path.write_text("\n".join(out_lines).rstrip() + "\n", encoding="utf-8")
+
+
+cfg_team, cfg_prefix, cfg_mtime = parse_local_xcconfig(xcconfig_path)
+pbx_team, pbx_prefix, pbx_mtime = parse_pbxproj_signing(pbx_path, cfg_team)
+
+final_team = cfg_team
+team_source = "local-xcconfig" if cfg_team else ""
+if explicit_team:
+    final_team = explicit_team
+    team_source = "explicit"
+elif cfg_team and pbx_team and pbx_team != cfg_team and pbx_mtime > cfg_mtime:
+    final_team = pbx_team
+    team_source = "xcode-gui"
+elif not cfg_team and pbx_team:
+    final_team = pbx_team
+    team_source = "migrated-pbxproj"
+elif not cfg_team and allow_auto_detect and os.environ.get("CI") != "true":
+    detected_team, detected_label = auto_detect_xcode_account_team()
+    if detected_team:
+        final_team = detected_team
+        team_source = f"auto-detected ({detected_label})"
+
+final_prefix = cfg_prefix
+prefix_source = "local-xcconfig" if cfg_prefix else ""
+prefix_changed = False
+if explicit_prefix:
+    final_prefix = explicit_prefix
+    prefix_source = "explicit"
+    prefix_changed = (explicit_prefix != cfg_prefix) and not (explicit_prefix == DEFAULT_BUNDLE_PREFIX and not cfg_prefix)
+elif cfg_prefix and pbx_prefix and pbx_prefix != cfg_prefix and pbx_mtime > cfg_mtime:
+    final_prefix = pbx_prefix
+    prefix_source = "xcode-gui"
+    prefix_changed = True
+elif not cfg_prefix and pbx_prefix:
+    final_prefix = pbx_prefix
+    prefix_source = "migrated-pbxproj"
+    prefix_changed = True
+
+team_changed = bool(final_team) and (final_team != cfg_team or not xcconfig_path.is_file())
+should_write = team_changed or prefix_changed
+
+if should_write:
+    write_local_xcconfig(
+        xcconfig_path,
+        team=final_team,
+        prefix=final_prefix,
+        update_prefix=prefix_changed or bool(explicit_prefix),
+    )
+    parts = []
+    if final_team:
+        parts.append(f"DEVELOPMENT_TEAM={final_team}")
+    if final_prefix and final_prefix != DEFAULT_BUNDLE_PREFIX:
+        parts.append(f"ANTIGRAVITY_BUNDLE_PREFIX={final_prefix}")
+    detail = ", ".join(parts) if parts else "defaults"
+    src_note = team_source or prefix_source
+    print(f"[+] Persisted local Xcode signing ({detail}) to gitignored {xcconfig_path.name} [{src_note}].")
+elif final_team:
+    extra = f", ANTIGRAVITY_BUNDLE_PREFIX={final_prefix}" if (final_prefix and final_prefix != DEFAULT_BUNDLE_PREFIX) else ""
+    print(f"[+] Preserving local Xcode signing from {xcconfig_path.name} (DEVELOPMENT_TEAM={final_team}{extra}).")
+elif os.environ.get("CI") != "true":
+    print("[i] No local DEVELOPMENT_TEAM saved yet (Xcode will ask for a Team on physical device builds).")
+    print("    Save once: bash scripts/sync-xcode.sh --team <YOUR_10_CHAR_TEAM_ID>  (or select Team in Xcode once — next sync remembers it).")
 PY
 }
 
@@ -466,6 +844,7 @@ EOF
   cat >"$tmp_dir/modern.pbxproj" <<'EOF'
 /* modern monorepo project */
 relativePath = apps/ios/Packages/AntigravityData;
+path = apps/ios/Config/LocalSigning.xcconfig;
 path = apps/ios/App/ViewControllers/Home/AgentsHomeViewController.swift;
 path = tests/ios-ui/AntigravityInteractiveUITests.swift;
 EOF
@@ -484,6 +863,7 @@ from pathlib import Path
 txt = Path(sys.argv[1]).read_text(encoding="utf-8")
 assert "AntigravityShared.xcframework" not in txt, "XCFramework reference was not stripped"
 assert "apps/ios/Packages/AntigravityData" in txt, "AntigravityData package was lost"
+assert "apps/ios/Config/LocalSigning.xcconfig" in txt, "LocalSigning.xcconfig configFiles was lost"
 assert "target: AGPocketLiveActivity" in txt, "AGPocketLiveActivity target was lost"
 assert "target: AGPocketShare" in txt, "AGPocketShare target was lost"
 assert "target: AGPocketWatch" in txt, "AGPocketWatch target was lost"
@@ -598,6 +978,87 @@ PY
     exit 1
   fi
 
+  # 8. Tracked base LocalSigning.xcconfig sets default prefix & optionally includes gitignored local.signing.xcconfig
+  python3 - "$ROOT_DIR/apps/ios/Config/LocalSigning.xcconfig" "$ROOT_DIR/.gitignore" "$ROOT_DIR/project.yml" <<'PY'
+import sys
+from pathlib import Path
+
+base_xc = Path(sys.argv[1]).read_text(encoding="utf-8")
+gitignore = Path(sys.argv[2]).read_text(encoding="utf-8")
+proj_yml = Path(sys.argv[3]).read_text(encoding="utf-8")
+
+assert "ANTIGRAVITY_BUNDLE_PREFIX = com.thousandtimes.agpocket" in base_xc, "Base LocalSigning.xcconfig missing default prefix"
+assert '#include? "../../../local.signing.xcconfig"' in base_xc, "Base LocalSigning.xcconfig missing optional local include"
+assert "local.signing.xcconfig" in gitignore, ".gitignore must ignore local.signing.xcconfig"
+assert "apps/ios/Config/LocalSigning.xcconfig" in proj_yml, "project.yml must attach LocalSigning.xcconfig via configFiles"
+assert "ANTIGRAVITY_BUNDLE_PREFIX: com.thousandtimes.agpocket" not in proj_yml, "project.yml settings.base must not shadow xcconfig ANTIGRAVITY_BUNDLE_PREFIX"
+PY
+
+  # 9. Local signing migration from existing project.pbxproj -> local.signing.xcconfig (survives --clean)
+  local sign_dir="$tmp_dir/signing-test"
+  mkdir -p "$sign_dir"
+  local sign_pbx="$sign_dir/project.pbxproj"
+  local sign_xc="$sign_dir/local.signing.xcconfig"
+  cat >"$sign_pbx" <<'EOF'
+CODE_SIGN_STYLE = Automatic;
+DEVELOPMENT_TEAM = AB12CD34EF;
+PRODUCT_BUNDLE_IDENTIFIER = com.devuser.agpocket;
+PRODUCT_BUNDLE_IDENTIFIER = com.devuser.agpocket.LiveActivity;
+EOF
+  sync_local_signing_config "$sign_pbx" "$sign_xc" "" "" "0" >/dev/null
+  python3 - "$sign_xc" <<'PY'
+import sys
+from pathlib import Path
+txt = Path(sys.argv[1]).read_text(encoding="utf-8")
+assert "DEVELOPMENT_TEAM = AB12CD34EF" in txt, f"Team not migrated: {txt}"
+assert "ANTIGRAVITY_BUNDLE_PREFIX = com.devuser.agpocket" in txt, f"Custom bundle prefix not migrated: {txt}"
+PY
+
+  # 10. Local signing persists when pbxproj is wiped (--clean) and keeps custom user lines
+  echo "CUSTOM_LOCAL_FLAG = YES" >>"$sign_xc"
+  rm -f "$sign_pbx"
+  sync_local_signing_config "$sign_pbx" "$sign_xc" "" "" "0" >/dev/null
+  python3 - "$sign_xc" <<'PY'
+import sys
+from pathlib import Path
+txt = Path(sys.argv[1]).read_text(encoding="utf-8")
+assert "DEVELOPMENT_TEAM = AB12CD34EF" in txt, "Team lost after pbxproj wipe"
+assert "ANTIGRAVITY_BUNDLE_PREFIX = com.devuser.agpocket" in txt, "Bundle prefix lost after pbxproj wipe"
+assert "CUSTOM_LOCAL_FLAG = YES" in txt, "Custom user xcconfig line was clobbered"
+PY
+
+  # 11. Newer Xcode GUI team switch updates local.signing.xcconfig, and explicit --team overrides both
+  cat >"$sign_pbx" <<'EOF'
+DEVELOPMENT_TEAM = ZZ99YY88XX;
+EOF
+  python3 - "$sign_xc" "$sign_pbx" <<'PY'
+import os, sys, time
+now = time.time()
+os.utime(sys.argv[1], (now - 20, now - 20))
+os.utime(sys.argv[2], (now, now))
+PY
+  sync_local_signing_config "$sign_pbx" "$sign_xc" "" "" "0" >/dev/null
+  python3 - "$sign_xc" <<'PY'
+import sys
+from pathlib import Path
+txt = Path(sys.argv[1]).read_text(encoding="utf-8")
+assert "DEVELOPMENT_TEAM = ZZ99YY88XX" in txt, f"Newer Xcode GUI team not persisted: {txt}"
+assert "CUSTOM_LOCAL_FLAG = YES" in txt, "Custom user xcconfig line lost on update"
+PY
+  sync_local_signing_config "$sign_pbx" "$sign_xc" "QW12ER34TY" "com.thousandtimes.agpocket" "0" >/dev/null
+  python3 - "$sign_xc" <<'PY'
+import sys
+from pathlib import Path
+txt = Path(sys.argv[1]).read_text(encoding="utf-8")
+assert "DEVELOPMENT_TEAM = QW12ER34TY" in txt, f"Explicit --team did not override: {txt}"
+assert "ANTIGRAVITY_BUNDLE_PREFIX =" not in txt, f"Resetting bundle prefix to default should drop override: {txt}"
+assert "CUSTOM_LOCAL_FLAG = YES" in txt, "Custom user xcconfig line lost on explicit override"
+PY
+  if sync_local_signing_config "" "$sign_xc" "BAD_TEAM" "" "0" 2>/dev/null; then
+    echo "[FAIL] Expected invalid Team ID to be rejected" >&2
+    exit 1
+  fi
+
   echo "[PASS] sync-xcode.sh self-tests passed!"
 }
 
@@ -615,7 +1076,7 @@ if [[ "$INSTALL_HOOKS" -eq 1 ]]; then
   chmod +x "$ROOT_DIR/.githooks/post-merge" "$ROOT_DIR/.githooks/post-checkout" 2>/dev/null || true
   git config core.hooksPath .githooks
   echo "[+] Installed Git hooks (.githooks/post-merge & post-checkout)."
-  echo "    Future 'git pull' / branch switches will automatically keep PocketAntigravity.xcodeproj in sync."
+  echo "    Future 'git pull' / branch switches will automatically keep PocketAntigravity.xcodeproj & local signing in sync."
 fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -632,6 +1093,17 @@ if [[ -n "$CASE_RENAME_OUT" ]]; then
     [[ -n "$line" ]] && echo "[*] Normalized on-disk directory casing (${line#RENAMED:}) for Xcode 26.4+ compatibility."
   done <<< "$CASE_RENAME_OUT"
 fi
+
+# 0b. Preserve/persist local Xcode signing BEFORE any clean/regeneration wipes PocketAntigravity.xcodeproj
+EXISTING_PBXPROJ=""
+if [[ -f "$XCODEPROJ_PATH/project.pbxproj" ]]; then
+  EXISTING_PBXPROJ="$XCODEPROJ_PATH/project.pbxproj"
+elif [[ -f "$LEGACY_XCODEPROJ_PATH/project.pbxproj" ]]; then
+  EXISTING_PBXPROJ="$LEGACY_XCODEPROJ_PATH/project.pbxproj"
+fi
+EXPLICIT_TEAM="${CLI_TEAM_ID:-${DEVELOPMENT_TEAM:-${TEAM_ID:-}}}"
+EXPLICIT_PREFIX="${CLI_BUNDLE_PREFIX:-${ANTIGRAVITY_BUNDLE_PREFIX:-${BUNDLE_PREFIX:-}}}"
+sync_local_signing_config "$EXISTING_PBXPROJ" "$LOCAL_SIGNING_XCCONFIG" "$EXPLICIT_TEAM" "$EXPLICIT_PREFIX" "1"
 
 # 1. Detect & wipe legacy iOSAntigravity.xcodeproj or stale pre-monorepo Xcode project / DerivedData
 LEGACY_DETECTED=0
