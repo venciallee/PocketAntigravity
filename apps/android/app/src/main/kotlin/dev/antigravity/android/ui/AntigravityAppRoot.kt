@@ -406,7 +406,10 @@ fun AntigravityAppRoot(
     }
 
     fun openConversation(cascadeId: String) {
-        coordinator.chatStore.setActiveCascade(cascadeId)
+        val shouldPreMarkLoading = !coordinator.isVerificationMode &&
+            connectionState.isConnected &&
+            connectionState.isDeviceNetworkReachable
+        coordinator.chatStore.setActiveCascade(cascadeId, markLoadingIfEmpty = shouldPreMarkLoading)
         if (coordinator.isVerificationMode && cascadeId == "cas-audit-log-admin") {
             navigateTo(AppRoute.StructuredQuestion)
         } else {

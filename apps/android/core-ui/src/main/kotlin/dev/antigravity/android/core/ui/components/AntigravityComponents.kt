@@ -1,6 +1,13 @@
 package dev.antigravity.android.core.ui.components
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -55,6 +62,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -1396,3 +1405,101 @@ private fun AnnotatedString.Builder.appendMarkdownInlines(
         }
     }
 }
+
+/**
+ * Minimal open-arc rotating spinner matching the official Antigravity mobile history loading pill.
+ */
+@Composable
+fun AntigravityThinSpinner(
+    modifier: Modifier = Modifier,
+    animated: Boolean = true,
+    size: Dp = 13.5.dp,
+    strokeWidth: Dp = 1.6.dp,
+    tint: Color = LocalAntigravityColors.current.inkSecondary,
+) {
+    val startAngle = if (animated) {
+        val transition = rememberInfiniteTransition(label = "antigravity-thin-spinner")
+        val animatedAngle by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 950, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "antigravity-thin-spinner-angle",
+        )
+        animatedAngle - 90f
+    } else {
+        -90f
+    }
+
+    Canvas(modifier = modifier.size(size)) {
+        val strokePx = strokeWidth.toPx()
+        val inset = strokePx / 2f
+        drawArc(
+            color = tint,
+            startAngle = startAngle,
+            sweepAngle = 245f,
+            useCenter = false,
+            topLeft = Offset(inset, inset),
+            size = Size(this.size.width - strokePx, this.size.height - strokePx),
+            style = Stroke(width = strokePx, cap = StrokeCap.Round),
+        )
+    }
+}
+
+/**
+ * Floating top-center capsule pill overlaid over the chat viewport while loading historical or older messages.
+ */
+@Composable
+fun AntigravityFloatingLoadingPill(
+    title: String,
+    modifier: Modifier = Modifier,
+    animated: Boolean = true,
+) {
+    val colors = LocalAntigravityColors.current
+    val shape = RoundedCornerShape(14.dp)
+    val containerColor = if (colors.isDark) {
+        colors.surfacePill.copy(alpha = 0.96f)
+    } else {
+        colors.surfaceCard.copy(alpha = 0.97f)
+    }
+    val borderColor = if (colors.isDark) {
+        Color.White.copy(alpha = 0.12f)
+    } else {
+        Color.Black.copy(alpha = 0.10f)
+    }
+
+    Surface(
+        modifier = modifier,
+        shape = shape,
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
+        shadowElevation = if (colors.isDark) 8.dp else 5.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AntigravityThinSpinner(
+                animated = animated,
+                size = 13.5.dp,
+                strokeWidth = 1.6.dp,
+                tint = colors.inkSecondary,
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                color = colors.inkLabel.copy(alpha = 0.86f),
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+

@@ -1228,7 +1228,18 @@ extension AntigravitySessionStore {
             return
         }
 
-        if (stepsByCascadeId[cascadeId] ?? []).isEmpty && !isBrandNewEmptySession {
+        let initialInMemorySteps = stepsByCascadeId[cascadeId] ?? []
+        let initialKnownCount = initialSummary?.stepCount ?? 0
+        let isActiveRunSummary = initialSummary?.status == .inProgress
+            || initialSummary?.status == .pending
+            || initialSummary?.status == .waiting
+            || initialSummary?.status == .blocked
+        let needsHistoryBackfill = forceRefresh
+            || (!initialInMemorySteps.isEmpty
+                && initialKnownCount > initialInMemorySteps.count
+                && !isActiveRunSummary
+                && !withinInitialOptimisticSend)
+        if (initialInMemorySteps.isEmpty && !isBrandNewEmptySession) || needsHistoryBackfill {
             isLoadingSteps = true
         } else {
             isLoadingSteps = false
@@ -1271,7 +1282,9 @@ extension AntigravitySessionStore {
                     self.stepsByCascadeId[cascadeId] = cached
                     self.harvestEmbedResources(from: cached)
                     self.applyHydratedMetadataIfNeeded(cascadeId: cascadeId, steps: cached, persist: false)
-                    if self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
+                    let cachedNeedsMore = forceRefresh
+                        || (initialKnownCount > cached.count && !isActiveRunSummary && !withinInitialOptimisticSend)
+                    if !cachedNeedsMore && self.stepSyncGeneration == generation && self.activeCascadeId == cascadeId {
                         self.isLoadingSteps = false
                     }
                 }
