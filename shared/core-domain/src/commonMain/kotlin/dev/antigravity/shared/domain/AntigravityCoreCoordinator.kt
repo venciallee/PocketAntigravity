@@ -33,6 +33,7 @@ import dev.antigravity.shared.platform.StaticPowerStateProvider
 import dev.antigravity.shared.protocol.AntigravityKmpRpcClient
 import dev.antigravity.shared.protocol.AntigravityRpcError
 import dev.antigravity.shared.protocol.BackendHandshakeResult
+import dev.antigravity.shared.protocol.ConnectionPowerPolicy
 import dev.antigravity.shared.protocol.FederatedWorkspaceSyncResult
 import dev.antigravity.shared.protocol.HostCapability
 import dev.antigravity.shared.protocol.HostReachabilityProbeResult
@@ -50,6 +51,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -86,6 +88,7 @@ public class AntigravityCoreCoordinator(
         }
     ),
     private val autoPreloadConversations: Boolean = true,
+    private val enableForegroundHeartbeatLoop: Boolean = true,
     clientFactory: (
         host: RemoteHostInstance,
         csrfToken: String?,
@@ -110,6 +113,13 @@ public class AntigravityCoreCoordinator(
     public val capabilityErrorBanner: StateFlow<String?> = _capabilityErrorBanner.asStateFlow()
     private var hostSwitchJob: Job? = null
     private var hostSwitchGeneration: Long = 0L
+    private var connectivityHeartbeatJob: Job? = null
+    private var streamErrorProbeJob: Job? = null
+    private var summaryStreamEnabled: Boolean = true
+    private var lastBackendActivityAtMs: Long = 0L
+    private var lastFullSyncAtMs: Long = 0L
+    private var consecutiveSyncFailures: Int = 0
+    private var lastStreamErrorProbeAtMs: Long = 0L
 
     private val preloadMutex = Mutex()
     private val preloadQueue = ArrayDeque<String>()
@@ -124,7 +134,9 @@ public class AntigravityCoreCoordinator(
         preferencesStore = preferencesStore,
         projectionStorage = projectionStorage,
         clientFactory = clientFactory,
-    )
+    ).also { store ->
+        store.onNetworkRecovered = { handleNetworkRecovered() }
+    }
 
     public val conversationSyncStore: ConversationSyncStore = ConversationSyncStore(
         scope = scope,
@@ -408,11 +420,121 @@ public class AntigravityCoreCoordinator(
     public suspend fun probeHostReachability(
         allowCrossHostFallback: Boolean = true,
         verifyEndToEnd: Boolean = false,
-    ): HostReachabilityProbeResult =
-        connectionStore.probeHostReachability(
+    ): HostReachabilityProbeResult {
+        val result = connectionStore.probeHostReachability(
             allowCrossHostFallback = allowCrossHostFallback,
             verifyEndToEnd = verifyEndToEnd,
         )
+        if (result.isSelectedHostOnline) {
+            consecutiveSyncFailures = 0
+            lastBackendActivityAtMs = currentTimeMillis()
+        }
+        return result
+    }
+
+    /**
+     * Probes Cloud Relay hosts end-to-end (mirroring iOS `refreshAvailableRelayHosts`) so Settings
+     * and Home always display live ground-truth online/offline status instead of stale metadata.
+     */
+    @Throws(Throwable::class)
+    public suspend fun refreshAvailableRelayHosts(verifyEndToEnd: Boolean = true): HostReachabilityProbeResult? {
+        if (isVerificationMode) return null
+        val conn = connectionStore.state.value
+        if (conn.isNetworkingSuspended || !conn.isDeviceNetworkReachable) return null
+        if (connectionStore.activeClient() == null) return null
+        if (conn.isRefreshingRelayHosts) return null
+        connectionStore.setRefreshingRelayHosts(true)
+        return try {
+            val allowCrossHost = conn.selectedHostScope !is AgentsHostFilterScope.LocalHost
+            val probe = probeHostReachability(
+                allowCrossHostFallback = allowCrossHost,
+                verifyEndToEnd = verifyEndToEnd,
+            )
+            val updatedConn = connectionStore.state.value
+            val client = connectionStore.activeClient()
+            val host = updatedConn.activeHost
+            if (summaryStreamEnabled && probe.isSelectedHostOnline && client != null && host != null && host.isOnline) {
+                startManagedSummaryStream(client, host)
+            } else if (!probe.isSelectedHostOnline) {
+                conversationSyncStore.stopSummarySubscriptionStream()
+            }
+            probe
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connectionStore.setRefreshingRelayHosts(false)
+        }
+    }
+
+    /**
+     * Immediately resets exponential backoff, probes end-to-end reachability, refreshes workspaces &
+     * summaries, and restarts push streams (Android/KMP parity with iOS `reconnectNow`).
+     */
+    @Throws(Throwable::class)
+    public suspend fun reconnectNow(): Boolean {
+        if (isVerificationMode) return true
+        val conn = connectionStore.state.value
+        if (!conn.hasPairedBackend) return false
+        if (!conn.isDeviceNetworkReachable) return false
+
+        connectionStore.resetReconnectAttempt()
+        consecutiveSyncFailures = 0
+
+        if (connectionStore.activeClient() == null) {
+            return try {
+                val restored = restoreSavedSession(startSummaryStream = true)
+                restored?.isSelectedHostOnline == true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                startForegroundConnectivityLoopIfNeeded()
+                false
+            }
+        }
+
+        val allowCrossHost = conn.selectedHostScope !is AgentsHostFilterScope.LocalHost
+        val probe = try {
+            probeHostReachability(
+                allowCrossHostFallback = allowCrossHost,
+                verifyEndToEnd = true,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            startForegroundConnectivityLoopIfNeeded()
+            return false
+        }
+
+        if (!probe.isSelectedHostOnline) {
+            conversationSyncStore.stopSummarySubscriptionStream()
+            startForegroundConnectivityLoopIfNeeded()
+            return false
+        }
+
+        val client = connectionStore.activeClient()
+        val host = connectionStore.state.value.activeHost
+        if (client != null && host != null) {
+            startManagedSummaryStream(client, host)
+        }
+        try {
+            refreshWorkspacesAndSummaries(skipRelayListRefresh = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // Best-effort post-reconnect sync; reachability already verified.
+        }
+        try {
+            replayPendingOutbox()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // Best-effort outbox replay.
+        }
+        startForegroundConnectivityLoopIfNeeded()
+        return connectionStore.state.value.isConnected
+    }
 
     @Throws(Throwable::class)
     public suspend fun refreshWorkspacesAndSummaries(
@@ -451,18 +573,52 @@ public class AntigravityCoreCoordinator(
                     instanceUuid = effectiveHost.instanceId,
                     errorMessage = ProtocolCompatibilityEngine.formatUserFacingRpcError(e),
                 )
+            } else if (ConnectionDomainStore.isBackendOfflineError(e)) {
+                consecutiveSyncFailures += 1
+                val threshold = ConnectionPowerPolicy.offlineFailureThreshold(effectiveHost.channel, e)
+                if (consecutiveSyncFailures >= threshold) {
+                    connectionStore.markAllChannelHostsOffline(error = e)
+                }
             }
             throw e
         }
-        if (effectiveHost.channel == RemoteConnectionChannel.CLOUD_RELAY &&
-            effectiveScope is AgentsHostFilterScope.LocalHost &&
-            result.succeededInstanceUuids.isEmpty()
-        ) {
-            connectionStore.markInstanceOffline(
-                instanceUuid = effectiveHost.instanceId,
-                errorMessage = "${effectiveHost.hostname} is currently offline.",
-            )
+
+        if (effectiveHost.channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            if (result.availableRelayInstances.isNotEmpty()) {
+                connectionStore.syncRelayInstances(
+                    instances = result.availableRelayInstances,
+                    latencyMs = result.latencyMs,
+                    succeededInstanceUuids = result.succeededInstanceUuids,
+                    allowCrossHostPromotion = effectiveScope !is AgentsHostFilterScope.LocalHost,
+                )
+            }
+            if (effectiveScope is AgentsHostFilterScope.LocalHost && result.succeededInstanceUuids.isEmpty()) {
+                connectionStore.markInstanceOffline(
+                    instanceUuid = effectiveHost.instanceId,
+                    errorMessage = "${effectiveHost.hostname} is currently offline.",
+                )
+            } else if (result.succeededInstanceUuids.isEmpty() &&
+                !result.cloudSucceeded &&
+                result.availableRelayInstances.isNotEmpty() &&
+                result.availableRelayInstances.all { !it.status.isReachable }
+            ) {
+                connectionStore.markAllChannelHostsOffline(
+                    errorMessage = "No reachable Antigravity Desktop instances online",
+                )
+            } else {
+                consecutiveSyncFailures = 0
+                val now = currentTimeMillis()
+                lastBackendActivityAtMs = now
+                lastFullSyncAtMs = now
+            }
+        } else {
+            consecutiveSyncFailures = 0
+            val now = currentTimeMillis()
+            lastBackendActivityAtMs = now
+            lastFullSyncAtMs = now
+            connectionStore.markBackendConnected(latencyMs = result.latencyMs)
         }
+
         reconcileSelectedProjectForScope(effectiveScope)
         conversationSyncStore.resetSettledEmptyTitles()
         scheduleConversationPreload()
@@ -543,6 +699,7 @@ public class AntigravityCoreCoordinator(
                 summaryUpdatedAtEpochMs = summary?.updatedAtEpochMs ?: 0L,
                 forceRefresh = forceRefresh,
             )
+            lastBackendActivityAtMs = currentTimeMillis()
             conversationSyncStore.applyHydratedStepsMetadata(
                 host = connectionStore.state.value.activeHost,
                 cascadeId = cascadeId,
@@ -550,6 +707,23 @@ public class AntigravityCoreCoordinator(
                 persist = true,
             )
             steps
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (!isCloud) {
+                val targetUuid = instanceUuidOverride ?: summary?.originInstanceUuid
+                if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                    connectionStore.markInstanceOffline(
+                        instanceUuid = targetUuid,
+                        errorMessage = ProtocolCompatibilityEngine.formatUserFacingRpcError(e),
+                    )
+                } else if (connectionStore.state.value.activeHost?.channel == RemoteConnectionChannel.DIRECT_HOST &&
+                    ConnectionDomainStore.isBackendOfflineError(e)
+                ) {
+                    connectionStore.markAllChannelHostsOffline(error = e)
+                }
+            }
+            throw e
         } finally {
             activeForegroundSyncCount.update { (it - 1).coerceAtLeast(0) }
         }
@@ -840,24 +1014,19 @@ public class AntigravityCoreCoordinator(
     private fun isSummaryHostReachable(summary: CascadeSummary, conn: ConnectionState): Boolean {
         if (!conn.isDeviceNetworkReachable) return false
         if (summary.isCloud) {
-            return if (conn.activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY && conn.availableRelayInstances.isNotEmpty()) {
-                conn.availableRelayInstances.any { it.status.isReachable } || conn.isConnected
-            } else {
-                conn.isConnected || conn.isConnecting
-            }
+            return conn.isHostScopeOnline(AgentsHostFilterScope.AntigravityCloud)
         }
-        val originUuid = summary.originInstanceUuid?.trim().orEmpty()
-        if (originUuid.isNotEmpty() && conn.availableRelayInstances.isNotEmpty()) {
-            val matched = conn.availableRelayInstances.firstOrNull { it.uuid == originUuid }
-            if (matched != null) return matched.status.isReachable
-        }
-        val originHost = summary.originHostName?.trim().orEmpty()
-        if (originHost.isNotEmpty() && conn.availableRelayInstances.isNotEmpty()) {
-            val matched = conn.availableRelayInstances.firstOrNull { it.name == originHost }
-            if (matched != null) return matched.status.isReachable
-        }
-        return conn.isConnected || conn.isConnecting
+        return conn.isLocalHostOnline(
+            instanceId = summary.originInstanceUuid,
+            hostname = summary.originHostName,
+        )
     }
+
+    public fun isLocalHostOnline(instanceId: String?, hostname: String?): Boolean =
+        connectionStore.state.value.isLocalHostOnline(instanceId, hostname)
+
+    public fun isHostScopeOnline(scope: AgentsHostFilterScope = connectionStore.state.value.selectedHostScope): Boolean =
+        connectionStore.state.value.isHostScopeOnline(scope)
 
     @Throws(Throwable::class)
     public suspend fun startConversation(
@@ -885,7 +1054,7 @@ public class AntigravityCoreCoordinator(
         val conn = connectionStore.state.value
         if (!conn.hasPairedBackend) return true
         if (!conn.isDeviceNetworkReachable) return false
-        if (summary == null) return conn.isConnected && (conn.activeHost?.isOnline != false)
+        if (summary == null) return conn.isConnected && (conn.activeHost?.isOnline == true)
         return isSummaryHostReachable(summary, conn)
     }
 
@@ -1067,16 +1236,22 @@ public class AntigravityCoreCoordinator(
 
     @Throws(Throwable::class)
     public suspend fun switchToRelayInstance(instance: RelayInstanceInfo) {
+        hostSwitchGeneration += 1L
+        streamErrorProbeJob?.cancel()
+        streamErrorProbeJob = null
         connectionStore.switchToRelayInstance(instance)
         reconcileSelectedProjectForScope(
             AgentsHostFilterScope.LocalHost(instance.uuid, instance.name),
         )
         val client = connectionStore.activeClient()
         val host = connectionStore.state.value.activeHost
-        if (client != null && host != null && host.isOnline) {
-            conversationSyncStore.startSummarySubscriptionStream(client, host)
+        if (summaryStreamEnabled && client != null && host != null && host.isOnline) {
+            startManagedSummaryStream(client, host)
         } else {
             conversationSyncStore.stopSummarySubscriptionStream()
+        }
+        if (summaryStreamEnabled) {
+            startForegroundConnectivityLoopIfNeeded()
         }
     }
 
@@ -1090,6 +1265,8 @@ public class AntigravityCoreCoordinator(
 
         val generation = ++hostSwitchGeneration
         hostSwitchJob?.cancel()
+        streamErrorProbeJob?.cancel()
+        streamErrorProbeJob = null
         hostSwitchJob = scope.launch {
             try {
                 val client = connectionStore.activeClient() ?: return@launch
@@ -1102,14 +1279,15 @@ public class AntigravityCoreCoordinator(
                     val matchedHost = connState.knownHosts.firstOrNull {
                         it.instanceId == targetScope.id || it.hostname == targetScope.name
                     }
+                    val initiallyOnline = connState.availableRelayInstances.isEmpty() && (matchedHost?.isOnline == true)
                     val targetInstance = matchedRelay ?: RelayInstanceInfo(
                         uuid = matchedHost?.instanceId ?: targetScope.id,
                         name = matchedHost?.hostname ?: targetScope.name,
                         version = matchedHost?.version.orEmpty(),
-                        status = if (matchedHost?.isOnline == false) {
-                            RelayInstanceStatus.DISCONNECTED
-                        } else {
+                        status = if (initiallyOnline) {
                             RelayInstanceStatus.CONNECTED
+                        } else {
+                            RelayInstanceStatus.DISCONNECTED
                         },
                     )
                     connectionStore.switchToRelayInstance(targetInstance)
@@ -1117,8 +1295,8 @@ public class AntigravityCoreCoordinator(
                         return@launch
                     }
                     val nextHost = connectionStore.state.value.activeHost
-                    if (nextHost != null && nextHost.isOnline) {
-                        conversationSyncStore.startSummarySubscriptionStream(client, nextHost)
+                    if (summaryStreamEnabled && nextHost != null && nextHost.isOnline) {
+                        startManagedSummaryStream(client, nextHost)
                     } else {
                         conversationSyncStore.stopSummarySubscriptionStream()
                     }
@@ -1130,6 +1308,9 @@ public class AntigravityCoreCoordinator(
                     hostScope = targetScope,
                     skipRelayListRefresh = false,
                 )
+                if (summaryStreamEnabled) {
+                    startForegroundConnectivityLoopIfNeeded()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
@@ -1387,6 +1568,7 @@ public class AntigravityCoreCoordinator(
         chatStore.parseMarkdown(markdown)
 
     public fun onBackground() {
+        stopForegroundConnectivityLoop()
         stopConversationPreload()
         conversationSyncStore.stopSummarySubscriptionStream()
         connectionStore.onBackground()
@@ -1395,13 +1577,77 @@ public class AntigravityCoreCoordinator(
     @Throws(Throwable::class)
     public suspend fun onForeground() {
         connectionStore.onForeground()
+        if (isVerificationMode) return
+
+        val conn = connectionStore.state.value
         val client = connectionStore.activeClient()
-        val host = connectionStore.state.value.activeHost
-        if (client != null && host != null && connectionStore.state.value.isConnected) {
-            conversationSyncStore.startSummarySubscriptionStream(client, host)
-            replayPendingOutbox()
-            scheduleConversationPreload()
+        val host = conn.activeHost
+
+        if (!enableForegroundHeartbeatLoop) {
+            if (client != null && host != null && conn.isConnected) {
+                startManagedSummaryStream(client, host)
+                replayPendingOutbox()
+                scheduleConversationPreload()
+            }
+            return
         }
+
+        if (!conn.hasPairedBackend || conn.isConnecting) {
+            return
+        }
+
+        if (client == null) {
+            if (conn.isDeviceNetworkReachable) {
+                try {
+                    restoreSavedSession(startSummaryStream = true)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    startForegroundConnectivityLoopIfNeeded()
+                }
+            }
+            return
+        }
+
+        if (!conn.isDeviceNetworkReachable) {
+            return
+        }
+
+        val allowCrossHost = conn.selectedHostScope !is AgentsHostFilterScope.LocalHost
+        val probe = try {
+            probeHostReachability(
+                allowCrossHostFallback = allowCrossHost,
+                verifyEndToEnd = true,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+
+        val updatedConn = connectionStore.state.value
+        val activeHost = updatedConn.activeHost
+        if (probe?.isSelectedHostOnline == true && activeHost != null && activeHost.isOnline) {
+            startManagedSummaryStream(client, activeHost)
+            try {
+                refreshWorkspacesAndSummaries(skipRelayListRefresh = true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Keep live connection state; periodic loop will reconcile.
+            }
+            try {
+                replayPendingOutbox()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort outbox replay on foreground resume.
+            }
+            scheduleConversationPreload()
+        } else {
+            conversationSyncStore.stopSummarySubscriptionStream()
+        }
+        startForegroundConnectivityLoopIfNeeded()
     }
 
     @Throws(Throwable::class)
@@ -1410,6 +1656,7 @@ public class AntigravityCoreCoordinator(
         val activeHostSwitch = hostSwitchJob
         hostSwitchJob = null
         activeHostSwitch?.cancelAndJoin()
+        stopForegroundConnectivityLoop()
         stopConversationPreload()
         preloadMutex.withLock {
             preloadQueue.clear()
@@ -1425,6 +1672,7 @@ public class AntigravityCoreCoordinator(
         hostSwitchGeneration += 1L
         hostSwitchJob?.cancel()
         hostSwitchJob = null
+        stopForegroundConnectivityLoop()
         stopConversationPreload()
         conversationSyncStore.stopSummarySubscriptionStream()
         connectionStore.close()
@@ -1469,18 +1717,289 @@ public class AntigravityCoreCoordinator(
         return true
     }
 
+    private fun startManagedSummaryStream(
+        client: AntigravityKmpRpcClient,
+        host: RemoteHostInstance,
+    ) {
+        conversationSyncStore.startSummarySubscriptionStream(
+            client = client,
+            host = host,
+            onStreamActivity = {
+                lastBackendActivityAtMs = currentTimeMillis()
+            },
+            onStreamError = { err ->
+                handleSummaryStreamError(err)
+            },
+        )
+    }
+
+    private fun handleSummaryStreamError(error: Throwable) {
+        if (isVerificationMode || !enableForegroundHeartbeatLoop) return
+        if (!ConnectionDomainStore.isBackendOfflineError(error)) return
+        val conn = connectionStore.state.value
+        if (conn.isNetworkingSuspended || !conn.isDeviceNetworkReachable || !conn.hasPairedBackend) return
+        val nowMs = currentTimeMillis()
+        if ((nowMs - lastStreamErrorProbeAtMs) < 5_000L) return
+        lastStreamErrorProbeAtMs = nowMs
+
+        val generation = hostSwitchGeneration
+        streamErrorProbeJob?.cancel()
+        streamErrorProbeJob = scope.launch {
+            try {
+                if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error)) {
+                    if (hostSwitchGeneration != generation) return@launch
+                    connectionStore.markInstanceOffline(
+                        instanceUuid = conn.activeHost?.instanceId,
+                        errorMessage = ProtocolCompatibilityEngine.formatUserFacingRpcError(error),
+                    )
+                    conversationSyncStore.stopSummarySubscriptionStream()
+                    startForegroundConnectivityLoopIfNeeded()
+                    return@launch
+                }
+                val allowCrossHost = connectionStore.state.value.selectedHostScope !is AgentsHostFilterScope.LocalHost
+                val probe = probeHostReachability(
+                    allowCrossHostFallback = allowCrossHost,
+                    verifyEndToEnd = true,
+                )
+                if (hostSwitchGeneration != generation) return@launch
+                if (!probe.isSelectedHostOnline) {
+                    conversationSyncStore.stopSummarySubscriptionStream()
+                    startForegroundConnectivityLoopIfNeeded()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // probeHostReachability already reconciled offline state when applicable.
+                if (hostSwitchGeneration == generation) {
+                    startForegroundConnectivityLoopIfNeeded()
+                }
+            } finally {
+                if (hostSwitchGeneration == generation) {
+                    streamErrorProbeJob = null
+                }
+            }
+        }
+    }
+
+    private fun handleNetworkRecovered() {
+        if (isVerificationMode || !enableForegroundHeartbeatLoop) return
+        scope.launch {
+            try {
+                reconnectNow()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                startForegroundConnectivityLoopIfNeeded()
+            }
+        }
+    }
+
+    private fun stopForegroundConnectivityLoop() {
+        streamErrorProbeJob?.cancel()
+        streamErrorProbeJob = null
+        connectivityHeartbeatJob?.cancel()
+        connectivityHeartbeatJob = null
+    }
+
+    private fun startForegroundConnectivityLoopIfNeeded() {
+        if (isVerificationMode || !enableForegroundHeartbeatLoop) return
+        if (connectivityHeartbeatJob?.isActive == true) return
+        val initialConn = connectionStore.state.value
+        if (initialConn.isNetworkingSuspended || !initialConn.isDeviceNetworkReachable || !initialConn.hasPairedBackend) {
+            return
+        }
+
+        connectivityHeartbeatJob = scope.launch {
+            try {
+                while (isActive) {
+                    val conn = connectionStore.state.value
+                    if (isVerificationMode ||
+                        conn.isNetworkingSuspended ||
+                        !conn.isDeviceNetworkReachable ||
+                        !conn.hasPairedBackend
+                    ) {
+                        break
+                    }
+                    val activeHost = conn.activeHost ?: break
+                    val isLowPower = powerStateProvider.isLowPowerModeEnabled
+                    val isOnline = conn.isConnected && activeHost.isOnline
+
+                    if (isOnline) {
+                        val streamHealthy = conversationSyncStore.state.value.isStreamHealthy
+                        val heartbeatSec = ConnectionPowerPolicy.onlineHeartbeatIntervalSeconds(
+                            channel = activeHost.channel,
+                            isLowPowerMode = isLowPower,
+                            isExpensiveNetwork = conn.isNetworkExpensiveOrConstrained,
+                            isStreamHealthy = streamHealthy,
+                        )
+                        val elapsedSec = if (lastBackendActivityAtMs > 0L) {
+                            ((currentTimeMillis() - lastBackendActivityAtMs).coerceAtLeast(0L)) / 1000.0
+                        } else {
+                            heartbeatSec
+                        }
+                        val sleepSec = (heartbeatSec - elapsedSec).coerceAtLeast(2.0)
+                        delay((sleepSec * 1_000.0).toLong())
+                        if (!isActive) break
+
+                        val liveConn = connectionStore.state.value
+                        if (liveConn.isNetworkingSuspended || !liveConn.isDeviceNetworkReachable || !liveConn.hasPairedBackend) {
+                            break
+                        }
+                        if (!liveConn.isConnected || liveConn.activeHost?.isOnline != true) {
+                            continue
+                        }
+
+                        val fullSyncSec = ConnectionPowerPolicy.onlineFullSyncIntervalSeconds(
+                            channel = activeHost.channel,
+                            isLowPowerMode = powerStateProvider.isLowPowerModeEnabled,
+                        )
+                        val nowStreamHealthy = conversationSyncStore.state.value.isStreamHealthy
+                        val needsFullSync = !nowStreamHealthy ||
+                            (currentTimeMillis() - lastFullSyncAtMs) >= (fullSyncSec * 1_000.0).toLong()
+                        val allowCrossHost = liveConn.selectedHostScope !is AgentsHostFilterScope.LocalHost
+
+                        try {
+                            val probe = probeHostReachability(
+                                allowCrossHostFallback = allowCrossHost,
+                                verifyEndToEnd = false,
+                            )
+                            if (!probe.isSelectedHostOnline) {
+                                conversationSyncStore.stopSummarySubscriptionStream()
+                                continue
+                            }
+                            consecutiveSyncFailures = 0
+                            lastBackendActivityAtMs = currentTimeMillis()
+
+                            val client = connectionStore.activeClient()
+                            val refreshedHost = connectionStore.state.value.activeHost
+                            if (client != null && refreshedHost != null) {
+                                if (probe.relayTopologyChanged || !nowStreamHealthy) {
+                                    startManagedSummaryStream(client, refreshedHost)
+                                }
+                                if (probe.relayTopologyChanged || needsFullSync) {
+                                    refreshWorkspacesAndSummaries(skipRelayListRefresh = true)
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            if (ConnectionDomainStore.isBackendOfflineError(e)) {
+                                consecutiveSyncFailures += 1
+                                val threshold = ConnectionPowerPolicy.offlineFailureThreshold(activeHost.channel, e)
+                                if (consecutiveSyncFailures >= threshold) {
+                                    connectionStore.markAllChannelHostsOffline(error = e)
+                                    conversationSyncStore.stopSummarySubscriptionStream()
+                                }
+                            }
+                        }
+                    } else {
+                        val attempt = connectionStore.currentReconnectAttempt()
+                        val delaySec = ConnectionPowerPolicy.offlineBackoffDelaySeconds(
+                            attempt = attempt,
+                            isLowPowerMode = isLowPower,
+                            applyJitter = true,
+                        )
+                        delay((delaySec * 1_000.0).toLong())
+                        if (!isActive) break
+
+                        val liveConn = connectionStore.state.value
+                        if (liveConn.isNetworkingSuspended || !liveConn.isDeviceNetworkReachable || !liveConn.hasPairedBackend) {
+                            break
+                        }
+                        if (liveConn.isConnected && liveConn.activeHost?.isOnline == true) {
+                            continue
+                        }
+
+                        val client = connectionStore.activeClient()
+                        if (client == null) {
+                            val restored = try {
+                                restoreSavedSession(startSummaryStream = true)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Throwable) {
+                                null
+                            }
+                            if (restored?.isSelectedHostOnline != true) {
+                                connectionStore.incrementReconnectAttempt()
+                            }
+                            continue
+                        }
+
+                        val allowCrossHost = liveConn.selectedHostScope !is AgentsHostFilterScope.LocalHost
+                        val recovered = try {
+                            val probe = probeHostReachability(
+                                allowCrossHostFallback = allowCrossHost,
+                                verifyEndToEnd = true,
+                            )
+                            if (probe.isSelectedHostOnline) {
+                                val nextHost = connectionStore.state.value.activeHost
+                                if (nextHost != null) {
+                                    startManagedSummaryStream(client, nextHost)
+                                }
+                                try {
+                                    refreshWorkspacesAndSummaries(skipRelayListRefresh = true)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Throwable) {
+                                    // Best-effort post-recovery refresh.
+                                }
+                                try {
+                                    replayPendingOutbox()
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Throwable) {
+                                    // Best-effort post-recovery outbox replay.
+                                }
+                                scheduleConversationPreload()
+                                true
+                            } else {
+                                false
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            if (e is AntigravityRpcError.Unauthorized) {
+                                // Stop noisy 401 retries until the user signs in again.
+                                repeat(ConnectionPowerPolicy.offlineBackoffScheduleSeconds.size) {
+                                    connectionStore.incrementReconnectAttempt()
+                                }
+                            }
+                            false
+                        }
+                        if (!recovered) {
+                            connectionStore.incrementReconnectAttempt()
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Never allow background connectivity heartbeat failures to crash the app.
+            } finally {
+                connectivityHeartbeatJob = null
+            }
+        }
+    }
+
     private suspend fun onHandshakeSucceeded(
         handshake: BackendHandshakeResult,
         startSummaryStream: Boolean,
     ) {
+        summaryStreamEnabled = startSummaryStream
         val host = connectionStore.state.value.activeHost ?: return
+        val nowMs = currentTimeMillis()
+        consecutiveSyncFailures = 0
+        if (handshake.isSelectedHostOnline) {
+            lastBackendActivityAtMs = nowMs
+            lastFullSyncAtMs = nowMs
+        }
         conversationSyncStore.applyHandshake(host, handshake)
         reconcileSelectedProjectForScope(connectionStore.state.value.selectedHostScope)
         conversationSyncStore.resetSettledEmptyTitles()
         val client = connectionStore.activeClient()
         if (client != null && handshake.isSelectedHostOnline) {
             if (startSummaryStream) {
-                conversationSyncStore.startSummarySubscriptionStream(client, host)
+                startManagedSummaryStream(client, host)
             }
             if (host.channel == RemoteConnectionChannel.CLOUD_RELAY &&
                 (!handshake.initialSyncCompleted || (handshake.summaries.isEmpty() && handshake.workspaces.isEmpty()))
@@ -1494,13 +2013,30 @@ public class AntigravityCoreCoordinator(
                             hostScope = activeScope,
                             skipRelayListRefresh = true,
                         )
+                        val liveScope = connectionStore.state.value.selectedHostScope
+                        if (synced.availableRelayInstances.isNotEmpty()) {
+                            connectionStore.syncRelayInstances(
+                                instances = synced.availableRelayInstances,
+                                latencyMs = synced.latencyMs,
+                                succeededInstanceUuids = synced.succeededInstanceUuids,
+                                allowCrossHostPromotion = liveScope !is AgentsHostFilterScope.LocalHost,
+                            )
+                        }
                         if (activeScope is AgentsHostFilterScope.LocalHost && synced.succeededInstanceUuids.isEmpty()) {
                             connectionStore.markInstanceOffline(
                                 instanceUuid = host.instanceId,
                                 errorMessage = "${host.hostname} is currently offline.",
                             )
+                        } else if (synced.succeededInstanceUuids.isEmpty() &&
+                            !synced.cloudSucceeded &&
+                            synced.availableRelayInstances.isNotEmpty() &&
+                            synced.availableRelayInstances.all { !it.status.isReachable }
+                        ) {
+                            connectionStore.markAllChannelHostsOffline(
+                                errorMessage = "No reachable Antigravity Desktop instances online",
+                            )
                         }
-                        reconcileSelectedProjectForScope(activeScope)
+                        reconcileSelectedProjectForScope(connectionStore.state.value.selectedHostScope)
                         scheduleConversationPreload()
                     } catch (e: CancellationException) {
                         throw e
@@ -1545,6 +2081,9 @@ public class AntigravityCoreCoordinator(
                     // Best-effort outbox replay after reconnect; never crash process.
                 }
             }
+        }
+        if (startSummaryStream) {
+            startForegroundConnectivityLoopIfNeeded()
         }
     }
 

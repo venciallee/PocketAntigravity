@@ -25,7 +25,9 @@ public actor AntigravityRPCClient {
     internal var didRunOriginApiKeyDiscovery: Bool = false
     internal var didForceRefreshInvalidApiKey: Bool = false
     internal var preferredCloudInstanceUuid: String? = nil
+    internal static let endToEndFreshnessWindowSeconds: TimeInterval = 45.0
     internal var cachedRelayInstances: [RelayInstanceInfo] = []
+    internal var lastEndToEndVerifiedAtByUuid: [String: Date] = [:]
     internal var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
     internal var cachedLocalProjectNameById: [String: String] = [:]
     internal var cachedLocalProjectIdByName: [String: String] = [:]
@@ -1160,6 +1162,7 @@ public actor AntigravityRPCClient {
                 data,
                 responseHeaders: http.allHeaderFields
             )
+            self.lastEndToEndVerifiedAtByUuid[targetUuid] = Date()
             return (decoded.payload, decoded.headers, targetUuid)
         }
 
@@ -1184,9 +1187,15 @@ public actor AntigravityRPCClient {
             }
             let isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error)
             if isInstanceUnregistered {
+                self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
                 self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
                     inst.uuid == initialTargetUuid ? inst.withStatus(.disconnected) : inst
                 }
+            } else if error is URLError {
+                self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
+            } else if case let AntigravityRPCError.httpError(code, _) = error,
+                      code == 502 || code == 503 || code == 504 {
+                self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
             }
             if ignoreCachedOfflineStatus {
                 throw error

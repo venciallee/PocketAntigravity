@@ -1344,7 +1344,8 @@ extension AntigravitySessionStore {
 
         await refreshWorkspacesAndSummaries(
             forceFullSync: true,
-            includeAutomations: selectedTab == .automations
+            includeAutomations: selectedTab == .automations,
+            verifyRelayEndToEnd: true
         )
         if userDisplayName == nil {
             Task { [weak self] in
@@ -1389,7 +1390,8 @@ extension AntigravitySessionStore {
 
         await refreshWorkspacesAndSummaries(
             forceFullSync: true,
-            includeAutomations: includeAutomations || selectedTab == .automations
+            includeAutomations: includeAutomations || selectedTab == .automations,
+            verifyRelayEndToEnd: true
         )
         startSummarySubscriptionStream()
 
@@ -1683,8 +1685,8 @@ extension AntigravitySessionStore {
         }
     }
 
-    internal func markBackendReconnected() {
-        let wasOffline = !isLiveBackendConnected || !activeHost.isOnline
+    internal func markBackendReconnected(forceReconnectedActions: Bool = false) {
+        let wasOffline = forceReconnectedActions || !isLiveBackendConnected || !activeHost.isOnline
         consecutiveSyncFailures = 0
         reconnectAttemptCount = 0
         nextReconnectAt = nil

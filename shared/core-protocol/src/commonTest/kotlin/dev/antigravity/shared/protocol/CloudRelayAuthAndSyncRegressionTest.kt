@@ -832,4 +832,89 @@ class CloudRelayAuthAndSyncRegressionTest {
             assertEquals(RelayInstanceStatus.DISCONNECTED, reported?.status)
         }
     }
+
+    @Test
+    fun testHeartbeatProbeAutoVerifiesUnverifiedZombieAndSkipsFreshVerifiedOnlineHost() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSySTALEHEARTBEAT0000000000000000000"
+            val liveUuid = "11111111-live-macbook-v2"
+            val zombieUuid = "22222222-sleeping-imac-v2"
+            val boqUnregistered = """[9,"instance not registered",[["type.googleapis.com/google.rpc.ErrorInfo","INSTANCE_NOT_REGISTERED","antigravity.googleapis.com"]]]"""
+            var liveProxyProbeCount = 0
+            var zombieProxyProbeCount = 0
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        respond(
+                            content = """[[["$liveUuid",["MacBook Pro","2.34.0",true],1,[1740000000,0]],["$zombieUuid",["Office iMac","2.34.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val bodyText = request.body.toByteArray().decodeToString()
+                        if (bodyText.contains(zombieUuid)) {
+                            zombieProxyProbeCount += 1
+                            respond(
+                                content = boqUnregistered,
+                                status = HttpStatusCode.BadRequest,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            liveProxyProbeCount += 1
+                            // Base64 of "{}" is "e30="
+                            respond(
+                                content = """["e30=",[["content-type","application/json"]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val host = RemoteHostInstance(
+                instanceId = liveUuid,
+                hostname = "MacBook Pro",
+                channel = RemoteConnectionChannel.CLOUD_RELAY,
+                endpointUrl = "https://antigravity.google.com/r/$liveUuid",
+            )
+            val client = AntigravityKmpRpcClient(
+                host = host,
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = validKey,
+                resolvedInstanceUuid = liveUuid,
+                httpClientOverride = HttpClient(engine),
+            )
+
+            // 1. Even with verifyEndToEnd = false, unverified instances reported CONNECTED in ListInstances
+            //    are probed end-to-end so the sleeping zombie iMac is truthfully downgraded to DISCONNECTED.
+            val firstProbe = client.probeHostReachability(allowCrossHostFallback = false, verifyEndToEnd = false)
+            assertTrue(firstProbe.isSelectedHostOnline)
+            assertEquals(1, liveProxyProbeCount)
+            assertEquals(1, zombieProxyProbeCount)
+            assertEquals(
+                RelayInstanceStatus.CONNECTED,
+                firstProbe.availableRelayInstances.first { it.uuid == liveUuid }.status,
+            )
+            assertEquals(
+                RelayInstanceStatus.DISCONNECTED,
+                firstProbe.availableRelayInstances.first { it.uuid == zombieUuid }.status,
+            )
+
+            // 2. Immediately running a second lightweight heartbeat skips redundant ProxyCommand for the
+            //    freshly verified live MacBook while still re-checking the previously disconnected zombie iMac.
+            val secondProbe = client.probeHostReachability(allowCrossHostFallback = false, verifyEndToEnd = false)
+            assertTrue(secondProbe.isSelectedHostOnline)
+            assertEquals(1, liveProxyProbeCount, "Freshly verified live host must not incur redundant ProxyCommand probes within freshness window")
+            assertEquals(2, zombieProxyProbeCount, "Previously disconnected host reappearing as CONNECTED must still be verified")
+            assertEquals(
+                RelayInstanceStatus.DISCONNECTED,
+                secondProbe.availableRelayInstances.first { it.uuid == zombieUuid }.status,
+            )
+        }
+    }
 }

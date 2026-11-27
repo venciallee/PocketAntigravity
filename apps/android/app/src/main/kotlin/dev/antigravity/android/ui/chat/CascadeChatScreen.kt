@@ -167,7 +167,7 @@ fun CascadeChatScreen(
         .ifBlank { "Desktop" }
     val isActiveSessionHostOnline = remember(activeSummary, resolvedIsCloud, connectionState) {
         if (resolvedIsCloud) {
-            connectionState.isDeviceNetworkReachable
+            connectionState.isHostScopeOnline(dev.antigravity.shared.model.AgentsHostFilterScope.AntigravityCloud)
         } else {
             coordinator.isHostOnlineForSummary(activeSummary)
         }

@@ -1292,4 +1292,41 @@ class AndroidInteractiveE2eTest {
         assertEquals(AgentPermissionPreset.REQUEST_REVIEW, coordinator.settingsStore.state.value.remotePermissionPreset)
         assertEquals(AgentPermissionPreset.AUTO, coordinator.settingsStore.state.value.localPermissionPreset)
     }
+
+    @Test
+    fun atc33_settingsAndHomeRenderAccurateOfflineAndOnlineHostStatus() {
+        val coordinator = AntigravityCoreCoordinator(
+            autoPreloadConversations = false,
+            enableForegroundHeartbeatLoop = false,
+        )
+        val macHost = dev.antigravity.shared.domain.EsddVerificationFixtures.macHost
+        val imacHost = dev.antigravity.shared.domain.EsddVerificationFixtures.officeImacHost
+        coordinator.connectionStore.seedVerificationConnection(
+            activeHost = macHost,
+            knownHosts = listOf(macHost, imacHost),
+            statusText = "Connected · MacBook Pro · 42ms",
+        )
+        coordinator.isVerificationMode = false
+        coordinator.connectionStore.markInstanceOffline(
+            instanceUuid = macHost.instanceId,
+            errorMessage = "MacBook Pro is offline",
+        )
+
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = null,
+            )
+        }
+
+        // Home switcher pill must truthfully show Offline when all paired hosts are offline
+        composeRule.onNodeWithTag("host-switcher-pill").assertIsDisplayed()
+        composeRule.onNodeWithText("All Hosts · Offline", useUnmergedTree = true).assertIsDisplayed()
+
+        // Navigate into Settings via Sidebar -> Hero Card must show Host Offline + Reconnect button (not hardcoded Connected)
+        composeRule.onNodeWithTag("btn-sidebar").performClick()
+        composeRule.onNodeWithTag("drawer-settings").performClick()
+        composeRule.onNodeWithText("Host Offline: MacBook Pro", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("btn-reconnect-host").assertIsDisplayed()
+    }
 }

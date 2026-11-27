@@ -1224,6 +1224,153 @@ class CoreDomainStoreTest {
     }
 
     @Test
+    fun testConnectionStatusAccuracyAcrossSyncDisappearanceNetworkLossAndColdRestore() = runTest {
+        withContext(Dispatchers.Default) {
+            val validKey = "AI" + "zaSyDOMAINSTATUS000000000000000000000"
+            val macAUuid = "aaaa-mac-a-v2"
+            val macBUuid = "bbbb-mac-b-v2"
+            val macCUuid = "cccc-mac-removed-v2"
+            var listStep = 0
+
+            val storage = InMemoryProjectionStorage()
+            // Pre-populate disk cache with stale isOnline = true for a removed/offline host
+            storage.saveKnownHosts(
+                listOf(
+                    RemoteHostInstance(
+                        instanceId = macAUuid,
+                        hostname = "MacBook A",
+                        channel = RemoteConnectionChannel.CLOUD_RELAY,
+                        endpointUrl = "https://antigravity.google.com/r/$macAUuid",
+                        isOnline = true,
+                    ),
+                    RemoteHostInstance(
+                        instanceId = macCUuid,
+                        hostname = "Old iMac",
+                        channel = RemoteConnectionChannel.CLOUD_RELAY,
+                        endpointUrl = "https://antigravity.google.com/r/$macCUuid",
+                        isOnline = true,
+                    ),
+                )
+            )
+            val secrets = dev.antigravity.shared.platform.InMemorySecretStore()
+            secrets.saveCredentials(
+                dev.antigravity.shared.platform.SavedBackendCredentials(
+                    endpointUrlString = "https://antigravity.google.com/r/$macAUuid",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    hostname = "MacBook A",
+                    sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                    authUser = "0",
+                    resolvedInstanceUuid = macAUuid,
+                    relayApiKey = validKey,
+                )
+            )
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        val payload = when (listStep) {
+                            // Step 0: Handshake — MacBook A & MacBook B both online (Old iMac absent!)
+                            0 -> """[[["$macAUuid",["MacBook A","2.34.0",true],1,[1740000000,0]],["$macBUuid",["MacBook B","2.34.0",true],1,[1740000000,0]]],5]"""
+                            // Step 1: Refresh — MacBook A went offline (DISCONNECTED), MacBook B stays online
+                            else -> """[[["$macAUuid",["MacBook A","2.34.0",true],2,[1740000000,0]],["$macBUuid",["MacBook B","2.34.0",true],1,[1740000000,0]]],5]"""
+                        }
+                        respond(
+                            content = payload,
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        respond(
+                            content = """["e30=",[["content-type","application/json"]]]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val coordinator = AntigravityCoreCoordinator(
+                secretStore = secrets,
+                projectionStorage = storage,
+                autoPreloadConversations = false,
+                enableForegroundHeartbeatLoop = false,
+                clientFactory = { host, csrf, cookie, authUser, resolvedUuid, relayApiKey, tlsConfig ->
+                    AntigravityKmpRpcClient(
+                        host = host,
+                        csrfToken = csrf,
+                        sessionCookie = cookie,
+                        authUser = authUser,
+                        resolvedInstanceUuid = resolvedUuid,
+                        relayApiKey = relayApiKey,
+                        tlsConfig = tlsConfig,
+                        httpClientOverride = HttpClient(engine),
+                    )
+                },
+            )
+
+            // 1. Handshake marks absent cached Cloud Relay host ("Old iMac") offline immediately
+            coordinator.restoreSavedSession(startSummaryStream = false)
+            val afterHandshake = coordinator.connectionState.value
+            assertTrue(afterHandshake.isConnected)
+            assertTrue(afterHandshake.isLocalHostOnline(macAUuid, "MacBook A"))
+            assertTrue(afterHandshake.isLocalHostOnline(macBUuid, "MacBook B"))
+            assertFalse(
+                afterHandshake.isLocalHostOnline(macCUuid, "Old iMac"),
+                "Host absent from authoritative ListInstances must be reported offline",
+            )
+            assertFalse(
+                afterHandshake.knownHosts.first { it.instanceId == macCUuid }.isOnline,
+                "Absent cached Cloud Relay host in knownHosts must be marked isOnline=false",
+            )
+
+            // 2. Refresh in AllHosts mode when activeHost (MacBook A) goes offline & MacBook B stays online:
+            //    refreshWorkspacesAndSummaries must sync updated relay states into ConnectionState and
+            //    promote activeHost to MacBook B without overwriting MacBook A back to online.
+            listStep = 1
+            coordinator.refreshWorkspacesAndSummaries(
+                hostScope = AgentsHostFilterScope.AllHosts,
+                skipRelayListRefresh = false,
+            )
+            val afterRefresh = coordinator.connectionState.value
+            assertFalse(afterRefresh.isLocalHostOnline(macAUuid, "MacBook A"))
+            assertTrue(afterRefresh.isLocalHostOnline(macBUuid, "MacBook B"))
+            assertEquals(macBUuid, afterRefresh.activeHost?.instanceId)
+            assertTrue(afterRefresh.isConnected)
+            assertFalse(afterRefresh.knownHosts.first { it.instanceId == macAUuid }.isOnline)
+            assertTrue(afterRefresh.knownHosts.first { it.instanceId == macBUuid }.isOnline)
+
+            // 3. Network drop clears isConnected + host online indicators; recovery enters Connecting (not OnlineIdle)
+            var recoveryTriggered = false
+            coordinator.connectionStore.onNetworkRecovered = { recoveryTriggered = true }
+            coordinator.connectionStore.onNetworkStatusChanged(NetworkReachabilityStatus.Unsatisfied)
+            val noNet = coordinator.connectionState.value
+            assertFalse(noNet.isDeviceNetworkReachable)
+            assertFalse(noNet.isConnected)
+            assertEquals(ConnectionLifecyclePhase.NoNetwork, noNet.lifecyclePhase)
+            assertEquals("No Internet Connection", noNet.statusText)
+            assertFalse(noNet.isHostScopeOnline(AgentsHostFilterScope.AllHosts))
+            assertFalse(noNet.isHostScopeOnline(AgentsHostFilterScope.AntigravityCloud))
+            assertTrue(noNet.knownHosts.all { !it.isOnline })
+
+            coordinator.connectionStore.onNetworkStatusChanged(
+                NetworkReachabilityStatus.Satisfied("wifi0", isExpensive = false, isConstrained = false)
+            )
+            val recovering = coordinator.connectionState.value
+            assertTrue(recovering.isDeviceNetworkReachable)
+            assertEquals(
+                ConnectionLifecyclePhase.Connecting,
+                recovering.lifecyclePhase,
+                "Network recovery must enter Connecting rather than falsely claiming OnlineIdle before probe",
+            )
+            assertTrue(recoveryTriggered, "Network recovery must notify coordinator to re-probe")
+            coordinator.close()
+        }
+    }
+
+    @Test
     fun testSendMessageAutoRecoversEvictedZeroServerTurnCascadeAndMigratesState() = runTest {
         withContext(Dispatchers.Default) {
             val evictedId = "v1/evicted-zero-turn-chat"

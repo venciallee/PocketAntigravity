@@ -33,8 +33,11 @@ import androidx.compose.material.icons.rounded.LaptopMac
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.RadioButtonChecked
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
@@ -48,6 +51,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,7 +81,10 @@ import dev.antigravity.shared.model.AppAppearanceMode
 import dev.antigravity.shared.model.AppLanguage
 import dev.antigravity.shared.model.AppThemePreset
 import dev.antigravity.shared.model.RemoteConnectionChannel
+import dev.antigravity.shared.model.RemoteHostInstance
 import dev.antigravity.shared.model.localizedTitle
+import dev.antigravity.shared.protocol.ConnectionLifecyclePhase
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -108,9 +115,70 @@ fun SettingsAndCustomizationsScreen(
 
     val appearance = settingsState.appearance
     val activeHost = connectionState.activeHost
-    val displayHosts = remember(connectionState.knownHosts, coordinator.isVerificationMode) {
-        connectionState.knownHosts.filterNot { host ->
-            coordinator.isVerificationMode && host.instanceId == "cloud-vm-us-central1"
+    val isNoInternet = !coordinator.isVerificationMode &&
+        connectionState.hasPairedBackend &&
+        !connectionState.isDeviceNetworkReachable
+    val isConnectingHero = !coordinator.isVerificationMode &&
+        connectionState.isDeviceNetworkReachable &&
+        (connectionState.isConnecting || connectionState.lifecyclePhase is ConnectionLifecyclePhase.Connecting)
+    val isOnlineConnected = coordinator.isVerificationMode ||
+        (connectionState.isDeviceNetworkReachable && connectionState.isConnected && (activeHost?.isOnline == true))
+    val isGoogleAuthExpired = !coordinator.isVerificationMode &&
+        activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY &&
+        (connectionState.statusText.contains("Expired", ignoreCase = true) ||
+            connectionState.errorText?.contains("unauthorized", ignoreCase = true) == true)
+
+    LaunchedEffect(connectionState.hasPairedBackend, activeHost?.channel) {
+        if (!coordinator.isVerificationMode &&
+            connectionState.hasPairedBackend &&
+            activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY
+        ) {
+            try {
+                coordinator.refreshAvailableRelayHosts(verifyEndToEnd = true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort live host liveness check on Settings entry.
+            }
+        }
+    }
+
+    val displayHosts = remember(
+        connectionState.knownHosts,
+        connectionState.availableRelayInstances,
+        connectionState.isDeviceNetworkReachable,
+        coordinator.isVerificationMode,
+    ) {
+        if (coordinator.isVerificationMode) {
+            connectionState.knownHosts.filterNot { host ->
+                host.instanceId == "cloud-vm-us-central1"
+            }
+        } else if (connectionState.availableRelayInstances.isNotEmpty()) {
+            val fromRelay = connectionState.availableRelayInstances.map { inst ->
+                val existing = connectionState.knownHosts.firstOrNull { it.instanceId == inst.uuid }
+                RemoteHostInstance(
+                    instanceId = inst.uuid,
+                    hostname = inst.name,
+                    version = inst.version.ifBlank { existing?.version.orEmpty() },
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = existing?.endpointUrl ?: "https://antigravity.google.com/r/${inst.uuid}",
+                    isOnline = connectionState.isDeviceNetworkReachable && inst.status.isReachable,
+                    latencyMs = existing?.latencyMs ?: 0,
+                )
+            }
+            val relayIds = fromRelay.map { it.instanceId }.toSet()
+            val remainingKnown = connectionState.knownHosts
+                .filterNot { it.instanceId == "unpaired" || it.hostname.equals("cloud", ignoreCase = true) || it.instanceId in relayIds }
+                .map { host ->
+                    host.copy(isOnline = connectionState.isLocalHostOnline(host.instanceId, host.hostname))
+                }
+            fromRelay + remainingKnown
+        } else {
+            connectionState.knownHosts
+                .filterNot { it.instanceId == "unpaired" || it.hostname.equals("cloud", ignoreCase = true) }
+                .map { host ->
+                    host.copy(isOnline = connectionState.isLocalHostOnline(host.instanceId, host.hostname))
+                }
         }
     }
 
@@ -205,13 +273,22 @@ fun SettingsAndCustomizationsScreen(
         }
 
         // 1. Connected Host Hero Card
+        val heroTint = when {
+            isOnlineConnected -> colors.statusDone
+            isConnectingHero -> colors.accentPeriwinkle
+            isGoogleAuthExpired -> colors.statusWaiting
+            else -> colors.statusError
+        }
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("card-host-capability-profile"),
             shape = RoundedCornerShape(22.dp),
             color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.cardBorder.copy(alpha = 0.7f)),
+            border = BorderStroke(
+                1.dp,
+                if (isOnlineConnected) colors.cardBorder.copy(alpha = 0.7f) else heroTint.copy(alpha = 0.45f),
+            ),
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
@@ -226,23 +303,43 @@ fun SettingsAndCustomizationsScreen(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(colors.statusDone.copy(alpha = 0.14f)),
+                            .background(heroTint.copy(alpha = 0.14f)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.LaptopMac,
-                            contentDescription = null,
-                            tint = colors.statusDone,
-                            modifier = Modifier.size(22.dp),
-                        )
+                        if (isConnectingHero) {
+                            CircularProgressIndicator(
+                                strokeWidth = 2.dp,
+                                color = colors.accentPeriwinkle,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        } else {
+                            Icon(
+                                imageVector = when {
+                                    isOnlineConnected -> Icons.Rounded.LaptopMac
+                                    isGoogleAuthExpired -> Icons.Rounded.Warning
+                                    else -> Icons.Rounded.WifiOff
+                                },
+                                contentDescription = null,
+                                tint = heroTint,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
                     }
                     Column(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         val hostDisplayName = activeHost?.hostname ?: "MacBook Pro"
+                        val heroTitle = when {
+                            isOnlineConnected -> tr("Connected: $hostDisplayName", "已连接：$hostDisplayName")
+                            isConnectingHero -> tr("Connecting: $hostDisplayName", "正在连接：$hostDisplayName")
+                            isNoInternet -> tr("No Internet Connection", "无网络连接")
+                            isGoogleAuthExpired -> tr("Google Sign-In Expired", "Google 登录已过期")
+                            connectionState.hasPairedBackend -> tr("Host Offline: $hostDisplayName", "主机离线：$hostDisplayName")
+                            else -> tr("Not Connected", "未连接")
+                        }
                         Text(
-                            text = tr("Connected: $hostDisplayName", "已连接：$hostDisplayName"),
+                            text = heroTitle,
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -257,11 +354,29 @@ fun SettingsAndCustomizationsScreen(
                         }
                         val latencyMs = connectionState.lastPingLatencyMs ?: activeHost?.latencyMs ?: 42
                         val sessionCount = if (coordinator.isVerificationMode) 12 else syncState.summaries.size
-                        Text(
-                            text = tr(
+                        val heroSubtitle = when {
+                            isOnlineConnected -> tr(
                                 "$channelLabel · ${latencyMs}ms · $sessionCount sessions",
                                 "$channelLabel · ${latencyMs}ms · $sessionCount 个会话",
-                            ),
+                            )
+                            isConnectingHero -> connectionState.statusText.ifBlank {
+                                tr("Checking host reachability...", "正在检查主机连通性...")
+                            }
+                            isNoInternet -> tr(
+                                "Paused while offline · Auto-resumes when network returns",
+                                "离线时已暂停 · 网络恢复后自动继续",
+                            )
+                            isGoogleAuthExpired -> tr(
+                                "Sign in with Google again to restore sync",
+                                "请重新登录 Google 以恢复同步",
+                            )
+                            else -> tr(
+                                "Power-saving backoff reconnect · Tap Reconnect or scan QR",
+                                "节能退避重连中 · 点击重连或重新扫码",
+                            )
+                        }
+                        Text(
+                            text = heroSubtitle,
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                             color = colors.inkSecondary,
                             maxLines = 1,
@@ -270,32 +385,103 @@ fun SettingsAndCustomizationsScreen(
                     }
                 }
 
-                FilledTonalButton(
-                    onClick = onOpenPairing,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .testTag("btn-scan-new-qr"),
-                    shape = RoundedCornerShape(100.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = colors.surfaceSelectionTint,
-                        contentColor = colors.inkReading,
-                    ),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.QrCodeScanner,
-                        contentDescription = null,
-                        tint = colors.inkReading,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = tr("Scan New QR", "扫描新二维码"),
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontSize = 14.5.sp,
-                            fontWeight = FontWeight.SemiBold,
+                if (!coordinator.isVerificationMode && connectionState.hasPairedBackend && !isOnlineConnected && !isConnectingHero && !isNoInternet) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        coordinator.reconnectNow()
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Throwable) {
+                                        // Status reflected in connectionState.
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                                .testTag("btn-reconnect-host"),
+                            shape = RoundedCornerShape(100.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = colors.accentPeriwinkle.copy(alpha = 0.18f),
+                                contentColor = colors.accentPeriwinkle,
+                            ),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = tr("Reconnect", "重新连接"),
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = onOpenPairing,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                                .testTag("btn-scan-new-qr"),
+                            shape = RoundedCornerShape(100.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = colors.surfaceSelectionTint,
+                                contentColor = colors.inkReading,
+                            ),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.QrCodeScanner,
+                                contentDescription = null,
+                                tint = colors.inkReading,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = tr("Scan New QR", "扫描新二维码"),
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                            )
+                        }
+                    }
+                } else {
+                    FilledTonalButton(
+                        onClick = onOpenPairing,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .testTag("btn-scan-new-qr"),
+                        shape = RoundedCornerShape(100.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = colors.surfaceSelectionTint,
+                            contentColor = colors.inkReading,
                         ),
-                    )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.QrCodeScanner,
+                            contentDescription = null,
+                            tint = colors.inkReading,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = tr("Scan New QR", "扫描新二维码"),
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -316,8 +502,13 @@ fun SettingsAndCustomizationsScreen(
                 ),
                 color = colors.accentPeriwinkle,
             )
+            val refreshLabel = when {
+                connectionState.isRefreshingRelayHosts -> tr("Probing...", "探测中...")
+                didRefreshHosts -> tr("Refreshed", "已刷新")
+                else -> tr("Refresh", "刷新")
+            }
             Text(
-                text = if (didRefreshHosts) tr("Refreshed", "已刷新") else tr("Refresh", "刷新"),
+                text = refreshLabel,
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
@@ -325,10 +516,17 @@ fun SettingsAndCustomizationsScreen(
                 color = colors.accentPeriwinkle,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable {
+                    .clickable(enabled = !connectionState.isRefreshingRelayHosts) {
                         didRefreshHosts = true
                         scope.launch {
-                            runCatching { coordinator.refreshWorkspacesAndSummaries() }
+                            try {
+                                coordinator.refreshAvailableRelayHosts(verifyEndToEnd = true)
+                                coordinator.refreshWorkspacesAndSummaries(skipRelayListRefresh = true)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Throwable) {
+                                // ConnectionState reflects offline/error outcome cleanly.
+                            }
                         }
                     }
                     .padding(horizontal = 4.dp, vertical = 2.dp)
@@ -340,6 +538,7 @@ fun SettingsAndCustomizationsScreen(
 
         displayHosts.forEach { host ->
             val isSelected = selectedHostId == host.instanceId
+            val hostOnline = connectionState.isLocalHostOnline(host.instanceId, host.hostname)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -371,11 +570,12 @@ fun SettingsAndCustomizationsScreen(
                         ),
                         color = colors.inkReading,
                     )
-                    val onlineText = if (host.isOnline) tr("Online", "在线") else tr("Offline", "离线")
+                    val onlineText = if (hostOnline) tr("Online", "在线") else tr("Offline", "离线")
+                    val cleanVer = host.version.removePrefix("v")
                     Text(
-                        text = "$onlineText · ${host.version.removePrefix("v")}",
+                        text = if (cleanVer.isBlank()) onlineText else "$onlineText · $cleanVer",
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
-                        color = if (host.isOnline) colors.statusDone else colors.inkSecondary,
+                        color = if (hostOnline) colors.statusDone else colors.inkSecondary,
                     )
                 }
             }
