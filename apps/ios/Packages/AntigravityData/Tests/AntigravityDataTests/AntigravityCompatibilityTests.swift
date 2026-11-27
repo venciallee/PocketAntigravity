@@ -1558,7 +1558,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
             payload: Data([0x0A, 0x01, 0x61]),
             contentType: "application/proto"
         )
-        let text = String(data: encoded, encoding: .utf8) ?? ""
+        let text = (String(data: encoded, encoding: .utf8) ?? "").replacingOccurrences(of: "\\/", with: "/")
         XCTAssertTrue(text.contains("[\"accept-encoding\",\"gzip\"]"), "Missing gzip accept-encoding header: \(text)")
         XCTAssertTrue(text.contains("[\"accept\",\"application/proto\"]"), "Missing application/proto accept header: \(text)")
     }

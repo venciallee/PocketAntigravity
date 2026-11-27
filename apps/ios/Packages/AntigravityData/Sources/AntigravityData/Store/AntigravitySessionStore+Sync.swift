@@ -1067,8 +1067,10 @@ extension AntigravitySessionStore {
         if !forceRefresh,
            !cascadeId.isEmpty,
            stepPollingTask != nil,
-           activeStepSyncCascadeId == cascadeId,
-           (!pollUntilIdle || activeStepSyncPollsUntilIdle) {
+           activeStepSyncCascadeId == cascadeId {
+            if pollUntilIdle {
+                activeStepSyncPollsUntilIdle = true
+            }
             return
         }
 
@@ -1162,13 +1164,18 @@ extension AntigravitySessionStore {
         }
 
         let clientRef = rpcClient
+        let countsAsForeground = pollUntilIdle || activeRoute == .cascadeChat(cascadeId)
         activeStepSyncCascadeId = cascadeId
         activeStepSyncPollsUntilIdle = pollUntilIdle
-        activeForegroundStepSyncCount += 1
+        if countsAsForeground {
+            activeForegroundStepSyncCount += 1
+        }
         stepPollingTask = Task { [weak self] in
             defer {
                 if let self {
-                    self.activeForegroundStepSyncCount = max(0, self.activeForegroundStepSyncCount - 1)
+                    if countsAsForeground {
+                        self.activeForegroundStepSyncCount = max(0, self.activeForegroundStepSyncCount - 1)
+                    }
                     if self.stepSyncGeneration == generation {
                         if self.activeCascadeId == cascadeId {
                             self.isLoadingSteps = false
@@ -1251,8 +1258,7 @@ extension AntigravitySessionStore {
             }
 
             var attempts = 0
-            let maxAttempts = pollUntilIdle ? 10_000 : 1
-            while !Task.isCancelled && attempts < maxAttempts {
+            while !Task.isCancelled && attempts < 10_000 {
                 guard let self, !self.isNetworkingSuspended, self.isDeviceNetworkReachable else { break }
                 attempts += 1
                 let summaryMeta = self.summaries.first(where: { $0.cascadeId == cascadeId })
@@ -1430,11 +1436,11 @@ extension AntigravitySessionStore {
                             }
                         }
                     }
-                    if !pollUntilIdle { break }
+                    if !self.activeStepSyncPollsUntilIdle { break }
                 }
 
                 guard !Task.isCancelled, !self.isNetworkingSuspended, self.isDeviceNetworkReachable else { break }
-                if !pollUntilIdle {
+                if !self.activeStepSyncPollsUntilIdle {
                     break
                 }
                 let isViewingThisChat = (self.activeRoute == .cascadeChat(cascadeId) && self.activeCascadeId == cascadeId)

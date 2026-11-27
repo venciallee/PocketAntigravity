@@ -2483,10 +2483,10 @@ extension AntigravitySessionStore {
         }
 
         startSummarySubscriptionStream()
-        if hostOnline && !activeCascadeId.isEmpty {
+        if hostOnline && !activeCascadeId.isEmpty && activeRoute == .cascadeChat(activeCascadeId) {
             syncStepsForCascade(
                 activeCascadeId,
-                pollUntilIdle: activeRoute == .cascadeChat(activeCascadeId)
+                pollUntilIdle: true
             )
         }
         if hostOnline {
