@@ -1863,7 +1863,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
     func testCloudStreamAgentStateUpdatesDoesNotAbortOnEmptyZeroStubAndTriesBackendVariant() async throws {
         let instanceUuid = "inst-swift-cloud-stub"
         let cloudCascadeId = "v1/default/jetski_remote_agents_3p_devbox/xcode-signing-swift"
-        let probe = CompatCloudBackendProbeState()
+        let probe = CompatCloudWakeProbeState()
 
         let emptyStubFrame = """
         {"update":{"conversationId":"\(cloudCascadeId)","mainTrajectoryUpdate":{"stepsUpdate":{"totalLength":0}}}}
