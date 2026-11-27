@@ -92,6 +92,8 @@ import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.antigravityColors
 import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.android.ui.chat.ComposerAttachmentsStrip
+import dev.antigravity.android.ui.chat.VoiceLanguageDropdownMenu
+import dev.antigravity.android.ui.chat.VoiceListeningLanguageBar
 import dev.antigravity.android.ui.chat.formatComposerModelPillName
 import dev.antigravity.android.ui.chat.rememberVoiceDictationController
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
@@ -843,6 +845,12 @@ fun AgentsHomeScreen(
                                     "随便问点什么，输入 @ 引用，/ 调用指令",
                                 )
 
+                                VoiceListeningLanguageBar(
+                                    controller = voiceController,
+                                    existingDraft = draftText,
+                                    onDraftUpdated = { draftText = it },
+                                )
+
                                 voiceController.errorMessage?.let { voiceErr ->
                                     Text(
                                         text = voiceErr,
@@ -973,25 +981,50 @@ fun AgentsHomeScreen(
 
                                     Spacer(modifier = Modifier.weight(1f))
 
-                                    IconButton(
-                                        onClick = {
-                                            voiceController.toggleRecording(existingDraft = draftText) { updated ->
-                                                draftText = updated
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .size(34.dp)
-                                            .testTag("btn-voice-mode"),
-                                    ) {
-                                        Icon(
-                                            imageVector = if (voiceController.isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                                            contentDescription = if (voiceController.isRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
-                                            tint = when {
-                                                voiceController.isRecording -> colors.statusError
-                                                voiceController.isStarting -> colors.accentPeriwinkle
-                                                else -> colors.inkLabel
+                                    var homeVoiceMenuExpanded by remember { mutableStateOf(false) }
+                                    Box {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(34.dp)
+                                                .clip(CircleShape)
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        voiceController.toggleRecording(
+                                                            existingDraft = draftText,
+                                                            appLanguage = lang,
+                                                        ) { updated ->
+                                                            draftText = updated
+                                                        }
+                                                    },
+                                                    onLongClick = { homeVoiceMenuExpanded = true },
+                                                )
+                                                .testTag("btn-voice-mode"),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                imageVector = if (voiceController.isRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                                                contentDescription = if (voiceController.isRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
+                                                tint = when {
+                                                    voiceController.isRecording -> colors.statusError
+                                                    voiceController.isStarting -> colors.accentPeriwinkle
+                                                    else -> colors.inkLabel
+                                                },
+                                                modifier = Modifier.size(if (voiceController.isRecording) 17.dp else 20.dp),
+                                            )
+                                        }
+                                        VoiceLanguageDropdownMenu(
+                                            expanded = homeVoiceMenuExpanded,
+                                            selectedLanguage = voiceController.preferredLanguage,
+                                            onDismiss = { homeVoiceMenuExpanded = false },
+                                            onSelect = { chosen ->
+                                                homeVoiceMenuExpanded = false
+                                                voiceController.selectLanguage(
+                                                    language = chosen,
+                                                    appLanguage = lang,
+                                                    existingDraft = draftText,
+                                                    onDraftUpdated = { draftText = it },
+                                                )
                                             },
-                                            modifier = Modifier.size(if (voiceController.isRecording) 17.dp else 20.dp),
                                         )
                                     }
 

@@ -32,6 +32,7 @@ extension AntigravityRPCClient {
         if upper.contains("WORKFLOW") { return .dynamicWorkflow }
         if upper.contains("SWARM") { return .swarmBoard }
         if upper.contains("MCP") { return .mcpToolCall }
+        if upper.contains("ERROR_MESSAGE") { return .errorMessage }
         if upper.contains("CHECKPOINT") { return .checkpoint }
         if upper.contains("EPHEMERAL_MESSAGE") { return .ephemeralMessage }
         if upper.contains("CODE_ACTION")
@@ -45,29 +46,131 @@ extension AntigravityRPCClient {
         return .unspecified
     }
 
-    internal static func extractReadableSummary(from value: JSONValue?) -> String? {
+    internal static func extractReadableSummary(from value: JSONValue?, maxDepth: Int = 3) -> String? {
         guard let value else { return nil }
         if let s = nonEmptyString(value.stringValue) {
-            return s
+            return s.count > 240 ? String(s.prefix(240)) : s
         }
         guard let obj = value.objectValue else { return nil }
         let preferredKeys = [
+            "userErrorMessage", "user_error_message",
+            "shortError", "short_error",
             "proposedCommandLine", "commandLine", "command", "input",
             "absolutePathUri", "fileUri", "targetFileUri", "path", "target",
             "url", "domain", "question", "title", "reason", "description",
-            "message", "action", "toolName", "serverName", "summary", "query"
+            "message", "action", "toolName", "serverName", "summary", "query",
+            "fullError", "full_error"
         ]
         for key in preferredKeys {
             if let s = nonEmptyString(obj[key]?.stringValue) {
-                return s
+                return s.count > 240 ? String(s.prefix(240)) : s
             }
         }
-        for key in obj.keys.sorted() {
+        let ignoredPrimitiveKeys: Set<String> = ["type", "status", "cascadeId", "stepIndex"]
+        for key in obj.keys.sorted() where !ignoredPrimitiveKeys.contains(key) {
             if let s = nonEmptyString(obj[key]?.stringValue) {
-                return s
+                return s.count > 240 ? String(s.prefix(240)) : s
+            }
+        }
+        if maxDepth > 0 {
+            let ignoredNestedKeys: Set<String> = ["metadata", "requestedInteraction"]
+            for key in obj.keys.sorted() where !ignoredNestedKeys.contains(key) {
+                if let nested = obj[key], nested.objectValue != nil,
+                   let found = extractReadableSummary(from: nested, maxDepth: maxDepth - 1) {
+                    return found
+                }
             }
         }
         return nil
+    }
+
+    internal static func extractErrorMessagePayload(from value: JSONValue?) -> ErrorMessagePayload {
+        guard let value else { return ErrorMessagePayload() }
+        if let direct = nonEmptyString(value.stringValue) {
+            return ErrorMessagePayload(message: direct)
+        }
+        guard let errObj = value.objectValue else {
+            return ErrorMessagePayload()
+        }
+        let nestedErr = errObj["error"]?.objectValue
+            ?? errObj["errorDetails"]?.objectValue
+            ?? errObj["error_details"]?.objectValue
+            ?? errObj["details"]?.objectValue
+            ?? errObj["cortexError"]?.objectValue
+            ?? errObj["cortex_error"]?.objectValue
+        let scopes: [[String: JSONValue]] = [nestedErr, errObj].compactMap { $0 }
+
+        func firstString(_ keys: [String]) -> String? {
+            for scope in scopes {
+                for key in keys {
+                    if let s = nonEmptyString(scope[key]?.stringValue) {
+                        return s
+                    }
+                }
+            }
+            return nil
+        }
+
+        func firstErrorCode() -> String? {
+            let codeKeys = [
+                "httpStatusCode", "http_status_code",
+                "errorCode", "error_code",
+                "statusCode", "status_code",
+                "grpcCode", "grpc_code",
+                "code"
+            ]
+            for scope in scopes {
+                for key in codeKeys {
+                    guard let val = scope[key] else { continue }
+                    let raw: String?
+                    if let s = nonEmptyString(val.stringValue) {
+                        raw = s
+                    } else if let n = val.intValue, n != 0 {
+                        raw = String(n)
+                    } else {
+                        raw = nil
+                    }
+                    guard let raw else { continue }
+                    let upper = raw.uppercased()
+                    if raw == "0" || upper == "OK" || upper.hasSuffix("_UNSPECIFIED") { continue }
+                    if key.lowercased().contains("http"), raw.allSatisfy(\.isNumber) {
+                        return "HTTP \(raw)"
+                    }
+                    return raw
+                }
+            }
+            return nil
+        }
+
+        let userMsg = firstString(["userErrorMessage", "user_error_message"])
+        let shortErr = firstString(["shortError", "short_error"])
+        let plainMsg = firstString([
+            "message", "errorMessage", "error_message",
+            "text", "reason", "description", "summary", "error"
+        ])
+        let fullErr = firstString([
+            "fullError", "full_error", "details", "rawError", "raw_error", "stackTrace", "stack_trace"
+        ])
+        let code = firstErrorCode()
+
+        let primary = userMsg
+            ?? shortErr
+            ?? plainMsg
+            ?? fullErr
+            ?? extractReadableSummary(from: value, maxDepth: 3)
+            ?? ""
+
+        let detail: String? = {
+            if let fullErr, fullErr != primary { return fullErr }
+            if let shortErr, shortErr != primary, userMsg != nil { return shortErr }
+            return nil
+        }()
+
+        return ErrorMessagePayload(
+            message: primary,
+            detail: detail,
+            errorCode: code
+        )
     }
 
     internal static func decodePersistSuggestionType(_ value: JSONValue?) -> PersistSuggestionType {
@@ -359,7 +462,7 @@ extension AntigravityRPCClient {
             }
             return .unspecified
         }()
-        let stepStatus: CortexStepStatus = {
+        var stepStatus: CortexStepStatus = {
             if let statusName = obj["status"]?.stringValue, !statusName.isEmpty {
                 return CortexStepStatus.from(jsonName: statusName)
             }
@@ -800,6 +903,23 @@ extension AntigravityRPCClient {
             if stepType == .unspecified { stepType = .mcpToolCall }
         }
 
+        var errorMessagePayload: ErrorMessagePayload?
+        let errVal = obj["errorMessage"] ?? obj["error_message"]
+        if errVal != nil || stepType == .errorMessage {
+            errorMessagePayload = extractErrorMessagePayload(from: errVal)
+            if stepType == .unspecified && errVal != nil {
+                stepType = .errorMessage
+            }
+        }
+        if stepType == .errorMessage {
+            if errorMessagePayload == nil {
+                errorMessagePayload = ErrorMessagePayload()
+            }
+            if stepStatus == .done || stepStatus == .unspecified {
+                stepStatus = .error
+            }
+        }
+
         if (stepType == .plannerResponse || stepType == .notifyUser)
             && plannerPayload == nil
             && (stepStatus == .inProgress || stepStatus == .pending) {
@@ -856,6 +976,7 @@ extension AntigravityRPCClient {
             codeAction: codeActionPayload,
             viewFile: viewFilePayload,
             search: searchPayload,
+            errorMessage: errorMessagePayload,
             requestedInteraction: interaction,
             recordedExecutionMode: recordedMode,
             recordedModelId: recordedModelId,

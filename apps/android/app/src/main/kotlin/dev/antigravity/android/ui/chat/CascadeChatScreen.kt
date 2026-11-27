@@ -1,8 +1,10 @@
 package dev.antigravity.android.ui.chat
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +53,7 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -448,15 +451,15 @@ fun CascadeChatScreen(
                     onRemoveChip = { coordinator.workspaceStore.removeComposerChip(it) },
                     modelLabel = modelDisplayName,
                     permissionLabel = permissionLabel,
-                    isVoiceRecording = voiceController.isRecording,
-                    isVoiceStarting = voiceController.isStarting,
-                    voiceErrorMessage = voiceController.errorMessage,
-                    onDismissVoiceError = { voiceController.clearError() },
+                    voiceController = voiceController,
                     onAddContext = onOpenAddContext,
                     onOpenModelAndMode = onOpenModelAndMode,
                     onOpenPermissionsPreset = onOpenPermissionsPreset,
                     onOpenVoice = {
-                        voiceController.toggleRecording(existingDraft = chatState.draftInputText) { updated ->
+                        voiceController.toggleRecording(
+                            existingDraft = chatState.draftInputText,
+                            appLanguage = lang,
+                        ) { updated ->
                             coordinator.chatStore.setDraftInputText(updated)
                         }
                     },
@@ -779,7 +782,12 @@ private fun CascadeStepItemView(
             )
         }
 
-        // 3. Forward-Compatible Unknown Step Card (non-waiting)
+        // 3. First-Class Error Message Step Card (CORTEX_STEP_TYPE_ERROR_MESSAGE)
+        step.isErrorMessageStep -> {
+            ErrorMessageStepCard(step = step)
+        }
+
+        // 4. Forward-Compatible Unknown Step Card (non-waiting)
         step.isUnrecognizedForwardStep -> {
             UnknownForwardStepCard(step = step)
         }
@@ -1407,6 +1415,149 @@ private fun GenericFallbackInteractionCard(
 }
 
 /**
+ * First-class error card rendered for upstream `CORTEX_STEP_TYPE_ERROR_MESSAGE` steps
+ * (including legacy offline-cached steps decoded before explicit `errorMessage` support).
+ */
+@Composable
+private fun ErrorMessageStepCard(step: CascadeStep) {
+    val colors = LocalAntigravityColors.current
+    var isDetailExpanded by remember(step.id) { mutableStateOf(false) }
+
+    val primaryMessage = remember(step.errorMessage, step.fallbackSummary, step.plannerResponse) {
+        listOf(
+            step.errorMessage?.message,
+            step.fallbackSummary,
+            step.plannerResponse?.response,
+        ).firstNotNullOfOrNull { candidate ->
+            val cleaned = candidate
+                ?.trim()
+                ?.removePrefix("⚠️")
+                ?.trim()
+            cleaned?.takeIf { it.isNotEmpty() }
+        }
+    }
+
+    val detailText = remember(step.errorMessage, primaryMessage) {
+        step.errorMessage?.detail
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != primaryMessage }
+    }
+
+    val badgeLabel = step.errorMessage?.errorCode
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: tr("ERROR", "错误")
+
+    AntigravitySurfaceCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("step-error-${step.stepIndex}"),
+        containerColor = colors.surfaceCard,
+        borderColor = colors.statusError.copy(alpha = 0.35f),
+        cornerRadius = 14.dp,
+        contentPadding = PaddingValues(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Warning,
+                contentDescription = null,
+                tint = colors.statusError,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = tr("Error", "出错了"),
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = colors.statusError,
+                modifier = Modifier.weight(1f),
+            )
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = colors.statusError.copy(alpha = 0.14f),
+            ) {
+                Text(
+                    text = badgeLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                    ),
+                    color = colors.statusError,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (primaryMessage != null) {
+            MarkdownContentView(markdown = primaryMessage)
+        } else {
+            Text(
+                text = tr(
+                    "Antigravity Desktop encountered an error while processing this turn.",
+                    "Antigravity 桌面端在处理本轮请求时遇到错误。",
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.inkSecondary,
+            )
+        }
+
+        if (detailText != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { isDetailExpanded = !isDetailExpanded }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = if (isDetailExpanded) {
+                        tr("Hide details", "收起详情")
+                    } else {
+                        tr("Show details", "查看详情")
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.inkSecondary,
+                )
+                Icon(
+                    imageVector = if (isDetailExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = null,
+                    tint = colors.inkSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            if (isDetailExpanded) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = colors.surfaceSubtleBox,
+                ) {
+                    Text(
+                        text = detailText,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp,
+                        ),
+                        color = colors.inkSecondary,
+                        modifier = Modifier.padding(8.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
  * Forward-compatible card for unrecognized future upstream `CortexStepType` wire values.
  */
 @Composable
@@ -1738,6 +1889,7 @@ private fun VoiceSummaryCard(summary: VoiceCallTranscriptSummary) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatComposerCard(
     draftText: String,
@@ -1746,10 +1898,7 @@ private fun ChatComposerCard(
     onRemoveChip: (String) -> Unit,
     modelLabel: String,
     permissionLabel: String,
-    isVoiceRecording: Boolean = false,
-    isVoiceStarting: Boolean = false,
-    voiceErrorMessage: String? = null,
-    onDismissVoiceError: () -> Unit = {},
+    voiceController: VoiceDictationController,
     onAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
     onOpenPermissionsPreset: () -> Unit,
@@ -1758,6 +1907,10 @@ private fun ChatComposerCard(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val appLanguage = LocalAppLanguage.current
+    val isVoiceRecording = voiceController.isRecording
+    val isVoiceStarting = voiceController.isStarting
+    val voiceErrorMessage = voiceController.errorMessage
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -1779,6 +1932,12 @@ private fun ChatComposerCard(
                 )
             }
 
+            VoiceListeningLanguageBar(
+                controller = voiceController,
+                existingDraft = draftText,
+                onDraftUpdated = onDraftChange,
+            )
+
             if (!voiceErrorMessage.isNullOrBlank()) {
                 Text(
                     text = voiceErrorMessage,
@@ -1787,7 +1946,7 @@ private fun ChatComposerCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 2.dp)
-                        .clickable(onClick = onDismissVoiceError)
+                        .clickable(onClick = { voiceController.clearError() })
                         .testTag("composer-voice-error"),
                 )
             }
@@ -1901,21 +2060,43 @@ private fun ChatComposerCard(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                IconButton(
-                    onClick = onOpenVoice,
-                    modifier = Modifier
-                        .size(34.dp)
-                        .testTag("composer-btn-voice"),
-                ) {
-                    Icon(
-                        imageVector = if (isVoiceRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                        contentDescription = if (isVoiceRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
-                        tint = when {
-                            isVoiceRecording -> colors.statusError
-                            isVoiceStarting -> colors.accentPeriwinkle
-                            else -> colors.inkLabel
+                var chatVoiceMenuExpanded by remember { mutableStateOf(false) }
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .combinedClickable(
+                                onClick = onOpenVoice,
+                                onLongClick = { chatVoiceMenuExpanded = true },
+                            )
+                            .testTag("composer-btn-voice"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (isVoiceRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                            contentDescription = if (isVoiceRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
+                            tint = when {
+                                isVoiceRecording -> colors.statusError
+                                isVoiceStarting -> colors.accentPeriwinkle
+                                else -> colors.inkLabel
+                            },
+                            modifier = Modifier.size(if (isVoiceRecording) 17.dp else 20.dp),
+                        )
+                    }
+                    VoiceLanguageDropdownMenu(
+                        expanded = chatVoiceMenuExpanded,
+                        selectedLanguage = voiceController.preferredLanguage,
+                        onDismiss = { chatVoiceMenuExpanded = false },
+                        onSelect = { chosen ->
+                            chatVoiceMenuExpanded = false
+                            voiceController.selectLanguage(
+                                language = chosen,
+                                appLanguage = appLanguage,
+                                existingDraft = draftText,
+                                onDraftUpdated = onDraftChange,
+                            )
                         },
-                        modifier = Modifier.size(if (isVoiceRecording) 17.dp else 20.dp),
                     )
                 }
 

@@ -1365,6 +1365,7 @@ extension AntigravityRPCClient {
         if current.type == .unspecified && current.rawTypeName != nil {
             if matched.type != .unspecified
                 || matched.plannerResponse != nil
+                || matched.errorMessage != nil
                 || matched.requestedInteraction != nil
                 || (matched.fallbackSummary?.isEmpty == false)
                 || (matched.rawTypeName?.isEmpty == false && matched.rawTypeName != current.rawTypeName) {
@@ -1374,6 +1375,10 @@ extension AntigravityRPCClient {
                 }
                 updated = next
             }
+        } else if current.type == .errorMessage,
+                  (current.errorMessage?.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+                  !(matched.errorMessage?.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+            updated = matched
         }
         if let recoveredInteraction = matched.requestedInteraction,
            !recoveredInteraction.isUnrecognizedWireMember,
@@ -1409,7 +1414,8 @@ extension AntigravityRPCClient {
 
     /// Forward-compatibility repair: if a Binary Protobuf trajectory contains either:
     /// 1. A `WAITING` step whose `RequestedInteraction` used a brand-new wire field number unknown to this build, OR
-    /// 2. An unrecognized future `CortexStepType` (`.unspecified` with a non-nil `rawTypeName`),
+    /// 2. An unrecognized future `CortexStepType` (`.unspecified` with a non-nil `rawTypeName`), OR
+    /// 3. A `CORTEX_STEP_TYPE_ERROR_MESSAGE` step whose binary payload omitted its error message body,
     /// issues targeted JSON `GetCascadeTrajectorySteps(stepOffset:)` probes (reusing any tail slice already
     /// fetched in the same pass and caching repaired steps + learned housekeeping wire types per host).
     internal func repairUnrecognizedWireInteractionsIfNeeded(
@@ -1423,7 +1429,9 @@ extension AntigravityRPCClient {
             let needsInteractionRepair = step.isWaitingForUser
                 && step.requestedInteraction?.isUnrecognizedWireMember == true
             let needsStepTypeRepair = step.type == .unspecified && step.rawTypeName != nil
-            return needsInteractionRepair || needsStepTypeRepair
+            let needsErrorRepair = step.type == .errorMessage
+                && (step.errorMessage?.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            return needsInteractionRepair || needsStepTypeRepair || needsErrorRepair
         }
         guard !targets.isEmpty else { return steps }
 

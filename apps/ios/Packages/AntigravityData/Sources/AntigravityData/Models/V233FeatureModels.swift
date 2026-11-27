@@ -1088,6 +1088,265 @@ public enum AppLanguage: String, ResilientStringEnum, CaseIterable, Identifiable
     }
 }
 
+/// User-selectable speech-to-text dictation language preference (persisted per device).
+///
+/// Defaults to `.auto`, which prioritizes in-app `AppLanguage`, OS `Locale.preferredLanguages`
+/// (ahead of `Locale.current`, which iOS pins to the app bundle's development region `en`),
+/// and active keyboard language when dictating on an English-system device with a Chinese keyboard.
+public enum VoiceDictationLanguage: String, ResilientStringEnum, CaseIterable, Identifiable {
+    case auto = "auto"
+    case zhCN = "zh-CN"
+    case zhTW = "zh-TW"
+    case zhHK = "zh-HK"
+    case enUS = "en-US"
+
+    public var id: String { rawValue }
+    public static var unknownFallback: VoiceDictationLanguage { .auto }
+
+    public var bcp47Tag: String? {
+        switch self {
+        case .auto: return nil
+        case .zhCN: return "zh-CN"
+        case .zhTW: return "zh-TW"
+        case .zhHK: return "zh-HK"
+        case .enUS: return "en-US"
+        }
+    }
+
+    public func localizedTitle(for language: AppLanguage) -> String {
+        switch self {
+        case .auto: return language.t("Auto", "自动")
+        case .zhCN: return "中文 (简体)"
+        case .zhTW: return "中文 (繁體)"
+        case .zhHK: return "粵語 (香港)"
+        case .enUS: return "English"
+        }
+    }
+
+    public func shortBadgeLabel(for language: AppLanguage) -> String {
+        switch self {
+        case .auto: return language.t("Auto", "自动")
+        case .zhCN: return "中文"
+        case .zhTW: return "繁體"
+        case .zhHK: return "粵語"
+        case .enUS: return "EN"
+        }
+    }
+
+    public static func fromTag(_ raw: String?) -> VoiceDictationLanguage {
+        let normalized = (raw ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+        switch normalized {
+        case "zhcn", "zhhans", "zhhanscn", "zh", "chinese":
+            return .zhCN
+        case "zhtw", "zhhant", "zhhanttw":
+            return .zhTW
+        case "zhhk", "zhhanthk", "yue", "yuehk":
+            return .zhHK
+        case "enus", "en", "english":
+            return .enUS
+        default:
+            return .auto
+        }
+    }
+}
+
+/// Pure Swift speech-recognition locale resolver mirroring `shared/core-model/VoiceLocaleResolver.kt`.
+///
+/// Prevents iOS from picking an English `SFSpeechRecognizer` (`Locale.current == "en_CN"`)
+/// on Chinese iPhones when the app bundle does not ship a `.lproj` localization directory.
+public enum VoiceLocaleResolver {
+    public static func normalizeSpeechLocaleTags(_ raw: String) -> [String] {
+        let cleaned = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "-")
+        guard !cleaned.isEmpty else { return [] }
+
+        let parts = cleaned.split(separator: "-").map(String.init).filter { !$0.isEmpty }
+        guard let first = parts.first else { return [] }
+
+        let lang = first.lowercased()
+        let lowerParts = Set(parts.map { $0.lowercased() })
+
+        switch lang {
+        case "zh":
+            if lowerParts.contains("hk") {
+                return ["zh-HK", "zh-TW", "zh-CN"]
+            }
+            if lowerParts.contains("hant") || lowerParts.contains("tw") || lowerParts.contains("mo") {
+                return ["zh-TW", "zh-HK", "zh-CN"]
+            }
+            if lowerParts.contains("sg") {
+                return ["zh-CN", "zh-SG", "zh-Hans-CN"]
+            }
+            if lowerParts.contains("hans") {
+                return ["zh-CN", "zh-Hans-CN", "zh-SG"]
+            }
+            return ["zh-CN", "zh-Hans-CN", "zh-TW", "zh-HK"]
+
+        case "yue":
+            return ["zh-HK", "yue-HK", "zh-TW", "zh-CN"]
+
+        case "en":
+            let region = (parts.count >= 2 && parts.last?.count == 2) ? parts.last?.uppercased() : nil
+            if region == nil || region == "CN" {
+                return ["en-US", "en-GB"]
+            }
+            if region == "US" {
+                return ["en-US"]
+            }
+            return ["en-\(region!)", "en-US"]
+
+        default:
+            let region = (parts.count >= 2 && parts.last?.count == 2) ? parts.last?.uppercased() : nil
+            let canonical = region.map { "\(lang)-\($0)" } ?? lang
+            return [canonical]
+        }
+    }
+
+    public static func buildCandidateLocaleTags(
+        preference: VoiceDictationLanguage,
+        appLanguage: AppLanguage,
+        systemPreferredLanguages: [String],
+        activeKeyboardLanguage: String? = nil,
+        fallbackLocaleTag: String? = nil
+    ) -> [String] {
+        var result: [String] = []
+        var seen = Set<String>()
+
+        func appendNormalized(_ raw: String?) {
+            guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            for tag in normalizeSpeechLocaleTags(raw) where seen.insert(tag).inserted {
+                result.append(tag)
+            }
+        }
+
+        // 1. Explicit user dictation language override always wins.
+        if preference != .auto, let tag = preference.bcp47Tag {
+            appendNormalized(tag)
+        } else {
+            let primarySystem = systemPreferredLanguages.first {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            let primarySystemLang = primaryLanguageCode(primarySystem)
+            let keyboardLang = primaryLanguageCode(activeKeyboardLanguage)
+
+            // 2. If user switched in-app language to Chinese, prefer their Chinese variant (or zh-CN).
+            if appLanguage == .zhHans {
+                if primarySystemLang == "zh" || primarySystemLang == "yue" {
+                    appendNormalized(primarySystem)
+                }
+                appendNormalized("zh-CN")
+            }
+
+            // 3. On an English-system device, if the user currently has a non-English keyboard open
+            //    (e.g. Chinese Pinyin keyboard), honor the active keyboard language first.
+            if primarySystemLang == "en", let keyboardLang, keyboardLang != "en" {
+                appendNormalized(activeKeyboardLanguage)
+            }
+
+            // 4. OS preferred languages (MUST come before Locale.current, which iOS pins to bundle dev region).
+            for sysLang in systemPreferredLanguages {
+                appendNormalized(sysLang)
+            }
+
+            // 5. Active keyboard as fallback if not already added.
+            appendNormalized(activeKeyboardLanguage)
+        }
+
+        // 6. Fallback locale & ultimate en-US safety net.
+        appendNormalized(fallbackLocaleTag)
+        if seen.insert("en-US").inserted {
+            result.append("en-US")
+        }
+        return result
+    }
+
+    public static func resolveBestLocaleTag(
+        candidates: [String],
+        supportedLocaleTags: Set<String>
+    ) -> String? {
+        guard let firstCandidate = candidates.first else { return nil }
+        guard !supportedLocaleTags.isEmpty else { return firstCandidate }
+
+        var normalizedToOriginal: [String: String] = [:]
+        var orderedEntries: [(norm: String, original: String)] = []
+        for supported in supportedLocaleTags.sorted() {
+            let norm = supported
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "_", with: "-")
+                .lowercased()
+            if !norm.isEmpty && normalizedToOriginal[norm] == nil {
+                normalizedToOriginal[norm] = supported
+                orderedEntries.append((norm: norm, original: supported))
+            }
+        }
+
+        // Match each candidate in priority order:
+        // 1. Exact normalized BCP-47 match immediately wins.
+        // 2. Once all explicit regional variants for a language have been checked without an exact match,
+        //    match any supported locale sharing that primary language (e.g. `ja-US` -> `ja-JP`)
+        //    before falling through to lower-priority languages such as the `en-US` safety net.
+        for (index, candidate) in candidates.enumerated() {
+            let norm = candidate
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "_", with: "-")
+                .lowercased()
+            if let exact = normalizedToOriginal[norm] {
+                return exact
+            }
+            guard let targetLang = primaryLanguageCode(candidate) else { continue }
+            let hasLaterSameLanguage = candidates.dropFirst(index + 1).contains { later in
+                primaryLanguageCode(later) == targetLang
+            }
+            if !hasLaterSameLanguage,
+               let matched = orderedEntries.first(where: { primaryLanguageCode($0.norm) == targetLang })?.original {
+                return matched
+            }
+        }
+
+        return nil
+    }
+
+    public static func shortDisplayLabel(forLocaleTag localeTag: String?) -> String {
+        let cleaned = (localeTag ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "-")
+        guard !cleaned.isEmpty else { return "Auto" }
+        let lower = cleaned.lowercased()
+        guard let lang = primaryLanguageCode(lower) else { return cleaned.uppercased() }
+        switch lang {
+        case "zh":
+            if lower.contains("-hk") { return "粵語" }
+            if lower.contains("-tw") || lower.contains("-hant") || lower.contains("-mo") { return "繁體" }
+            return "中文"
+        case "yue":
+            return "粵語"
+        case "en":
+            return "EN"
+        case "ja":
+            return "日本語"
+        case "ko":
+            return "한국어"
+        default:
+            return lang.uppercased()
+        }
+    }
+
+    private static func primaryLanguageCode(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let cleaned = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "-")
+        guard !cleaned.isEmpty else { return nil }
+        let code = cleaned.split(separator: "-").first.map { String($0).lowercased() }
+        return (code?.isEmpty == false) ? code : nil
+    }
+}
+
 public struct AppAppearancePreferences: Codable, Sendable, Equatable {
     public var interfaceLayout: InterfaceLayoutMode
     public var appearanceMode: AppAppearanceMode

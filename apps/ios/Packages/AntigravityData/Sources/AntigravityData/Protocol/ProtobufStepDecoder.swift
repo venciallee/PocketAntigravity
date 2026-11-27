@@ -182,6 +182,7 @@ public enum ProtobufStepCodec {
         var codeActionPayload: CodeActionPayload?
         var viewFilePayload: ViewFilePayload?
         var searchPayload: SearchPayload?
+        var errorMessagePayload: ErrorMessagePayload?
         var requestedInteraction: RequestedInteraction?
         var subagentPayload: SubagentPayload?
         var dynamicWorkflowPayload: DynamicWorkflowPayload?
@@ -286,13 +287,9 @@ public enum ProtobufStepCodec {
                 }
             case (24, 2): // CortexStepErrorMessage
                 if let nested = readLengthDelimited(from: data, offset: &offset) {
-                    let errMsg = nonEmpty(extractStringField(nested, targetField: 1))
-                        ?? nonEmpty(extractNestedStringField(nested, outerField: 1, innerField: 1))
-                    if let errMsg {
-                        plannerPayload = PlannerResponsePayload(response: "⚠️ \(errMsg)")
-                        stepType = .plannerResponse
-                        stepStatus = .error
-                    }
+                    errorMessagePayload = decodeErrorMessage(nested)
+                    stepType = .errorMessage
+                    stepStatus = .error
                 }
             case (28, 2): // CortexStepRunCommand
                 if let nested = readLengthDelimited(from: data, offset: &offset) {
@@ -426,7 +423,7 @@ public enum ProtobufStepCodec {
         }
 
         // Legacy mock_language_server compatibility: rawType 17 with no error payload stays .generateImage
-        if rawType == 17 && plannerPayload == nil {
+        if rawType == 17 && errorMessagePayload == nil && plannerPayload == nil {
             stepType = .generateImage
         }
         if (stepType == .plannerResponse || stepType == .notifyUser)
@@ -456,6 +453,7 @@ public enum ProtobufStepCodec {
             codeAction: codeActionPayload,
             viewFile: viewFilePayload,
             search: searchPayload,
+            errorMessage: errorMessagePayload,
             requestedInteraction: requestedInteraction,
             recordedExecutionMode: recordedMode,
             recordedModelId: recordedModelId,
@@ -876,14 +874,77 @@ public enum ProtobufStepCodec {
         return value
     }
 
+    private static func decodeErrorMessage(_ data: Data) -> ErrorMessagePayload {
+        if let field1 = extractMessageField(data, targetField: 1), !field1.isEmpty {
+            let nestedStrings = extractOrderedReadableStrings(field1)
+            if let primary = nestedStrings.first {
+                let detail = nestedStrings.dropFirst().first { $0 != primary }
+                return ErrorMessagePayload(message: primary, detail: detail)
+            }
+            if let direct = nonEmpty(String(data: field1, encoding: .utf8)),
+               isHumanReadableText(direct) {
+                return ErrorMessagePayload(message: direct)
+            }
+        }
+        let topStrings = extractOrderedReadableStrings(data)
+        if let primary = topStrings.first {
+            let detail = topStrings.dropFirst().first { $0 != primary }
+            return ErrorMessagePayload(message: primary, detail: detail)
+        }
+        return ErrorMessagePayload(message: extractReadableSummaryFromUnknownSubmessage(data) ?? "")
+    }
+
+    /// Parses `data` strictly as a protobuf submessage and returns ordered human-readable strings
+    /// from length-delimited fields (`1...12`). Returns `[]` if `data` is not valid protobuf wire data.
+    private static func extractOrderedReadableStrings(_ data: Data) -> [String] {
+        guard !data.isEmpty, data.count <= 65_536 else { return [] }
+        var offset = 0
+        var found: [(Int, String)] = []
+        while offset < data.count {
+            guard let tag = readVarint(from: data, offset: &offset) else { return [] }
+            let fieldNumber = Int(tag >> 3)
+            let wireType = Int(tag & 0x07)
+            guard fieldNumber > 0 && fieldNumber <= 536_870_911 else { return [] }
+            switch wireType {
+            case 0:
+                guard readVarint(from: data, offset: &offset) != nil else { return [] }
+            case 1:
+                guard offset + 8 <= data.count else { return [] }
+                offset += 8
+            case 2:
+                guard let bytes = readLengthDelimited(from: data, offset: &offset) else { return [] }
+                if (1...12).contains(fieldNumber), !bytes.isEmpty,
+                   let candidate = nonEmpty(String(data: bytes, encoding: .utf8)),
+                   isHumanReadableText(candidate) {
+                    found.append((fieldNumber, candidate))
+                }
+            case 5:
+                guard offset + 4 <= data.count else { return [] }
+                offset += 4
+            default:
+                return []
+            }
+        }
+        var seen: Set<String> = []
+        return found
+            .sorted { $0.0 < $1.0 }
+            .map(\.1)
+            .filter { seen.insert($0).inserted }
+    }
+
     /// Safely extracts the first short printable UTF-8 string from an unknown Protobuf submessage
-    /// (fields 1..8) so future Desktop step/interaction types display meaningful context instead of vanishing.
-    private static func extractReadableSummaryFromUnknownSubmessage(_ data: Data) -> String? {
+    /// (fields 1..8, plus 1 nested submessage level) so future Desktop step/interaction types display
+    /// meaningful context instead of vanishing.
+    private static func extractReadableSummaryFromUnknownSubmessage(_ data: Data, depth: Int = 1) -> String? {
         guard !data.isEmpty, data.count <= 65_536 else { return nil }
         for field in 1...8 {
-            if let candidate = nonEmpty(extractStringField(data, targetField: field)),
+            guard let bytes = extractMessageField(data, targetField: field) else { continue }
+            if let candidate = nonEmpty(String(data: bytes, encoding: .utf8)),
                isHumanReadableText(candidate) {
                 return candidate.count > 240 ? String(candidate.prefix(240)) : candidate
+            }
+            if depth > 0, let nested = extractReadableSummaryFromUnknownSubmessage(bytes, depth: depth - 1) {
+                return nested
             }
         }
         if let direct = nonEmpty(String(data: data, encoding: .utf8)),
