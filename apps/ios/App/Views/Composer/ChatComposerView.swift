@@ -84,6 +84,33 @@ public struct ChatComposerView: View {
 
     private var lang: AppLanguage { store.appearancePreferences.language }
 
+    private var voiceContextHint: String? {
+        var parts: [String] = []
+        let trimmedDraft = draftMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedDraft.isEmpty {
+            parts.append(trimmedDraft)
+        }
+        if !isHomeComposer {
+            let recentUserInputs = store.activeSteps
+                .compactMap { $0.userInput?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .suffix(2)
+            parts.append(contentsOf: recentUserInputs)
+            if let title = store.activeSummary?.title.trimmingCharacters(in: .whitespacesAndNewlines),
+               !title.isEmpty, title != "New Conversation" {
+                parts.append(title)
+            }
+        } else {
+            let recentTitles = store.summaries
+                .prefix(3)
+                .map { $0.title.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0 != "New Conversation" }
+            parts.append(contentsOf: recentTitles)
+        }
+        let joined = parts.joined(separator: " ")
+        return joined.isEmpty ? nil : joined
+    }
+
     private var activeMentionQuery: String? {
         guard let lastToken = draftMessageText.split(whereSeparator: \.isWhitespace).last,
               lastToken.hasPrefix("@"),
@@ -439,7 +466,7 @@ public struct ChatComposerView: View {
                     }
                 }
 
-                if voiceManager.isRecording || voiceManager.isStarting {
+                if voiceManager.isRecording || voiceManager.isStarting || voiceManager.isRefining {
                     HStack(spacing: 8) {
                         Circle()
                             .fill(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle)
@@ -447,7 +474,9 @@ public struct ChatComposerView: View {
                         Text(
                             voiceManager.isRecording
                                 ? lang.t("Listening", "正在聆听")
-                                : lang.t("Starting microphone...", "正在启动麦克风...")
+                                : (voiceManager.isRefining
+                                    ? lang.t("Refining...", "自动校准中...")
+                                    : lang.t("Starting microphone...", "正在启动麦克风..."))
                         )
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(AntigravityTheme.inkSecondary)
@@ -461,7 +490,8 @@ public struct ChatComposerView: View {
                                     dictationDraftPrefix = prefix
                                     voiceManager.selectLanguage(
                                         option,
-                                        appLanguage: lang
+                                        appLanguage: lang,
+                                        contextTextHint: voiceContextHint
                                     ) { transcript in
                                         draftMessageText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
                                     }
@@ -477,7 +507,7 @@ public struct ChatComposerView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "globe")
                                     .font(.system(size: 11, weight: .medium))
-                                Text(voiceManager.activeLanguageBadgeLabel(for: lang))
+                                Text(voiceManager.activeLanguageBadgeLabel(for: lang, contextTextHint: voiceContextHint))
                                     .font(.system(size: 11.5, weight: .semibold))
                                 Image(systemName: "chevron.down")
                                     .font(.system(size: 8.5, weight: .semibold))
@@ -839,13 +869,16 @@ public struct ChatComposerView: View {
             .accessibilityLabel(lang.t("Permissions \(resolvedPermissionPreset.localizedTitle(for: lang))", "权限 \(resolvedPermissionPreset.localizedTitle(for: lang))"))
             .accessibilityIdentifier("composer-pill-permissions")
 
-            // 4. Speech-to-Text Dictation Button (`mic`, long-press to switch language)
+            // 4. Speech-to-Text Dictation Button (`mic`, long-press to override language)
             Button {
-                if !voiceManager.isRecording && !voiceManager.isStarting {
+                if !voiceManager.isRecording && !voiceManager.isStarting && !voiceManager.isRefining {
                     dictationDraftPrefix = draftMessageText
                 }
                 let prefix = dictationDraftPrefix
-                voiceManager.toggleRecording(appLanguage: lang) { transcript in
+                voiceManager.toggleRecording(
+                    appLanguage: lang,
+                    contextTextHint: voiceContextHint
+                ) { transcript in
                     draftMessageText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
                 }
             } label: {
@@ -854,7 +887,7 @@ public struct ChatComposerView: View {
                     .foregroundStyle(
                         voiceManager.isRecording
                             ? AntigravityTheme.statusError
-                            : (voiceManager.isStarting ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkReading)
+                            : ((voiceManager.isStarting || voiceManager.isRefining) ? AntigravityTheme.accentPeriwinkle : AntigravityTheme.inkReading)
                     )
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 30, height: AntigravityTheme.minTouchTargetPt)
@@ -869,7 +902,8 @@ public struct ChatComposerView: View {
                             dictationDraftPrefix = prefix
                             voiceManager.selectLanguage(
                                 option,
-                                appLanguage: lang
+                                appLanguage: lang,
+                                contextTextHint: voiceContextHint
                             ) { transcript in
                                 draftMessageText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
                             }

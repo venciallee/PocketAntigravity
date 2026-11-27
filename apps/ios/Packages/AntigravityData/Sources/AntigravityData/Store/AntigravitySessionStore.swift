@@ -533,6 +533,8 @@ public final class AntigravitySessionStore {
     public var kmpEngine: (any AntigravityKmpEnginePort)?
     public var isUsingKmpEngine: Bool { kmpEngine != nil }
     internal var kmpSummaryStreamTask: Task<Void, Never>? = nil
+    internal var kmpLiveChatStreamTask: Task<Void, Never>? = nil
+    internal var liveStepPersistDebounceTasks: [String: Task<Void, Never>] = [:]
     internal var rpcClient: AntigravityRPCClient?
     internal var isOptimisticInitialPairing: Bool = false
     internal var localSummaryStreamTasks: [String: Task<Void, Never>] = [:]
@@ -564,6 +566,7 @@ public final class AntigravitySessionStore {
     @ObservationIgnored internal var activeForegroundStepSyncCount: Int = 0
     @ObservationIgnored internal var inFlightPreloadTasksByCascadeId: [String: Task<[CascadeStep], Never>] = [:]
     @ObservationIgnored internal var syncedStepsMarkerByCascadeId: [String: (stepCount: Int, updatedAt: Date)] = [:]
+    @ObservationIgnored internal var kmpDeltaOffsetIgnoredHosts: Set<String> = []
     internal var lastNetworkStatus: NetworkReachabilityStatus? = nil
     internal var isNetworkExpensiveOrConstrained: Bool = false
     internal var lastBackendActivityAt: Date = .distantPast
@@ -590,6 +593,13 @@ public final class AntigravitySessionStore {
         summaryStreamGeneration &+= 1
         kmpSummaryStreamTask?.cancel()
         kmpSummaryStreamTask = nil
+        kmpLiveChatStreamTask?.cancel()
+        kmpLiveChatStreamTask = nil
+        kmpEngine?.stopLiveChatStream()
+        for task in liveStepPersistDebounceTasks.values {
+            task.cancel()
+        }
+        liveStepPersistDebounceTasks.removeAll()
         for task in localSummaryStreamTasks.values {
             task.cancel()
         }
@@ -600,8 +610,152 @@ public final class AntigravitySessionStore {
         hasReceivedCloudStreamEvent = false
     }
 
+    public func stopLiveChatStream() {
+        kmpEngine?.stopLiveChatStream()
+    }
+
+    internal func startKmpLiveChatSubscriptionIfNeeded() {
+        guard let engine = kmpEngine, !isVerificationMode, !isNetworkingSuspended else { return }
+        if kmpLiveChatStreamTask != nil { return }
+        let generation = summaryStreamGeneration
+        let stream = engine.liveChatUpdatesStream()
+        kmpLiveChatStreamTask = Task { [weak self] in
+            for await update in stream {
+                guard let self, !Task.isCancelled, self.summaryStreamGeneration == generation else { break }
+                self.applyKmpLiveChatUpdate(update)
+            }
+        }
+    }
+
+    internal func applyKmpLiveChatUpdate(_ update: KmpLiveChatUpdate) {
+        let cid = update.cascadeId
+        guard !cid.isEmpty else { return }
+        self.lastBackendActivityAt = Date()
+
+        let incomingSteps = update.steps
+        if !incomingSteps.isEmpty {
+            self.locallyCreatedEmptyCascadeIds.remove(cid)
+            let existing = self.stepsByCascadeId[cid] ?? []
+            let mergedSteps: [CascadeStep]
+            if !existing.isEmpty,
+               let firstIncomingIdx = incomingSteps.first?.stepIndex,
+               firstIncomingIdx > 0,
+               existing.count > incomingSteps.count {
+                // Preserve earlier cached prefix when receiving a tail-first fast-paint slice
+                var byIdx = Dictionary(uniqueKeysWithValues: existing.map { ($0.stepIndex, $0) })
+                for step in incomingSteps {
+                    byIdx[step.stepIndex] = step
+                }
+                mergedSteps = byIdx.values.sorted { $0.stepIndex < $1.stepIndex }
+            } else {
+                mergedSteps = incomingSteps
+            }
+
+            if existing != mergedSteps {
+                self.stepsByCascadeId[cid] = mergedSteps
+                self.harvestEmbedResources(from: mergedSteps)
+                scheduleDebouncedStepsPersist(mergedSteps, for: cid, immediate: update.isSnapshotComplete)
+            }
+            if self.activeCascadeId == cid {
+                let isTailFirstPartialSlice = !update.isSnapshotComplete
+                    && (mergedSteps.first?.stepIndex ?? 0) > 0
+                if !isTailFirstPartialSlice {
+                    self.isLoadingSteps = false
+                }
+                self.stepLoadErrorText = nil
+            }
+        }
+
+        let currentSteps = self.stepsByCascadeId[cid] ?? incomingSteps
+        if let sumIdx = self.summaries.firstIndex(where: { $0.cascadeId == cid }) {
+            let withinOptimistic = (self.optimisticActiveUntilByCascadeId[cid].map { $0 > Date() } ?? false)
+            var summaryDidMutate = false
+            let nextStepCount = max(self.summaries[sumIdx].stepCount, max(update.totalLength ?? 0, currentSteps.count))
+            if nextStepCount != self.summaries[sumIdx].stepCount {
+                self.summaries[sumIdx].stepCount = nextStepCount
+                self.summaries[sumIdx].currentStepIndex = max(1, nextStepCount)
+                self.summaries[sumIdx].totalSteps = max(self.summaries[sumIdx].totalSteps, nextStepCount)
+                summaryDidMutate = true
+            }
+            if self.summaries[sumIdx].needsTitleHydration,
+               let derivedTitle = CascadeSummaryTitleResolver.deriveTitle(from: currentSteps) {
+                self.summaries[sumIdx].title = derivedTitle
+                self.summaries[sumIdx].hasResolvedTitle = true
+                self.hydratingCascadeIds.remove(cid)
+                self.settledEmptyTitleCascadeIds.remove(cid)
+                summaryDidMutate = true
+            }
+
+            let parsedRunStatus: CortexStepStatus? = {
+                guard let raw = update.runStatus?.uppercased(), !raw.isEmpty else { return nil }
+                if raw.contains("WAITING") || raw.contains("BLOCKED") { return .waiting }
+                if raw.contains("RUNNING") || raw.contains("IN_PROGRESS") || raw.contains("PENDING") { return .inProgress }
+                if raw.contains("ERROR") || raw.contains("FAIL") { return .error }
+                if raw.contains("CANCEL") { return .cancelled }
+                if raw.contains("IDLE") || raw.contains("DONE") || raw.contains("COMPLETED") { return .done }
+                return nil
+            }()
+
+            let reconciled = Self.reconcileSummaryStreamingStatus(
+                currentStatus: parsedRunStatus ?? self.summaries[sumIdx].status,
+                remoteSteps: currentSteps,
+                withinOptimisticSendWindow: withinOptimistic
+            )
+            if self.summaries[sumIdx].status != reconciled.status {
+                self.summaries[sumIdx].status = reconciled.status
+                summaryDidMutate = true
+            }
+            if !reconciled.stillActive {
+                self.optimisticActiveUntilByCascadeId.removeValue(forKey: cid)
+            }
+            let nextSubtitle = AntigravityRPCClient.buildLiveStatusSubtitle(
+                status: self.summaries[sumIdx].status,
+                stepCount: self.summaries[sumIdx].stepCount,
+                isUnread: self.summaries[sumIdx].isUnread
+            )
+            if self.summaries[sumIdx].statusSubtitle != nextSubtitle {
+                self.summaries[sumIdx].statusSubtitle = nextSubtitle
+                summaryDidMutate = true
+            }
+            if update.isSnapshotComplete {
+                self.syncedStepsMarkerByCascadeId[cid] = (
+                    stepCount: self.summaries[sumIdx].stepCount,
+                    updatedAt: self.summaries[sumIdx].updatedAt
+                )
+            }
+            let belongsToActiveHost = !self.summaries[sumIdx].isCloud && (
+                self.summaries[sumIdx].originInstanceUuid == nil
+                    || self.summaries[sumIdx].originInstanceUuid?.isEmpty == true
+                    || self.summaries[sumIdx].originInstanceUuid == self.activeHost.instanceId
+            )
+            if belongsToActiveHost {
+                self.connectionLifecyclePhase = reconciled.stillActive ? .onlineStreaming : .onlineIdle
+            }
+            if summaryDidMutate {
+                self.scheduleDebouncedHostProjectionPersist(for: self.summaries[sumIdx])
+            }
+        }
+    }
+
+    private func scheduleDebouncedStepsPersist(_ steps: [CascadeStep], for cascadeId: String, immediate: Bool) {
+        guard !isVerificationMode, !steps.isEmpty else { return }
+        liveStepPersistDebounceTasks[cascadeId]?.cancel()
+        let storeRef = projectionStore
+        liveStepPersistDebounceTasks[cascadeId] = Task { [weak self] in
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            await storeRef.saveProjectedSteps(steps, for: cascadeId)
+            await MainActor.run {
+                self?.liveStepPersistDebounceTasks.removeValue(forKey: cascadeId)
+            }
+        }
+    }
+
     internal func startKmpSummarySubscriptionIfNeeded() {
         guard let engine = kmpEngine, !isVerificationMode, !isNetworkingSuspended else { return }
+        startKmpLiveChatSubscriptionIfNeeded()
         kmpSummaryStreamTask?.cancel()
         let generation = summaryStreamGeneration
         let stream = engine.summaryUpdatesStream()

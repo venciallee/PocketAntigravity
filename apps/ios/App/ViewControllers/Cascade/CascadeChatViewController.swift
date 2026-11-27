@@ -442,6 +442,10 @@ public struct CascadeChatViewController: View {
             olderMessagesLoadTask?.cancel()
             olderMessagesLoadTask = nil
             isLoadingOlderMessages = false
+            if case .cascadeChat = store.activeRoute {
+                return
+            }
+            store.stopLiveChatStream()
         }
     }
 

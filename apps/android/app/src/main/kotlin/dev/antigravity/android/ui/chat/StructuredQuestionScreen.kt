@@ -195,9 +195,15 @@ fun StructuredQuestionScreen(
                                     )
                                     freeformReply = ""
                                 } else {
+                                    val contextHint = listOf(freeformReply, activeQuestion.questionTitle)
+                                        .map { it.trim() }
+                                        .filter { it.isNotEmpty() }
+                                        .joinToString(" ")
+                                        .ifBlank { null }
                                     voiceController.toggleRecording(
                                         existingDraft = freeformReply,
                                         appLanguage = lang,
+                                        contextTextHint = contextHint,
                                     ) { updated ->
                                         freeformReply = updated
                                     }

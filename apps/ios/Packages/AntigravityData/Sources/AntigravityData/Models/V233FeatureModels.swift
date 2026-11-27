@@ -1154,10 +1154,35 @@ public enum VoiceDictationLanguage: String, ResilientStringEnum, CaseIterable, I
     }
 }
 
-/// Pure Swift speech-recognition locale resolver mirroring `shared/core-model/VoiceLocaleResolver.kt`.
+/// Candidate speech transcription output evaluated during automatic bilingual language detection.
+///
+/// Mirrors `shared/core-model/VoiceTranscriptCandidate` so iOS and Android share identical
+/// auto-fallback thresholds and confidence/script coherence scoring.
+public struct VoiceTranscriptCandidate: Sendable, Equatable {
+    public let localeTag: String
+    public let text: String
+    public let averageConfidence: Double
+    public let hasPopulatedConfidence: Bool
+
+    public init(
+        localeTag: String,
+        text: String,
+        averageConfidence: Double = 0.0,
+        hasPopulatedConfidence: Bool = false
+    ) {
+        self.localeTag = localeTag
+        self.text = text
+        self.averageConfidence = averageConfidence
+        self.hasPopulatedConfidence = hasPopulatedConfidence
+    }
+}
+
+/// Pure Swift speech-recognition locale resolver & auto-detection evaluator mirroring
+/// `shared/core-model/VoiceLocaleResolver.kt`.
 ///
 /// Prevents iOS from picking an English `SFSpeechRecognizer` (`Locale.current == "en_CN"`)
-/// on Chinese iPhones when the app bundle does not ship a `.lproj` localization directory.
+/// on Chinese iPhones when the app bundle does not ship a `.lproj` localization directory,
+/// and supports automatic bilingual Chinese <-> English detection without manual language switching.
 public enum VoiceLocaleResolver {
     public static func normalizeSpeechLocaleTags(_ raw: String) -> [String] {
         let cleaned = raw
@@ -1207,11 +1232,43 @@ public enum VoiceLocaleResolver {
         }
     }
 
+    public static func inferLocaleTag(fromText text: String?) -> String? {
+        let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        var cjkIdeographs = 0
+        var japaneseKana = 0
+        var koreanHangul = 0
+        var latinLetters = 0
+
+        for scalar in trimmed.unicodeScalars {
+            let v = scalar.value
+            if (0x3040...0x30FF).contains(v) {
+                japaneseKana += 1
+            } else if (0xAC00...0xD7AF).contains(v) || (0x1100...0x11FF).contains(v) {
+                koreanHangul += 1
+            } else if (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v) || (0xF900...0xFAFF).contains(v) {
+                cjkIdeographs += 1
+            } else if (0x41...0x5A).contains(v) || (0x61...0x7A).contains(v) {
+                latinLetters += 1
+            }
+        }
+
+        if japaneseKana >= 2 { return "ja-JP" }
+        if koreanHangul >= 2 { return "ko-KR" }
+        if cjkIdeographs >= 2 || (cjkIdeographs >= 1 && latinLetters <= 8) { return "zh-CN" }
+        if latinLetters >= 12 && cjkIdeographs == 0 && japaneseKana == 0 && koreanHangul == 0 { return "en-US" }
+        return nil
+    }
+
     public static func buildCandidateLocaleTags(
         preference: VoiceDictationLanguage,
         appLanguage: AppLanguage,
         systemPreferredLanguages: [String],
         activeKeyboardLanguage: String? = nil,
+        installedKeyboardLanguages: [String] = [],
+        contextTextHint: String? = nil,
+        lastDetectedLocaleTag: String? = nil,
         fallbackLocaleTag: String? = nil
     ) -> [String] {
         var result: [String] = []
@@ -1233,36 +1290,233 @@ public enum VoiceLocaleResolver {
             }
             let primarySystemLang = primaryLanguageCode(primarySystem)
             let keyboardLang = primaryLanguageCode(activeKeyboardLanguage)
+            let contextLocale = inferLocaleTag(fromText: contextTextHint)
+            let contextLang = primaryLanguageCode(contextLocale)
+            let lastDetectedLang = primaryLanguageCode(lastDetectedLocaleTag)
 
-            // 2. If user switched in-app language to Chinese, prefer their Chinese variant (or zh-CN).
-            if appLanguage == .zhHans {
-                if primarySystemLang == "zh" || primarySystemLang == "yue" {
-                    appendNormalized(primarySystem)
-                }
-                appendNormalized("zh-CN")
+            var chineseSearchPool: [String] = []
+            if let activeKeyboardLanguage, !activeKeyboardLanguage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                chineseSearchPool.append(activeKeyboardLanguage)
+            }
+            chineseSearchPool.append(contentsOf: systemPreferredLanguages)
+            chineseSearchPool.append(contentsOf: installedKeyboardLanguages)
+            let preferredChineseSource = chineseSearchPool.first { tag in
+                let lang = primaryLanguageCode(tag)
+                return lang == "zh" || lang == "yue"
             }
 
-            // 3. On an English-system device, if the user currently has a non-English keyboard open
+            let hasChineseSignal = appLanguage == .zhHans
+                || keyboardLang == "zh"
+                || keyboardLang == "yue"
+                || preferredChineseSource != nil
+                || contextLang == "zh"
+                || lastDetectedLang == "zh"
+                || lastDetectedLang == "yue"
+
+            // 2. Active conversation/draft text containing Chinese immediately prioritizes the
+            //    user's preferred Chinese variant.
+            if contextLang == "zh" {
+                appendNormalized(preferredChineseSource ?? "zh-CN")
+            }
+
+            // 3. Pure-English conversation context combined with recent English voice detection
+            //    keeps English primary (with Chinese right behind for auto-fallback).
+            if contextLang == "en" && lastDetectedLang == "en" {
+                appendNormalized(lastDetectedLocaleTag)
+                appendNormalized("en-US")
+            }
+
+            // 4. If user switched in-app language to Chinese, prefer their Chinese variant (or zh-CN).
+            if appLanguage == .zhHans {
+                appendNormalized(preferredChineseSource ?? "zh-CN")
+            }
+
+            // 5. On an English-system device, if the user currently has a non-English keyboard open
             //    (e.g. Chinese Pinyin keyboard), honor the active keyboard language first.
             if primarySystemLang == "en", let keyboardLang, keyboardLang != "en" {
                 appendNormalized(activeKeyboardLanguage)
             }
 
-            // 4. OS preferred languages (MUST come before Locale.current, which iOS pins to bundle dev region).
+            // 6. Bilingual English-OS user with Chinese OS secondary language or installed Chinese
+            //    keyboard: start with Chinese unless their very last auto-detected turn was English.
+            if primarySystemLang == "en" && hasChineseSignal && lastDetectedLang != "en" {
+                appendNormalized(preferredChineseSource ?? "zh-CN")
+            }
+
+            // 7. Remembered auto-detected locale from the previous turn (when not overridden above).
+            appendNormalized(lastDetectedLocaleTag)
+
+            // 8. OS preferred languages (MUST come before Locale.current, which iOS pins to bundle dev region).
             for sysLang in systemPreferredLanguages {
                 appendNormalized(sysLang)
             }
 
-            // 5. Active keyboard as fallback if not already added.
+            // 9. Active & installed keyboards as additional bilingual signals.
             appendNormalized(activeKeyboardLanguage)
+            for kbLang in installedKeyboardLanguages {
+                appendNormalized(kbLang)
+            }
+
+            // 10. Context locale hint (e.g. ja-JP / ko-KR / en-US).
+            appendNormalized(contextLocale)
         }
 
-        // 6. Fallback locale & ultimate en-US safety net.
+        // 11. Fallback locale & ultimate en-US safety net.
         appendNormalized(fallbackLocaleTag)
         if seen.insert("en-US").inserted {
             result.append("en-US")
         }
         return result
+    }
+
+    public static func buildAutoDetectionAllowedLocales(
+        candidates: [String],
+        includeBilingualFallback: Bool = false,
+        maxCount: Int = 4
+    ) -> [String] {
+        guard maxCount > 0 else { return [] }
+        var selected: [String] = []
+        var seenPrimary = Set<String>()
+
+        for candidate in candidates {
+            if selected.count >= maxCount { break }
+            guard let normalized = normalizeSpeechLocaleTags(candidate).first,
+                  let primary = primaryLanguageCode(normalized) else {
+                continue
+            }
+            let bucket = (primary == "yue") ? "zh" : primary
+            if seenPrimary.insert(bucket).inserted {
+                selected.append(normalized)
+            }
+        }
+
+        if includeBilingualFallback && selected.count == 1 && maxCount >= 2 {
+            let primary = primaryLanguageCode(selected[0])
+            if primary == "en" {
+                selected.append("zh-CN")
+            } else if primary == "zh" || primary == "yue" {
+                selected.append("en-US")
+            }
+        }
+
+        return selected
+    }
+
+    public static func shouldProbeAlternateLocale(
+        primary: VoiceTranscriptCandidate,
+        alternateLocaleTag: String?,
+        activeSpeechDurationMs: Int,
+        isFinal: Bool
+    ) -> Bool {
+        let altTag = (alternateLocaleTag ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !altTag.isEmpty,
+              let primaryLang = primaryLanguageCode(primary.localeTag),
+              let altLang = primaryLanguageCode(altTag),
+              primaryLang != altLang,
+              activeSpeechDurationMs >= 400 else {
+            return false
+        }
+
+        let trimmedText = primary.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedText.isEmpty {
+            return isFinal || activeSpeechDurationMs >= 1600
+        }
+
+        if primary.hasPopulatedConfidence {
+            if !isFinal {
+                return activeSpeechDurationMs >= 1400 && primary.averageConfidence < 0.52
+            }
+            if primary.averageConfidence < 0.76 {
+                return true
+            }
+        }
+
+        guard isFinal else { return false }
+
+        let inferredLang = primaryLanguageCode(inferLocaleTag(fromText: trimmedText))
+        if primaryLang == "zh" && altLang == "en" && inferredLang == "en" {
+            return true
+        }
+        if primaryLang == "en" && altLang == "zh" && !primary.hasPopulatedConfidence {
+            return looksLikeSuspiciousEnglishPhoneticGibberish(trimmedText)
+        }
+        return false
+    }
+
+    public static func chooseBetterAutoDetectTranscript(
+        primary: VoiceTranscriptCandidate,
+        alternate: VoiceTranscriptCandidate
+    ) -> VoiceTranscriptCandidate {
+        let primaryText = primary.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let alternateText = alternate.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if primaryText.isEmpty && !alternateText.isEmpty { return alternate }
+        if alternateText.isEmpty { return primary }
+
+        let primaryScore = scoreAutoDetectCandidate(primary)
+        let alternateScore = scoreAutoDetectCandidate(alternate)
+
+        if alternateScore >= primaryScore + 0.05 {
+            return alternate
+        }
+
+        let primaryLang = primaryLanguageCode(primary.localeTag)
+        let altLang = primaryLanguageCode(alternate.localeTag)
+        let primaryInferred = primaryLanguageCode(inferLocaleTag(fromText: primaryText))
+        let altInferred = primaryLanguageCode(inferLocaleTag(fromText: alternateText))
+        if primaryLang == "zh"
+            && altLang == "en"
+            && primaryInferred == "en"
+            && altInferred == "en"
+            && alternateScore >= primaryScore - 0.02 {
+            return alternate
+        }
+
+        return primary
+    }
+
+    static func looksLikeSuspiciousEnglishPhoneticGibberish(_ text: String) -> Bool {
+        let words = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .map { token in token.filter(\.isLetter) }
+            .filter { !$0.isEmpty }
+        guard !words.isEmpty else { return true }
+        if words.count <= 5 { return true }
+        let totalLetters = words.reduce(0) { $0 + $1.count }
+        let avgWordLength = Double(totalLetters) / Double(words.count)
+        return avgWordLength <= 3.6
+    }
+
+    private static func scoreAutoDetectCandidate(_ candidate: VoiceTranscriptCandidate) -> Double {
+        let trimmed = candidate.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0.0 }
+
+        var score: Double = candidate.hasPopulatedConfidence
+            ? min(max(candidate.averageConfidence, 0.0), 1.0)
+            : 0.60
+
+        let candLang = primaryLanguageCode(candidate.localeTag)
+        let inferred = primaryLanguageCode(inferLocaleTag(fromText: trimmed))
+
+        if candLang == "zh" {
+            if inferred == "zh" { score += 0.06 }
+            if inferred == "en" { score -= 0.08 }
+        } else if candLang == "en" {
+            if inferred == "en" { score += 0.04 }
+            let words = trimmed
+                .split(whereSeparator: \.isWhitespace)
+                .map { token in token.filter(\.isLetter) }
+                .filter { !$0.isEmpty }
+            if words.count >= 3 {
+                let totalLetters = words.reduce(0) { $0 + $1.count }
+                let avgLen = Double(totalLetters) / Double(words.count)
+                if avgLen < 3.4 {
+                    score -= 0.08
+                }
+            }
+        }
+
+        return score
     }
 
     public static func resolveBestLocaleTag(

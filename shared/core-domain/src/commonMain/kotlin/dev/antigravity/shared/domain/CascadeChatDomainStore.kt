@@ -507,6 +507,56 @@ public class CascadeChatDomainStore(
         _state.update { it.copy(stepLoadErrorText = message?.takeIf { s -> s.isNotBlank() }) }
     }
 
+    public fun hasCachedSteps(cascadeId: String): Boolean =
+        !_state.value.stepsByCascadeId[cascadeId].isNullOrEmpty()
+
+    /**
+     * Seeds in-memory trajectory steps (e.g. from iOS Swift `LocalProjectionStore` on cold start)
+     * so KMP incremental binary delta sync (`tryFetchIncrementalBinaryDelta`) hits on the very first sync.
+     */
+    public fun seedCachedSteps(cascadeId: String, steps: List<CascadeStep>) {
+        if (cascadeId.isEmpty() || steps.isEmpty()) return
+        val existing = _state.value.stepsByCascadeId[cascadeId].orEmpty()
+        if (existing.size >= steps.size) return
+        putSteps(cascadeId, steps)
+    }
+
+    /**
+     * Applies progressive or live-streamed steps immediately to UI state without blocking on disk I/O.
+     */
+    public fun applyLiveSteps(
+        cascadeId: String,
+        steps: List<CascadeStep>,
+        keepLoadingWhileBackfillingOlder: Boolean = false,
+    ) {
+        if (cascadeId.isEmpty() || steps.isEmpty()) return
+        val existing = _state.value.stepsByCascadeId[cascadeId].orEmpty()
+        if (existing != steps) {
+            putSteps(cascadeId, steps)
+        }
+        _state.update {
+            if (it.activeCascadeId == cascadeId) {
+                it.copy(
+                    isLoadingSteps = if (keepLoadingWhileBackfillingOlder) it.isLoadingSteps else false,
+                    stepLoadErrorText = null,
+                )
+            } else {
+                it
+            }
+        }
+    }
+
+    @Throws(Throwable::class)
+    public suspend fun persistLiveStepsSnapshot(cascadeId: String, steps: List<CascadeStep>, summaryUpdatedAtEpochMs: Long = 0L) {
+        if (cascadeId.isEmpty() || steps.isEmpty()) return
+        projectionStorage.saveSteps(cascadeId, steps)
+        val nextMarker = SyncedTrajectoryMarker(
+            stepCount = steps.size,
+            summaryUpdatedAtEpochMs = summaryUpdatedAtEpochMs,
+        )
+        syncedMarkersByCascadeId.update { it + (cascadeId to nextMarker) }
+    }
+
     @Throws(Throwable::class)
     public suspend fun syncSteps(
         client: AntigravityKmpRpcClient,
@@ -517,6 +567,7 @@ public class CascadeChatDomainStore(
         summaryStatus: CortexStepStatus? = null,
         summaryUpdatedAtEpochMs: Long = 0L,
         forceRefresh: Boolean = false,
+        onPartialSteps: (suspend (List<CascadeStep>) -> Unit)? = null,
     ): List<CascadeStep> {
         if (cascadeId.isEmpty()) return emptyList()
         var existingSteps = _state.value.stepsByCascadeId[cascadeId].orEmpty()
@@ -600,11 +651,25 @@ public class CascadeChatDomainStore(
                     isCloud = isCloud,
                     instanceUuidOverride = instanceUuidOverride,
                     existingSteps = if (forceRefresh) emptyList() else existingSteps,
+                    onPartialSteps = { partial ->
+                        if (partial.isNotEmpty()) {
+                            val stillLoadingOlderPrefix = (partial.firstOrNull()?.stepIndex ?: 0) > 0
+                            applyLiveSteps(
+                                cascadeId = cascadeId,
+                                steps = partial,
+                                keepLoadingWhileBackfillingOlder = stillLoadingOlderPrefix,
+                            )
+                            onPartialSteps?.invoke(partial)
+                        }
+                    },
                 )
             }
             if (remoteSteps.isNotEmpty()) {
-                if (remoteSteps != existingSteps) {
+                val latestStored = _state.value.stepsByCascadeId[cascadeId].orEmpty()
+                if (remoteSteps != latestStored) {
                     putSteps(cascadeId, remoteSteps)
+                }
+                if (remoteSteps != existingSteps) {
                     projectionStorage.saveSteps(cascadeId, remoteSteps)
                 }
                 val nextMarker = SyncedTrajectoryMarker(

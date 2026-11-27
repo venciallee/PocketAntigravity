@@ -414,6 +414,92 @@ public class ConversationSyncStore(
         return changed
     }
 
+    /**
+     * Immediately reconciles live conversation `status`, `stepCount`, `statusSubtitle`, and
+     * derived `title` from real-time `StreamAgentStateUpdates` frames or fetched steps.
+     * Returns `true` when the conversation is actively running (`IN_PROGRESS` or `PENDING`).
+     */
+    public fun reconcileLiveRunStatus(
+        cascadeId: String,
+        steps: List<CascadeStep>,
+        runStatus: String? = null,
+    ): Boolean {
+        if (cascadeId.isEmpty()) return false
+        val waitingStep = steps.lastOrNull {
+            it.status == CortexStepStatus.WAITING || it.status == CortexStepStatus.BLOCKED
+        }
+        val hasInProgressStep = steps.any { it.status == CortexStepStatus.IN_PROGRESS || it.status == CortexStepStatus.PENDING }
+        val upperRun = runStatus?.uppercase().orEmpty()
+        val parsedRunStatus: CortexStepStatus? = when {
+            upperRun.contains("WAITING") || upperRun.contains("BLOCKED") -> CortexStepStatus.WAITING
+            upperRun.contains("RUNNING") || upperRun.contains("IN_PROGRESS") || upperRun.contains("PENDING") -> CortexStepStatus.IN_PROGRESS
+            upperRun.contains("ERROR") || upperRun.contains("FAIL") -> CortexStepStatus.ERROR
+            upperRun.contains("CANCEL") -> CortexStepStatus.CANCELLED
+            upperRun.contains("IDLE") || upperRun.contains("DONE") || upperRun.contains("COMPLETED") -> CortexStepStatus.DONE
+            else -> null
+        }
+
+        val resolvedStatus = when {
+            waitingStep != null -> CortexStepStatus.WAITING
+            hasInProgressStep -> CortexStepStatus.IN_PROGRESS
+            parsedRunStatus != null -> parsedRunStatus
+            steps.lastOrNull()?.status == CortexStepStatus.ERROR -> CortexStepStatus.ERROR
+            steps.lastOrNull()?.status == CortexStepStatus.CANCELLED -> CortexStepStatus.CANCELLED
+            steps.isNotEmpty() -> CortexStepStatus.DONE
+            else -> null
+        }
+        val derivedTitle = if (steps.isNotEmpty()) CascadeSummaryTitleResolver.deriveTitleFromSteps(steps) else null
+
+        var isRunning = resolvedStatus == CortexStepStatus.IN_PROGRESS || resolvedStatus == CortexStepStatus.PENDING
+        _state.update { prev ->
+            val idx = prev.summaries.indexOfFirst { it.cascadeId == cascadeId }
+            if (idx < 0) return@update prev
+            val current = prev.summaries[idx]
+            val nextStatus = resolvedStatus ?: current.status
+            isRunning = nextStatus == CortexStepStatus.IN_PROGRESS || nextStatus == CortexStepStatus.PENDING
+            val nextStepCount = maxOf(current.stepCount, steps.size)
+            val shouldUpdateTitle = current.needsTitleHydration && !derivedTitle.isNullOrBlank()
+            val req = waitingStep?.requestedInteraction
+            val pendingTitle = req?.runCommand?.proposedCommandLine
+                ?: req?.askQuestion?.question
+                ?: req?.permission?.action
+                ?: req?.rawSummary
+                ?: waitingStep?.runCommand?.commandLine
+                ?: if (nextStatus == CortexStepStatus.WAITING) current.pendingInteractionTitle else null
+
+            val nextSubtitle = JsonStepAndSummaryDecoder.buildLiveStatusSubtitle(
+                status = nextStatus,
+                stepCount = nextStepCount,
+                isUnread = current.isUnread,
+            )
+            if (nextStatus == current.status &&
+                nextStepCount == current.stepCount &&
+                !shouldUpdateTitle &&
+                pendingTitle == current.pendingInteractionTitle &&
+                nextSubtitle == current.statusSubtitle
+            ) {
+                return@update prev
+            }
+            val updated = current.copy(
+                title = if (shouldUpdateTitle) derivedTitle!! else current.title,
+                hasResolvedTitle = if (shouldUpdateTitle) true else current.hasResolvedTitle,
+                status = nextStatus,
+                stepCount = nextStepCount,
+                currentStepIndex = maxOf(1, nextStepCount),
+                totalSteps = maxOf(current.totalSteps, nextStepCount),
+                statusSubtitle = nextSubtitle,
+                pendingInteractionTitle = pendingTitle,
+            )
+            val nextList = prev.summaries.toMutableList().apply { this[idx] = updated }
+            prev.copy(
+                summaries = nextList,
+                hydratingCascadeIds = if (updated.hasResolvedTitle) prev.hydratingCascadeIds - cascadeId else prev.hydratingCascadeIds,
+                cachedStepCascadeIds = if (steps.isNotEmpty()) prev.cachedStepCascadeIds + cascadeId else prev.cachedStepCascadeIds,
+            )
+        }
+        return isRunning
+    }
+
     public fun upsertSummary(summary: CascadeSummary) {
         _state.update { prev ->
             val byId = prev.summaries.associateBy { it.cascadeId }.toMutableMap()
