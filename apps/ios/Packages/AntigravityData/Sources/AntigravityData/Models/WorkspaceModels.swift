@@ -1333,6 +1333,17 @@ public enum AgentPermissionPreset: String, ResilientStringEnum, Equatable, CaseI
         self == .defaultPolicy || self == .auto
     }
 
+    /// Resolves a concrete preset for the target runtime (`Auto` is local-only; `Use Global Settings` resolves to runtime default).
+    public func resolvedForRuntime(isRemote: Bool) -> AgentPermissionPreset {
+        if self == .inheritGlobal {
+            return Self.defaultPreset(isRemote: isRemote)
+        }
+        if isRemote && self == .auto {
+            return .defaultPolicy
+        }
+        return self
+    }
+
     public static var concretePresets: [AgentPermissionPreset] {
         [.requestReview, .defaultPolicy, .auto, .turbo]
     }

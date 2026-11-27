@@ -119,11 +119,10 @@ extension AntigravitySessionStore {
             return projects.first(where: { $0.name == trimmedSlug })
         }()
         let isUnassigned = (project?.isNoProject == true) || AntigravityCloudDetector.isNoProjectSlug(trimmedSlug)
-        let isCloudProj = isCloudOverride ?? (
-            (project?.runtime == .cloud)
-            || trimmedSlug.lowercased().hasPrefix("cloud:")
-            || (project == nil && selectedHostScope == .antigravityCloud)
-        )
+        let isCloudProj = isCloudOverride
+            ?? ((project?.runtime == .cloud)
+                || trimmedSlug.lowercased().hasPrefix("cloud:")
+                || (project == nil && selectedHostScope == .antigravityCloud))
         let effectiveSlug: String = {
             if let project { return project.id }
             if isUnassigned {
@@ -1464,14 +1463,16 @@ extension AntigravitySessionStore {
         guard var draft = pendingDraftConversation else { return }
         let trimmed = projectSlug.trimmingCharacters(in: .whitespacesAndNewlines)
         draft.projectSlug = trimmed.isEmpty ? AntigravityCloudDetector.noProjectDisplayName : trimmed
-        pendingDraftConversation = draft
-        selectedProjectId = draft.projectSlug
         if let proj = projects.first(where: { $0.id == draft.projectSlug || $0.name == draft.projectSlug }),
            !proj.isNoProject {
+            draft.isCloud = (proj.runtime == .cloud)
             selectedWorkspaceUri = proj.workspaceUri
         } else {
+            draft.isCloud = false
             selectedWorkspaceUri = ""
         }
+        pendingDraftConversation = draft
+        selectedProjectId = draft.projectSlug
     }
 
     /// Backwards-compatible alias that opens the interactive `/automation` prompt draft without auto-sending.

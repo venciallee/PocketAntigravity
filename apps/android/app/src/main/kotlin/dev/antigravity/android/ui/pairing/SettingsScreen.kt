@@ -78,7 +78,6 @@ import dev.antigravity.shared.model.AppLanguage
 import dev.antigravity.shared.model.AppThemePreset
 import dev.antigravity.shared.model.RemoteConnectionChannel
 import dev.antigravity.shared.model.localizedTitle
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
 /**
@@ -98,7 +97,6 @@ fun SettingsAndCustomizationsScreen(
     val syncState by coordinator.syncState.collectAsStateWithLifecycle()
     val settingsState by coordinator.settingsStore.state.collectAsStateWithLifecycle()
     val capabilityBanner by coordinator.capabilityErrorBanner.collectAsStateWithLifecycle()
-    val chatState by coordinator.chatState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var showMoreSubpage by rememberSaveable { mutableStateOf(false) }
@@ -120,8 +118,7 @@ fun SettingsAndCustomizationsScreen(
         SettingsMoreSubpage(
             coordinator = coordinator,
             appearance = appearance,
-            activePermissionPreset = settingsState.activePermissionPreset,
-            activeCascadeId = chatState.activeCascadeId.ifBlank { "cas-rate-limiter" },
+            activePermissionPreset = settingsState.localPermissionPreset,
             onBack = { showMoreSubpage = false },
             onDisconnect = {
                 scope.launch {
@@ -684,14 +681,12 @@ private fun SettingsMoreSubpage(
     coordinator: AntigravityCoreCoordinator,
     appearance: dev.antigravity.shared.model.AppAppearancePreferences,
     activePermissionPreset: AgentPermissionPreset,
-    activeCascadeId: String,
     onBack: () -> Unit,
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.antigravityColors
     val lang = LocalAppLanguage.current
-    val scope = rememberCoroutineScope()
 
     Column(
         modifier = modifier
@@ -759,21 +754,10 @@ private fun SettingsMoreSubpage(
                     .defaultMinSize(minHeight = 56.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .clickable {
-                        coordinator.settingsStore.updateAppearance {
-                            it.copy(globalPermissionPreset = preset)
-                        }
-                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                            val rpcClient = if (coordinator.isVerificationMode) {
-                                null
-                            } else {
-                                coordinator.connectionStore.activeClient()
-                            }
-                            coordinator.settingsStore.setPermissionPreset(
-                                client = rpcClient,
-                                cascadeId = activeCascadeId,
-                                preset = preset,
-                            )
-                        }
+                        coordinator.settingsStore.selectPermissionPreset(
+                            preset = preset,
+                            isRemote = false,
+                        )
                     }
                     .padding(vertical = 8.dp)
                     .testTag("permission-preset-${preset.rawValue}"),

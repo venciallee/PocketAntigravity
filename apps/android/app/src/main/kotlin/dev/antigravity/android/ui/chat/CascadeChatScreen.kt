@@ -1,8 +1,10 @@
 package dev.antigravity.android.ui.chat
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -91,7 +93,6 @@ import dev.antigravity.android.core.ui.theme.LocalAntigravityColors
 import dev.antigravity.android.core.ui.theme.LocalAppLanguage
 import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
-import dev.antigravity.shared.model.AntigravityCloudDetector
 import dev.antigravity.shared.model.localizedTitle
 import dev.antigravity.shared.model.CascadeDisplayItem
 import dev.antigravity.shared.model.CascadeStep
@@ -101,7 +102,6 @@ import dev.antigravity.shared.model.CortexStepType
 import dev.antigravity.shared.model.DynamicWorkflowPayload
 import dev.antigravity.shared.model.InteractionDecision
 import dev.antigravity.shared.model.McpToolCallPayload
-import dev.antigravity.shared.model.ProjectRuntimeTarget
 import dev.antigravity.shared.model.SlashCommandItem
 import dev.antigravity.shared.model.SubagentPayload
 import dev.antigravity.shared.model.SwarmBoardPayload
@@ -149,21 +149,8 @@ fun CascadeChatScreen(
     val activeCascadeId = chatState.activeCascadeId.ifBlank { "cas-rate-limiter" }
     val activeSummary = syncState.summaries.firstOrNull { it.cascadeId == activeCascadeId }
         ?: syncState.summaries.firstOrNull()
-    val resolvedIsCloud = remember(activeCascadeId, activeSummary, workspaceState.projects) {
-        if (activeSummary?.isCloud == true) {
-            true
-        } else if (AntigravityCloudDetector.isCloudWorkspaceUri(activeSummary?.workspaceUri.orEmpty(), cascadeId = activeCascadeId)) {
-            true
-        } else {
-            val matchedProject = activeSummary?.let { item ->
-                workspaceState.projects.firstOrNull { proj ->
-                    (!item.cloudProjectId.isNullOrBlank() && (proj.cloudProjectId == item.cloudProjectId || proj.id == item.cloudProjectId)) ||
-                        (item.workspaceUri.isNotBlank() && proj.workspaceUri == item.workspaceUri) ||
-                        (item.projectSlug.isNotBlank() && proj.name.equals(item.projectSlug, ignoreCase = true))
-                }
-            }
-            matchedProject?.runtime == ProjectRuntimeTarget.CLOUD
-        }
+    val resolvedIsCloud = remember(activeCascadeId, activeSummary, workspaceState.projects, syncState.projects) {
+        coordinator.isSummaryCloudRuntime(activeCascadeId, activeSummary)
     }
 
     val isHeaderTitleLoading = activeSummary != null && coordinator.isSummaryTitleLoading(activeSummary)
@@ -196,7 +183,8 @@ fun CascadeChatScreen(
     val displayItems = chatState.activeDisplayItems
     val lang = LocalAppLanguage.current
     val modelDisplayName = formatComposerModelPillName(settingsState.selectedModel?.displayName)
-    val permissionLabel = settingsState.activePermissionPreset.localizedTitle(lang)
+    val activePermissionPreset = settingsState.permissionPresetFor(isRemote = resolvedIsCloud)
+    val permissionLabel = activePermissionPreset.localizedTitle(lang)
     val voiceController = rememberVoiceDictationController()
 
     Scaffold(
@@ -478,15 +466,15 @@ fun CascadeChatScreen(
                     onRemoveChip = { coordinator.workspaceStore.removeComposerChip(it) },
                     modelLabel = modelDisplayName,
                     permissionLabel = permissionLabel,
-                    isVoiceRecording = voiceController.isRecording,
-                    isVoiceStarting = voiceController.isStarting,
-                    voiceErrorMessage = voiceController.errorMessage,
-                    onDismissVoiceError = { voiceController.clearError() },
+                    voiceController = voiceController,
                     onAddContext = onOpenAddContext,
                     onOpenModelAndMode = onOpenModelAndMode,
                     onOpenPermissionsPreset = onOpenPermissionsPreset,
                     onOpenVoice = {
-                        voiceController.toggleRecording(existingDraft = chatState.draftInputText) { updated ->
+                        voiceController.toggleRecording(
+                            existingDraft = chatState.draftInputText,
+                            appLanguage = lang,
+                        ) { updated ->
                             coordinator.chatStore.setDraftInputText(updated)
                         }
                     },
@@ -526,7 +514,7 @@ fun CascadeChatScreen(
                                             agentPersona = settingsState.selectedAgentPersona,
                                             isCloud = resolvedIsCloud,
                                             cloudProjectId = activeSummary?.cloudProjectId,
-                                            permissionPreset = settingsState.activePermissionPreset,
+                                            permissionPreset = activePermissionPreset,
                                             instanceUuidOverride = activeSummary?.originInstanceUuid,
                                             isOptimisticDraft = isDraft,
                                         )
@@ -1902,6 +1890,7 @@ private fun VoiceSummaryCard(summary: VoiceCallTranscriptSummary) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatComposerCard(
     draftText: String,
@@ -1910,10 +1899,7 @@ private fun ChatComposerCard(
     onRemoveChip: (String) -> Unit,
     modelLabel: String,
     permissionLabel: String,
-    isVoiceRecording: Boolean = false,
-    isVoiceStarting: Boolean = false,
-    voiceErrorMessage: String? = null,
-    onDismissVoiceError: () -> Unit = {},
+    voiceController: VoiceDictationController,
     onAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
     onOpenPermissionsPreset: () -> Unit,
@@ -1922,6 +1908,10 @@ private fun ChatComposerCard(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
+    val appLanguage = LocalAppLanguage.current
+    val isVoiceRecording = voiceController.isRecording
+    val isVoiceStarting = voiceController.isStarting
+    val voiceErrorMessage = voiceController.errorMessage
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -1943,6 +1933,12 @@ private fun ChatComposerCard(
                 )
             }
 
+            VoiceListeningLanguageBar(
+                controller = voiceController,
+                existingDraft = draftText,
+                onDraftUpdated = onDraftChange,
+            )
+
             if (!voiceErrorMessage.isNullOrBlank()) {
                 Text(
                     text = voiceErrorMessage,
@@ -1951,7 +1947,7 @@ private fun ChatComposerCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 2.dp)
-                        .clickable(onClick = onDismissVoiceError)
+                        .clickable(onClick = { voiceController.clearError() })
                         .testTag("composer-voice-error"),
                 )
             }
@@ -2065,21 +2061,43 @@ private fun ChatComposerCard(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                IconButton(
-                    onClick = onOpenVoice,
-                    modifier = Modifier
-                        .size(34.dp)
-                        .testTag("composer-btn-voice"),
-                ) {
-                    Icon(
-                        imageVector = if (isVoiceRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                        contentDescription = if (isVoiceRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
-                        tint = when {
-                            isVoiceRecording -> colors.statusError
-                            isVoiceStarting -> colors.accentPeriwinkle
-                            else -> colors.inkLabel
+                var chatVoiceMenuExpanded by remember { mutableStateOf(false) }
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .combinedClickable(
+                                onClick = onOpenVoice,
+                                onLongClick = { chatVoiceMenuExpanded = true },
+                            )
+                            .testTag("composer-btn-voice"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (isVoiceRecording) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                            contentDescription = if (isVoiceRecording) tr("Stop dictation", "停止听写") else tr("Dictate message", "语音听写"),
+                            tint = when {
+                                isVoiceRecording -> colors.statusError
+                                isVoiceStarting -> colors.accentPeriwinkle
+                                else -> colors.inkLabel
+                            },
+                            modifier = Modifier.size(if (isVoiceRecording) 17.dp else 20.dp),
+                        )
+                    }
+                    VoiceLanguageDropdownMenu(
+                        expanded = chatVoiceMenuExpanded,
+                        selectedLanguage = voiceController.preferredLanguage,
+                        onDismiss = { chatVoiceMenuExpanded = false },
+                        onSelect = { chosen ->
+                            chatVoiceMenuExpanded = false
+                            voiceController.selectLanguage(
+                                language = chosen,
+                                appLanguage = appLanguage,
+                                existingDraft = draftText,
+                                onDraftUpdated = onDraftChange,
+                            )
                         },
-                        modifier = Modifier.size(if (isVoiceRecording) 17.dp else 20.dp),
                     )
                 }
 

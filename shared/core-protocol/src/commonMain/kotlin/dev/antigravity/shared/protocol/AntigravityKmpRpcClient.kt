@@ -153,6 +153,43 @@ public class AntigravityKmpRpcClient(
         public fun extractUnknownProtoFieldName(message: String): String? =
             ProtocolCompatibilityEngine.extractUnknownProtoFieldName(message)
 
+        public fun buildToolConfigForPermissionPreset(preset: AgentPermissionPreset): JsonObject = buildJsonObject {
+            put("code", buildJsonObject { put("allowEditGitignore", true) })
+            put("viewFile", buildJsonObject { put("allowViewGitignore", true) })
+            put("grep", buildJsonObject { put("allowAccessGitignore", true) })
+            when (preset) {
+                AgentPermissionPreset.REQUEST_REVIEW -> {
+                    put("runCommand", buildJsonObject {
+                        put("autoCommandConfig", buildJsonObject {
+                            put("autoExecutionPolicy", "CASCADE_COMMANDS_AUTO_EXECUTION_OFF")
+                        })
+                    })
+                    put("notifyUser", buildJsonObject { put("artifactReviewMode", "ARTIFACT_REVIEW_MODE_ALWAYS") })
+                }
+                AgentPermissionPreset.AUTO -> {
+                    put("runCommand", buildJsonObject {
+                        put("autoCommandConfig", buildJsonObject {
+                            put("autoExecutionPolicy", "CASCADE_COMMANDS_AUTO_EXECUTION_AUTO")
+                        })
+                    })
+                    put("notifyUser", buildJsonObject { put("artifactReviewMode", "ARTIFACT_REVIEW_MODE_AUTO") })
+                }
+                AgentPermissionPreset.TURBO -> {
+                    put("runCommand", buildJsonObject {
+                        put("autoCommandConfig", buildJsonObject {
+                            put("autoExecutionPolicy", "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER")
+                        })
+                    })
+                    put("notifyUser", buildJsonObject { put("artifactReviewMode", "ARTIFACT_REVIEW_MODE_TURBO") })
+                }
+                AgentPermissionPreset.DEFAULT_POLICY,
+                AgentPermissionPreset.INHERIT_GLOBAL,
+                -> {
+                    put("notifyUser", buildJsonObject { put("artifactReviewMode", "ARTIFACT_REVIEW_MODE_AUTO") })
+                }
+            }
+        }
+
         internal fun extractJsonTruncationCeiling(response: JsonObject, fallbackStepCount: Int): Int? {
             val truncatedPrim = response["truncatedAt"] as? JsonPrimitive
             if (truncatedPrim != null && truncatedPrim !is JsonNull) {
@@ -3702,8 +3739,8 @@ public class AntigravityKmpRpcClient(
     ) {
         val isRemoteCloud = isRemoteCloudCascade(cascadeId, isCloud)
         val protoModel = JsonStepAndSummaryDecoder.normalizeProtoModelEnum(modelId)
-        val effectivePermission = permissionPreset?.takeIf { it != AgentPermissionPreset.INHERIT_GLOBAL }
-            ?: AgentPermissionPreset.defaultPreset(isRemote = isRemoteCloud)
+        val effectivePermission = (permissionPreset ?: AgentPermissionPreset.INHERIT_GLOBAL)
+            .resolveForRuntime(isRemote = isRemoteCloud)
 
         val mediaEntries = mutableListOf<JsonObject>()
         val items = buildJsonArray {
@@ -3773,32 +3810,7 @@ public class AntigravityKmpRpcClient(
             }
         }
 
-        val toolConfig = buildJsonObject {
-            put("code", buildJsonObject { put("allowEditGitignore", true) })
-            put("viewFile", buildJsonObject { put("allowViewGitignore", true) })
-            put("grep", buildJsonObject { put("allowAccessGitignore", true) })
-            when (effectivePermission) {
-                AgentPermissionPreset.REQUEST_REVIEW -> {
-                    put("runCommand", buildJsonObject {
-                        put("autoCommandConfig", buildJsonObject {
-                            put("autoExecutionPolicy", "CASCADE_COMMANDS_AUTO_EXECUTION_OFF")
-                        })
-                    })
-                    put("notifyUser", buildJsonObject { put("artifactReviewMode", "ARTIFACT_REVIEW_MODE_ALWAYS") })
-                }
-                AgentPermissionPreset.TURBO -> {
-                    put("runCommand", buildJsonObject {
-                        put("autoCommandConfig", buildJsonObject {
-                            put("autoExecutionPolicy", "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER")
-                        })
-                    })
-                    put("notifyUser", buildJsonObject { put("artifactReviewMode", "ARTIFACT_REVIEW_MODE_TURBO") })
-                }
-                else -> {
-                    put("notifyUser", buildJsonObject { put("artifactReviewMode", "ARTIFACT_REVIEW_MODE_AUTO") })
-                }
-            }
-        }
+        val toolConfig = buildToolConfigForPermissionPreset(effectivePermission)
 
         val requestedModelObj = if (isModelAlias) {
             buildJsonObject { put("alias", modelId) }

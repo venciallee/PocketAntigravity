@@ -244,7 +244,7 @@ extension AntigravitySessionStore {
 
         let currentSummary = summaries.first(where: { $0.cascadeId == activeCascadeId })
         let currentProj = projects.first(where: { $0.id == (currentSummary?.projectSlug ?? selectedProjectId) })
-        let summaryIsCloud = currentSummary?.isCloud ?? (currentProj?.runtime == .cloud)
+        let summaryIsCloud = currentSummary.map { isSummaryCloudRuntime($0) } ?? (currentProj?.runtime == .cloud)
         let summaryCloudProjId = currentSummary?.cloudProjectId ?? currentProj?.cloudProjectId
         let summaryOriginUuid = currentSummary?.originInstanceUuid ?? currentProj?.originInstanceUuid
 
@@ -276,13 +276,7 @@ extension AntigravitySessionStore {
 
         let cid = activeCascadeId
         let cfg = selectedModelConfig
-        let runtimeDefaultPreset = summaryIsCloud ? remotePermissionPreset : localPermissionPreset
-        let effectivePreset: AgentPermissionPreset = {
-            if let overridePreset = conversationPermissionPresets[cid], overridePreset != .inheritGlobal {
-                return overridePreset
-            }
-            return runtimeDefaultPreset
-        }()
+        let effectivePreset = effectivePermissionPreset(for: cid, isRemoteOverride: summaryIsCloud)
         let storeRef = projectionStore
         let clientRef = rpcClient
         let engineRef = kmpEngine
@@ -700,10 +694,11 @@ extension AntigravitySessionStore {
             var targetCascadeId = entry.cascadeId
             let currentSummary = summaries.first(where: { $0.cascadeId == targetCascadeId })
             let currentProj = projects.first(where: { $0.id == (currentSummary?.projectSlug ?? selectedProjectId) })
-            let summaryIsCloud = currentSummary?.isCloud ?? (currentProj?.runtime == .cloud)
+            let summaryIsCloud = currentSummary.map { isSummaryCloudRuntime($0) } ?? (currentProj?.runtime == .cloud)
             let summaryCloudProjId = currentSummary?.cloudProjectId ?? currentProj?.cloudProjectId
             let summaryOriginUuid = currentSummary?.originInstanceUuid ?? currentProj?.originInstanceUuid
             let workspaceUri = currentSummary?.workspaceUri ?? currentProj?.workspaceUri ?? selectedWorkspaceUri
+            let replayPreset = effectivePermissionPreset(for: targetCascadeId, isRemoteOverride: summaryIsCloud)
 
             do {
                 if let engine = kmpEngine {
@@ -720,7 +715,7 @@ extension AntigravitySessionStore {
                         agentPersona: cfg.agentPersona,
                         isCloud: summaryIsCloud,
                         cloudProjectId: summaryCloudProjId,
-                        permissionPreset: summaryIsCloud ? remotePermissionPreset : localPermissionPreset,
+                        permissionPreset: replayPreset,
                         instanceUuidOverride: summaryOriginUuid,
                         isOptimisticDraft: isOptimistic
                     )
@@ -778,7 +773,7 @@ extension AntigravitySessionStore {
                         agentPersona: cfg.agentPersona,
                         isModelAlias: cfg.isModelAlias,
                         isCloud: summaryIsCloud,
-                        permissionPreset: summaryIsCloud ? remotePermissionPreset : localPermissionPreset,
+                        permissionPreset: replayPreset,
                         instanceUuidOverride: summaryOriginUuid
                     )
                 }

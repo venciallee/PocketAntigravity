@@ -276,12 +276,19 @@ public struct AgentsHomeViewController: View {
         guard !scoped.isEmpty else {
             selectedProjectSlug = ""
             isCloudTargetSelected = (selectedHost == .antigravityCloud)
+            store.selectedWorkspaceUri = ""
             return
         }
         if let current = scoped.first(where: { $0.id == selectedProjectSlug })
             ?? scoped.first(where: { $0.name == selectedProjectSlug }) {
             selectedProjectSlug = current.id
             isCloudTargetSelected = (current.runtime == .cloud)
+            if store.selectedProjectId != current.id {
+                store.selectedProjectId = current.id
+            }
+            if store.selectedWorkspaceUri != current.workspaceUri {
+                store.selectedWorkspaceUri = current.workspaceUri
+            }
             return
         }
         let preferred: ProjectWorkspace? = {
@@ -298,6 +305,9 @@ public struct AgentsHomeViewController: View {
             isCloudTargetSelected = (preferred.runtime == .cloud)
             if store.selectedProjectId != preferred.id {
                 store.selectedProjectId = preferred.id
+            }
+            if store.selectedWorkspaceUri != preferred.workspaceUri {
+                store.selectedWorkspaceUri = preferred.workspaceUri
             }
         }
     }
@@ -669,6 +679,7 @@ public struct AgentsHomeViewController: View {
                                 selectedProjectSlug = proj.id
                                 isCloudTargetSelected = (proj.runtime == .cloud)
                                 store.selectedProjectId = proj.id
+                                store.selectedWorkspaceUri = proj.workspaceUri
                             } label: {
                                 if proj.id == resolvedSelectedProject?.id {
                                     Label(proj.name, systemImage: "checkmark")
@@ -767,6 +778,7 @@ public struct AgentsHomeViewController: View {
                 store: store,
                 placeholderOverride: lang.t("Ask anything, @ to mention, / for actions", "输入任何内容，@ 引用上下文，/ 快捷操作"),
                 isHomeComposer: true,
+                isRemoteSessionOverride: isCloudTargetSelected,
                 onSubmitDraft: { promptText in
                     let slug = resolvedSelectedProject?.id
                         ?? (usesLiveStoreData ? AntigravityCloudDetector.noProjectDisplayName : "ledger-svc")

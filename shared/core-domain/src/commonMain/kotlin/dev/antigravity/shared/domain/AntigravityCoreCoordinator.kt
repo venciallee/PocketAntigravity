@@ -317,14 +317,17 @@ public class AntigravityCoreCoordinator(
                 ?: allProjects.firstOrNull { it.id == resolvedProject }?.workspaceUri.orEmpty()
         }
         val resolvedIsCloud = isCloud
-            ?: (matchedProject?.runtime == ProjectRuntimeTarget.CLOUD)
-            || AntigravityCloudDetector.isCloudWorkspaceUri(resolvedWorkspace)
-            || resolvedProject.lowercase().startsWith("cloud:")
+            ?: ((matchedProject?.runtime == ProjectRuntimeTarget.CLOUD)
+                || AntigravityCloudDetector.isCloudWorkspaceUri(resolvedWorkspace)
+                || resolvedProject.lowercase().startsWith("cloud:"))
         val resolvedCloudProjectId = cloudProjectId?.takeIf { it.isNotBlank() }
             ?: matchedProject?.cloudProjectId
         val resolvedOriginUuid = originInstanceUuid?.takeIf { it.isNotBlank() }
-            ?: matchedProject?.originInstanceUuid
-            ?: if (!resolvedIsCloud) activeHost?.instanceId else null
+            ?: if (resolvedIsCloud) {
+                matchedProject?.takeIf { it.runtime == ProjectRuntimeTarget.CLOUD }?.originInstanceUuid
+            } else {
+                matchedProject?.originInstanceUuid ?: activeHost?.instanceId
+            }
         val resolvedOriginHostName = originHostName?.takeIf { it.isNotBlank() }
             ?: if (resolvedIsCloud) {
                 "Antigravity"
@@ -357,6 +360,45 @@ public class AntigravityCoreCoordinator(
         )
         chatStore.setActiveCascade(draftId)
         return draftId
+    }
+
+    /**
+     * Determines accurately whether a conversation targets Antigravity Cloud vs a paired local Mac/PC,
+     * preventing same-name Cloud projects from hijacking concrete local `file://` workspaces.
+     */
+    public fun isSummaryCloudRuntime(cascadeId: String, summary: CascadeSummary?): Boolean {
+        if (summary?.isCloud == true) return true
+        val uri = summary?.workspaceUri.orEmpty()
+        if (AntigravityCloudDetector.isCloudWorkspaceUri(uri, cascadeId = cascadeId)) {
+            return true
+        }
+        if (uri.startsWith("file://") && !AntigravityCloudDetector.isPlaygroundScratchUri(uri)) {
+            return false
+        }
+        if (summary == null) return false
+        val allProjects = (workspaceStore.state.value.projects + conversationSyncStore.state.value.projects)
+            .distinctBy { it.id }
+        val cpid = summary.cloudProjectId
+        if (!cpid.isNullOrBlank()) {
+            allProjects.firstOrNull { it.cloudProjectId == cpid || it.id == cpid }?.let {
+                return it.runtime == ProjectRuntimeTarget.CLOUD
+            }
+        }
+        if (uri.isNotBlank()) {
+            allProjects.firstOrNull { it.workspaceUri.equals(uri, ignoreCase = true) }?.let {
+                return it.runtime == ProjectRuntimeTarget.CLOUD
+            }
+        }
+        if (summary.projectSlug.isNotBlank()) {
+            val slugMatches = allProjects.filter {
+                it.id == summary.projectSlug || it.name.equals(summary.projectSlug, ignoreCase = true)
+            }
+            if (slugMatches.size == 1) {
+                return slugMatches[0].runtime == ProjectRuntimeTarget.CLOUD
+            }
+            return false
+        }
+        return false
     }
 
     @Throws(Throwable::class)

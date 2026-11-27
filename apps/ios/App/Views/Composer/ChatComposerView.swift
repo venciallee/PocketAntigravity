@@ -44,6 +44,7 @@ public struct ChatComposerView: View {
     @Bindable public var store: AntigravitySessionStore
     public var placeholderOverride: String?
     public var isHomeComposer: Bool
+    public var isRemoteSessionOverride: Bool?
     public var onSubmitDraft: ((String) -> Void)?
     @FocusState private var isInputFocused: Bool
 
@@ -64,11 +65,13 @@ public struct ChatComposerView: View {
         store: AntigravitySessionStore,
         placeholderOverride: String? = nil,
         isHomeComposer: Bool = false,
+        isRemoteSessionOverride: Bool? = nil,
         onSubmitDraft: ((String) -> Void)? = nil
     ) {
         self.store = store
         self.placeholderOverride = placeholderOverride
         self.isHomeComposer = isHomeComposer
+        self.isRemoteSessionOverride = isRemoteSessionOverride
         self.onSubmitDraft = onSubmitDraft
         if isHomeComposer || !store.isVerificationMode || store.hasPairedBackend || store.isLiveBackendConnected {
             self._attachedChipLabels = State(initialValue: isHomeComposer ? [] : store.composerAttachments.map(\.label))
@@ -159,8 +162,22 @@ public struct ChatComposerView: View {
         return (name, effortLabel)
     }
 
+    private var resolvedIsRemoteSession: Bool {
+        isRemoteSessionOverride ?? store.isActiveSessionCloud
+    }
+
+    private var resolvedPermissionPreset: AgentPermissionPreset {
+        if isHomeComposer {
+            return store.permissionPreset(isRemote: resolvedIsRemoteSession)
+        }
+        return store.effectivePermissionPreset(
+            for: store.activeCascadeId,
+            isRemoteOverride: resolvedIsRemoteSession
+        )
+    }
+
     private var permissionShortLabel: String {
-        switch store.activePermissionPreset {
+        switch resolvedPermissionPreset {
         case .requestReview: return lang.t("Ask", "询问")
         case .defaultPolicy: return lang.t("Default", "默认")
         case .auto: return lang.t("Auto", "自动")
@@ -419,6 +436,60 @@ public struct ChatComposerView: View {
                     }
                 }
 
+                if voiceManager.isRecording || voiceManager.isStarting {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(voiceManager.isRecording ? AntigravityTheme.statusError : AntigravityTheme.accentPeriwinkle)
+                            .frame(width: 7, height: 7)
+                        Text(
+                            voiceManager.isRecording
+                                ? lang.t("Listening", "正在聆听")
+                                : lang.t("Starting microphone...", "正在启动麦克风...")
+                        )
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(AntigravityTheme.inkSecondary)
+
+                        Spacer(minLength: 4)
+
+                        Menu {
+                            ForEach(VoiceDictationLanguage.allCases) { option in
+                                Button {
+                                    let prefix = draftMessageText
+                                    dictationDraftPrefix = prefix
+                                    voiceManager.selectLanguage(
+                                        option,
+                                        appLanguage: lang
+                                    ) { transcript in
+                                        draftMessageText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
+                                    }
+                                } label: {
+                                    if voiceManager.preferredLanguage == option {
+                                        Label(option.localizedTitle(for: lang), systemImage: "checkmark")
+                                    } else {
+                                        Text(option.localizedTitle(for: lang))
+                                    }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "globe")
+                                    .font(.system(size: 11, weight: .medium))
+                                Text(voiceManager.activeLanguageBadgeLabel(for: lang))
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 8.5, weight: .semibold))
+                            }
+                            .foregroundStyle(AntigravityTheme.accentPeriwinkle)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(AntigravityTheme.surfaceElevated, in: Capsule())
+                        }
+                        .accessibilityIdentifier("composer-voice-language-menu")
+                    }
+                    .padding(.horizontal, 4)
+                    .accessibilityIdentifier("composer-voice-listening-bar")
+                }
+
                 if let voiceErr = voiceManager.errorMessage {
                     Text(voiceErr)
                         .font(.system(size: 11.5))
@@ -579,11 +650,12 @@ public struct ChatComposerView: View {
             case .permissions:
                 PermissionsSheetView(
                     store: store,
+                    isRemoteOverride: resolvedIsRemoteSession,
                     onDismiss: {
                         activeModalSheet = nil
                     }
                 )
-                .presentationDetents([.height(store.isActiveSessionCloud ? 356 : 428), .large])
+                .presentationDetents([.height(resolvedIsRemoteSession ? 356 : 428), .large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
                 .presentationBackground(PermissionsSheetView.sheetSurfaceColor)
@@ -761,16 +833,16 @@ public struct ChatComposerView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(lang.t("Permissions \(store.activePermissionPreset.localizedTitle(for: lang))", "权限 \(store.activePermissionPreset.localizedTitle(for: lang))"))
+            .accessibilityLabel(lang.t("Permissions \(resolvedPermissionPreset.localizedTitle(for: lang))", "权限 \(resolvedPermissionPreset.localizedTitle(for: lang))"))
             .accessibilityIdentifier("composer-pill-permissions")
 
-            // 4. Speech-to-Text Dictation Button (`mic`)
+            // 4. Speech-to-Text Dictation Button (`mic`, long-press to switch language)
             Button {
                 if !voiceManager.isRecording && !voiceManager.isStarting {
                     dictationDraftPrefix = draftMessageText
                 }
                 let prefix = dictationDraftPrefix
-                voiceManager.toggleRecording { transcript in
+                voiceManager.toggleRecording(appLanguage: lang) { transcript in
                     draftMessageText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
                 }
             } label: {
@@ -786,6 +858,28 @@ public struct ChatComposerView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Section(lang.t("Voice Dictation Language", "语音识别语言")) {
+                    ForEach(VoiceDictationLanguage.allCases) { option in
+                        Button {
+                            let prefix = draftMessageText
+                            dictationDraftPrefix = prefix
+                            voiceManager.selectLanguage(
+                                option,
+                                appLanguage: lang
+                            ) { transcript in
+                                draftMessageText = VoiceInputManager.mergeTranscript(prefix: prefix, transcript: transcript)
+                            }
+                        } label: {
+                            if voiceManager.preferredLanguage == option {
+                                Label(option.localizedTitle(for: lang), systemImage: "checkmark")
+                            } else {
+                                Text(option.localizedTitle(for: lang))
+                            }
+                        }
+                    }
+                }
+            }
             .accessibilityLabel(voiceManager.isRecording ? lang.t("Stop dictation", "停止语音输入") : lang.t("Dictate message", "语音输入"))
             .accessibilityIdentifier("composer-btn-mic")
 

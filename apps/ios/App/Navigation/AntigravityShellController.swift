@@ -503,6 +503,9 @@ public struct AntigravityRootContainerView: View {
                     case .permissionsPreset:
                         PermissionsSheetView(
                             store: store,
+                            isRemoteOverride: store.activeRoute == .tabRoot
+                                ? store.isHomeSelectedProjectCloud
+                                : store.isActiveSessionCloud,
                             onDismiss: { store.presentedSheet = nil }
                         )
                     case .slashMenu:

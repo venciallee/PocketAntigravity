@@ -24,7 +24,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -39,51 +38,35 @@ import dev.antigravity.android.core.ui.theme.tr
 import dev.antigravity.android.ui.home.AgentsHomeScreen
 import dev.antigravity.shared.domain.AntigravityCoreCoordinator
 import dev.antigravity.shared.model.AgentPermissionPreset
+import dev.antigravity.shared.model.localizedSummaryDescription
 import dev.antigravity.shared.model.localizedTitle
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.launch
 
 /**
  * UE07B_PERMISSIONS_PRESET (`and-preset.png`): Anchored Material 3 Permissions Preset popup
- * over the composer (`Request Review`, `Default ✓`, `Auto`, `Turbo`, plus Settings link).
+ * over the composer (`Request Review`, `Default ✓`, `Auto`, `Turbo` on local projects;
+ * `Request Review`, `Default`, `Turbo` on remote Cloud sessions).
  */
 @Composable
 fun PermissionsPresetOverlayScreen(
     coordinator: AntigravityCoreCoordinator,
     onDismiss: () -> Unit,
     onOpenSettings: () -> Unit = {},
+    isRemote: Boolean = false,
     showHomeBackdrop: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAntigravityColors.current
     val lang = LocalAppLanguage.current
     val settingsState by coordinator.settingsStore.state.collectAsState()
-    val chatState by coordinator.chatState.collectAsState()
-    val scope = rememberCoroutineScope()
-    val activePreset = settingsState.activePermissionPreset
+    val activePreset = settingsState.permissionPresetFor(isRemote = isRemote)
 
-    val presets = listOf(
+    val presets = AgentPermissionPreset.availablePresets(isRemote = isRemote).map { preset ->
         Triple(
-            AgentPermissionPreset.REQUEST_REVIEW,
-            AgentPermissionPreset.REQUEST_REVIEW.localizedTitle(lang),
-            tr("Every command requires approval.", "每条命令都需要审批。"),
-        ),
-        Triple(
-            AgentPermissionPreset.DEFAULT_POLICY,
-            AgentPermissionPreset.DEFAULT_POLICY.localizedTitle(lang),
-            tr("Ask before sensitive operations.", "敏感操作前先征求确认。"),
-        ),
-        Triple(
-            AgentPermissionPreset.AUTO,
-            AgentPermissionPreset.AUTO.localizedTitle(lang),
-            tr("Automatically decide if commands run.", "自动判断是否直接执行命令。"),
-        ),
-        Triple(
-            AgentPermissionPreset.TURBO,
-            AgentPermissionPreset.TURBO.localizedTitle(lang),
-            tr("Run all commands without restrictions.", "无限制自动执行所有命令。"),
-        ),
-    )
+            preset,
+            preset.localizedTitle(lang),
+            preset.localizedSummaryDescription(lang),
+        )
+    }
 
     Box(
         modifier = modifier
@@ -128,7 +111,11 @@ fun PermissionsPresetOverlayScreen(
                     .padding(vertical = 10.dp),
             ) {
                 Text(
-                    text = tr("Permissions for this conversation", "当前会话权限"),
+                    text = if (isRemote) {
+                        tr("Remote Permissions", "远程权限")
+                    } else {
+                        tr("Permissions for this conversation", "当前会话权限")
+                    },
                     style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp),
                     color = colors.inkSecondary,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
@@ -141,14 +128,10 @@ fun PermissionsPresetOverlayScreen(
                             .fillMaxWidth()
                             .background(if (selected) Color.White.copy(alpha = 0.06f) else Color.Transparent)
                             .clickable {
-                                scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                                    val rpc = if (coordinator.isVerificationMode) null else coordinator.connectionStore.activeClient()
-                                    coordinator.settingsStore.setPermissionPreset(
-                                        client = rpc,
-                                        cascadeId = chatState.activeCascadeId.ifBlank { "cas-rate-limiter" },
-                                        preset = preset,
-                                    )
-                                }
+                                coordinator.settingsStore.selectPermissionPreset(
+                                    preset = preset,
+                                    isRemote = isRemote,
+                                )
                                 onDismiss()
                             }
                             .padding(horizontal = 18.dp, vertical = 11.dp)

@@ -81,6 +81,17 @@ public fun AgentPermissionPreset.localizedTitle(language: AppLanguage): String =
     AgentPermissionPreset.INHERIT_GLOBAL -> language.t("Inherit Global", "跟随全局")
 }
 
+public fun AgentPermissionPreset.localizedSummaryDescription(language: AppLanguage): String = when (this) {
+    AgentPermissionPreset.REQUEST_REVIEW -> language.t("Every command requires approval.", "每条命令都需要审批。")
+    AgentPermissionPreset.DEFAULT_POLICY -> language.t("Ask before sensitive operations.", "敏感操作前先征求确认。")
+    AgentPermissionPreset.AUTO -> language.t("Automatically decide if commands run.", "自动判断是否直接执行命令。")
+    AgentPermissionPreset.TURBO -> language.t("Run all commands without restrictions.", "无限制自动执行所有命令。")
+    AgentPermissionPreset.INHERIT_GLOBAL -> language.t(
+        "Follow your global workstation or remote agent preset.",
+        "沿用全局工作站或云端代理权限策略。",
+    )
+}
+
 public fun AgentPermissionPreset.localizedDescription(language: AppLanguage): String = when (this) {
     AgentPermissionPreset.REQUEST_REVIEW -> language.t(
         "Ask before running commands, editing outside workspace, or opening browser",
@@ -91,8 +102,8 @@ public fun AgentPermissionPreset.localizedDescription(language: AppLanguage): St
         "沙盒内终端命令自动安全执行，敏感操作需先确认",
     )
     AgentPermissionPreset.AUTO -> language.t(
-        "Automatically approve routine edits & sandboxed commands",
-        "自动批准常规代码编辑与沙盒内命令",
+        "Sandboxed by default; safe outside-sandbox commands auto-evaluated",
+        "默认沙盒运行，沙盒外安全命令自动评估放行",
     )
     AgentPermissionPreset.TURBO -> language.t(
         "Maximum autonomy — execute commands and edits without stopping",

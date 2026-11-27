@@ -1604,6 +1604,52 @@ extension AntigravityRPCClient {
         }
     }
 
+    /// Builds the upstream `cascadeConfig.plannerConfig.toolConfig` dictionary for a resolved `AgentPermissionPreset`.
+    /// Explicitly encodes local `Auto` (`CASCADE_COMMANDS_AUTO_EXECUTION_AUTO`) distinct from `Default`, `Request Review`, and `Turbo`.
+    public static func buildToolConfig(for preset: AgentPermissionPreset) -> [String: JSONValue] {
+        switch preset {
+        case .requestReview:
+            return [
+                "runCommand": .object([
+                    "autoCommandConfig": .object([
+                        "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_OFF")
+                    ])
+                ]),
+                "notifyUser": .object([
+                    "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_ALWAYS")
+                ])
+            ]
+        case .auto:
+            return [
+                "runCommand": .object([
+                    "autoCommandConfig": .object([
+                        "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_AUTO")
+                    ])
+                ]),
+                "notifyUser": .object([
+                    "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_AUTO")
+                ])
+            ]
+        case .turbo:
+            return [
+                "runCommand": .object([
+                    "autoCommandConfig": .object([
+                        "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_EAGER")
+                    ])
+                ]),
+                "notifyUser": .object([
+                    "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_TURBO")
+                ])
+            ]
+        case .defaultPolicy, .inheritGlobal:
+            return [
+                "notifyUser": .object([
+                    "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_AUTO")
+                ])
+            ]
+        }
+    }
+
     /// Sends a user prompt + rich multimodal/context items + model/mode/effort/permission config (`SendUserCascadeMessage`).
     /// Encodes `Planning` vs `Fast` via `conversational.agenticMode` (`CONVERSATIONAL_PLANNER_MODE_DEFAULT`),
     /// applies the selected `AgentPermissionPreset` via `plannerConfig.toolConfig`,
@@ -1700,41 +1746,8 @@ extension AntigravityRPCClient {
             : .object(["model": .string(protoModel)])
 
         let isRemoteCloud = Self.isRemoteCloudCascade(cascadeId: cascadeId, isCloud: isCloud)
-        let effectivePermission: AgentPermissionPreset = {
-            if let preset = permissionPreset, preset != .inheritGlobal {
-                return preset
-            }
-            return AgentPermissionPreset.defaultPreset(isRemote: isRemoteCloud)
-        }()
-        var toolConfig: [String: JSONValue] = [
-            "code": .object(["allowEditGitignore": .bool(true)]),
-            "viewFile": .object(["allowViewGitignore": .bool(true)]),
-            "grep": .object(["allowAccessGitignore": .bool(true)])
-        ]
-        switch effectivePermission {
-        case .requestReview:
-            toolConfig["runCommand"] = .object([
-                "autoCommandConfig": .object([
-                    "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_OFF")
-                ])
-            ])
-            toolConfig["notifyUser"] = .object([
-                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_ALWAYS")
-            ])
-        case .defaultPolicy, .auto, .inheritGlobal:
-            toolConfig["notifyUser"] = .object([
-                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_AUTO")
-            ])
-        case .turbo:
-            toolConfig["runCommand"] = .object([
-                "autoCommandConfig": .object([
-                    "autoExecutionPolicy": .string("CASCADE_COMMANDS_AUTO_EXECUTION_EAGER")
-                ])
-            ])
-            toolConfig["notifyUser"] = .object([
-                "artifactReviewMode": .string("ARTIFACT_REVIEW_MODE_TURBO")
-            ])
-        }
+        let effectivePermission = (permissionPreset ?? .inheritGlobal).resolvedForRuntime(isRemote: isRemoteCloud)
+        let toolConfig = Self.buildToolConfig(for: effectivePermission)
 
         var plannerConfig: [String: JSONValue] = [
             "conversational": .object([

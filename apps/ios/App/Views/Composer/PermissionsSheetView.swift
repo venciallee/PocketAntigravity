@@ -31,7 +31,7 @@ public struct PermissionsPresetListCard: View {
     }
 
     private var selectedPreset: AgentPermissionPreset {
-        isRemote ? store.remotePermissionPreset : store.localPermissionPreset
+        store.permissionPreset(isRemote: isRemote)
     }
 
     private var presets: [AgentPermissionPreset] {
@@ -157,22 +157,29 @@ public struct PermissionsPresetListCard: View {
 /// Compact native iOS sheet for selecting `Remote Permissions` / `Permissions` directly from the composer shield button.
 public struct PermissionsSheetView: View {
     @Bindable public var store: AntigravitySessionStore
+    public var isRemoteOverride: Bool?
     public var onDismiss: (() -> Void)?
 
     public static let sheetSurfaceColor = AntigravityTheme.surfaceSheet
 
     public init(
         store: AntigravitySessionStore,
+        isRemoteOverride: Bool? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.store = store
+        self.isRemoteOverride = isRemoteOverride
         self.onDismiss = onDismiss
     }
 
     private var lang: AppLanguage { store.appearancePreferences.language }
 
+    private var resolvedIsRemote: Bool {
+        isRemoteOverride ?? store.isActiveSessionCloud
+    }
+
     private var headerTitle: String {
-        store.isActiveSessionCloud
+        resolvedIsRemote
             ? lang.t("Remote Permissions", "远程权限")
             : lang.t("Permissions", "权限设置")
     }
@@ -220,7 +227,10 @@ public struct PermissionsSheetView: View {
                 .overlay(AntigravityTheme.subtleDivider)
 
             ScrollView(.vertical, showsIndicators: false) {
-                PermissionsPresetListCard(store: store)
+                PermissionsPresetListCard(
+                    store: store,
+                    isRemoteOverride: resolvedIsRemote
+                )
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
                     .padding(.bottom, 24)
@@ -229,24 +239,27 @@ public struct PermissionsSheetView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Self.sheetSurfaceColor.ignoresSafeArea())
-        .sensoryFeedback(.selection, trigger: store.activePermissionPreset)
+        .sensoryFeedback(.selection, trigger: store.permissionPreset(isRemote: resolvedIsRemote))
     }
 }
 
 /// State `UE07B_PERMISSIONS_PRESET`: Anchored composer Permissions Preset popover (`docs/ue/ios/ios-preset.png`).
 public struct PermissionsPresetPopoverView: View {
     @Bindable public var store: AntigravitySessionStore
+    public var isRemoteOverride: Bool?
     public var showHomeBackdrop: Bool
     public var onDismiss: (() -> Void)?
     public var onOpenSettings: (() -> Void)?
 
     public init(
         store: AntigravitySessionStore,
+        isRemoteOverride: Bool? = nil,
         showHomeBackdrop: Bool = true,
         onDismiss: (() -> Void)? = nil,
         onOpenSettings: (() -> Void)? = nil
     ) {
         self.store = store
+        self.isRemoteOverride = isRemoteOverride
         self.showHomeBackdrop = showHomeBackdrop
         self.onDismiss = onDismiss
         self.onOpenSettings = onOpenSettings
@@ -254,8 +267,16 @@ public struct PermissionsPresetPopoverView: View {
 
     private var lang: AppLanguage { store.appearancePreferences.language }
 
+    private var resolvedIsRemote: Bool {
+        isRemoteOverride ?? store.isActiveSessionCloud
+    }
+
     private var presets: [AgentPermissionPreset] {
-        [.requestReview, .defaultPolicy, .auto, .turbo]
+        AgentPermissionPreset.availablePresets(isRemote: resolvedIsRemote)
+    }
+
+    private var selectedPreset: AgentPermissionPreset {
+        store.permissionPreset(isRemote: resolvedIsRemote)
     }
 
     public var body: some View {
@@ -285,7 +306,11 @@ public struct PermissionsPresetPopoverView: View {
             VStack(spacing: 12) {
                 // Anchored Popover Card aligned above `🛡 Default ⌄` pill
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(lang.t("Permissions for this conversation", "当前对话权限"))
+                    Text(
+                        resolvedIsRemote
+                            ? lang.t("Remote Permissions", "远程权限")
+                            : lang.t("Permissions for this conversation", "当前对话权限")
+                    )
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(AntigravityTheme.textSecondary)
                         .padding(.horizontal, 16)
@@ -293,14 +318,14 @@ public struct PermissionsPresetPopoverView: View {
                         .padding(.bottom, 4)
 
                     ForEach(presets) { preset in
-                        let isSelected = (store.activePermissionPreset == preset)
+                        let isSelected = (selectedPreset == preset)
                         let shieldColor: Color = {
                             if isSelected { return AntigravityTheme.accentPeriwinkle }
                             if preset == .turbo { return AntigravityTheme.statusWaiting }
                             return AntigravityTheme.textBody
                         }()
                         Button {
-                            store.setActivePermissionPreset(preset)
+                            store.setActivePermissionPreset(preset, isRemoteOverride: resolvedIsRemote)
                             onDismiss?()
                         } label: {
                             HStack(alignment: .top, spacing: 12) {
