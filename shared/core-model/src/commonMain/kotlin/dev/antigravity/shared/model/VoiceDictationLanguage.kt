@@ -69,11 +69,26 @@ public object VoiceDictationLanguageSerializer : ResilientEnumSerializer<VoiceDi
 )
 
 /**
- * Pure cross-platform speech recognition locale resolver shared across Android & iOS.
+ * Candidate speech transcription output evaluated during automatic bilingual language detection.
+ *
+ * Mirrors `AntigravityData.VoiceTranscriptCandidate` on iOS so both platforms share identical
+ * auto-fallback thresholds and confidence/script coherence scoring.
+ */
+public data class VoiceTranscriptCandidate(
+    public val localeTag: String,
+    public val text: String,
+    public val averageConfidence: Double = 0.0,
+    public val hasPopulatedConfidence: Boolean = false,
+)
+
+/**
+ * Pure cross-platform speech recognition locale resolver & auto-detection evaluator shared across
+ * Android & iOS.
  *
  * Prevents the classic iOS/Android bug where an app without full OS locale bundles receives
  * `Locale.current = "en_CN"` on a Chinese phone and mistakenly transcribes Chinese speech
- * with an English recognizer.
+ * with an English recognizer, and supports automatic bilingual Chinese <-> English detection
+ * without requiring manual language switching.
  */
 public object VoiceLocaleResolver {
     /**
@@ -126,13 +141,54 @@ public object VoiceLocaleResolver {
     }
 
     /**
+     * Infers a coarse BCP-47 speech locale from freeform text (draft, recent conversation turns,
+     * or recognized transcript) using Unicode script counts.
+     */
+    public fun inferLocaleTagFromText(text: String?): String? {
+        val trimmed = text?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+
+        var cjkIdeographs = 0
+        var japaneseKana = 0
+        var koreanHangul = 0
+        var latinLetters = 0
+
+        for (ch in trimmed) {
+            val code = ch.code
+            when {
+                code in 0x3040..0x30FF -> japaneseKana += 1
+                code in 0xAC00..0xD7AF || code in 0x1100..0x11FF -> koreanHangul += 1
+                code in 0x4E00..0x9FFF || code in 0x3400..0x4DBF || code in 0xF900..0xFAFF -> cjkIdeographs += 1
+                code in 'A'.code..'Z'.code || code in 'a'.code..'z'.code -> latinLetters += 1
+            }
+        }
+
+        return when {
+            japaneseKana >= 2 -> "ja-JP"
+            koreanHangul >= 2 -> "ko-KR"
+            cjkIdeographs >= 2 || (cjkIdeographs >= 1 && latinLetters <= 8) -> "zh-CN"
+            latinLetters >= 12 && cjkIdeographs == 0 && japaneseKana == 0 && koreanHangul == 0 -> "en-US"
+            else -> null
+        }
+    }
+
+    /**
      * Builds the ordered list of candidate BCP-47 speech recognizer locale tags.
+     *
+     * For bilingual Chinese/English devices (e.g., English-OS iPhone with Chinese secondary OS
+     * language or Chinese keyboard enabled), prefers the user's Chinese recognizer ahead of
+     * `en-US` because Chinese recognizers accurately handle both Mandarin and Chinese-English
+     * code-switching, whereas `en-US` turns Chinese speech into English gibberish — while keeping
+     * `en-US` immediately behind for automatic runtime fallback when pure English is spoken.
      */
     public fun buildCandidateLocaleTags(
         preference: VoiceDictationLanguage,
         appLanguage: AppLanguage,
         systemPreferredLanguages: List<String>,
         activeKeyboardLanguage: String? = null,
+        installedKeyboardLanguages: List<String> = emptyList(),
+        contextTextHint: String? = null,
+        lastDetectedLocaleTag: String? = null,
         fallbackLocaleTag: String? = null,
     ): List<String> {
         val result = LinkedHashSet<String>()
@@ -150,34 +206,240 @@ public object VoiceLocaleResolver {
             val primarySystem = systemPreferredLanguages.firstOrNull { it.isNotBlank() }
             val primarySystemLang = primaryLanguageCode(primarySystem)
             val keyboardLang = primaryLanguageCode(activeKeyboardLanguage)
+            val contextLocale = inferLocaleTagFromText(contextTextHint)
+            val contextLang = primaryLanguageCode(contextLocale)
+            val lastDetectedLang = primaryLanguageCode(lastDetectedLocaleTag)
 
-            // 2. If user switched in-app language to Chinese, prefer their Chinese variant (or zh-CN).
-            if (appLanguage == AppLanguage.ZH_HANS) {
-                if (primarySystemLang == "zh" || primarySystemLang == "yue") {
-                    addNormalized(primarySystem)
-                }
-                addNormalized("zh-CN")
+            val preferredChineseSource = buildList {
+                if (!activeKeyboardLanguage.isNullOrBlank()) add(activeKeyboardLanguage)
+                addAll(systemPreferredLanguages)
+                addAll(installedKeyboardLanguages)
+            }.firstOrNull { tag ->
+                val lang = primaryLanguageCode(tag)
+                lang == "zh" || lang == "yue"
             }
 
-            // 3. On an English-system device, if the user currently has a non-English keyboard open
+            val hasChineseSignal = appLanguage == AppLanguage.ZH_HANS ||
+                keyboardLang == "zh" ||
+                keyboardLang == "yue" ||
+                preferredChineseSource != null ||
+                contextLang == "zh" ||
+                lastDetectedLang == "zh" ||
+                lastDetectedLang == "yue"
+
+            // 2. Active conversation/draft text containing Chinese immediately prioritizes the
+            //    user's preferred Chinese variant.
+            if (contextLang == "zh") {
+                addNormalized(preferredChineseSource ?: "zh-CN")
+            }
+
+            // 3. Pure-English conversation context combined with recent English voice detection
+            //    keeps English primary (with Chinese right behind for auto-fallback).
+            if (contextLang == "en" && lastDetectedLang == "en") {
+                addNormalized(lastDetectedLocaleTag)
+                addNormalized("en-US")
+            }
+
+            // 4. If user switched in-app language to Chinese, prefer their Chinese variant (or zh-CN).
+            if (appLanguage == AppLanguage.ZH_HANS) {
+                addNormalized(preferredChineseSource ?: "zh-CN")
+            }
+
+            // 5. On an English-system device, if the user currently has a non-English keyboard open
             //    (e.g. Chinese Pinyin keyboard), honor the active keyboard language first.
             if (primarySystemLang == "en" && keyboardLang != null && keyboardLang != "en") {
                 addNormalized(activeKeyboardLanguage)
             }
 
-            // 4. OS preferred languages (MUST come before Locale.current which iOS pins to app bundle language).
+            // 6. Bilingual English-OS user with Chinese OS secondary language or installed Chinese
+            //    keyboard: start with Chinese unless their very last auto-detected turn was English.
+            if (primarySystemLang == "en" && hasChineseSignal && lastDetectedLang != "en") {
+                addNormalized(preferredChineseSource ?: "zh-CN")
+            }
+
+            // 7. Remembered auto-detected locale from the previous turn (when not overridden above).
+            addNormalized(lastDetectedLocaleTag)
+
+            // 8. OS preferred languages (MUST come before Locale.current which iOS pins to app bundle).
             for (sysLang in systemPreferredLanguages) {
                 addNormalized(sysLang)
             }
 
-            // 5. Active keyboard as fallback if not already added.
+            // 9. Active & installed keyboards as additional bilingual signals.
             addNormalized(activeKeyboardLanguage)
+            for (kbLang in installedKeyboardLanguages) {
+                addNormalized(kbLang)
+            }
+
+            // 10. Context locale hint (e.g. ja-JP / ko-KR / en-US).
+            addNormalized(contextLocale)
         }
 
-        // 6. Fallback locale & ultimate en-US safety net.
+        // 11. Fallback locale & ultimate en-US safety net.
         addNormalized(fallbackLocaleTag)
         result.add("en-US")
         return result.toList()
+    }
+
+    /**
+     * Produces a compact deduplicated list of distinct primary-language BCP-47 tags for
+     * Android 14+ native language detection/switching (`EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES`)
+     * and iOS automatic PCM-replay alternate locale selection.
+     */
+    public fun buildAutoDetectionAllowedLocales(
+        candidates: List<String>,
+        includeBilingualFallback: Boolean = false,
+        maxCount: Int = 4,
+    ): List<String> {
+        if (maxCount <= 0) return emptyList()
+        val selected = ArrayList<String>(maxCount)
+        val seenPrimary = HashSet<String>()
+
+        for (candidate in candidates) {
+            if (selected.size >= maxCount) break
+            val normalized = normalizeSpeechLocaleTags(candidate).firstOrNull() ?: continue
+            val primary = primaryLanguageCode(normalized) ?: continue
+            val bucket = if (primary == "yue") "zh" else primary
+            if (seenPrimary.add(bucket)) {
+                selected.add(normalized)
+            }
+        }
+
+        if (includeBilingualFallback && selected.size == 1 && maxCount >= 2) {
+            val primary = primaryLanguageCode(selected[0])
+            if (primary == "en") {
+                selected.add("zh-CN")
+            } else if (primary == "zh" || primary == "yue") {
+                selected.add("en-US")
+            }
+        }
+
+        return selected
+    }
+
+    /**
+     * Decides whether an automatic bilingual session should probe [alternateLocaleTag]
+     * using buffered PCM audio (either mid-utterance when silent/low-confidence, or on finalize).
+     */
+    public fun shouldProbeAlternateLocale(
+        primary: VoiceTranscriptCandidate,
+        alternateLocaleTag: String?,
+        activeSpeechDurationMs: Int,
+        isFinal: Boolean,
+    ): Boolean {
+        val altTag = alternateLocaleTag?.trim().orEmpty()
+        if (altTag.isEmpty()) return false
+        val primaryLang = primaryLanguageCode(primary.localeTag) ?: return false
+        val altLang = primaryLanguageCode(altTag) ?: return false
+        if (primaryLang == altLang) return false
+        if (activeSpeechDurationMs < 400) return false
+
+        val trimmedText = primary.text.trim()
+        if (trimmedText.isEmpty()) {
+            return isFinal || activeSpeechDurationMs >= 1600
+        }
+
+        if (primary.hasPopulatedConfidence) {
+            if (!isFinal) {
+                return activeSpeechDurationMs >= 1400 && primary.averageConfidence < 0.52
+            }
+            if (primary.averageConfidence < 0.76) {
+                return true
+            }
+        }
+
+        if (!isFinal) return false
+
+        val inferredLang = primaryLanguageCode(inferLocaleTagFromText(trimmedText))
+        // Chinese recognizer produced pure English text -> verify with en-US for proper casing/accuracy.
+        if (primaryLang == "zh" && altLang == "en" && inferredLang == "en") {
+            return true
+        }
+        // English recognizer returned unpopulated confidence on a short or chopped phrase ->
+        // verify against Chinese in case Chinese speech was phonetically mis-transcribed as English.
+        if (primaryLang == "en" && altLang == "zh" && !primary.hasPopulatedConfidence) {
+            return looksLikeSuspiciousEnglishPhoneticGibberish(trimmedText)
+        }
+        return false
+    }
+
+    /**
+     * Compares primary and alternate recognition candidates for the same audio buffer and
+     * selects the higher-quality transcript with hysteresis to avoid noisy flip-flops.
+     */
+    public fun chooseBetterAutoDetectTranscript(
+        primary: VoiceTranscriptCandidate,
+        alternate: VoiceTranscriptCandidate,
+    ): VoiceTranscriptCandidate {
+        val primaryText = primary.text.trim()
+        val alternateText = alternate.text.trim()
+        if (primaryText.isEmpty() && alternateText.isNotEmpty()) return alternate
+        if (alternateText.isEmpty()) return primary
+
+        val primaryScore = scoreAutoDetectCandidate(primary)
+        val alternateScore = scoreAutoDetectCandidate(alternate)
+
+        if (alternateScore >= primaryScore + 0.05) {
+            return alternate
+        }
+
+        val primaryLang = primaryLanguageCode(primary.localeTag)
+        val altLang = primaryLanguageCode(alternate.localeTag)
+        val primaryInferred = primaryLanguageCode(inferLocaleTagFromText(primaryText))
+        val altInferred = primaryLanguageCode(inferLocaleTagFromText(alternateText))
+        if (primaryLang == "zh" &&
+            altLang == "en" &&
+            primaryInferred == "en" &&
+            altInferred == "en" &&
+            alternateScore >= primaryScore - 0.02
+        ) {
+            return alternate
+        }
+
+        return primary
+    }
+
+    internal fun looksLikeSuspiciousEnglishPhoneticGibberish(text: String): Boolean {
+        val words = text.trim()
+            .split(Regex("\\s+"))
+            .map { token -> token.filter { it.isLetter() } }
+            .filter { it.isNotEmpty() }
+        if (words.isEmpty()) return true
+        if (words.size <= 5) return true
+        val avgWordLength = words.sumOf { it.length }.toDouble() / words.size.toDouble()
+        return avgWordLength <= 3.6
+    }
+
+    private fun scoreAutoDetectCandidate(candidate: VoiceTranscriptCandidate): Double {
+        val trimmed = candidate.text.trim()
+        if (trimmed.isEmpty()) return 0.0
+
+        var score = if (candidate.hasPopulatedConfidence) {
+            candidate.averageConfidence.coerceIn(0.0, 1.0)
+        } else {
+            0.60
+        }
+
+        val candLang = primaryLanguageCode(candidate.localeTag)
+        val inferred = primaryLanguageCode(inferLocaleTagFromText(trimmed))
+
+        if (candLang == "zh") {
+            if (inferred == "zh") score += 0.06
+            if (inferred == "en") score -= 0.08
+        } else if (candLang == "en") {
+            if (inferred == "en") score += 0.04
+            val words = trimmed.split(Regex("\\s+"))
+                .map { token -> token.filter { it.isLetter() } }
+                .filter { it.isNotEmpty() }
+            if (words.size >= 3) {
+                val avgLen = words.sumOf { it.length }.toDouble() / words.size.toDouble()
+                if (avgLen < 3.4) {
+                    score -= 0.08
+                }
+            }
+        }
+
+        return score
     }
 
     /**

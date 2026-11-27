@@ -989,12 +989,42 @@ class AndroidInteractiveE2eTest {
         composeRule.waitForIdle()
         assertEquals(0, composeRule.onAllNodesWithTag("composer-voice-error").fetchSemanticsNodes().size)
 
-        // 4. Verify Android VoiceDictationController honors AppLanguage.ZH_HANS & explicit language persistence
+        // 4. Verify Android VoiceDictationController honors AppLanguage.ZH_HANS, conversation context
+        //    hints, API 34+ native automatic language detection/switching extras, and persistence
         val controller = dev.antigravity.android.ui.chat.VoiceDictationController(app)
         controller.selectLanguage(dev.antigravity.shared.model.VoiceDictationLanguage.AUTO)
         assertEquals("zh-CN", controller.resolveSpeechLocaleTag(AppLanguage.ZH_HANS))
+        assertEquals(
+            "zh-CN",
+            controller.resolveSpeechLocaleTag(AppLanguage.ENGLISH, contextTextHint = "帮我排查一下登录超时问题"),
+        )
+        assertEquals(
+            "自动 · 中文",
+            controller.activeLanguageBadgeLabel(AppLanguage.ZH_HANS),
+        )
+        val (api34Intent, api34Locale) = controller.buildRecognizerIntent(
+            appLanguage = AppLanguage.ENGLISH,
+            contextTextHint = "帮我排查一下登录超时问题",
+            enableApi34AutoSwitch = true,
+            sdkInt = android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
+        )
+        assertEquals("zh-CN", api34Locale)
+        assertTrue(api34Intent.getBooleanExtra(android.speech.RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, false))
+        assertEquals(
+            arrayListOf("zh-CN", "en-US"),
+            api34Intent.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES),
+        )
+        assertEquals(
+            android.speech.RecognizerIntent.LANGUAGE_SWITCH_BALANCED,
+            api34Intent.getStringExtra(android.speech.RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH),
+        )
+        assertEquals(
+            arrayListOf("zh-CN", "en-US"),
+            api34Intent.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES),
+        )
         controller.selectLanguage(dev.antigravity.shared.model.VoiceDictationLanguage.ZH_CN)
         assertEquals("zh-CN", controller.resolveSpeechLocaleTag(AppLanguage.ENGLISH))
+        assertEquals("中文", controller.activeLanguageBadgeLabel(AppLanguage.ENGLISH))
         val reloaded = dev.antigravity.android.ui.chat.VoiceDictationController(app)
         assertEquals(dev.antigravity.shared.model.VoiceDictationLanguage.ZH_CN, reloaded.preferredLanguage)
         reloaded.selectLanguage(dev.antigravity.shared.model.VoiceDictationLanguage.AUTO)

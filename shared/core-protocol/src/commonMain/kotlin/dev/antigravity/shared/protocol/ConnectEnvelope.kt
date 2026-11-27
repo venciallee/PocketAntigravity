@@ -58,46 +58,75 @@ public object ConnectEnvelope {
  */
 public class ConnectStreamParser {
     private var buffer = ByteArray(0)
+    private var readOffset = 0
+    private var writeOffset = 0
 
     public val hasBufferedBytes: Boolean
-        get() = buffer.isNotEmpty()
+        get() = writeOffset > readOffset
 
     public fun feedByte(byte: Byte): ConnectEnvelopeFrame? =
         feed(byteArrayOf(byte)).firstOrNull()
 
     public fun feed(chunk: ByteArray): List<ConnectEnvelopeFrame> {
         if (chunk.isNotEmpty()) {
-            val combined = ByteArray(buffer.size + chunk.size)
-            buffer.copyInto(combined, destinationOffset = 0)
-            chunk.copyInto(combined, destinationOffset = buffer.size)
-            buffer = combined
+            val available = writeOffset - readOffset
+            val needed = available + chunk.size
+            if (buffer.size - writeOffset < chunk.size) {
+                if (buffer.size >= needed) {
+                    if (available > 0 && readOffset > 0) {
+                        buffer.copyInto(buffer, destinationOffset = 0, startIndex = readOffset, endIndex = writeOffset)
+                    }
+                    readOffset = 0
+                    writeOffset = available
+                } else {
+                    var newCap = if (buffer.isEmpty()) 4096 else buffer.size
+                    while (newCap < needed) newCap = newCap shl 1
+                    val next = ByteArray(newCap)
+                    if (available > 0) {
+                        buffer.copyInto(next, destinationOffset = 0, startIndex = readOffset, endIndex = writeOffset)
+                    }
+                    buffer = next
+                    readOffset = 0
+                    writeOffset = available
+                }
+            }
+            chunk.copyInto(buffer, destinationOffset = writeOffset)
+            writeOffset += chunk.size
         }
 
         val frames = mutableListOf<ConnectEnvelopeFrame>()
-        var offset = 0
 
-        while (buffer.size - offset >= 5) {
-            val flagByte = buffer[offset].toInt() and 0xFF
-            val b1 = (buffer[offset + 1].toInt() and 0xFF) shl 24
-            val b2 = (buffer[offset + 2].toInt() and 0xFF) shl 16
-            val b3 = (buffer[offset + 3].toInt() and 0xFF) shl 8
-            val b4 = buffer[offset + 4].toInt() and 0xFF
+        while (writeOffset - readOffset >= 5) {
+            val flagByte = buffer[readOffset].toInt() and 0xFF
+            val b1 = (buffer[readOffset + 1].toInt() and 0xFF) shl 24
+            val b2 = (buffer[readOffset + 2].toInt() and 0xFF) shl 16
+            val b3 = (buffer[readOffset + 3].toInt() and 0xFF) shl 8
+            val b4 = buffer[readOffset + 4].toInt() and 0xFF
             val payloadLength = b1 or b2 or b3 or b4
 
-            if (payloadLength < 0 || buffer.size - offset < 5 + payloadLength) {
+            if (payloadLength < 0 || writeOffset - readOffset < 5 + payloadLength) {
                 break
             }
 
-            val payloadStart = offset + 5
+            val payloadStart = readOffset + 5
             val payloadEnd = payloadStart + payloadLength
             val payload = buffer.copyOfRange(payloadStart, payloadEnd)
-            offset = payloadEnd
+            readOffset = payloadEnd
 
             frames.add(ConnectEnvelopeFrame(flags = flagByte, payload = payload))
         }
 
-        if (offset > 0) {
-            buffer = if (offset >= buffer.size) ByteArray(0) else buffer.copyOfRange(offset, buffer.size)
+        if (readOffset == writeOffset) {
+            readOffset = 0
+            writeOffset = 0
+            if (buffer.size > 262_144) {
+                buffer = ByteArray(0)
+            }
+        } else if (readOffset > 65_536 && readOffset * 2 >= writeOffset) {
+            val remaining = writeOffset - readOffset
+            buffer.copyInto(buffer, destinationOffset = 0, startIndex = readOffset, endIndex = writeOffset)
+            readOffset = 0
+            writeOffset = remaining
         }
 
         return frames

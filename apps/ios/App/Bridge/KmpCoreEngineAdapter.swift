@@ -159,6 +159,25 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
         }
     }
 
+    public func fetchBinaryStepDelta(
+        cascadeId: String,
+        startIndex: Int,
+        knownStepCount: Int,
+        instanceUuidOverride: String?
+    ) async throws -> [AntigravityData.CascadeStep] {
+        do {
+            let steps = try await coordinator.fetchBinaryStepDelta(
+                cascadeId: cascadeId,
+                startIndex: Int32(startIndex),
+                knownStepCount: Int32(knownStepCount),
+                instanceUuidOverride: instanceUuidOverride
+            )
+            return steps.map(KmpModelConverters.toSwiftStep)
+        } catch {
+            throw KmpModelConverters.mapKmpError(error)
+        }
+    }
+
     public func preloadSteps(
         cascadeId: String,
         knownStepCount: Int,
@@ -177,6 +196,48 @@ public final class KmpCoreEngineAdapter: AntigravityKmpEnginePort, @unchecked Se
             return steps.map(KmpModelConverters.toSwiftStep)
         } catch {
             throw KmpModelConverters.mapKmpError(error)
+        }
+    }
+
+    public var supportsNativeLiveChatStream: Bool { true }
+
+    public func startLiveChatStream(
+        cascadeId: String,
+        isCloud: Bool,
+        instanceUuidOverride: String?
+    ) {
+        coordinator.startLiveChatStream(
+            cascadeId: cascadeId,
+            isCloud: isCloud,
+            instanceUuidOverride: instanceUuidOverride
+        )
+    }
+
+    public func stopLiveChatStream() {
+        coordinator.stopLiveChatStream()
+    }
+
+    public func liveChatUpdatesStream() -> AsyncStream<AntigravityData.KmpLiveChatUpdate> {
+        return AsyncStream { continuation in
+            let task = Task { [self] in
+                for await update in self.coordinator.liveChatUpdates {
+                    if Task.isCancelled { break }
+                    let mappedSteps = update.steps.map(KmpModelConverters.toSwiftStep)
+                    continuation.yield(
+                        AntigravityData.KmpLiveChatUpdate(
+                            cascadeId: update.cascadeId,
+                            steps: mappedSteps,
+                            totalLength: update.totalLength.map { Int($0.int32Value) },
+                            runStatus: update.runStatus,
+                            isSnapshotComplete: update.isSnapshotComplete
+                        )
+                    )
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
         }
     }
 

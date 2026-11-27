@@ -1221,13 +1221,10 @@ extension AntigravitySessionStore {
         activeStepSyncPollsUntilIdle = pollUntilIdle
         if countsAsForeground {
             activeForegroundStepSyncCount += 1
-            let competingPreloadIds = inFlightPreloadTasksByCascadeId.keys.filter { $0 != cascadeId }
-            for otherId in competingPreloadIds {
-                inFlightPreloadTasksByCascadeId.removeValue(forKey: otherId)?.cancel()
-                preloadAttemptedAtByCascadeId.removeValue(forKey: otherId)
-                conversationPreloadQueue.removeAll { $0 == otherId }
-                conversationPreloadQueue.insert(otherId, at: 0)
-            }
+            preemptNonTargetPreloads(keeping: cascadeId)
+        }
+        if pollUntilIdle, let engine = kmpEngine, engine.supportsNativeLiveChatStream {
+            startKmpLiveChatSubscriptionIfNeeded()
         }
         stepPollingTask = Task { [weak self] in
             defer {
@@ -1283,6 +1280,17 @@ extension AntigravitySessionStore {
                         self.isLoadingSteps = false
                         self.stepLoadErrorText = nil
                     }
+                    if self.activeStepSyncPollsUntilIdle,
+                       let engine = self.kmpEngine,
+                       engine.supportsNativeLiveChatStream {
+                        let isCloudChat = currentSummary.map { self.isSummaryCloudRuntime($0) }
+                            ?? AntigravityCloudDetector.isCloudWorkspaceURI("", cascadeId: cascadeId)
+                        engine.startLiveChatStream(
+                            cascadeId: cascadeId,
+                            isCloud: isCloudChat,
+                            instanceUuidOverride: currentSummary?.originInstanceUuid
+                        )
+                    }
                     return
                 }
             }
@@ -1316,6 +1324,17 @@ extension AntigravitySessionStore {
                             self.syncedStepsMarkerByCascadeId[cascadeId] = (
                                 stepCount: max(refreshedSummary.stepCount, preloadedSteps.count),
                                 updatedAt: refreshedSummary.updatedAt
+                            )
+                        }
+                        if self.activeStepSyncPollsUntilIdle,
+                           let engine = self.kmpEngine,
+                           engine.supportsNativeLiveChatStream {
+                            let isCloudChat = refreshedSummary.map { self.isSummaryCloudRuntime($0) }
+                                ?? AntigravityCloudDetector.isCloudWorkspaceURI("", cascadeId: cascadeId)
+                            engine.startLiveChatStream(
+                                cascadeId: cascadeId,
+                                isCloud: isCloudChat,
+                                instanceUuidOverride: refreshedSummary?.originInstanceUuid
                             )
                         }
                         return
@@ -1357,7 +1376,17 @@ extension AntigravitySessionStore {
                 do {
                     let remoteSteps: [CascadeStep]
                     if let engine = self.kmpEngine {
-                        if useForceOnThisAttempt {
+                        if !useForceOnThisAttempt,
+                           !summaryIsCloud,
+                           let deltaMerged = try await self.tryFetchKmpIncrementalBinaryDelta(
+                               engine: engine,
+                               cascadeId: cascadeId,
+                               existingSteps: existingStepsSnapshot,
+                               knownStepCount: knownCount,
+                               instanceUuidOverride: originUuid
+                           ) {
+                            remoteSteps = deltaMerged
+                        } else if useForceOnThisAttempt {
                             remoteSteps = try await engine.forceSyncSteps(
                                 cascadeId: cascadeId,
                                 knownStepCount: knownCount,
@@ -1378,7 +1407,20 @@ extension AntigravitySessionStore {
                             knownStepCount: knownCount,
                             isCloud: summaryIsCloud,
                             instanceUuidOverride: originUuid,
-                            existingSteps: useForceOnThisAttempt ? [] : existingStepsSnapshot
+                            existingSteps: useForceOnThisAttempt ? [] : existingStepsSnapshot,
+                            onPartialSteps: { [weak self] partial in
+                                await MainActor.run {
+                                    guard let self, self.stepSyncGeneration == generation else { return }
+                                    self.applyKmpLiveChatUpdate(
+                                        KmpLiveChatUpdate(
+                                            cascadeId: cascadeId,
+                                            steps: partial,
+                                            totalLength: max(knownCount, partial.count),
+                                            isSnapshotComplete: false
+                                        )
+                                    )
+                                }
+                            }
                         )
                     } else {
                         break
@@ -1551,6 +1593,19 @@ extension AntigravitySessionStore {
                     break
                 }
 
+                // When running on the real KMP engine, hand off continuous real-time updates to
+                // `StreamAgentStateUpdates` (with built-in legacy delta fallback) instead of running a duplicate Swift polling loop.
+                if let engine = self.kmpEngine, engine.supportsNativeLiveChatStream {
+                    if isViewingThisChat || stillActive {
+                        engine.startLiveChatStream(
+                            cascadeId: cascadeId,
+                            isCloud: summaryIsCloud,
+                            instanceUuidOverride: originUuid
+                        )
+                    }
+                    break
+                }
+
                 if stillActive {
                     let interval = ConnectionPowerPolicy.activeStreamingStepPollInterval(
                         channel: self.activeHost.channel,
@@ -1590,6 +1645,107 @@ extension AntigravitySessionStore {
                     }
                 }
             }
+        }
+    }
+
+    /// Cancels in-flight background preload tasks for other conversations so foreground chat opens
+    /// immediately get full Relay/LAN bandwidth and Desktop server capacity.
+    internal func preemptNonTargetPreloads(keeping cascadeId: String) {
+        let keysToCancel = inFlightPreloadTasksByCascadeId.keys.filter { $0 != cascadeId }
+        for cid in keysToCancel {
+            inFlightPreloadTasksByCascadeId.removeValue(forKey: cid)?.cancel()
+            preloadAttemptedAtByCascadeId.removeValue(forKey: cid)
+            conversationPreloadQueue.removeAll { $0 == cid }
+            conversationPreloadQueue.insert(cid, at: 0)
+        }
+    }
+
+    /// Fetches only newly added tail steps via KMP `fetchBinaryStepDelta` when Swift already has
+    /// contiguous disk/memory-cached steps, eliminating cold-start full-history re-downloads and
+    /// cross-bridge conversion of hundreds of unchanged steps.
+    internal func tryFetchKmpIncrementalBinaryDelta(
+        engine: any AntigravityKmpEnginePort,
+        cascadeId: String,
+        existingSteps: [CascadeStep],
+        knownStepCount: Int,
+        instanceUuidOverride: String?
+    ) async throws -> [CascadeStep]? {
+        guard existingSteps.count >= 2 else { return nil }
+        if knownStepCount > 0 && knownStepCount < existingSteps.count { return nil }
+        guard existingSteps.first?.stepIndex == 0,
+              existingSteps.last?.stepIndex == existingSteps.count - 1 else {
+            return nil
+        }
+        let hostKey = instanceUuidOverride?.isEmpty == false ? instanceUuidOverride! : activeHost.instanceId
+        guard !kmpDeltaOffsetIgnoredHosts.contains(hostKey) else { return nil }
+
+        let deltaOffset = existingSteps.count - 1
+        let deltaSteps: [CascadeStep]
+        do {
+            deltaSteps = try await engine.fetchBinaryStepDelta(
+                cascadeId: cascadeId,
+                startIndex: deltaOffset,
+                knownStepCount: knownStepCount,
+                instanceUuidOverride: instanceUuidOverride
+            )
+        } catch let AntigravityRPCError.unauthorized(msg) {
+            throw AntigravityRPCError.unauthorized(msg)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+        guard let firstDelta = deltaSteps.first else { return nil }
+
+        let anchorStep = existingSteps[deltaOffset]
+        let matchesAnchor = Self.isStepAnchorMatch(cached: anchorStep, remote: firstDelta)
+        let looksLikeFullUnfiltered = deltaSteps.count >= existingSteps.count
+            && Self.isStepAnchorMatch(cached: existingSteps[0], remote: firstDelta)
+            && (!matchesAnchor || (knownStepCount > 0 && deltaOffset + deltaSteps.count > knownStepCount + 1))
+
+        if looksLikeFullUnfiltered {
+            kmpDeltaOffsetIgnoredHosts.insert(hostKey)
+            return deltaSteps.enumerated().map { idx, step in
+                if step.stepIndex == idx { return step }
+                var copy = step
+                copy.stepIndex = idx
+                return copy
+            }
+        }
+        guard matchesAnchor else { return nil }
+
+        var merged = Array(existingSteps[0..<deltaOffset])
+        merged.reserveCapacity(deltaOffset + deltaSteps.count)
+        merged.append(contentsOf: deltaSteps)
+        return merged
+    }
+
+    internal static func isStepAnchorMatch(cached: CascadeStep, remote: CascadeStep) -> Bool {
+        let typeMatches = cached.type == remote.type
+            || (cached.type == .unspecified && cached.rawTypeName != nil && cached.rawTypeName == remote.rawTypeName)
+        guard typeMatches else { return false }
+        if cached.createdAt.timeIntervalSince1970 > 1.0 && remote.createdAt.timeIntervalSince1970 > 1.0 {
+            return abs(cached.createdAt.timeIntervalSince(remote.createdAt)) <= 2.0
+        }
+        switch cached.type {
+        case .userInput:
+            return cached.userInput == remote.userInput
+        case .viewFile, .listDirectory, .viewContentChunk:
+            return cached.viewFile?.fileUri == remote.viewFile?.fileUri
+        case .codeAction:
+            return cached.codeAction?.targetFileUri == remote.codeAction?.targetFileUri
+        case .runCommand:
+            return cached.runCommand?.commandLine == remote.runCommand?.commandLine
+        case .search:
+            return cached.search?.query == remote.search?.query
+        case .taskBoundary:
+            return cached.taskBoundary?.taskName == remote.taskBoundary?.taskName
+        case .plannerResponse, .notifyUser:
+            let cachedResp = cached.plannerResponse?.response ?? ""
+            let remoteResp = remote.plannerResponse?.response ?? ""
+            return cachedResp.isEmpty || remoteResp.hasPrefix(String(cachedResp.prefix(24)))
+        default:
+            return true
         }
     }
 

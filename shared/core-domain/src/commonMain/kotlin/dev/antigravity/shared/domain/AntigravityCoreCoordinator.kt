@@ -30,6 +30,7 @@ import dev.antigravity.shared.platform.NoopNetworkReachabilityMonitor
 import dev.antigravity.shared.platform.PowerStateProviding
 import dev.antigravity.shared.platform.SecretStore
 import dev.antigravity.shared.platform.StaticPowerStateProvider
+import dev.antigravity.shared.protocol.AgentStateLiveUpdate
 import dev.antigravity.shared.protocol.AntigravityKmpRpcClient
 import dev.antigravity.shared.protocol.AntigravityRpcError
 import dev.antigravity.shared.protocol.BackendHandshakeResult
@@ -52,11 +53,14 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -125,10 +129,18 @@ public class AntigravityCoreCoordinator(
     private var consecutiveSyncFailures: Int = 0
     private var lastStreamErrorProbeAtMs: Long = 0L
 
+    private val _liveChatUpdates = MutableSharedFlow<AgentStateLiveUpdate>(
+        extraBufferCapacity = 32,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    public val liveChatUpdates: SharedFlow<AgentStateLiveUpdate> = _liveChatUpdates.asSharedFlow()
+    private var liveChatStreamJob: Job? = null
+    private var liveChatStreamCascadeId: String? = null
+
     private val preloadMutex = Mutex()
     private val preloadQueue = ArrayDeque<String>()
     private val preloadAttemptedAtMs = mutableMapOf<String, Long>()
-    private val inFlightPreloadJobs = linkedMapOf<String, Job>()
+    private val activePreloadJobsByCascadeId = linkedMapOf<String, Job>()
     private var preloadWorkerJob: Job? = null
     private val activeForegroundSyncCount = MutableStateFlow(0)
 
@@ -686,6 +698,243 @@ public class AntigravityCoreCoordinator(
         forceRefresh = true,
     )
 
+    public fun hasCachedSteps(cascadeId: String): Boolean =
+        chatStore.hasCachedSteps(cascadeId)
+
+    /**
+     * Seeds cached trajectory steps into KMP memory (used by iOS on cold start so
+     * `tryFetchIncrementalBinaryDelta` runs on the very first sync instead of re-fetching 0..N).
+     */
+    public fun seedCachedSteps(cascadeId: String, steps: List<CascadeStep>) {
+        chatStore.seedCachedSteps(cascadeId, steps)
+    }
+
+    /**
+     * Fetches a binary Protobuf step slice starting at [startIndex] without requiring full-history
+     * cross-bridge serialization. Used by iOS cold-start and incremental delta sync to fetch only
+     * newly added tail steps (`existingSteps.size - 1 .. N`).
+     */
+    @Throws(Throwable::class)
+    public suspend fun fetchBinaryStepDelta(
+        cascadeId: String,
+        startIndex: Int,
+        knownStepCount: Int = 0,
+        instanceUuidOverride: String? = null,
+    ): List<CascadeStep> {
+        if (cascadeId.isBlank() || startIndex < 0) return emptyList()
+        val client = connectionStore.activeClient() ?: return emptyList()
+        if (client.isBinaryProtobufStepsUnsupported(instanceUuidOverride)) return emptyList()
+        activeForegroundSyncCount.update { it + 1 }
+        return try {
+            preemptNonTargetPreloads(keepCascadeId = cascadeId)
+            val steps = client.fetchTrajectoryStepsProtobuf(
+                cascadeId = cascadeId,
+                startIndex = startIndex,
+                endIndex = knownStepCount,
+                instanceUuidOverride = instanceUuidOverride,
+                allowCrossHostFailover = false,
+            )
+            lastBackendActivityAtMs = currentTimeMillis()
+            steps
+        } finally {
+            activeForegroundSyncCount.update { (it - 1).coerceAtLeast(0) }
+        }
+    }
+
+    /**
+     * Starts real-time frame-by-frame synchronization for the active conversation [cascadeId].
+     *
+     * Uses `StreamAgentStateUpdates` server-streaming when supported by the host to deliver
+     * instant token/step/status updates with zero polling delay, and automatically falls back
+     * to incremental binary delta polling while a turn is active on legacy hosts.
+     */
+    public fun startLiveChatStream(
+        cascadeId: String,
+        isCloud: Boolean = false,
+        instanceUuidOverride: String? = null,
+    ) {
+        if (isVerificationMode || cascadeId.isBlank() || cascadeId.startsWith("cascade-new-")) return
+        if (liveChatStreamCascadeId == cascadeId && liveChatStreamJob?.isActive == true) return
+        stopLiveChatStream()
+
+        liveChatStreamCascadeId = cascadeId
+        liveChatStreamJob = scope.launch {
+            try {
+                preemptNonTargetPreloads(keepCascadeId = cascadeId)
+                var consecutiveStreamFailures = 0
+                var lastPersistedCount = chatStore.state.value.stepsByCascadeId[cascadeId]?.size ?: 0
+                var lastPersistMs = currentTimeMillis()
+
+                while (isActive) {
+                    val conn = connectionStore.state.value
+                    val client = connectionStore.activeClient()
+                    if (client == null || !conn.isConnected || conn.isNetworkingSuspended || !conn.isDeviceNetworkReachable) {
+                        delay(1_000L)
+                        continue
+                    }
+
+                    val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+                    val resolvedIsCloud = isCloud || (summary != null && isSummaryCloud(summary))
+                    val targetUuid = instanceUuidOverride ?: summary?.originInstanceUuid
+                    if (!resolvedIsCloud && summary != null && !isSummaryHostReachable(summary, conn)) {
+                        delay(2_000L)
+                        continue
+                    }
+
+                    val profile = client.capabilityProfile(targetUuid)
+                    val canUseAgentStateStream = !profile.isMethodKnownUnsupported("StreamAgentStateUpdates") &&
+                        consecutiveStreamFailures < 3
+
+                    if (canUseAgentStateStream) {
+                        var receivedAnyFrame = false
+                        var streamUnsupported = false
+                        try {
+                            val seedSteps = chatStore.state.value.stepsByCascadeId[cascadeId].orEmpty()
+                            client.streamAgentStateUpdates(
+                                cascadeId = cascadeId,
+                                isCloud = resolvedIsCloud,
+                                instanceUuidOverride = targetUuid,
+                                initialSteps = seedSteps,
+                            ).collect { update ->
+                                receivedAnyFrame = true
+                                consecutiveStreamFailures = 0
+                                lastBackendActivityAtMs = currentTimeMillis()
+                                if (update.steps.isNotEmpty()) {
+                                    chatStore.applyLiveSteps(cascadeId, update.steps)
+                                }
+                                conversationSyncStore.reconcileLiveRunStatus(
+                                    cascadeId = cascadeId,
+                                    steps = update.steps,
+                                    runStatus = update.runStatus,
+                                )
+                                _liveChatUpdates.tryEmit(update)
+
+                                val nowMs = currentTimeMillis()
+                                if (update.steps.isNotEmpty() &&
+                                    (update.isSnapshotComplete ||
+                                        update.steps.size != lastPersistedCount ||
+                                        (nowMs - lastPersistMs) >= 2_500L)
+                                ) {
+                                    lastPersistedCount = update.steps.size
+                                    lastPersistMs = nowMs
+                                    val updatedSummary = conversationSyncStore.state.value.summaries
+                                        .firstOrNull { it.cascadeId == cascadeId }
+                                    runCatching {
+                                        chatStore.persistLiveStepsSnapshot(
+                                            cascadeId = cascadeId,
+                                            steps = update.steps,
+                                            summaryUpdatedAtEpochMs = updatedSummary?.updatedAtEpochMs ?: nowMs,
+                                        )
+                                    }
+                                }
+                            }
+                            // Clean EOF from server stream: persist latest snapshot and wait briefly before reconnect if still active
+                            val latestSteps = chatStore.state.value.stepsByCascadeId[cascadeId].orEmpty()
+                            if (latestSteps.isNotEmpty() && latestSteps.size != lastPersistedCount) {
+                                lastPersistedCount = latestSteps.size
+                                runCatching { chatStore.persistLiveStepsSnapshot(cascadeId, latestSteps) }
+                            }
+                            if (!isActive) break
+                            val isStillRunning = isConversationActivelyRunning(cascadeId)
+                            if (receivedAnyFrame) {
+                                delay(if (isStillRunning) 400L else 2_500L)
+                            } else {
+                                consecutiveStreamFailures += 1
+                                delay(if (isStillRunning) 600L else 3_000L)
+                            }
+                            continue
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: AntigravityRpcError.Unauthorized) {
+                            break
+                        } catch (e: Throwable) {
+                            if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
+                                streamUnsupported = true
+                            } else {
+                                consecutiveStreamFailures += 1
+                            }
+                        }
+                        if (!streamUnsupported && consecutiveStreamFailures < 3) {
+                            delay(minOf(4_000L, 600L * consecutiveStreamFailures))
+                            continue
+                        }
+                    }
+
+                    // Legacy host or fallback path: fast incremental delta polling ONLY while actively running
+                    // (or periodic fallback when summary stream is unhealthy).
+                    val currentSummary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+                    val isRunning = isConversationActivelyRunning(cascadeId)
+                    val channel = conn.activeHost?.channel ?: RemoteConnectionChannel.DIRECT_HOST
+                    val pollIntervalMs: Long? = if (isRunning) {
+                        (ConnectionPowerPolicy.activeStreamingStepPollIntervalSeconds(
+                            channel = channel,
+                            isLowPowerMode = powerStateProvider.isLowPowerModeEnabled,
+                        ) * 1000.0).toLong()
+                    } else {
+                        ConnectionPowerPolicy.idleChatFallbackStepPollIntervalSeconds(
+                            isStreamHealthy = conversationSyncStore.state.value.isStreamHealthy,
+                            isLowPowerMode = powerStateProvider.isLowPowerModeEnabled,
+                        )?.let { (it * 1000.0).toLong() }
+                    }
+
+                    if (pollIntervalMs == null) {
+                        // Idle chat with healthy summary push stream: stay quiescent until summary wakes or stream restarts
+                        delay(3_000L)
+                        continue
+                    }
+
+                    delay(pollIntervalMs)
+                    if (!isActive) break
+                    try {
+                        val synced = syncStepsInternal(
+                            cascadeId = cascadeId,
+                            knownStepCount = currentSummary?.stepCount ?: 0,
+                            isCloud = resolvedIsCloud,
+                            instanceUuidOverride = targetUuid,
+                            forceRefresh = false,
+                        )
+                        if (synced.isNotEmpty()) {
+                            _liveChatUpdates.tryEmit(
+                                AgentStateLiveUpdate(
+                                    cascadeId = cascadeId,
+                                    steps = synced,
+                                    totalLength = synced.size,
+                                    isSnapshotComplete = true,
+                                )
+                            )
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: AntigravityRpcError.Unauthorized) {
+                        break
+                    } catch (_: Throwable) {
+                        // Back off cleanly on transient poll errors
+                        delay(1_500L)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Never propagate background live-stream exceptions across Kotlin/Native boundaries.
+            }
+        }
+    }
+
+    public fun stopLiveChatStream() {
+        liveChatStreamJob?.cancel()
+        liveChatStreamJob = null
+        liveChatStreamCascadeId = null
+    }
+
+    private fun isConversationActivelyRunning(cascadeId: String): Boolean {
+        val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
+        if (summary?.status == CortexStepStatus.IN_PROGRESS || summary?.status == CortexStepStatus.PENDING) {
+            return true
+        }
+        val steps = chatStore.state.value.stepsByCascadeId[cascadeId].orEmpty()
+        return steps.any { it.status == CortexStepStatus.IN_PROGRESS || it.status == CortexStepStatus.PENDING }
+    }
+
     private suspend fun syncStepsInternal(
         cascadeId: String,
         knownStepCount: Int,
@@ -712,7 +961,7 @@ public class AntigravityCoreCoordinator(
         val effectiveKnownCount = maxOf(knownStepCount, summary?.stepCount ?: 0)
         activeForegroundSyncCount.update { it + 1 }
         return try {
-            preemptBackgroundPreloadsExcept(cascadeId)
+            preemptNonTargetPreloads(keepCascadeId = cascadeId)
             val steps = chatStore.syncSteps(
                 client = client,
                 cascadeId = cascadeId,
@@ -722,8 +971,30 @@ public class AntigravityCoreCoordinator(
                 summaryStatus = summary?.status,
                 summaryUpdatedAtEpochMs = summary?.updatedAtEpochMs ?: 0L,
                 forceRefresh = forceRefresh,
+                onPartialSteps = { partial ->
+                    if (partial.isNotEmpty()) {
+                        conversationSyncStore.reconcileLiveRunStatus(
+                            cascadeId = cascadeId,
+                            steps = partial,
+                        )
+                        _liveChatUpdates.tryEmit(
+                            AgentStateLiveUpdate(
+                                cascadeId = cascadeId,
+                                steps = partial,
+                                totalLength = maxOf(effectiveKnownCount, partial.size),
+                                isSnapshotComplete = false,
+                            )
+                        )
+                    }
+                },
             )
             lastBackendActivityAtMs = currentTimeMillis()
+            if (steps.isNotEmpty()) {
+                conversationSyncStore.reconcileLiveRunStatus(
+                    cascadeId = cascadeId,
+                    steps = steps,
+                )
+            }
             conversationSyncStore.applyHydratedStepsMetadata(
                 host = connectionStore.state.value.activeHost,
                 cascadeId = cascadeId,
@@ -929,8 +1200,8 @@ public class AntigravityCoreCoordinator(
         scope.launch {
             try {
                 val activeJobs = preloadMutex.withLock {
-                    val snapshot = inFlightPreloadJobs.values.toList()
-                    inFlightPreloadJobs.clear()
+                    val snapshot = activePreloadJobsByCascadeId.values.toList()
+                    activePreloadJobsByCascadeId.clear()
                     snapshot
                 }
                 for (job in activeJobs) {
@@ -944,20 +1215,24 @@ public class AntigravityCoreCoordinator(
         }
     }
 
-    private suspend fun preemptBackgroundPreloadsExcept(targetCascadeId: String) {
-        val victims = preloadMutex.withLock {
-            val active = inFlightPreloadJobs.entries
-                .filter { (cid, job) -> cid != targetCascadeId && job.isActive }
+    /**
+     * Immediately cancels in-flight background preload HTTP transfers for conversations other than
+     * [keepCascadeId] so foreground chat opening gets 100% of relay/LAN bandwidth and Desktop CPU.
+     */
+    private suspend fun preemptNonTargetPreloads(keepCascadeId: String) {
+        val jobsToCancel = preloadMutex.withLock {
+            val active = activePreloadJobsByCascadeId.entries
+                .filter { (cid, job) -> cid != keepCascadeId && job.isActive }
                 .map { it.key to it.value }
             for ((cid, _) in active) {
-                inFlightPreloadJobs.remove(cid)
+                activePreloadJobsByCascadeId.remove(cid)
                 preloadAttemptedAtMs.remove(cid)
                 preloadQueue.remove(cid)
                 preloadQueue.addFirst(cid)
             }
             active
         }
-        for ((_, job) in victims) {
+        for ((_, job) in jobsToCancel) {
             job.cancel()
         }
     }
@@ -983,11 +1258,35 @@ public class AntigravityCoreCoordinator(
                         if (!liveConn.isConnected || liveConn.isNetworkingSuspended || !liveConn.isDeviceNetworkReachable) {
                             break
                         }
-                        if (activeForegroundSyncCount.value > 0) {
-                            preloadMutex.withLock { preloadQueue.addFirst(nextId) }
+                        val childJob = launch(start = CoroutineStart.LAZY) {
+                            preloadSingleConversation(nextId)
+                        }
+                        val preemptedBeforeStart = preloadMutex.withLock {
+                            if (activeForegroundSyncCount.value > 0 && chatStore.state.value.activeCascadeId != nextId) {
+                                preloadQueue.remove(nextId)
+                                preloadQueue.addFirst(nextId)
+                                true
+                            } else {
+                                activePreloadJobsByCascadeId[nextId] = childJob
+                                false
+                            }
+                        }
+                        if (preemptedBeforeStart) {
+                            childJob.cancel()
                             continue
                         }
-                        preloadSingleConversation(nextId)
+                        childJob.start()
+                        try {
+                            childJob.join()
+                        } finally {
+                            withContext(NonCancellable) {
+                                preloadMutex.withLock {
+                                    if (activePreloadJobsByCascadeId[nextId] === childJob) {
+                                        activePreloadJobsByCascadeId.remove(nextId)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1016,78 +1315,42 @@ public class AntigravityCoreCoordinator(
         if (shouldMarkHydrating) {
             conversationSyncStore.markHydrating(cascadeId)
         }
-        var wasPreempted = false
         try {
-            coroutineScope {
-                val job = launch(start = CoroutineStart.LAZY) {
-                    var steps = chatStore.preloadSteps(
-                        client = client,
-                        cascadeId = cascadeId,
-                        knownStepCount = summary.stepCount,
-                        isCloud = isCloud,
-                        instanceUuidOverride = summary.originInstanceUuid,
-                        requireRemoteRefresh = false,
-                    )
-                    if (steps.isNotEmpty() && shouldMarkHydrating &&
-                        CascadeSummaryTitleResolver.deriveTitleFromSteps(steps) == null
-                    ) {
-                        steps = chatStore.preloadSteps(
-                            client = client,
-                            cascadeId = cascadeId,
-                            knownStepCount = summary.stepCount,
-                            isCloud = isCloud,
-                            instanceUuidOverride = summary.originInstanceUuid,
-                            requireRemoteRefresh = true,
-                        )
-                    }
-                    if (steps.isNotEmpty()) {
-                        conversationSyncStore.applyHydratedStepsMetadata(
-                            host = conn.activeHost,
-                            cascadeId = cascadeId,
-                            steps = steps,
-                            persist = true,
-                        )
-                    } else if (shouldMarkHydrating) {
-                        conversationSyncStore.markSettledEmptyTitle(cascadeId)
-                    }
-                }
-                val preemptedBeforeStart = preloadMutex.withLock {
-                    if (activeForegroundSyncCount.value > 0 && chatStore.state.value.activeCascadeId != cascadeId) {
-                        preloadAttemptedAtMs.remove(cascadeId)
-                        preloadQueue.remove(cascadeId)
-                        preloadQueue.addFirst(cascadeId)
-                        true
-                    } else {
-                        inFlightPreloadJobs[cascadeId] = job
-                        false
-                    }
-                }
-                if (preemptedBeforeStart) {
-                    job.cancel()
-                    wasPreempted = true
-                } else {
-                    job.start()
-                    try {
-                        job.join()
-                        if (job.isCancelled && currentCoroutineContext().isActive) {
-                            wasPreempted = true
-                        }
-                    } finally {
-                        withContext(NonCancellable) {
-                            preloadMutex.withLock {
-                                if (inFlightPreloadJobs[cascadeId] === job) {
-                                    inFlightPreloadJobs.remove(cascadeId)
-                                }
-                            }
-                        }
-                    }
-                }
+            var steps = chatStore.preloadSteps(
+                client = client,
+                cascadeId = cascadeId,
+                knownStepCount = summary.stepCount,
+                isCloud = isCloud,
+                instanceUuidOverride = summary.originInstanceUuid,
+                requireRemoteRefresh = false,
+            )
+            if (steps.isNotEmpty() && shouldMarkHydrating &&
+                CascadeSummaryTitleResolver.deriveTitleFromSteps(steps) == null
+            ) {
+                steps = chatStore.preloadSteps(
+                    client = client,
+                    cascadeId = cascadeId,
+                    knownStepCount = summary.stepCount,
+                    isCloud = isCloud,
+                    instanceUuidOverride = summary.originInstanceUuid,
+                    requireRemoteRefresh = true,
+                )
+            }
+            if (steps.isNotEmpty()) {
+                conversationSyncStore.applyHydratedStepsMetadata(
+                    host = conn.activeHost,
+                    cascadeId = cascadeId,
+                    steps = steps,
+                    persist = true,
+                )
+            } else if (shouldMarkHydrating) {
+                conversationSyncStore.markSettledEmptyTitle(cascadeId)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Throwable) {
             // Settle cleanly so the row does not spin indefinitely; refresh/reconnect or tapping retries.
-            if (shouldMarkHydrating && !wasPreempted) {
+            if (shouldMarkHydrating) {
                 conversationSyncStore.markSettledEmptyTitle(cascadeId)
             }
         } finally {
@@ -1668,6 +1931,7 @@ public class AntigravityCoreCoordinator(
     public fun onBackground() {
         stopForegroundConnectivityLoop()
         stopConversationPreload()
+        stopLiveChatStream()
         conversationSyncStore.stopSummarySubscriptionStream()
         connectionStore.onBackground()
     }
@@ -1756,9 +2020,16 @@ public class AntigravityCoreCoordinator(
         activeHostSwitch?.cancelAndJoin()
         stopForegroundConnectivityLoop()
         stopConversationPreload()
-        preloadMutex.withLock {
+        stopLiveChatStream()
+        val activePreloads = preloadMutex.withLock {
             preloadQueue.clear()
             preloadAttemptedAtMs.clear()
+            val snapshot = activePreloadJobsByCascadeId.values.toList()
+            activePreloadJobsByCascadeId.clear()
+            snapshot
+        }
+        for (job in activePreloads) {
+            job.cancel()
         }
         conversationSyncStore.clear()
         chatStore.clear()
@@ -1772,6 +2043,7 @@ public class AntigravityCoreCoordinator(
         hostSwitchJob = null
         stopForegroundConnectivityLoop()
         stopConversationPreload()
+        stopLiveChatStream()
         conversationSyncStore.stopSummarySubscriptionStream()
         connectionStore.close()
         scope.cancel()

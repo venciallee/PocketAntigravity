@@ -70,6 +70,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -455,6 +456,23 @@ fun CascadeChatScreen(
                     }
                 }
 
+                val voiceContextHint = remember(
+                    chatState.draftInputText,
+                    chatState.activeSteps,
+                    activeSummary?.title,
+                ) {
+                    buildList {
+                        chatState.draftInputText.trim().takeIf { it.isNotEmpty() }?.let(::add)
+                        chatState.activeSteps
+                            .mapNotNull { it.userInput?.trim()?.takeIf(String::isNotEmpty) }
+                            .takeLast(2)
+                            .forEach(::add)
+                        activeSummary?.title?.trim()
+                            ?.takeIf { it.isNotEmpty() && it != "New Conversation" }
+                            ?.let(::add)
+                    }.joinToString(" ").ifBlank { null }
+                }
+
                 // Docked Material 3 Chat Composer (`and-chat.png`)
                 ChatComposerCard(
                     draftText = chatState.draftInputText,
@@ -469,6 +487,7 @@ fun CascadeChatScreen(
                     modelLabel = modelDisplayName,
                     permissionLabel = permissionLabel,
                     voiceController = voiceController,
+                    voiceContextHint = voiceContextHint,
                     onAddContext = onOpenAddContext,
                     onOpenModelAndMode = onOpenModelAndMode,
                     onOpenPermissionsPreset = onOpenPermissionsPreset,
@@ -476,6 +495,7 @@ fun CascadeChatScreen(
                         voiceController.toggleRecording(
                             existingDraft = chatState.draftInputText,
                             appLanguage = lang,
+                            contextTextHint = voiceContextHint,
                         ) { updated ->
                             coordinator.chatStore.setDraftInputText(updated)
                         }
@@ -671,9 +691,15 @@ fun CascadeChatScreen(
         } else {
         val listState = rememberLazyListState()
         var anchoredCascadeId by remember { mutableStateOf<String?>(null) }
-        LaunchedEffect(activeCascadeId, displayItems.size) {
-            if (!coordinator.isVerificationMode && displayItems.isNotEmpty()) {
-                val lastIdx = displayItems.lastIndex
+        var visibleTailLimit by remember(activeCascadeId) { mutableIntStateOf(60) }
+        val hiddenPrefixCount = if (coordinator.isVerificationMode) 0 else (displayItems.size - visibleTailLimit).coerceAtLeast(0)
+        val renderedItems = remember(displayItems, hiddenPrefixCount) {
+            if (hiddenPrefixCount > 0) displayItems.subList(hiddenPrefixCount, displayItems.size) else displayItems
+        }
+        val extraTopItems = if (hiddenPrefixCount > 0) 1 else 0
+        LaunchedEffect(activeCascadeId, renderedItems.size, extraTopItems) {
+            if (!coordinator.isVerificationMode && renderedItems.isNotEmpty()) {
+                val lastIdx = (renderedItems.lastIndex + extraTopItems).coerceAtLeast(0)
                 val isInitialAnchor = anchoredCascadeId != activeCascadeId
                 val nearBottom = listState.firstVisibleItemIndex >= (lastIdx - 4).coerceAtLeast(0)
                 if (isInitialAnchor || nearBottom) {
@@ -691,8 +717,38 @@ fun CascadeChatScreen(
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (hiddenPrefixCount > 0) {
+                item(key = "load-earlier-messages") {
+                    Surface(
+                        onClick = { visibleTailLimit += 80 },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn-load-earlier-messages"),
+                        shape = RoundedCornerShape(12.dp),
+                        color = colors.surfaceCard,
+                        border = BorderStroke(1.dp, colors.cardBorder),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = tr(
+                                    "Load earlier messages ($hiddenPrefixCount hidden)",
+                                    "加载更早消息（已折叠 $hiddenPrefixCount 条）",
+                                ),
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = colors.accentPeriwinkle,
+                            )
+                        }
+                    }
+                }
+            }
             items(
-                items = displayItems,
+                items = renderedItems,
                 key = { it.id },
             ) { item ->
                 when (item) {
@@ -1916,6 +1972,7 @@ private fun ChatComposerCard(
     modelLabel: String,
     permissionLabel: String,
     voiceController: VoiceDictationController,
+    voiceContextHint: String? = null,
     onAddContext: () -> Unit,
     onOpenModelAndMode: () -> Unit,
     onOpenPermissionsPreset: () -> Unit,
@@ -1953,6 +2010,7 @@ private fun ChatComposerCard(
                 controller = voiceController,
                 existingDraft = draftText,
                 onDraftUpdated = onDraftChange,
+                contextTextHint = voiceContextHint,
             )
 
             if (!voiceErrorMessage.isNullOrBlank()) {
@@ -2111,6 +2169,7 @@ private fun ChatComposerCard(
                                 language = chosen,
                                 appLanguage = appLanguage,
                                 existingDraft = draftText,
+                                contextTextHint = voiceContextHint,
                                 onDraftUpdated = onDraftChange,
                             )
                         },

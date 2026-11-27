@@ -995,9 +995,19 @@ fun VoiceModeSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        val voiceContextHint = remember(turnDraft, orchState.voiceTranscriptTurns) {
+                            buildList {
+                                turnDraft.trim().takeIf { it.isNotEmpty() }?.let(::add)
+                                orchState.voiceTranscriptTurns
+                                    .takeLast(3)
+                                    .map { it.text.trim() }
+                                    .filter { it.isNotEmpty() }
+                                    .forEach(::add)
+                            }.joinToString(" ").ifBlank { null }
+                        }
                         Box {
                             AntigravityChip(
-                                label = voiceController.activeLanguageBadgeLabel(appLanguage),
+                                label = voiceController.activeLanguageBadgeLabel(appLanguage, voiceContextHint),
                                 selected = true,
                                 onClick = { voiceLanguageMenuExpanded = true },
                                 modifier = Modifier.testTag("menu-voice-language"),
@@ -1012,6 +1022,7 @@ fun VoiceModeSheet(
                                         language = chosen,
                                         appLanguage = appLanguage,
                                         existingDraft = turnDraft,
+                                        contextTextHint = voiceContextHint,
                                         onDraftUpdated = { turnDraft = it },
                                     )
                                 },
@@ -1157,9 +1168,18 @@ fun VoiceModeSheet(
                         if (!voiceController.isRecording && !voiceController.isStarting && voiceState.isMuted) {
                             coordinator.orchestrationStore.toggleVoiceMute()
                         }
+                        val contextHint = buildList {
+                            turnDraft.trim().takeIf { it.isNotEmpty() }?.let(::add)
+                            orchState.voiceTranscriptTurns
+                                .takeLast(3)
+                                .map { it.text.trim() }
+                                .filter { it.isNotEmpty() }
+                                .forEach(::add)
+                        }.joinToString(" ").ifBlank { null }
                         voiceController.toggleRecording(
                             existingDraft = turnDraft,
                             appLanguage = appLanguage,
+                            contextTextHint = contextHint,
                         ) { updated ->
                             turnDraft = updated
                         }
