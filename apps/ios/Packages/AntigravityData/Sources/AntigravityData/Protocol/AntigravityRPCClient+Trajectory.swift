@@ -571,10 +571,11 @@ extension AntigravityRPCClient {
                         return false
                     }()
                     guard shouldRefreshInstances,
-                          let refreshed = try? await listRelayInstances(timeoutInterval: 4.0),
-                          !refreshed.isEmpty else {
+                          let refreshedRaw = try? await listRelayInstances(timeoutInterval: 4.0),
+                          !refreshedRaw.isEmpty else {
                         break
                     }
+                    let refreshed = self.applyHealthCooldowns(to: refreshedRaw, respectDeadCooldown: true)
                     self.cachedRelayInstances = refreshed
                     instancesToSearch = refreshed
                 }
@@ -586,9 +587,15 @@ extension AntigravityRPCClient {
                     ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : nil)
                 let familySeed = instancesToSearch.first(where: { $0.uuid == seedUuid })?.name
                     ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : "")
+                let now = Date()
                 let peerCandidates = instancesToSearch
                     .filter { inst in
-                        guard inst.status.isReachable && !probedUuids.contains(inst.uuid) else { return false }
+                        guard inst.status.isReachable
+                            && !probedUuids.contains(inst.uuid)
+                            && !self.isRelayInstanceInDeadCooldown(inst.uuid, now: now)
+                            && !self.isRelayInstanceInTimeoutCooldown(inst.uuid, now: now) else {
+                            return false
+                        }
                         if isRemoteCloud { return true }
                         return inst.uuid == seedUuid || (!familySeed.isEmpty && inst.sameHostFamily(as: familySeed))
                     }
@@ -858,6 +865,11 @@ extension AntigravityRPCClient {
                 }
             }
 
+            if let deadErr = cloudStreamError ?? lastError,
+               ProtocolCompatibilityEngine.isInstanceNotRegisteredError(deadErr) {
+                throw deadErr
+            }
+
             if !cloudStreamWasUnsupported && cloudStreamTimedOut && cloudStreamSawResponse {
                 throw cloudStreamError ?? AntigravityRPCError.httpError(
                     statusCode: 504,
@@ -1079,6 +1091,9 @@ extension AntigravityRPCClient {
                 }
                 return SingleInstanceFetchOutcome(steps: cachedTailSteps)
             }
+            if let deadErr = lastError, ProtocolCompatibilityEngine.isInstanceNotRegisteredError(deadErr) {
+                throw deadErr
+            }
         }
 
         // Path 2: JSON (`GetCascadeTrajectorySteps` + `LoadTrajectory` + `GetCascadeTrajectory`)
@@ -1107,6 +1122,9 @@ extension AntigravityRPCClient {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+                throw error
+            }
             adaptiveError = error
             adaptiveSteps = []
         }
@@ -1126,6 +1144,30 @@ extension AntigravityRPCClient {
             Self.logStepSyncDiagnostic(
                 "StepSync Path2(json) empty cid=\(cidTag) target=\(targetTag) err=\(errSummary) t=\(p2Ms)ms"
             )
+        }
+
+        // Recovery for raw-UUID local sessions misclassified as Cloud: if `cascadeId` is not a `v1/...`
+        // remote path and both Cloud Path 0 & Cloud Path 2 returned 404 (not dead tunnel / not timeout),
+        // try a single fast bare Binary Protobuf fetch on this host before failing over.
+        if isRemoteCloud,
+           !cascadeId.lowercased().hasPrefix("v1/"),
+           !didAttemptProtobuf,
+           !isBinaryProtobufStepsUnsupported(for: targetUuid),
+           !cloudStreamTimedOut,
+           !Self.isTransportTimeoutError(adaptiveError),
+           adaptiveError.map({ ProtocolCompatibilityEngine.isTrajectoryNotFoundError($0) }) ?? false {
+            if let localProtoSteps = try? await fetchTrajectoryStepsProtobuf(
+                cascadeId: cascadeId,
+                startIndex: 0,
+                endIndex: knownStepCount,
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: false,
+                allowNonCriticalRepair: allowNonCriticalRepair,
+                onDecodedBeforeRepair: onPartialSteps
+            ), !localProtoSteps.isEmpty {
+                wokenInstanceCascadeKeys.insert(wakeKey)
+                return SingleInstanceFetchOutcome(steps: localProtoSteps)
+            }
         }
 
         // Path 3 (Antigravity 2.x Stream Fallback & Post-Wake Cloud Retry):
@@ -1341,6 +1383,14 @@ extension AntigravityRPCClient {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
+                    if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+                        if let deadUuid = targetUuid {
+                            markRelayInstanceDead(deadUuid, reasonIsUnregistered: true)
+                        }
+                        lastError = error
+                        shouldBreakAllVariants = true
+                        break
+                    }
                     if ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
                         mutateCapabilityProfile(for: targetUuid) { p in
                             p.recordMethodUnsupported("StreamAgentStateUpdates")
@@ -1372,8 +1422,7 @@ extension AntigravityRPCClient {
                     }
                     let shouldTryNext: Bool = {
                         if case let AntigravityRPCError.httpError(code, body) = error {
-                            return code == 400
-                                || unknownField != nil
+                            return unknownField != nil
                                 || ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(statusCode: code, body: body)
                         }
                         return false
@@ -1799,6 +1848,9 @@ extension AntigravityRPCClient {
             } catch let AntigravityRPCError.unauthorized(msg) {
                 throw AntigravityRPCError.unauthorized(msg)
             } catch {
+                if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+                    throw error
+                }
                 lastError = error
                 firstResp = nil
                 if ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
@@ -1872,6 +1924,9 @@ extension AntigravityRPCClient {
             } catch let AntigravityRPCError.unauthorized(msg) {
                 throw AntigravityRPCError.unauthorized(msg)
             } catch {
+                if ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+                    throw error
+                }
                 if ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
                     loadTrajectoryFailedNotFound = true
                 }

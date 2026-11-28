@@ -25,7 +25,15 @@ extension AntigravitySessionStore {
                     return []
                 }
                 if !reachable.isEmpty {
-                    return reachable.map { ($0.uuid, $0.uuid, $0.name) }
+                    // Cap permanent Cloud Relay summary streams to at most 2 hosts (active host first)
+                    // so multi-instance accounts never exhaust per-host HTTP/2 or proxy connection limits.
+                    let activeUuid = activeHost.instanceId
+                    let ordered = reachable.sorted { lhs, rhs in
+                        if lhs.uuid == activeUuid && rhs.uuid != activeUuid { return true }
+                        if rhs.uuid == activeUuid && lhs.uuid != activeUuid { return false }
+                        return lhs.uuid < rhs.uuid
+                    }
+                    return ordered.prefix(2).map { ($0.uuid, $0.uuid, $0.name) }
                 }
                 if activeHost.isOnline && !activeHost.instanceId.isEmpty && activeHost.instanceId != "unpaired" {
                     return [(activeHost.instanceId, activeHost.instanceId, activeHost.hostname)]
@@ -1914,6 +1922,12 @@ extension AntigravitySessionStore {
         guard !cascadeId.isEmpty, !locallyCreatedEmptyCascadeIds.contains(cascadeId) else { return }
         guard !(cascadeId.hasPrefix("cas-") && !Self.esddFixtureCascadeIds.contains(cascadeId)) else { return }
         guard let summary = summaries.first(where: { $0.cascadeId == cascadeId }) else { return }
+        if activeHost.channel == .cloudRelay {
+            // On Cloud Relay, never speculatively preload already-titled chats, Cloud streams, or peer hosts.
+            let isActiveHostLocal = !isSummaryCloudRuntime(summary)
+                && (summary.originInstanceUuid == nil || summary.originInstanceUuid == activeHost.instanceId)
+            guard summary.needsTitleHydration && isActiveHostLocal else { return }
+        }
         let hasCachedSteps = !(stepsByCascadeId[cascadeId] ?? []).isEmpty
         if !summary.needsTitleHydration && hasCachedSteps {
             return
@@ -1928,11 +1942,21 @@ extension AntigravitySessionStore {
         guard isLiveBackendConnected || (hasPairedBackend && activeHost.isOnline) else { return }
         guard kmpEngine != nil || rpcClient != nil else { return }
 
-        let maxBackgroundHydrateCount = 32
-        let maxRecentStepPreloadCount = 8
+        let isCloudRelay = (activeHost.channel == .cloudRelay)
+        let activeHostUuid = activeHost.instanceId
+        let maxBackgroundHydrateCount = isCloudRelay ? 4 : 32
+        let maxRecentStepPreloadCount = isCloudRelay ? 0 : 8
         let collapsedIds = appearancePreferences.collapsedProjectIds
         var candidates: [String] = []
         var seen = Set<String>()
+
+        func isRelayPreloadEligible(_ s: CascadeSummary) -> Bool {
+            guard isCloudRelay else { return true }
+            // Match Chrome Remote Control on Cloud Relay: never open speculative background Cloud streams
+            // (`StreamAgentStateUpdates`) or hit secondary/peer Relay tunnels for unopened chats.
+            guard !isSummaryCloudRuntime(s), s.needsTitleHydration else { return false }
+            return s.originInstanceUuid == nil || s.originInstanceUuid == activeHostUuid
+        }
 
         func appendCandidate(_ cid: String) {
             guard !cid.isEmpty,
@@ -1941,6 +1965,12 @@ extension AntigravitySessionStore {
                   seen.insert(cid).inserted else {
                 return
             }
+            if isCloudRelay {
+                guard let summary = summaries.first(where: { $0.cascadeId == cid }),
+                      isRelayPreloadEligible(summary) else {
+                    return
+                }
+            }
             candidates.append(cid)
         }
 
@@ -1948,15 +1978,17 @@ extension AntigravitySessionStore {
             appendCandidate(cid)
         }
 
-        // 1. Preload steps for top recent conversations in expanded projects FIRST so tapping recent chats opens on Frame 0
-        let recentUncached = summaries.filter { s in
-            !s.isArchived
-                && !collapsedIds.contains(s.projectSlug)
-                && (stepsByCascadeId[s.cascadeId] ?? []).isEmpty
-                && isSummaryHostOnline(s)
-        }
-        for s in recentUncached.prefix(maxRecentStepPreloadCount) {
-            appendCandidate(s.cascadeId)
+        // 1. Preload steps for top recent conversations in expanded projects on Direct LAN ONLY
+        if maxRecentStepPreloadCount > 0 {
+            let recentUncached = summaries.filter { s in
+                !s.isArchived
+                    && !collapsedIds.contains(s.projectSlug)
+                    && (stepsByCascadeId[s.cascadeId] ?? []).isEmpty
+                    && isSummaryHostOnline(s)
+            }
+            for s in recentUncached.prefix(maxRecentStepPreloadCount) {
+                appendCandidate(s.cascadeId)
+            }
         }
 
         // 2. Hydrate remaining unhydrated titles in expanded projects
@@ -1965,20 +1997,23 @@ extension AntigravitySessionStore {
                 && !settledEmptyTitleCascadeIds.contains(s.cascadeId)
                 && !collapsedIds.contains(s.projectSlug)
                 && isSummaryHostOnline(s)
+                && isRelayPreloadEligible(s)
         }
         for s in unresolvedExpanded.prefix(maxBackgroundHydrateCount) {
             appendCandidate(s.cascadeId)
         }
 
-        // 3. Hydrate unhydrated titles in collapsed projects last so they never starve recent active chats
-        let unresolvedCollapsed = summaries.filter { s in
-            !s.isArchived && s.needsTitleHydration
-                && !settledEmptyTitleCascadeIds.contains(s.cascadeId)
-                && collapsedIds.contains(s.projectSlug)
-                && isSummaryHostOnline(s)
-        }
-        for s in unresolvedCollapsed.prefix(maxBackgroundHydrateCount) {
-            appendCandidate(s.cascadeId)
+        // 3. Hydrate unhydrated titles in collapsed projects last (Direct LAN only)
+        if !isCloudRelay {
+            let unresolvedCollapsed = summaries.filter { s in
+                !s.isArchived && s.needsTitleHydration
+                    && !settledEmptyTitleCascadeIds.contains(s.cascadeId)
+                    && collapsedIds.contains(s.projectSlug)
+                    && isSummaryHostOnline(s)
+            }
+            for s in unresolvedCollapsed.prefix(maxBackgroundHydrateCount) {
+                appendCandidate(s.cascadeId)
+            }
         }
 
         guard !candidates.isEmpty else { return }

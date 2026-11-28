@@ -1135,7 +1135,14 @@ public class AntigravityCoreCoordinator(
     public fun prioritizeConversationPreload(cascadeId: String) {
         if (!autoPreloadConversations || isVerificationMode || cascadeId.isBlank()) return
         if (cascadeId.startsWith("cascade-new-")) return
+        val conn = connectionStore.state.value
         val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId } ?: return
+        if (conn.activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY) {
+            val activeUuid = conn.activeHost?.instanceId
+            val isActiveHostLocal = !isSummaryCloud(summary) &&
+                (summary.originInstanceUuid == null || summary.originInstanceUuid == activeUuid)
+            if (!summary.needsTitleHydration || !isActiveHostLocal) return
+        }
         val hasCachedSteps = !chatStore.state.value.stepsByCascadeId[cascadeId].isNullOrEmpty()
         if (!summary.needsTitleHydration && hasCachedSteps) return
         scheduleConversationPreload(priorityCascadeIds = listOf(cascadeId))
@@ -1150,46 +1157,67 @@ public class AntigravityCoreCoordinator(
         val conn = connectionStore.state.value
         if (!conn.isConnected || conn.isNetworkingSuspended || !conn.isDeviceNetworkReachable) return
 
+        val isCloudRelay = conn.activeHost?.channel == RemoteConnectionChannel.CLOUD_RELAY
+        val activeHostUuid = conn.activeHost?.instanceId
+        val maxHydrateCount = if (isCloudRelay) 4 else MAX_BACKGROUND_HYDRATE_COUNT
+        val maxRecentCount = if (isCloudRelay) 0 else MAX_RECENT_STEP_PRELOAD_COUNT
         val collapsedIds = workspaceStore.state.value.collapsedProjectIds
         val sync = conversationSyncStore.state.value
         val existingStepsById = chatStore.state.value.stepsByCascadeId
+        fun isRelayPreloadEligible(s: CascadeSummary): Boolean {
+            if (!isCloudRelay) return true
+            // Match Chrome Remote Control on Cloud Relay: never open speculative background Cloud
+            // streams (`StreamAgentStateUpdates`) or hit secondary/peer tunnels for unopened chats.
+            if (isSummaryCloud(s) || !s.needsTitleHydration) return false
+            return s.originInstanceUuid == null || s.originInstanceUuid == activeHostUuid
+        }
+
         val candidates = buildList {
             val seen = mutableSetOf<String>()
             fun addIfEligible(id: String) {
                 if (id.isNotBlank() && !id.startsWith("cascade-new-") && seen.add(id)) {
+                    if (isCloudRelay) {
+                        val summary = sync.summaries.firstOrNull { it.cascadeId == id } ?: return
+                        if (!isRelayPreloadEligible(summary)) return
+                    }
                     add(id)
                 }
             }
             for (cid in priorityCascadeIds) addIfEligible(cid)
-            // 1. Prioritize recent conversations in expanded projects so tapping them opens on Frame 0
-            val recentToWarm = sync.summaries.filter { s ->
-                !s.isArchived &&
-                    s.projectSlug !in collapsedIds &&
-                    existingStepsById[s.cascadeId].isNullOrEmpty() &&
-                    isSummaryHostReachable(s, conn)
-            }
-            for (s in recentToWarm.take(MAX_RECENT_STEP_PRELOAD_COUNT)) {
-                addIfEligible(s.cascadeId)
+            // 1. Prioritize recent conversations in expanded projects on Direct LAN ONLY
+            if (maxRecentCount > 0) {
+                val recentToWarm = sync.summaries.filter { s ->
+                    !s.isArchived &&
+                        s.projectSlug !in collapsedIds &&
+                        existingStepsById[s.cascadeId].isNullOrEmpty() &&
+                        isSummaryHostReachable(s, conn)
+                }
+                for (s in recentToWarm.take(maxRecentCount)) {
+                    addIfEligible(s.cascadeId)
+                }
             }
             // 2. Hydrate remaining unresolved-title conversations in expanded projects
             val unresolvedExpanded = sync.summaries.filter { s ->
                 !s.isArchived && s.needsTitleHydration &&
                     s.cascadeId !in sync.settledEmptyTitleCascadeIds &&
                     s.projectSlug !in collapsedIds &&
-                    isSummaryHostReachable(s, conn)
+                    isSummaryHostReachable(s, conn) &&
+                    isRelayPreloadEligible(s)
             }
-            for (s in unresolvedExpanded.take(MAX_BACKGROUND_HYDRATE_COUNT)) {
+            for (s in unresolvedExpanded.take(maxHydrateCount)) {
                 addIfEligible(s.cascadeId)
             }
-            // 3. Lastly hydrate unresolved-title conversations in collapsed projects
-            val unresolvedCollapsed = sync.summaries.filter { s ->
-                !s.isArchived && s.needsTitleHydration &&
-                    s.cascadeId !in sync.settledEmptyTitleCascadeIds &&
-                    s.projectSlug in collapsedIds &&
-                    isSummaryHostReachable(s, conn)
-            }
-            for (s in unresolvedCollapsed.take(MAX_BACKGROUND_HYDRATE_COUNT)) {
-                addIfEligible(s.cascadeId)
+            // 3. Lastly hydrate unresolved-title conversations in collapsed projects (Direct LAN only)
+            if (!isCloudRelay) {
+                val unresolvedCollapsed = sync.summaries.filter { s ->
+                    !s.isArchived && s.needsTitleHydration &&
+                        s.cascadeId !in sync.settledEmptyTitleCascadeIds &&
+                        s.projectSlug in collapsedIds &&
+                        isSummaryHostReachable(s, conn)
+                }
+                for (s in unresolvedCollapsed.take(maxHydrateCount)) {
+                    addIfEligible(s.cascadeId)
+                }
             }
         }
         if (candidates.isEmpty()) return

@@ -2669,6 +2669,89 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(localCounter.count(forSuffix: "/StreamProxyCommand"), 1, "Must try compact StreamAgentStateUpdates before returning preserved tail")
         XCTAssertEqual(localCounter.count(forSuffix: "/inner/jsonFallback"), 0, "Must NOT discard tail steps and burn Path 2 JSON")
     }
+
+    func testSwiftTunnelUnavailableMarksDeadAndAbortsWithoutVariant2OrPath2AndResistsListInstancesResurrection() async throws {
+        let boqTunnelNotFound = "[,[9,\"tunnel not found\",[[\"type.googleapis.com/google.rpc.ErrorInfo\",[\"TUNNEL_UNAVAILABLE\",\"cloudcode-pa.googleapis.com\"]]]]]"
+        XCTAssertTrue(
+            ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(statusCode: 400, body: boqTunnelNotFound),
+            "TUNNEL_UNAVAILABLE / tunnel not found must be classified as dead/unregistered instance"
+        )
+
+        let deadUuid = "fee0ee43-dead-4000-8000-000000000001"
+        let healthyUuid = "d25a1fd8-good-4000-8000-000000000002"
+        let cloudCid = "e996e1b8-59ba-4636-a766-87ad00000001"
+        let counter = CompatRequestCounter()
+
+        let okFrame = """
+        {"update":{"conversationId":"\(cloudCid)","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Load quickly"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Loaded from healthy peer"}}]}}}}
+        """
+        var streamBytes = Data()
+        streamBytes.append(ConnectEnvelope.encode(payload: Data(okFrame.utf8)))
+        streamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let okBoq = "[\"\(streamBytes.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(deadUuid)\",[\"Dead Mac\",\"2.34.0\",true],1,[1740000000,0]],[\"\(healthyUuid)\",[\"Healthy Mac\",\"2.34.0\",true],1,[1740000001,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+            let target = arr.first?.stringValue ?? ""
+            if path.hasSuffix("/StreamProxyCommand") {
+                counter.record(path: "/stream/\(target)")
+                if target == deadUuid {
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 400, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                    return (resp, Data(boqTunnelNotFound.utf8))
+                }
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(okBoq.utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                counter.record(path: "/proxy/\(target)")
+                if target == deadUuid {
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 400, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                    return (resp, Data(boqTunnelNotFound.utf8))
+                }
+                let okB64 = Data("{\"workspaceInfos\":[]}".utf8).base64EncodedString()
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data("[\"\(okB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let client = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: deadUuid,
+                hostname: "Dead Mac",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(deadUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+        _ = try await client.resolveCloudRelayInstance()
+
+        let steps = try await client.fetchAllTrajectorySteps(
+            cascadeId: cloudCid,
+            knownStepCount: 2,
+            isCloud: true
+        )
+        XCTAssertEqual(steps.count, 2, "Must fail over cleanly to healthy peer and return Cloud steps")
+        XCTAssertEqual(steps[1].plannerResponse?.response, "Loaded from healthy peer")
+        XCTAssertEqual(counter.count(forSuffix: "/stream/\(deadUuid)"), 1, "Dead tunnel HTTP 400 TUNNEL_UNAVAILABLE must NOT retry Variant #2")
+        XCTAssertEqual(counter.count(forSuffix: "/proxy/\(deadUuid)"), 0, "Dead tunnel must abort immediately and NEVER fall through to Path 2 ProxyCommand")
+        XCTAssertEqual(counter.count(forSuffix: "/stream/\(healthyUuid)"), 1)
+
+        // Subsequent federated refresh with stale ListInstances must NOT resurrect deadUuid during cooldown
+        _ = try await client.fetchFederatedWorkspacesAndSummaries(includeCloud: false, includeJetboxSnapshot: false)
+        XCTAssertEqual(counter.count(forSuffix: "/proxy/\(deadUuid)"), 0, "Stale ListInstances must NOT resurrect dead tunnel inside cooldown window")
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers
