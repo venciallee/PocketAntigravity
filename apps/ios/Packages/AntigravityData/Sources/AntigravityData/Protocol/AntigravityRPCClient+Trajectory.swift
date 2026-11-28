@@ -1428,6 +1428,12 @@ extension AntigravityRPCClient {
                 lock.unlock()
             }
 
+            func markSettledByEmptyGrace() {
+                lock.lock()
+                settledByEmptyGrace = true
+                lock.unlock()
+            }
+
             func armSettleTimer(
                 delaySeconds: TimeInterval,
                 isEmptyGrace: Bool = false,
@@ -1440,9 +1446,7 @@ extension AntigravityRPCClient {
                     try? await Task.sleep(nanoseconds: nanos)
                     guard !Task.isCancelled else { return }
                     if isEmptyGrace {
-                        self.lock.lock()
-                        self.settledByEmptyGrace = true
-                        self.lock.unlock()
+                        self.markSettledByEmptyGrace()
                     }
                     onSettle()
                 }
