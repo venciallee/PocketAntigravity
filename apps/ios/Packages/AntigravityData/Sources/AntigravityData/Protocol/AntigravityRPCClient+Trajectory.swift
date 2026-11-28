@@ -746,6 +746,18 @@ extension AntigravityRPCClient {
         ).steps
     }
 
+    nonisolated private static func isTransportTimeoutError(_ error: Error?) -> Bool {
+        guard let error else { return false }
+        if let urlErr = error as? URLError, urlErr.code == .timedOut {
+            return true
+        }
+        if case let AntigravityRPCError.httpError(code, _) = error, code == 504 {
+            return true
+        }
+        let lower = error.localizedDescription.lowercased()
+        return lower.contains("timed out") || lower.contains("timeout") || lower.contains("-1001")
+    }
+
     private func fetchStepsFromSingleInstanceOutcome(
         cascadeId: String,
         knownStepCount: Int,
@@ -757,7 +769,15 @@ extension AntigravityRPCClient {
         isPeerProbe: Bool = false,
         onPartialSteps: (@Sendable ([CascadeStep]) async -> Void)? = nil
     ) async throws -> SingleInstanceFetchOutcome {
+        let fetchStart = Date()
         let isRemoteCloud = Self.isRemoteCloudCascade(cascadeId: cascadeId, isCloud: isCloud)
+        let cidTag = String(cascadeId.prefix(28))
+        let targetTag = targetUuid.map { String($0.prefix(8)) } ?? "direct"
+        if !isBackgroundPreload {
+            Self.logStepSyncDiagnostic(
+                "StepSync start engine=Swift-URLSession cid=\(cidTag) isCloud=\(isRemoteCloud) known=\(knownStepCount) existing=\(existingStepsCount) target=\(targetTag) peer=\(isPeerProbe)"
+            )
+        }
         let wakeKey = "\(targetUuid ?? "direct")|\(cascadeId)"
         var lastError: Error? = nil
         var cloudStreamError: Error? = nil
@@ -767,6 +787,7 @@ extension AntigravityRPCClient {
         var didAttemptWake = false
         var didAttemptProtobuf = false
         var didAttemptAgentStream = false
+        var cachedTailSteps: [CascadeStep] = []
 
         // Path 0 (Antigravity 2.x Cloud Primary): Remote Cloud (`v1/...`) conversations live on
         // Google's remote backend rather than local `.pb` files, so `GetCascadeTrajectorySteps` /
@@ -776,6 +797,7 @@ extension AntigravityRPCClient {
         if isRemoteCloud {
             didAttemptAgentStream = true
             let cloudPrimaryTimeoutSeconds: TimeInterval = isBackgroundPreload ? 5.0 : (isPeerProbe ? 6.0 : 12.0)
+            let p0Start = Date()
             do {
                 let streamOutcome = try await fetchStepsViaAgentStateStreamOutcome(
                     cascadeId: cascadeId,
@@ -786,20 +808,35 @@ extension AntigravityRPCClient {
                     isBackgroundPreload: isBackgroundPreload,
                     onPartialSteps: onPartialSteps
                 )
+                let p0Ms = Int(Date().timeIntervalSince(p0Start) * 1000)
                 switch streamOutcome {
                 case .snapshot(let steps, let authoritativeEmpty):
+                    if !isBackgroundPreload {
+                        Self.logStepSyncDiagnostic(
+                            "StepSync Path0(stream) OK cid=\(cidTag) target=\(targetTag) steps=\(steps.count) authEmpty=\(authoritativeEmpty) t=\(p0Ms)ms"
+                        )
+                    }
                     if !steps.isEmpty || authoritativeEmpty {
                         wokenInstanceCascadeKeys.insert(wakeKey)
                         return SingleInstanceFetchOutcome(steps: steps, authoritativeEmpty: authoritativeEmpty)
                     }
                 case .unsupported:
                     cloudStreamWasUnsupported = true
+                    if !isBackgroundPreload {
+                        Self.logStepSyncDiagnostic("StepSync Path0(stream) unsupported cid=\(cidTag) target=\(targetTag) t=\(p0Ms)ms")
+                    }
                 case .noData(let err, let timedOut, let sawStreamResponse):
                     cloudStreamTimedOut = timedOut
                     cloudStreamSawResponse = sawStreamResponse
                     if let err, !ProtocolCompatibilityEngine.isMethodUnimplementedError(err) {
                         lastError = err
                         cloudStreamError = err
+                    }
+                    if !isBackgroundPreload {
+                        let errSummary = err.map { String($0.localizedDescription.prefix(120)) } ?? "none"
+                        Self.logStepSyncDiagnostic(
+                            "StepSync Path0(stream) noData cid=\(cidTag) target=\(targetTag) timedOut=\(timedOut) sawResp=\(sawStreamResponse) err=\(errSummary) t=\(p0Ms)ms"
+                        )
                     }
                 }
             } catch let AntigravityRPCError.unauthorized(msg) {
@@ -812,6 +849,12 @@ extension AntigravityRPCClient {
                 } else {
                     lastError = error
                     cloudStreamError = error
+                }
+                if !isBackgroundPreload {
+                    let p0Ms = Int(Date().timeIntervalSince(p0Start) * 1000)
+                    Self.logStepSyncDiagnostic(
+                        "StepSync Path0(stream) throw cid=\(cidTag) target=\(targetTag) err=\(String(error.localizedDescription.prefix(120))) t=\(p0Ms)ms"
+                    )
                 }
             }
 
@@ -832,11 +875,14 @@ extension AntigravityRPCClient {
             let hostKey = capabilityHostKey(for: targetUuid)
             var tailFastPainted = false
 
+            let tailMinSteps = (channel == .cloudRelay) ? 50 : 80
+            let tailWindow = (channel == .cloudRelay) ? 32 : 48
             if let onPartialSteps,
                existingStepsCount == 0,
-               knownStepCount >= 80,
+               knownStepCount >= tailMinSteps,
                !stepOffsetIgnoredHosts.contains(hostKey) {
-                let tailOffset = max(0, knownStepCount - 48)
+                let tailOffset = max(0, knownStepCount - tailWindow)
+                let tailStart = Date()
                 do {
                     let tailSteps = try await fetchTrajectoryStepsProtobuf(
                         cascadeId: cascadeId,
@@ -869,7 +915,14 @@ extension AntigravityRPCClient {
                             return SingleInstanceFetchOutcome(steps: repaired)
                         }
                         tailFastPainted = true
+                        cachedTailSteps = tailSteps
                         wokenInstanceCascadeKeys.insert(wakeKey)
+                        if !isBackgroundPreload {
+                            let tailMs = Int(Date().timeIntervalSince(tailStart) * 1000)
+                            Self.logStepSyncDiagnostic(
+                                "StepSync Path1(tailProto) OK cid=\(cidTag) target=\(targetTag) steps=\(tailSteps.count) offset=\(tailOffset) t=\(tailMs)ms"
+                            )
+                        }
                         await onPartialSteps(tailSteps)
                     }
                 } catch let AntigravityRPCError.unauthorized(msg) {
@@ -885,6 +938,7 @@ extension AntigravityRPCClient {
 
             if !isBinaryProtobufStepsUnsupported(for: targetUuid) {
                 var shouldWakeAndRetryProto = false
+                let p1Start = Date()
                 do {
                     let protoSteps = try await fetchTrajectoryStepsProtobuf(
                         cascadeId: cascadeId,
@@ -897,6 +951,12 @@ extension AntigravityRPCClient {
                     )
                     if !protoSteps.isEmpty {
                         wokenInstanceCascadeKeys.insert(wakeKey)
+                        if !isBackgroundPreload {
+                            let p1Ms = Int(Date().timeIntervalSince(p1Start) * 1000)
+                            Self.logStepSyncDiagnostic(
+                                "StepSync Path1(proto) OK cid=\(cidTag) target=\(targetTag) steps=\(protoSteps.count) t=\(p1Ms)ms"
+                            )
+                        }
                         return SingleInstanceFetchOutcome(steps: protoSteps)
                     }
                     if !tailFastPainted {
@@ -914,6 +974,12 @@ extension AntigravityRPCClient {
                         if ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
                             shouldWakeAndRetryProto = true
                         }
+                    }
+                    if !isBackgroundPreload {
+                        let p1Ms = Int(Date().timeIntervalSince(p1Start) * 1000)
+                        Self.logStepSyncDiagnostic(
+                            "StepSync Path1(proto) fail cid=\(cidTag) target=\(targetTag) err=\(String(error.localizedDescription.prefix(120))) t=\(p1Ms)ms"
+                        )
                     }
                 }
 
@@ -956,27 +1022,42 @@ extension AntigravityRPCClient {
                 }
             }
 
-            // Fast-path for Antigravity 2.x local SQLite/live sessions: if Binary Protobuf IS supported
-            // and `GetCascadeTrajectorySteps` STILL returned `trajectory not found` AFTER `LoadTrajectory`,
-            // try `StreamAgentStateUpdates` immediately before burning legacy JSON fallbacks.
-            if didAttemptWake,
-               !isBinaryProtobufStepsUnsupported(for: targetUuid),
-               let lastError,
-               ProtocolCompatibilityEngine.isTrajectoryNotFoundError(lastError) {
+            // Fast-path for Antigravity 2.x local sessions:
+            // 1. If Binary Protobuf returned `not_found` AFTER `LoadTrajectory`, OR
+            // 2. If full Binary Protobuf timed out / failed over Cloud Relay (e.g. giant trajectory),
+            // try compact `StreamAgentStateUpdates` (`PROD_UI` + empty metadata bounds) immediately
+            // before burning slow unary JSON fallbacks.
+            let shouldFastTryLocalStream: Bool = {
+                if didAttemptWake,
+                   !isBinaryProtobufStepsUnsupported(for: targetUuid),
+                   let lastError,
+                   ProtocolCompatibilityEngine.isTrajectoryNotFoundError(lastError) {
+                    return true
+                }
+                return !isBackgroundPreload && (Self.isTransportTimeoutError(lastError) || !cachedTailSteps.isEmpty)
+            }()
+            if shouldFastTryLocalStream {
                 didAttemptAgentStream = true
+                let localStreamTimeout: TimeInterval = (Self.isTransportTimeoutError(lastError) || !cachedTailSteps.isEmpty) ? 6.0 : 3.5
                 do {
                     let streamOutcome = try await fetchStepsViaAgentStateStreamOutcome(
                         cascadeId: cascadeId,
                         isRemoteCloud: false,
                         targetUuid: targetUuid,
                         knownStepCount: knownStepCount,
-                        timeoutSeconds: 3.5,
+                        timeoutSeconds: localStreamTimeout,
                         isBackgroundPreload: isBackgroundPreload,
                         onPartialSteps: onPartialSteps
                     )
                     if case let .snapshot(steps, authoritativeEmpty) = streamOutcome,
                        !steps.isEmpty || authoritativeEmpty {
                         wokenInstanceCascadeKeys.insert(wakeKey)
+                        if !isBackgroundPreload {
+                            let totalMs = Int(Date().timeIntervalSince(fetchStart) * 1000)
+                            Self.logStepSyncDiagnostic(
+                                "StepSync Path1(localStream) OK cid=\(cidTag) target=\(targetTag) steps=\(steps.count) t=\(totalMs)ms"
+                            )
+                        }
                         return SingleInstanceFetchOutcome(steps: steps, authoritativeEmpty: authoritativeEmpty)
                     }
                 } catch let AntigravityRPCError.unauthorized(msg) {
@@ -984,8 +1065,19 @@ extension AntigravityRPCClient {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    // Fall through to legacy JSON fallback below.
+                    // Fall through to cached tail or legacy JSON fallback below.
                 }
+            }
+
+            // Never discard already-painted tail steps if full unary fetch & stream fallback both failed.
+            if !cachedTailSteps.isEmpty {
+                if !isBackgroundPreload {
+                    let totalMs = Int(Date().timeIntervalSince(fetchStart) * 1000)
+                    Self.logStepSyncDiagnostic(
+                        "StepSync Path1(preserveTail) OK cid=\(cidTag) target=\(targetTag) steps=\(cachedTailSteps.count) t=\(totalMs)ms"
+                    )
+                }
+                return SingleInstanceFetchOutcome(steps: cachedTailSteps)
             }
         }
 
@@ -994,6 +1086,7 @@ extension AntigravityRPCClient {
         // skipping duplicate `LoadTrajectory` / Binary Protobuf calls Path 1 already executed.
         var adaptiveError: Error? = nil
         let wakeFlag = WakeFlagBox()
+        let p2Start = Date()
         let adaptiveSteps: [CascadeStep]
         do {
             adaptiveSteps = try await fetchStepsViaAdaptiveJSON(
@@ -1019,7 +1112,20 @@ extension AntigravityRPCClient {
         }
 
         if !adaptiveSteps.isEmpty {
+            if !isBackgroundPreload {
+                let p2Ms = Int(Date().timeIntervalSince(p2Start) * 1000)
+                let totalMs = Int(Date().timeIntervalSince(fetchStart) * 1000)
+                Self.logStepSyncDiagnostic(
+                    "StepSync Path2(json) OK cid=\(cidTag) target=\(targetTag) steps=\(adaptiveSteps.count) t=\(p2Ms)ms total=\(totalMs)ms"
+                )
+            }
             return SingleInstanceFetchOutcome(steps: adaptiveSteps)
+        } else if !isBackgroundPreload {
+            let p2Ms = Int(Date().timeIntervalSince(p2Start) * 1000)
+            let errSummary = adaptiveError.map { String($0.localizedDescription.prefix(120)) } ?? "none"
+            Self.logStepSyncDiagnostic(
+                "StepSync Path2(json) empty cid=\(cidTag) target=\(targetTag) err=\(errSummary) t=\(p2Ms)ms"
+            )
         }
 
         // Path 3 (Antigravity 2.x Stream Fallback & Post-Wake Cloud Retry):
@@ -1055,11 +1161,16 @@ extension AntigravityRPCClient {
         }
 
         // Preserve real `StreamAgentStateUpdates` error or timeout diagnostics on Cloud sessions instead of
-        // letting local-only fallback's `not_found: trajectory not found` mask the true root cause.
+        // letting local-only fallback's `not_found: trajectory not found` or fallback timeout mask the true root cause.
+        let adaptiveIsNotFoundOrTimeout: Bool = {
+            guard let adaptiveError else { return true }
+            return ProtocolCompatibilityEngine.isTrajectoryNotFoundError(adaptiveError)
+                || Self.isTransportTimeoutError(adaptiveError)
+        }()
         if isRemoteCloud,
            didAttemptAgentStream,
            !cloudStreamWasUnsupported,
-           (adaptiveError == nil || adaptiveError.map { ProtocolCompatibilityEngine.isTrajectoryNotFoundError($0) } == true) {
+           adaptiveIsNotFoundOrTimeout {
             if let cloudStreamError, !ProtocolCompatibilityEngine.isTrajectoryNotFoundError(cloudStreamError) {
                 throw cloudStreamError
             }
@@ -1666,6 +1777,7 @@ extension AntigravityRPCClient {
 
         var firstResp: [String: JSONValue]? = nil
         var firstStepsFailedNotFound = false
+        var firstStepsTimedOut = false
         let skipRedundantLocalStepsProbe = !isRemoteCloud
             && alreadyAttemptedWake
             && !isBinaryProtobufStepsUnsupported(for: targetUuid)
@@ -1692,6 +1804,9 @@ extension AntigravityRPCClient {
                 if ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
                     firstStepsFailedNotFound = true
                 }
+                if Self.isTransportTimeoutError(error) {
+                    firstStepsTimedOut = true
+                }
                 if isRemoteCloud, case let AntigravityRPCError.httpError(_, body) = error,
                    let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) {
                     mutateCapabilityProfile(for: targetUuid) { profile in
@@ -1714,6 +1829,10 @@ extension AntigravityRPCClient {
                     }
                 }
             }
+        }
+
+        if isRemoteCloud && firstStepsTimedOut, let lastError {
+            throw lastError
         }
 
         if let resp = firstResp,

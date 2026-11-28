@@ -1258,7 +1258,11 @@ extension AntigravitySessionStore {
         activeStepSyncPollsUntilIdle = pollUntilIdle
         if countsAsForeground {
             activeForegroundStepSyncCount += 1
-            preemptNonTargetPreloads(keeping: cascadeId)
+            let shouldPreemptTargetPreload = initialSummaryIsCloud || initialKnownCount >= 50
+            preemptNonTargetPreloads(
+                keeping: shouldPreemptTargetPreload ? nil : cascadeId,
+                targetCascadeId: cascadeId
+            )
         }
         if pollUntilIdle, let engine = kmpEngine, engine.supportsNativeLiveChatStream {
             startKmpLiveChatSubscriptionIfNeeded()
@@ -1688,13 +1692,18 @@ extension AntigravitySessionStore {
 
     /// Cancels in-flight background preload tasks for other conversations so foreground chat opens
     /// immediately get full Relay/LAN bandwidth and Desktop server capacity.
-    internal func preemptNonTargetPreloads(keeping cascadeId: String) {
+    internal func preemptNonTargetPreloads(
+        keeping cascadeId: String?,
+        targetCascadeId: String? = nil
+    ) {
         let keysToCancel = inFlightPreloadTasksByCascadeId.keys.filter { $0 != cascadeId }
         for cid in keysToCancel {
             inFlightPreloadTasksByCascadeId.removeValue(forKey: cid)?.cancel()
             preloadAttemptedAtByCascadeId.removeValue(forKey: cid)
-            conversationPreloadQueue.removeAll { $0 == cid }
-            conversationPreloadQueue.insert(cid, at: 0)
+            if cid != targetCascadeId {
+                conversationPreloadQueue.removeAll { $0 == cid }
+                conversationPreloadQueue.insert(cid, at: 0)
+            }
         }
     }
 

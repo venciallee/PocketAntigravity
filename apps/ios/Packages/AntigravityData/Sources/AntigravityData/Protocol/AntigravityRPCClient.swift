@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(os)
+import os
+#endif
 
 /// Pure Swift 6 Connect-RPC & Google Cloud Relay client for `exa.language_server_pb.LanguageServerService`.
 ///
@@ -8,6 +11,19 @@ import Foundation
 public actor AntigravityRPCClient {
     public static let servicePrefix = "/exa.language_server_pb.LanguageServerService"
     public static let clientAppVersion = "2.33.0"
+
+    #if canImport(os)
+    private static let stepSyncLogger = Logger(
+        subsystem: "com.thousandtimes.agpocket",
+        category: "CloudRelay"
+    )
+    #endif
+
+    nonisolated internal static func logStepSyncDiagnostic(_ message: String) {
+        #if canImport(os)
+        stepSyncLogger.notice("\(message, privacy: .public)")
+        #endif
+    }
 
     internal let channel: RemoteConnectionChannel
     internal let initialHostName: String
@@ -1946,6 +1962,9 @@ public actor AntigravityRPCClient {
             let rpcPath = "\(Self.servicePrefix)/\(method)"
             return AsyncThrowingStream { continuation in
                 let task = Task {
+                    let traceStream = (method == "StreamAgentStateUpdates")
+                    let streamStartDate = Date()
+                    var targetPrefix = String((initialUuid ?? "unresolved").prefix(8))
                     do {
                         let targetUuid: String
                         if let initialUuid, !initialUuid.isEmpty {
@@ -1969,6 +1988,7 @@ public actor AntigravityRPCClient {
                                 body: "Selected Antigravity Desktop host is offline"
                             )
                         }
+                        targetPrefix = String(targetUuid.prefix(8))
 
                         let encodedStreamBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
                             targetInstanceUuid: targetUuid,
@@ -1981,7 +2001,11 @@ public actor AntigravityRPCClient {
                         func makeStreamRequest(apiKey: String?) -> URLRequest {
                             var req = URLRequest(url: relayURL)
                             req.httpMethod = "POST"
+                            req.cachePolicy = .reloadIgnoringLocalCacheData
                             req.timeoutInterval = 300
+                            #if os(iOS) || os(macOS)
+                            req.assumesHTTP3Capable = false
+                            #endif
                             SAPISIDHashGenerator.applyApiServiceHeaders(
                                 to: &req,
                                 cookieHeader: capturedCookie,
@@ -2004,6 +2028,14 @@ public actor AntigravityRPCClient {
                         var (bytes, response) = try await session.bytes(for: makeStreamRequest(apiKey: activeApiKey))
                         guard var http = response as? HTTPURLResponse else {
                             throw AntigravityRPCError.invalidEndpoint
+                        }
+                        if traceStream {
+                            let openMs = Int(Date().timeIntervalSince(streamStartDate) * 1000)
+                            let ct = http.value(forHTTPHeaderField: "Content-Type") ?? "?"
+                            let b64Hdr = Self.hasBase64TransferHeader(http.allHeaderFields)
+                            Self.logStepSyncDiagnostic(
+                                "StepSync StreamProxy open method=\(method) target=\(targetPrefix) http=\(http.statusCode) ct=\(ct) b64Hdr=\(b64Hdr) t=\(openMs)ms"
+                            )
                         }
                         if http.statusCode == 400 || http.statusCode == 403 {
                             var errBytes: [UInt8] = []
@@ -2051,21 +2083,47 @@ public actor AntigravityRPCClient {
                         var outerMode: Int = Self.hasBase64TransferHeader(http.allHeaderFields) ? 2 : 0
                         var sniffBuffer: [UInt8] = []
                         var yieldedAny = false
+                        var totalBytesRead: Int = 0
+                        var totalJspbChunks: Int = 0
+                        var totalEmittedFrames: Int = 0
+                        var firstFrameKeys: String? = nil
+                        var terminalDiag: String? = nil
+
+                        defer {
+                            if traceStream {
+                                let elapsedMs = Int(Date().timeIntervalSince(streamStartDate) * 1000)
+                                let innerErr = jspbStreamParser.lastInnerHeaderError()?.localizedDescription.prefix(80)
+                                let boqErr = jspbStreamParser.lastErrorTrailer?.prefix(80)
+                                let errStr = terminalDiag
+                                    ?? innerErr.map(String.init)
+                                    ?? boqErr.map(String.init)
+                                    ?? (Task.isCancelled ? "cancelled" : "none")
+                                Self.logStepSyncDiagnostic(
+                                    "StepSync StreamProxy end method=\(method) target=\(targetPrefix) mode=\(outerMode) bytes=\(totalBytesRead) chunks=\(totalJspbChunks) frames=\(totalEmittedFrames) keys=\(firstFrameKeys ?? "-") err=\(errStr) t=\(elapsedMs)ms"
+                                )
+                            }
+                        }
 
                         func processStreamByte(_ decodedByte: UInt8) throws -> Bool {
                             guard let chunks = jspbStreamParser.feedByte(decodedByte) else {
                                 return true
                             }
                             for rawChunk in chunks {
+                                totalJspbChunks += 1
                                 let chunkData = CloudRelayJSPBCodec.decompressPayloadIfNeeded(rawChunk)
                                 if !connectParser.hasBufferedBytes,
                                    chunkData.first == UInt8(ascii: "{"),
                                    let obj = try? decoder.decode([String: JSONValue].self, from: chunkData) {
                                     if Self.isLikelyDirectConnectErrorObject(obj),
                                        let directErr = Self.extractConnectEndStreamError(from: chunkData, decoder: decoder) {
+                                        terminalDiag = String(directErr.localizedDescription.prefix(120))
                                         throw directErr
                                     }
+                                    if firstFrameKeys == nil {
+                                        firstFrameKeys = obj.keys.sorted().prefix(6).joined(separator: ",")
+                                    }
                                     yieldedAny = true
+                                    totalEmittedFrames += 1
                                     continuation.yield(obj)
                                 } else {
                                     for frame in connectParser.feed(chunkData) {
@@ -2074,13 +2132,18 @@ public actor AntigravityRPCClient {
                                             : frame.payload
                                         if frame.isEndStream {
                                             if let streamErr = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
+                                                terminalDiag = String(streamErr.localizedDescription.prefix(120))
                                                 throw streamErr
                                             }
                                             continuation.finish()
                                             return false
                                         }
                                         if let obj = try? decoder.decode([String: JSONValue].self, from: frameBytes) {
+                                            if firstFrameKeys == nil {
+                                                firstFrameKeys = obj.keys.sorted().prefix(6).joined(separator: ",")
+                                            }
                                             yieldedAny = true
+                                            totalEmittedFrames += 1
                                             continuation.yield(obj)
                                         }
                                     }
@@ -2090,6 +2153,7 @@ public actor AntigravityRPCClient {
                         }
 
                         for try await byte in bytes {
+                            totalBytesRead += 1
                             if outerMode == 1 {
                                 if !(try processStreamByte(byte)) { return }
                             } else if outerMode == 2 {
@@ -2148,14 +2212,22 @@ public actor AntigravityRPCClient {
 
                         if !yieldedAny {
                             if let innerHeaderErr = jspbStreamParser.lastInnerHeaderError() {
+                                terminalDiag = String(innerHeaderErr.localizedDescription.prefix(120))
                                 throw innerHeaderErr
                             }
                             if let boqErr = jspbStreamParser.lastErrorTrailer {
+                                terminalDiag = String(boqErr.prefix(120))
                                 throw AntigravityRPCError.httpError(statusCode: 502, body: boqErr)
                             }
                         }
                         continuation.finish()
                     } catch {
+                        if traceStream {
+                            let elapsedMs = Int(Date().timeIntervalSince(streamStartDate) * 1000)
+                            Self.logStepSyncDiagnostic(
+                                "StepSync StreamProxy throw method=\(method) target=\(targetPrefix) err=\(String(error.localizedDescription.prefix(120))) t=\(elapsedMs)ms"
+                            )
+                        }
                         continuation.finish(throwing: error)
                     }
                 }

@@ -13,13 +13,17 @@ import platform.CoreFoundation.CFDataGetBytePtr
 import platform.CoreFoundation.CFDataGetLength
 import platform.CoreFoundation.CFRelease
 import platform.Foundation.NSDate
+import platform.Foundation.NSLog
 import platform.Foundation.NSURLAuthenticationMethodServerTrust
 import platform.Foundation.NSURLCredential
+import platform.Foundation.NSURLRequestReloadIgnoringLocalCacheData
 import platform.Foundation.NSURLSessionAuthChallengeCancelAuthenticationChallenge
 import platform.Foundation.NSURLSessionAuthChallengePerformDefaultHandling
 import platform.Foundation.NSURLSessionAuthChallengeUseCredential
 import platform.Foundation.credentialForTrust
 import platform.Foundation.serverTrust
+import platform.Foundation.setAssumesHTTP3Capable
+import platform.Foundation.setCachePolicy
 import platform.Foundation.setHTTPShouldHandleCookies
 import platform.Foundation.timeIntervalSince1970
 import platform.Security.SecCertificateCopyData
@@ -30,6 +34,10 @@ public actual fun currentTimeMillis(): Long =
     (NSDate().timeIntervalSince1970 * 1000.0).toLong()
 
 public actual fun platformTransportEngineName(): String = "KMP-Darwin"
+
+internal actual fun logProtocolDiagnostic(message: String) {
+    NSLog("[CloudRelay] %@", message)
+}
 
 internal actual fun createPlatformHttpClient(
     endpointHost: String,
@@ -53,6 +61,8 @@ internal actual fun createPlatformHttpClient(
             }
             configureRequest {
                 setHTTPShouldHandleCookies(false)
+                setCachePolicy(NSURLRequestReloadIgnoringLocalCacheData)
+                setAssumesHTTP3Capable(false)
             }
             handleChallenge { _, _, challenge, completionHandler ->
                 val space = challenge.protectionSpace
