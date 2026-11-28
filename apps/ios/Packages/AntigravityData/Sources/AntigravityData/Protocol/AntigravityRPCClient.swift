@@ -1879,7 +1879,7 @@ public actor AntigravityRPCClient {
         guard let text = String(data: data, encoding: .utf8) else { return nil }
         var grpcStatus: Int? = nil
         var grpcMessage: String? = nil
-        for rawLine in text.split(separator: "\n") {
+        for rawLine in text.split(whereSeparator: \.isNewline) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let colon = line.firstIndex(of: ":") else { continue }
             let key = line[..<colon].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
