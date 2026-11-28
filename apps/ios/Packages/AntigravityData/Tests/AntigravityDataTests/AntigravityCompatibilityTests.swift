@@ -2610,7 +2610,7 @@ final class AntigravityCompatibilityTests: XCTestCase {
                 return (resp, Data("[null,[[\"grpc-status\",\"12\"],[\"grpc-message\",\"unimplemented\"]]]".utf8))
             }
             if path.hasSuffix("/ProxyCommand") {
-                let bodyText = String(data: bodyData, encoding: .utf8) ?? ""
+                let bodyText = (String(data: bodyData, encoding: .utf8) ?? "").replacingOccurrences(of: "\\/", with: "/")
                 if bodyText.contains("application/proto") {
                     let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
                     let innerB64 = arr.count > 2 ? (arr[2].stringValue ?? "") : ""

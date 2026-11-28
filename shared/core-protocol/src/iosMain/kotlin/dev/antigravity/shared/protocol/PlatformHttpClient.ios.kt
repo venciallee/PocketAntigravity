@@ -22,8 +22,6 @@ import platform.Foundation.NSURLSessionAuthChallengePerformDefaultHandling
 import platform.Foundation.NSURLSessionAuthChallengeUseCredential
 import platform.Foundation.credentialForTrust
 import platform.Foundation.serverTrust
-import platform.Foundation.setAssumesHTTP3Capable
-import platform.Foundation.setCachePolicy
 import platform.Foundation.setHTTPShouldHandleCookies
 import platform.Foundation.timeIntervalSince1970
 import platform.Security.SecCertificateCopyData
