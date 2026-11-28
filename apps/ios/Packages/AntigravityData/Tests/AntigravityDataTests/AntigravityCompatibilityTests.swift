@@ -2234,6 +2234,223 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(update.steps[0].userInput, "为什么进来显示空白")
         XCTAssertEqual(update.steps[1].plannerResponse?.response, "已定位根因并修复")
     }
+
+    func testSwiftCloudStreamRequestsProdUiEmptyMetadataAndConnectGzipAndDecodesPageBounds() async throws {
+        let instanceUuid = "inst-swift-prod-ui"
+        let cloudCid = "v1/default/jetski_remote_agents_3p_devbox/swift-prod-ui"
+        let probe = CompatCloudWakeProbeState()
+
+        // Verify streaming request carries connect-accept-encoding:gzip and NOT accept-encoding:gzip
+        let encodedStream = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
+            targetInstanceUuid: instanceUuid,
+            rpcPath: "/exa.language_server_pb.LanguageServerService/StreamAgentStateUpdates",
+            payload: ConnectEnvelope.encode(payload: Data("{\"conversationId\":\"\(cloudCid)\"}".utf8)),
+            contentType: "application/connect+json",
+            isStreaming: true
+        )
+        let streamText = (String(data: encodedStream, encoding: .utf8) ?? "").replacingOccurrences(of: "\\/", with: "/")
+        XCTAssertTrue(streamText.contains("[\"connect-accept-encoding\",\"gzip\"]"), "Streaming proxy request should advertise connect-accept-encoding:gzip")
+        XCTAssertFalse(streamText.contains("[\"accept-encoding\",\"gzip\"]"), "Streaming proxy request must NOT send HTTP accept-encoding:gzip")
+
+        // Verify decodeAgentStateStepsUpdate honors pageBounds.startIndex when indices array is omitted
+        let pagedFrame = """
+        {"update":{"conversationId":"\(cloudCid)","mainTrajectoryUpdate":{"stepsUpdate":{"pageBounds":{"startIndex":50},"totalLength":52,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Tail 50"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Tail 51"}}]}}}}
+        """
+        let pagedObj = try JSONDecoder().decode([String: JSONValue].self, from: Data(pagedFrame.utf8))
+        let pagedUpdate = AntigravityRPCClient.decodeAgentStateStepsUpdate(pagedObj, cascadeId: cloudCid)
+        XCTAssertEqual(pagedUpdate.steps.count, 2)
+        XCTAssertEqual(pagedUpdate.steps[0].stepIndex, 50)
+        XCTAssertEqual(pagedUpdate.steps[1].stepIndex, 51)
+
+        // Verify live Cloud StreamAgentStateUpdates sends PROD_UI verbosity + empty metadata page bounds
+        let okFrame = """
+        {"update":{"conversationId":"\(cloudCid)","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Fast Cloud load"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Opened in 2s"}}]}}}}
+        """
+        var streamBytes = Data()
+        streamBytes.append(ConnectEnvelope.encode(payload: Data(okFrame.utf8)))
+        streamBytes.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let okBoq = "[\"\(streamBytes.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.33.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+                let b64Inner = arr.count > 2 ? (arr[2].stringValue ?? "") : ""
+                let framed = CloudRelayJSPBCodec.decodeBase64Flexible(b64Inner) ?? Data()
+                let innerData = framed.count > 5 ? framed.subdata(in: 5..<framed.count) : Data("{}".utf8)
+                let innerObj = (try? JSONDecoder().decode([String: JSONValue].self, from: innerData)) ?? [:]
+                probe.recordLoadPayload(innerObj)
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(okBoq.utf8))
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let client = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: instanceUuid,
+                hostname: "MacBook Pro",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let steps = try await client.fetchAllTrajectorySteps(cascadeId: cloudCid, knownStepCount: 2, isCloud: true)
+        XCTAssertEqual(steps.count, 2)
+        let reqPayload = try XCTUnwrap(probe.loadPayloads().first)
+        XCTAssertEqual(reqPayload["trajectoryVerbosity"]?.stringValue, "CLIENT_TRAJECTORY_VERBOSITY_PROD_UI")
+        XCTAssertEqual(reqPayload["initialGeneratorMetadatasPageBounds"]?.objectValue?["endIndexExclusive"]?.intValue, 0)
+        XCTAssertEqual(reqPayload["initialExecutorMetadatasPageBounds"]?.objectValue?["endIndexExclusive"]?.intValue, 0)
+    }
+
+    func testSwiftCloudStreamSelfHealsUnknownOptionalFieldsFromDirectJsonError() async throws {
+        let instanceUuid = "inst-swift-self-heal"
+        let cloudCid = "v1/default/jetski_remote_agents_3p_devbox/swift-older-schema"
+        let counter = CompatRequestCounter()
+
+        let okFrame = """
+        {"update":{"conversationId":"\(cloudCid)","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0],"totalLength":1,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Swift self-healed"}}]}}}}
+        """
+        var okStream = Data()
+        okStream.append(ConnectEnvelope.encode(payload: Data(okFrame.utf8)))
+        okStream.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let okBoq = "[\"\(okStream.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            counter.record(path: path)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"Older Mac\",\"2.26.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+                let b64Inner = arr.count > 2 ? (arr[2].stringValue ?? "") : ""
+                let framed = CloudRelayJSPBCodec.decodeBase64Flexible(b64Inner) ?? Data()
+                let innerData = framed.count > 5 ? framed.subdata(in: 5..<framed.count) : Data("{}".utf8)
+                let innerObj = (try? JSONDecoder().decode([String: JSONValue].self, from: innerData)) ?? [:]
+                let rejected = ["initialGeneratorMetadatasPageBounds", "initialExecutorMetadatasPageBounds", "trajectoryVerbosity"]
+                    .first(where: { innerObj[$0] != nil })
+                if let rejected {
+                    let errJson = "{\"code\":\"invalid_argument\",\"message\":\"unknown field \\\"\(rejected)\\\"\"}"
+                    let errB64 = Data(errJson.utf8).base64EncodedString()
+                    let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                    return (resp, Data("[\"\(errB64)\",[[\"content-type\",\"application/json\"]]]".utf8))
+                }
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(okBoq.utf8))
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let client = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: instanceUuid,
+                hostname: "Older Mac",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let steps = try await client.fetchAllTrajectorySteps(cascadeId: cloudCid, knownStepCount: 1, isCloud: true)
+        XCTAssertEqual(steps.count, 1)
+        XCTAssertEqual(steps[0].userInput, "Swift self-healed")
+        XCTAssertEqual(counter.count(forSuffix: "/StreamProxyCommand"), 4)
+    }
+
+    func testSwiftCloudStreamGrpcWeb80TrailerAndInnerHeaderErrorAndPreservesCloudDiagnostics() async throws {
+        // 1. Inner header error capture in CloudRelayJSPBStreamParser
+        var headerParser = CloudRelayJSPBStreamParser()
+        let innerErrBytes = Data("[[null,[[\":status\",\"503\"],[\"grpc-status\",\"14\"],[\"grpc-message\",\"relay%20overloaded\"]]]]".utf8)
+        XCTAssertTrue(headerParser.feed(innerErrBytes).isEmpty)
+        if case let .httpError(statusCode, body)? = headerParser.lastInnerHeaderError() {
+            XCTAssertEqual(statusCode, 503)
+            XCTAssertEqual(body, "relay overloaded")
+        } else {
+            XCTFail("Expected HTTP 503 inner header error")
+        }
+
+        // 2. gRPC-Web 0x80 trailer inside StreamProxyCommand surfaces true 500 error over local 404 fallback
+        let instanceUuid = "inst-swift-grpc-80"
+        let cloudCid = "v1/default/jetski_remote_agents_3p_devbox/swift-grpc-diag"
+        let counter = CompatRequestCounter()
+        let probe = CompatTrajectoryProbeState()
+
+        let grpcTrailer = ConnectEnvelope.encode(
+            payload: Data("grpc-status: 13\r\ngrpc-message: remote%20agent%20proxy%20failed\r\n".utf8),
+            flags: .grpcWebTrailer
+        )
+        let grpcBoq = "[\"\(grpcTrailer.base64EncodedString())\",[[\"content-type\",\"application/grpc-web+json\"]]]"
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            counter.record(path: path)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.33.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(grpcBoq.utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let bodyText = String(data: bodyData, encoding: .utf8) ?? ""
+                if bodyText.contains("application/proto") {
+                    probe.recordProto()
+                }
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data("[5,\"not_found: trajectory not found\"]".utf8))
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let client = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: instanceUuid,
+                hostname: "MacBook Pro",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        _ = try await client.resolveCloudRelayInstance()
+        XCTAssertEqual(counter.count(forSuffix: "/ListInstances"), 1)
+
+        do {
+            _ = try await client.fetchAllTrajectorySteps(cascadeId: cloudCid, knownStepCount: 10, isCloud: true)
+            XCTFail("Expected Cloud gRPC-Web 500 error to be thrown")
+        } catch let AntigravityRPCError.httpError(code, body) {
+            XCTAssertEqual(code, 500, "Must preserve gRPC-Web 0x80 internal error instead of local 404")
+            XCTAssertTrue(body.contains("remote agent proxy failed"), "Unexpected body: \(body)")
+        }
+        XCTAssertEqual(probe.protoCount(), 0, "Cloud fallback must NOT invoke Binary Protobuf Fallback B")
+        XCTAssertEqual(counter.count(forSuffix: "/ListInstances"), 1, "Must NOT trigger extra ListInstances refresh on Cloud trajectory 404/500")
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers

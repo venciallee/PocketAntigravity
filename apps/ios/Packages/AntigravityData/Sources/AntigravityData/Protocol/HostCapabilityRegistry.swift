@@ -98,6 +98,7 @@ public enum HostCapability: String, Codable, Sendable, CaseIterable, Hashable {
     case orchestratorModels
     case usageQuota
     case streamChunking
+    case agentStatePaging
 
     public var displayTitle: String {
         switch self {
@@ -117,6 +118,7 @@ public enum HostCapability: String, Codable, Sendable, CaseIterable, Hashable {
         case .orchestratorModels: return "Orchestrator Models"
         case .usageQuota: return "Model Usage Quota"
         case .streamChunking: return "Chunked Relay Streaming"
+        case .agentStatePaging: return "Agent State Step Paging"
         }
     }
 
@@ -133,6 +135,8 @@ public enum HostCapability: String, Codable, Sendable, CaseIterable, Hashable {
             return AntigravitySemVer(major: 2, minor: 33, patch: 0)
         case .streamChunking:
             return AntigravitySemVer(major: 2, minor: 0, patch: 0)
+        case .agentStatePaging:
+            return AntigravitySemVer(major: 2, minor: 30, patch: 0)
         }
     }
 
@@ -151,6 +155,7 @@ public enum HostCapability: String, Codable, Sendable, CaseIterable, Hashable {
         case .customizationsCatalog: return ["GetCustomizationsCatalog", "RestartMcpServer", "TogglePlugin", "InstallPlugin"]
         case .fullTextSearch: return ["SearchAllConversations"]
         case .backgroundTaskControl: return ["CancelBackgroundTask", "StopSubagent"]
+        case .agentStatePaging: return ["RequestAgentStatePageUpdate"]
         case .thinkingEffortExtra, .orchestratorModels, .usageQuota, .streamChunking:
             return []
         }
@@ -182,6 +187,8 @@ public enum HostCapability: String, Codable, Sendable, CaseIterable, Hashable {
             return .fullTextSearch
         case "CancelBackgroundTask", "StopSubagent":
             return .backgroundTaskControl
+        case "RequestAgentStatePageUpdate":
+            return .agentStatePaging
         default:
             return nil
         }

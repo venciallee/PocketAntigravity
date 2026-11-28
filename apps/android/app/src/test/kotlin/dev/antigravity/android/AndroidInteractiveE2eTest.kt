@@ -1651,6 +1651,126 @@ class AndroidInteractiveE2eTest {
         composeRule.onNodeWithTag("chat-steps-list").assertIsDisplayed()
         composeRule.onNodeWithText("Historical message #74", useUnmergedTree = true).assertIsDisplayed()
     }
+
+    @Test
+    fun atc37_openingUncachedCloudChatGatesLiveStreamUntilInitialStepsLoad() {
+        val coordinator = AntigravityCoreCoordinator(
+            autoPreloadConversations = false,
+            enableForegroundHeartbeatLoop = false,
+        )
+        val cloudCid = "v1/default/jetski_remote_agents_3p_devbox/app-bug-report-android"
+        val macHost = dev.antigravity.shared.domain.EsddVerificationFixtures.macHost
+        coordinator.connectionStore.seedVerificationConnection(
+            activeHost = macHost,
+            knownHosts = listOf(macHost),
+            statusText = "Connected · MacBook Pro · 42ms",
+        )
+        coordinator.conversationSyncStore.seedFixtureData(
+            workspaces = listOf(
+                dev.antigravity.shared.model.WorkspaceInfo(
+                    workspaceUri = "cloud://venciallee/PocketAntigravity",
+                    displayName = "venciallee/PocketAntigravity",
+                    activeBranch = "main",
+                    isCloud = true,
+                    originHostName = "Antigravity",
+                )
+            ),
+            projects = listOf(
+                dev.antigravity.shared.model.ProjectWorkspace(
+                    id = "venciallee/PocketAntigravity",
+                    name = "venciallee/PocketAntigravity",
+                    pathDisplay = "cloud://venciallee/PocketAntigravity",
+                    workspaceUri = "cloud://venciallee/PocketAntigravity",
+                    runtime = dev.antigravity.shared.model.ProjectRuntimeTarget.CLOUD,
+                    hostName = "Antigravity",
+                    activeBranch = "main",
+                )
+            ),
+            summaries = listOf(
+                dev.antigravity.shared.model.CascadeSummary(
+                    cascadeId = cloudCid,
+                    title = "App Bug Report and Feedback",
+                    projectSlug = "venciallee/PocketAntigravity",
+                    workspaceUri = "cloud://venciallee/PocketAntigravity",
+                    branchName = "main",
+                    status = CortexStepStatus.DONE,
+                    stepCount = 2,
+                    currentStepIndex = 2,
+                    totalSteps = 2,
+                    updatedAtEpochMs = 1_740_000_000_000L,
+                    isCloud = true,
+                    originHostName = "Antigravity",
+                    hasResolvedTitle = true,
+                )
+            ),
+        )
+        coordinator.isVerificationMode = false
+
+        composeRule.setContent {
+            AntigravityAppRoot(
+                coordinator = coordinator,
+                initialVerifyScene = null,
+            )
+        }
+
+        // Open sidebar drawer and tap the uncached Cloud conversation
+        composeRule.onNodeWithTag("btn-sidebar").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("conversation-row-$cloudCid").performClick()
+        composeRule.waitForIdle()
+
+        // 1. With no steps loaded yet (errored/offline client), live stream must NOT start in background
+        assertEquals(
+            "AntigravityAppRoot must NOT start live chat stream while uncached Cloud chat has load error",
+            null,
+            coordinator.activeLiveChatStreamCascadeId,
+        )
+
+        // 2. While initial uncached loading is actively in progress, live stream must STILL stay gated
+        coordinator.chatStore.setStepLoadError(null)
+        coordinator.chatStore.setLoadingSteps(cloudCid, true)
+        composeRule.waitForIdle()
+        assertEquals(
+            "AntigravityAppRoot must NOT open a duplicate competing live stream while initial Cloud history is loading",
+            null,
+            coordinator.activeLiveChatStreamCascadeId,
+        )
+
+        // 3. Once initial Cloud steps hydrate, live chat stream activates cleanly for cloudCid
+        coordinator.chatStore.seedFixtureSteps(
+            stepsByCascade = mapOf(
+                cloudCid to listOf(
+                    CascadeStep(
+                        cascadeId = cloudCid,
+                        stepIndex = 0,
+                        type = CortexStepType.USER_INPUT,
+                        status = CortexStepStatus.DONE,
+                        userInput = "History loading takes 30s on iOS",
+                    ),
+                    CascadeStep(
+                        cascadeId = cloudCid,
+                        stepIndex = 1,
+                        type = CortexStepType.PLANNER_RESPONSE,
+                        status = CortexStepStatus.DONE,
+                        plannerResponse = dev.antigravity.shared.model.PlannerResponsePayload(
+                            response = "Fixed with PROD_UI verbosity, empty metadata bounds, and tail-first paging.",
+                        ),
+                    ),
+                )
+            ),
+            questions = emptyList(),
+        )
+        coordinator.chatStore.setLoadingSteps(cloudCid, false)
+        composeRule.waitForIdle()
+
+        assertEquals(
+            "Live chat stream must start once initial Cloud history finishes loading",
+            cloudCid,
+            coordinator.activeLiveChatStreamCascadeId,
+        )
+        composeRule.onNodeWithText("History loading takes 30s on iOS", useUnmergedTree = true).assertIsDisplayed()
+        coordinator.stopLiveChatStream()
+    }
 }
 
 

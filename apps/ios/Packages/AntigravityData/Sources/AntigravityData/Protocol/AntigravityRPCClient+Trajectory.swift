@@ -260,13 +260,137 @@ extension AntigravityRPCClient {
     private enum AgentStateStreamOutcome: Sendable {
         case unsupported
         case snapshot(steps: [CascadeStep], authoritativeEmpty: Bool)
-        case noData(lastError: Error?)
+        case noData(lastError: Error?, timedOut: Bool, sawStreamResponse: Bool)
     }
 
     private enum PeerProbeOutcome: Sendable {
         case matched(uuid: String, outcome: SingleInstanceFetchOutcome)
         case empty
         case failed(Error)
+    }
+
+    private static let cloudStreamTimeoutDiagnosticPrefix = "Cloud conversation stream timed out"
+
+    private static func isStreamFieldStripped(
+        _ strippedFields: Set<String>,
+        camelName: String,
+        snakeName: String
+    ) -> Bool {
+        strippedFields.contains {
+            $0.caseInsensitiveCompare(camelName) == .orderedSame
+                || $0.caseInsensitiveCompare(snakeName) == .orderedSame
+        }
+    }
+
+    private static func isOptionalAgentStateRequestField(_ fieldName: String) -> Bool {
+        let lower = fieldName.lowercased()
+        return lower == "trajectoryverbosity"
+            || lower == "trajectory_verbosity"
+            || lower == "initialstepspagebounds"
+            || lower == "initial_steps_page_bounds"
+            || lower == "initialgeneratormetadataspagebounds"
+            || lower == "initial_generator_metadatas_page_bounds"
+            || lower == "initialexecutormetadataspagebounds"
+            || lower == "initial_executor_metadatas_page_bounds"
+    }
+
+    private static func buildAgentStateUpdatesRequestBody(
+        cascadeId: String,
+        subscriberId: String,
+        strippedFields: Set<String>,
+        tailStartIndex: Int? = nil,
+        legacyBackendField: String? = nil
+    ) -> [String: JSONValue] {
+        var body: [String: JSONValue] = [
+            "conversationId": .string(cascadeId),
+            "subscriberId": .string(subscriberId)
+        ]
+        if !isStreamFieldStripped(strippedFields, camelName: "trajectoryVerbosity", snakeName: "trajectory_verbosity") {
+            body["trajectoryVerbosity"] = .string("CLIENT_TRAJECTORY_VERBOSITY_PROD_UI")
+        }
+        if !isStreamFieldStripped(
+            strippedFields,
+            camelName: "initialGeneratorMetadatasPageBounds",
+            snakeName: "initial_generator_metadatas_page_bounds"
+        ) {
+            body["initialGeneratorMetadatasPageBounds"] = .object([
+                "startIndex": .int(0),
+                "endIndexExclusive": .int(0)
+            ])
+        }
+        if !isStreamFieldStripped(
+            strippedFields,
+            camelName: "initialExecutorMetadatasPageBounds",
+            snakeName: "initial_executor_metadatas_page_bounds"
+        ) {
+            body["initialExecutorMetadatasPageBounds"] = .object([
+                "startIndex": .int(0),
+                "endIndexExclusive": .int(0)
+            ])
+        }
+        if let tailStartIndex,
+           tailStartIndex > 0,
+           !isStreamFieldStripped(strippedFields, camelName: "initialStepsPageBounds", snakeName: "initial_steps_page_bounds") {
+            body["initialStepsPageBounds"] = .object([
+                "startIndex": .int(tailStartIndex)
+            ])
+        }
+        if let legacyBackendField {
+            body[legacyBackendField] = .string("BACKEND_TYPE_REMOTE_AICODE")
+        }
+        return body
+    }
+
+    /// Expands the active `StreamAgentStateUpdates` step slice window via Antigravity 2.x
+    /// `RequestAgentStatePageUpdate` so tail-first initial frames paint immediately while earlier
+    /// history backfills seamlessly over the same open stream.
+    private func requestAgentStatePageUpdate(
+        cascadeId: String,
+        subscriberId: String,
+        startIndex: Int,
+        endIndexExclusive: Int? = nil,
+        isRemoteCloud: Bool,
+        targetUuid: String?
+    ) async throws -> Bool {
+        let profile = capabilityProfile(forHostKey: capabilityHostKey(for: targetUuid))
+        if profile.isMethodKnownUnsupported("RequestAgentStatePageUpdate") {
+            return false
+        }
+        var stepPageBounds: [String: JSONValue] = [
+            "startIndex": .int(max(0, startIndex))
+        ]
+        if let endIndexExclusive, endIndexExclusive > startIndex {
+            stepPageBounds["endIndexExclusive"] = .int(endIndexExclusive)
+        }
+        let body: [String: JSONValue] = [
+            "conversationId": .string(cascadeId),
+            "subscriberId": .string(subscriberId),
+            "stepPageBounds": .object(stepPageBounds),
+            "generatorMetadatasPageBounds": .object([
+                "startIndex": .int(0),
+                "endIndexExclusive": .int(0)
+            ]),
+            "executorMetadatasPageBounds": .object([
+                "startIndex": .int(0),
+                "endIndexExclusive": .int(0)
+            ])
+        ]
+        do {
+            _ = try await callUnaryJSON(
+                method: "RequestAgentStatePageUpdate",
+                body: body,
+                instanceUuidOverride: targetUuid,
+                allowCrossHostFailover: isRemoteCloud,
+                timeoutInterval: 4.0
+            )
+            return true
+        } catch let AntigravityRPCError.unauthorized(msg) {
+            throw AntigravityRPCError.unauthorized(msg)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return false
+        }
     }
 
     private func tryFetchIncrementalBinaryDelta(
@@ -387,6 +511,8 @@ extension AntigravityRPCClient {
                     targetUuid: primaryTarget,
                     allowNonCriticalRepair: allowNonCriticalRepair,
                     existingStepsCount: existingSteps.count,
+                    isBackgroundPreload: isBackgroundPreload,
+                    isPeerProbe: false,
                     onPartialSteps: onPartialSteps
                 )
                 if !outcome.steps.isEmpty {
@@ -426,10 +552,21 @@ extension AntigravityRPCClient {
                     instancesToSearch = cachedRelayInstances
                 } else {
                     if isBackgroundPreload { break }
+                    let isClientCloudStreamTimeout: Bool = {
+                        guard isRemoteCloud,
+                              let err = primaryError,
+                              case let AntigravityRPCError.httpError(code, body) = err else {
+                            return false
+                        }
+                        return code == 504 && body.contains(Self.cloudStreamTimeoutDiagnosticPrefix)
+                    }()
                     let shouldRefreshInstances: Bool = {
+                        if isClientCloudStreamTimeout { return false }
                         if cachedRelayInstances.isEmpty { return true }
                         if let err = primaryError, case let AntigravityRPCError.httpError(code, _) = err {
-                            return code == 404 || code == 502 || code == 503 || code == 504
+                            return code == 502 || code == 503 || code == 504
+                                || ProtocolCompatibilityEngine.isInstanceNotRegisteredError(err)
+                                || (!isRemoteCloud && code == 404)
                         }
                         return false
                     }()
@@ -481,6 +618,8 @@ extension AntigravityRPCClient {
                                 targetUuid: peer.uuid,
                                 allowNonCriticalRepair: allowNonCriticalRepair,
                                 existingStepsCount: existingSteps.count,
+                                isBackgroundPreload: isBackgroundPreload,
+                                isPeerProbe: true,
                                 onPartialSteps: onPartialSteps
                             )
                             if !peerOutcome.steps.isEmpty {
@@ -518,6 +657,8 @@ extension AntigravityRPCClient {
                                         targetUuid: peerUuid,
                                         allowNonCriticalRepair: allowNonCriticalRepair,
                                         existingStepsCount: existingSteps.count,
+                                        isBackgroundPreload: isBackgroundPreload,
+                                        isPeerProbe: true,
                                         onPartialSteps: onPartialSteps
                                     )
                                     if !peerOutcome.steps.isEmpty || (isRemoteCloud && peerOutcome.authoritativeEmpty) {
@@ -599,6 +740,8 @@ extension AntigravityRPCClient {
             targetUuid: targetUuid,
             allowNonCriticalRepair: true,
             existingStepsCount: existingStepsCount,
+            isBackgroundPreload: false,
+            isPeerProbe: false,
             onPartialSteps: onPartialSteps
         ).steps
     }
@@ -610,29 +753,38 @@ extension AntigravityRPCClient {
         targetUuid: String?,
         allowNonCriticalRepair: Bool,
         existingStepsCount: Int = 0,
+        isBackgroundPreload: Bool = false,
+        isPeerProbe: Bool = false,
         onPartialSteps: (@Sendable ([CascadeStep]) async -> Void)? = nil
     ) async throws -> SingleInstanceFetchOutcome {
         let isRemoteCloud = Self.isRemoteCloudCascade(cascadeId: cascadeId, isCloud: isCloud)
         let wakeKey = "\(targetUuid ?? "direct")|\(cascadeId)"
         var lastError: Error? = nil
+        var cloudStreamError: Error? = nil
+        var cloudStreamTimedOut = false
+        var cloudStreamSawResponse = false
+        var cloudStreamWasUnsupported = false
         var didAttemptWake = false
         var didAttemptProtobuf = false
         var didAttemptAgentStream = false
 
         // Path 0 (Antigravity 2.x Cloud Primary): Remote Cloud (`v1/...`) conversations live on
         // Google's remote backend rather than local `.pb` files, so `GetCascadeTrajectorySteps` /
-        // `LoadTrajectory` / `GetCascadeTrajectory` often return `not_found: trajectory not found`
-        // even for actively running Cloud chats. `StreamAgentStateUpdates` is the authoritative
-        // Antigravity 2.x streaming RPC that delivers live & historical Cloud trajectories.
+        // `LoadTrajectory` / `GetCascadeTrajectory` return `not_found: trajectory not found`
+        // even for active Cloud chats. `StreamAgentStateUpdates` is the authoritative Antigravity 2.x
+        // streaming RPC that delivers live & historical Cloud trajectories.
         if isRemoteCloud {
             didAttemptAgentStream = true
+            let cloudPrimaryTimeoutSeconds: TimeInterval = isBackgroundPreload ? 5.0 : (isPeerProbe ? 6.0 : 12.0)
             do {
                 let streamOutcome = try await fetchStepsViaAgentStateStreamOutcome(
                     cascadeId: cascadeId,
                     isRemoteCloud: true,
                     targetUuid: targetUuid,
                     knownStepCount: knownStepCount,
-                    timeoutSeconds: 8.0
+                    timeoutSeconds: cloudPrimaryTimeoutSeconds,
+                    isBackgroundPreload: isBackgroundPreload,
+                    onPartialSteps: onPartialSteps
                 )
                 switch streamOutcome {
                 case .snapshot(let steps, let authoritativeEmpty):
@@ -641,10 +793,13 @@ extension AntigravityRPCClient {
                         return SingleInstanceFetchOutcome(steps: steps, authoritativeEmpty: authoritativeEmpty)
                     }
                 case .unsupported:
-                    break
-                case .noData(let err):
+                    cloudStreamWasUnsupported = true
+                case .noData(let err, let timedOut, let sawStreamResponse):
+                    cloudStreamTimedOut = timedOut
+                    cloudStreamSawResponse = sawStreamResponse
                     if let err, !ProtocolCompatibilityEngine.isMethodUnimplementedError(err) {
                         lastError = err
+                        cloudStreamError = err
                     }
                 }
             } catch let AntigravityRPCError.unauthorized(msg) {
@@ -652,9 +807,19 @@ extension AntigravityRPCClient {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                if !ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+                if ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+                    cloudStreamWasUnsupported = true
+                } else {
                     lastError = error
+                    cloudStreamError = error
                 }
+            }
+
+            if !cloudStreamWasUnsupported && cloudStreamTimedOut && cloudStreamSawResponse {
+                throw cloudStreamError ?? AntigravityRPCError.httpError(
+                    statusCode: 504,
+                    body: "\(Self.cloudStreamTimeoutDiagnosticPrefix) waiting for Antigravity Desktop to hydrate Cloud trajectory history. Tap Retry."
+                )
             }
         }
 
@@ -805,7 +970,9 @@ extension AntigravityRPCClient {
                         isRemoteCloud: false,
                         targetUuid: targetUuid,
                         knownStepCount: knownStepCount,
-                        timeoutSeconds: 3.5
+                        timeoutSeconds: 3.5,
+                        isBackgroundPreload: isBackgroundPreload,
+                        onPartialSteps: onPartialSteps
                     )
                     if case let .snapshot(steps, authoritativeEmpty) = streamOutcome,
                        !steps.isEmpty || authoritativeEmpty {
@@ -839,6 +1006,7 @@ extension AntigravityRPCClient {
                 alreadyAttemptedWake: didAttemptWake,
                 alreadyAttemptedProtobuf: didAttemptProtobuf,
                 allowNonCriticalRepair: allowNonCriticalRepair,
+                cloudStreamSupported: isRemoteCloud && !cloudStreamWasUnsupported,
                 wakeFlag: wakeFlag
             )
         } catch let AntigravityRPCError.unauthorized(msg) {
@@ -868,7 +1036,9 @@ extension AntigravityRPCClient {
                     isRemoteCloud: isRemoteCloud,
                     targetUuid: targetUuid,
                     knownStepCount: knownStepCount,
-                    timeoutSeconds: isRemoteCloud ? 5.0 : 4.0
+                    timeoutSeconds: isRemoteCloud ? 6.0 : 4.0,
+                    isBackgroundPreload: isBackgroundPreload,
+                    onPartialSteps: onPartialSteps
                 )
                 if case let .snapshot(steps, authoritativeEmpty) = streamOutcome,
                    !steps.isEmpty || authoritativeEmpty {
@@ -880,7 +1050,24 @@ extension AntigravityRPCClient {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                // Preserve original adaptiveError below.
+                // Preserve original error below.
+            }
+        }
+
+        // Preserve real `StreamAgentStateUpdates` error or timeout diagnostics on Cloud sessions instead of
+        // letting local-only fallback's `not_found: trajectory not found` mask the true root cause.
+        if isRemoteCloud,
+           didAttemptAgentStream,
+           !cloudStreamWasUnsupported,
+           (adaptiveError == nil || adaptiveError.map { ProtocolCompatibilityEngine.isTrajectoryNotFoundError($0) } == true) {
+            if let cloudStreamError, !ProtocolCompatibilityEngine.isTrajectoryNotFoundError(cloudStreamError) {
+                throw cloudStreamError
+            }
+            if cloudStreamTimedOut {
+                throw AntigravityRPCError.httpError(
+                    statusCode: 504,
+                    body: "\(Self.cloudStreamTimeoutDiagnosticPrefix) waiting for Antigravity Desktop to hydrate Cloud trajectory history. Tap Retry."
+                )
             }
         }
 
@@ -892,28 +1079,33 @@ extension AntigravityRPCClient {
 
     /// Reads the initial trajectory snapshot from Antigravity 2.x's authoritative
     /// `StreamAgentStateUpdates` server-streaming Connect-RPC (`mainTrajectoryUpdate.stepsUpdate`),
-    /// merging sparse `indices` + `steps` up to `totalLength` and immediately closing the stream.
+    /// using `CLIENT_TRAJECTORY_VERBOSITY_PROD_UI`, empty metadata page bounds, and tail-first
+    /// `initialStepsPageBounds` + `RequestAgentStatePageUpdate` backfill.
     /// Returns `nil` when this host does not implement `StreamAgentStateUpdates` (negative-cached).
     internal func fetchStepsViaAgentStateStream(
         cascadeId: String,
         isRemoteCloud: Bool,
         targetUuid: String?,
         knownStepCount: Int = 0,
-        timeoutSeconds: TimeInterval = 8.0
+        timeoutSeconds: TimeInterval = 12.0,
+        isBackgroundPreload: Bool = false,
+        onPartialSteps: (@Sendable ([CascadeStep]) async -> Void)? = nil
     ) async throws -> [CascadeStep]? {
         let outcome = try await fetchStepsViaAgentStateStreamOutcome(
             cascadeId: cascadeId,
             isRemoteCloud: isRemoteCloud,
             targetUuid: targetUuid,
             knownStepCount: knownStepCount,
-            timeoutSeconds: timeoutSeconds
+            timeoutSeconds: timeoutSeconds,
+            isBackgroundPreload: isBackgroundPreload,
+            onPartialSteps: onPartialSteps
         )
         switch outcome {
         case .unsupported:
             return nil
         case .snapshot(let steps, _):
             return steps
-        case .noData(let err):
+        case .noData(let err, _, _):
             if let err { throw err }
             return []
         }
@@ -924,124 +1116,194 @@ extension AntigravityRPCClient {
         isRemoteCloud: Bool,
         targetUuid: String?,
         knownStepCount: Int = 0,
-        timeoutSeconds: TimeInterval = 5.0
+        timeoutSeconds: TimeInterval = 12.0,
+        isBackgroundPreload: Bool = false,
+        onPartialSteps: (@Sendable ([CascadeStep]) async -> Void)? = nil
     ) async throws -> AgentStateStreamOutcome {
-        let profile = capabilityProfile(forHostKey: capabilityHostKey(for: targetUuid))
-        if profile.isMethodKnownUnsupported("StreamAgentStateUpdates") {
+        let initialProfile = capabilityProfile(forHostKey: capabilityHostKey(for: targetUuid))
+        if initialProfile.isMethodKnownUnsupported("StreamAgentStateUpdates") {
             return .unsupported
         }
 
-        let strippedFields = profile.strippedFieldsByMethod["StreamAgentStateUpdates"] ?? []
-        var payloadVariants: [[String: JSONValue]] = [
-            [
-                "conversationId": .string(cascadeId),
-                "subscriberId": .string("pocket-\(UUID().uuidString.lowercased())")
-            ]
-        ]
-        if isRemoteCloud && !strippedFields.contains("backend") {
-            payloadVariants.append([
-                "conversationId": .string(cascadeId),
-                "subscriberId": .string("pocket-\(UUID().uuidString.lowercased())"),
-                "backend": .string("BACKEND_TYPE_REMOTE_AICODE")
-            ])
-        } else if isRemoteCloud && !strippedFields.contains("backendType") {
-            payloadVariants.append([
-                "conversationId": .string(cascadeId),
-                "subscriberId": .string("pocket-\(UUID().uuidString.lowercased())"),
-                "backendType": .string("BACKEND_TYPE_REMOTE_AICODE")
-            ])
+        let initialStripped = initialProfile.strippedFieldsByMethod["StreamAgentStateUpdates"] ?? []
+        var legacyBackendQueue: [String?] = [nil]
+        if isRemoteCloud && !Self.isStreamFieldStripped(initialStripped, camelName: "backend", snakeName: "backend") {
+            legacyBackendQueue.append("backend")
+        } else if isRemoteCloud && !Self.isStreamFieldStripped(initialStripped, camelName: "backendType", snakeName: "backend_type") {
+            legacyBackendQueue.append("backendType")
         }
 
         var lastError: Error? = nil
         var variantIndex = 0
         var appendedBackendTypeFallback = false
-        while variantIndex < payloadVariants.count {
-            let variant = payloadVariants[variantIndex]
-            let isLastVariant = (variantIndex == payloadVariants.count - 1)
+        var allowTailPagingForCanonical = knownStepCount >= 60
+            && onPartialSteps != nil
+            && !isBackgroundPreload
+            && !initialProfile.isMethodKnownUnsupported("RequestAgentStatePageUpdate")
+
+        while variantIndex < legacyBackendQueue.count {
+            let legacyBackendField = legacyBackendQueue[variantIndex]
+            let isLastVariant = (variantIndex == legacyBackendQueue.count - 1)
             variantIndex += 1
-            do {
-                let result = try await readAgentStateSnapshotOnce(
-                    cascadeId: cascadeId,
-                    requestPayload: variant,
-                    isRemoteCloud: isRemoteCloud,
-                    knownStepCount: knownStepCount,
-                    targetUuid: targetUuid,
-                    timeoutSeconds: timeoutSeconds
-                )
-                if !result.steps.isEmpty {
-                    mutateCapabilityProfile(for: targetUuid) { p in
-                        p.recordMethodSupported("StreamAgentStateUpdates")
+
+            var fieldStripRetries = 0
+            var shouldBreakAllVariants = false
+            var shouldReturnTimedOut = false
+            var sawAnyStreamResponse = false
+
+            while fieldStripRetries <= 4 {
+                let currentProfile = capabilityProfile(forHostKey: capabilityHostKey(for: targetUuid))
+                let currentStripped = currentProfile.strippedFieldsByMethod["StreamAgentStateUpdates"] ?? []
+                let subscriberId = "pocket-\(UUID().uuidString.lowercased())"
+                let activeTailStartIndex: Int? = {
+                    guard legacyBackendField == nil,
+                          allowTailPagingForCanonical,
+                          !currentProfile.isMethodKnownUnsupported("RequestAgentStatePageUpdate"),
+                          !Self.isStreamFieldStripped(currentStripped, camelName: "initialStepsPageBounds", snakeName: "initial_steps_page_bounds") else {
+                        return nil
                     }
-                    return .snapshot(steps: result.steps, authoritativeEmpty: false)
-                }
-                if result.sawMainTrajectory && result.reportedTotalLength == 0 {
-                    if !isRemoteCloud || isLastVariant {
+                    let start = max(0, knownStepCount - 50)
+                    return start > 0 ? start : nil
+                }()
+                let variant = Self.buildAgentStateUpdatesRequestBody(
+                    cascadeId: cascadeId,
+                    subscriberId: subscriberId,
+                    strippedFields: currentStripped,
+                    tailStartIndex: activeTailStartIndex,
+                    legacyBackendField: legacyBackendField
+                )
+
+                do {
+                    let result = try await readAgentStateSnapshotOnce(
+                        cascadeId: cascadeId,
+                        subscriberId: subscriberId,
+                        requestPayload: variant,
+                        isRemoteCloud: isRemoteCloud,
+                        knownStepCount: knownStepCount,
+                        activeTailStartIndex: activeTailStartIndex,
+                        targetUuid: targetUuid,
+                        timeoutSeconds: timeoutSeconds,
+                        onPartialSteps: onPartialSteps
+                    )
+                    if result.needsTailOvershootRetry {
+                        allowTailPagingForCanonical = false
+                        fieldStripRetries += 1
+                        continue
+                    }
+                    if !result.steps.isEmpty {
                         mutateCapabilityProfile(for: targetUuid) { p in
                             p.recordMethodSupported("StreamAgentStateUpdates")
                         }
-                        return .snapshot(steps: [], authoritativeEmpty: knownStepCount == 0)
+                        return .snapshot(steps: result.steps, authoritativeEmpty: false)
                     }
-                    // Cloud Variant #1 emitted an empty `totalLength: 0` stub: probe Variant #2 (`backend: BACKEND_TYPE_REMOTE_AICODE`).
-                    continue
-                }
-                // Variant timed out or closed cleanly with 0 frames and no schema/not_found error:
-                // do not burn another full timeout on Variant #2.
-                break
-            } catch let AntigravityRPCError.unauthorized(msg) {
-                throw AntigravityRPCError.unauthorized(msg)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                if ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
-                    mutateCapabilityProfile(for: targetUuid) { p in
-                        p.recordMethodUnsupported("StreamAgentStateUpdates")
+                    if result.timedOut {
+                        shouldReturnTimedOut = true
+                        shouldBreakAllVariants = true
+                        if result.sawMainTrajectory || currentProfile.supportedMethods.contains("StreamAgentStateUpdates") {
+                            sawAnyStreamResponse = true
+                        }
+                        break
                     }
-                    return .unsupported
-                }
-                var unknownField: String? = nil
-                if case let AntigravityRPCError.httpError(_, body) = error,
-                   let parsedField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) {
-                    unknownField = parsedField
-                    mutateCapabilityProfile(for: targetUuid) { p in
-                        p.recordStrippedField(parsedField, forMethod: "StreamAgentStateUpdates")
+                    if result.settledByEmptyGrace && result.sawMainTrajectory && result.reportedTotalLength == 0 && knownStepCount == 0 {
+                        mutateCapabilityProfile(for: targetUuid) { p in
+                            p.recordMethodSupported("StreamAgentStateUpdates")
+                        }
+                        return .snapshot(steps: [], authoritativeEmpty: true)
                     }
-                }
-                if isRemoteCloud,
-                   unknownField?.caseInsensitiveCompare("backend") == .orderedSame,
-                   !appendedBackendTypeFallback,
-                   !strippedFields.contains("backendType") {
-                    appendedBackendTypeFallback = true
-                    payloadVariants.append([
-                        "conversationId": .string(cascadeId),
-                        "subscriberId": .string("pocket-\(UUID().uuidString.lowercased())"),
-                        "backendType": .string("BACKEND_TYPE_REMOTE_AICODE")
-                    ])
-                }
-                lastError = error
-                let shouldTryNext: Bool = {
-                    if case let AntigravityRPCError.httpError(code, body) = error {
-                        return code == 400
-                            || unknownField != nil
-                            || ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(statusCode: code, body: body)
+                    if result.sawMainTrajectory && result.reportedTotalLength == 0 {
+                        if !isRemoteCloud || isLastVariant {
+                            mutateCapabilityProfile(for: targetUuid) { p in
+                                p.recordMethodSupported("StreamAgentStateUpdates")
+                            }
+                            return .snapshot(steps: [], authoritativeEmpty: knownStepCount == 0)
+                        }
+                        // Server closed Variant #1 cleanly with `totalLength: 0` EOF: probe legacy `backend` variant.
+                        break
                     }
-                    return false
-                }()
-                if !shouldTryNext {
+                    // Closed cleanly with 0 frames and no error: do not burn another stream on legacy `backend`.
+                    if lastError == nil {
+                        shouldBreakAllVariants = true
+                    }
+                    break
+                } catch let AntigravityRPCError.unauthorized(msg) {
+                    throw AntigravityRPCError.unauthorized(msg)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if ProtocolCompatibilityEngine.isMethodUnimplementedError(error) {
+                        mutateCapabilityProfile(for: targetUuid) { p in
+                            p.recordMethodUnsupported("StreamAgentStateUpdates")
+                        }
+                        return .unsupported
+                    }
+                    var unknownField: String? = nil
+                    if case let AntigravityRPCError.httpError(_, body) = error,
+                       let parsedField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) {
+                        unknownField = parsedField
+                        mutateCapabilityProfile(for: targetUuid) { p in
+                            p.recordStrippedField(parsedField, forMethod: "StreamAgentStateUpdates")
+                        }
+                    }
+                    lastError = error
+                    if legacyBackendField == nil,
+                       let unknownField,
+                       Self.isOptionalAgentStateRequestField(unknownField),
+                       fieldStripRetries < 4 {
+                        fieldStripRetries += 1
+                        continue
+                    }
+                    if isRemoteCloud,
+                       unknownField?.caseInsensitiveCompare("backend") == .orderedSame,
+                       !appendedBackendTypeFallback,
+                       !Self.isStreamFieldStripped(currentStripped, camelName: "backendType", snakeName: "backend_type") {
+                        appendedBackendTypeFallback = true
+                        legacyBackendQueue.append("backendType")
+                    }
+                    let shouldTryNext: Bool = {
+                        if case let AntigravityRPCError.httpError(code, body) = error {
+                            return code == 400
+                                || unknownField != nil
+                                || ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(statusCode: code, body: body)
+                        }
+                        return false
+                    }()
+                    if !shouldTryNext {
+                        shouldBreakAllVariants = true
+                    }
                     break
                 }
             }
+
+            if shouldReturnTimedOut {
+                return .noData(lastError: lastError, timedOut: true, sawStreamResponse: sawAnyStreamResponse)
+            }
+            if shouldBreakAllVariants {
+                break
+            }
         }
-        return .noData(lastError: lastError)
+        return .noData(lastError: lastError, timedOut: false, sawStreamResponse: false)
+    }
+
+    private struct AgentStateSnapshotReadResult: Sendable {
+        let steps: [CascadeStep]
+        let sawMainTrajectory: Bool
+        let reportedTotalLength: Int?
+        let timedOut: Bool
+        let settledByEmptyGrace: Bool
+        let needsTailOvershootRetry: Bool
     }
 
     private func readAgentStateSnapshotOnce(
         cascadeId: String,
+        subscriberId: String,
         requestPayload: [String: JSONValue],
         isRemoteCloud: Bool,
         knownStepCount: Int,
+        activeTailStartIndex: Int?,
         targetUuid: String?,
-        timeoutSeconds: TimeInterval
-    ) async throws -> (steps: [CascadeStep], sawMainTrajectory: Bool, reportedTotalLength: Int?) {
+        timeoutSeconds: TimeInterval,
+        onPartialSteps: (@Sendable ([CascadeStep]) async -> Void)? = nil
+    ) async throws -> AgentStateSnapshotReadResult {
         let stream = try subscribeEnvelopeStream(
             method: "StreamAgentStateUpdates",
             requestPayload: requestPayload,
@@ -1051,20 +1313,33 @@ extension AntigravityRPCClient {
 
         enum FrameAction: Sendable {
             case completeNow
-            case armPartialStepsSettle
+            case emitPartial(steps: [CascadeStep], shouldRequestBackfill: Bool, totalLen: Int?, useBackfillWindow: Bool)
+            case requestTailOvershootExpand(totalLen: Int)
             case armEmptyZeroGrace
             case keepWaiting
         }
 
         final class SnapshotState: @unchecked Sendable {
             private let lock = NSLock()
-            var stepsByIndex: [Int: CascadeStep] = [:]
-            var reportedTotalLength: Int? = nil
-            var sawMainTrajectory: Bool = false
+            private var stepsByIndex: [Int: CascadeStep] = [:]
+            private var reportedTotalLength: Int? = nil
+            private var sawMainTrajectory: Bool = false
             private var settleTask: Task<Void, Never>? = nil
             private var emptyGraceArmed: Bool = false
+            private var settledByEmptyGrace: Bool = false
+            private var outerTimedOut: Bool = false
+            private var didRequestBackfill: Bool = false
+            private var backfillFailed: Bool = false
+            private var needsTailOvershootRetry: Bool = false
+            private var lastPartialEmitTime: TimeInterval = 0
 
-            func apply(_ update: AgentStateStepsUpdate, isRemoteCloud: Bool, knownStepCount: Int) -> FrameAction {
+            func apply(
+                _ update: AgentStateStepsUpdate,
+                isRemoteCloud: Bool,
+                knownStepCount: Int,
+                activeTailStartIndex: Int?,
+                hasPartialCallback: Bool
+            ) -> FrameAction {
                 lock.lock()
                 defer { lock.unlock() }
                 if update.hasMainTrajectoryUpdate {
@@ -1082,30 +1357,93 @@ extension AntigravityRPCClient {
                 if !stepsByIndex.isEmpty {
                     emptyGraceArmed = false
                     if let total = reportedTotalLength {
-                        return stepsByIndex.count >= total ? .completeNow : .armPartialStepsSettle
+                        if stepsByIndex.count >= total {
+                            return .completeNow
+                        }
+                    } else {
+                        return .completeNow
                     }
-                    return .completeNow
+                    let sorted: [CascadeStep]
+                    let now = Date().timeIntervalSince1970
+                    if hasPartialCallback && (lastPartialEmitTime == 0 || (now - lastPartialEmitTime) >= 0.06) {
+                        lastPartialEmitTime = now
+                        sorted = stepsByIndex.values.sorted { $0.stepIndex < $1.stepIndex }
+                    } else {
+                        sorted = []
+                    }
+                    var shouldRequestBackfill = false
+                    if activeTailStartIndex != nil,
+                       !didRequestBackfill,
+                       let total = reportedTotalLength,
+                       stepsByIndex.count < total {
+                        didRequestBackfill = true
+                        shouldRequestBackfill = true
+                    }
+                    let useBackfillWindow = didRequestBackfill && !backfillFailed
+                    return .emitPartial(
+                        steps: sorted,
+                        shouldRequestBackfill: shouldRequestBackfill,
+                        totalLen: reportedTotalLength,
+                        useBackfillWindow: useBackfillWindow
+                    )
+                }
+                if let tailStart = activeTailStartIndex,
+                   let total = reportedTotalLength,
+                   total > 0,
+                   total <= tailStart,
+                   !didRequestBackfill {
+                    didRequestBackfill = true
+                    return .requestTailOvershootExpand(totalLen: total)
                 }
                 if sawMainTrajectory && reportedTotalLength == 0 {
                     if !isRemoteCloud && knownStepCount == 0 {
                         return .completeNow
                     }
-                    if !emptyGraceArmed {
+                    // On Cloud sessions with known steps (`knownStepCount > 0`), Desktop frequently emits
+                    // an initial `totalLength: 0` placeholder while hydrating remote steps (~1.5-4s).
+                    // Never arm a short kill timer prematurely on an open stream.
+                    if !(isRemoteCloud && knownStepCount > 0) && !emptyGraceArmed {
                         emptyGraceArmed = true
                         return .armEmptyZeroGrace
                     }
                 }
-                // Never arm a short kill timer while stepsByIndex is still empty and totalLength != 0
                 return .keepWaiting
             }
 
-            func armSettleTimer(delaySeconds: TimeInterval, onSettle: @escaping @Sendable () -> Void) {
+            func markBackfillFailed() {
+                lock.lock()
+                backfillFailed = true
+                lock.unlock()
+            }
+
+            func markNeedsTailOvershootRetry() {
+                lock.lock()
+                needsTailOvershootRetry = true
+                lock.unlock()
+            }
+
+            func markOuterTimedOut() {
+                lock.lock()
+                outerTimedOut = true
+                lock.unlock()
+            }
+
+            func armSettleTimer(
+                delaySeconds: TimeInterval,
+                isEmptyGrace: Bool = false,
+                onSettle: @escaping @Sendable () -> Void
+            ) {
                 lock.lock()
                 settleTask?.cancel()
                 let nanos = UInt64(max(0.1, delaySeconds) * 1_000_000_000)
                 settleTask = Task {
                     try? await Task.sleep(nanoseconds: nanos)
                     guard !Task.isCancelled else { return }
+                    if isEmptyGrace {
+                        self.lock.lock()
+                        self.settledByEmptyGrace = true
+                        self.lock.unlock()
+                    }
                     onSettle()
                 }
                 lock.unlock()
@@ -1118,11 +1456,18 @@ extension AntigravityRPCClient {
                 lock.unlock()
             }
 
-            func snapshot() -> (steps: [CascadeStep], sawMainTrajectory: Bool, reportedTotalLength: Int?) {
+            func snapshot() -> AgentStateSnapshotReadResult {
                 lock.lock()
                 defer { lock.unlock() }
                 let sorted = stepsByIndex.values.sorted { $0.stepIndex < $1.stepIndex }
-                return (sorted, sawMainTrajectory, reportedTotalLength)
+                return AgentStateSnapshotReadResult(
+                    steps: sorted,
+                    sawMainTrajectory: sawMainTrajectory,
+                    reportedTotalLength: reportedTotalLength,
+                    timedOut: outerTimedOut,
+                    settledByEmptyGrace: settledByEmptyGrace,
+                    needsTailOvershootRetry: needsTailOvershootRetry
+                )
             }
         }
 
@@ -1130,17 +1475,34 @@ extension AntigravityRPCClient {
         let partialStepsSettleSeconds = isRemoteCloud
             ? min(1.2, max(0.25, timeoutSeconds / 4.0))
             : min(0.45, max(0.15, timeoutSeconds / 4.0))
+        let backfillSettleSeconds = min(4.0, max(1.5, timeoutSeconds / 2.0))
         let emptyZeroGraceSeconds = isRemoteCloud
-            ? min(1.5, max(0.25, timeoutSeconds / 4.0))
+            ? min(4.0, max(0.4, timeoutSeconds / 2.0))
             : min(0.6, max(0.15, timeoutSeconds / 4.0))
+
         final class ReaderCancelBox: @unchecked Sendable {
             private let lock = NSLock()
             private var cancelAction: (@Sendable () -> Void)? = nil
+            private var backfillTasks: [Task<Void, Never>] = []
 
             func set(_ action: @escaping @Sendable () -> Void) {
                 lock.lock()
                 cancelAction = action
                 lock.unlock()
+            }
+
+            func trackBackfill(_ task: Task<Void, Never>) {
+                lock.lock()
+                backfillTasks.append(task)
+                lock.unlock()
+            }
+
+            func cancelBackfillTasks() {
+                lock.lock()
+                let tasks = backfillTasks
+                backfillTasks.removeAll()
+                lock.unlock()
+                for t in tasks { t.cancel() }
             }
 
             func cancel() {
@@ -1151,21 +1513,64 @@ extension AntigravityRPCClient {
             }
         }
         let cancelBox = ReaderCancelBox()
+        let capturedSelf = self
         let readerTask = Task<Void, Error> {
             for try await frameObj in stream {
                 if Task.isCancelled { break }
                 let decoded = Self.decodeAgentStateStepsUpdate(frameObj, cascadeId: cascadeId)
-                let action = state.apply(decoded, isRemoteCloud: isRemoteCloud, knownStepCount: knownStepCount)
+                let action = state.apply(
+                    decoded,
+                    isRemoteCloud: isRemoteCloud,
+                    knownStepCount: knownStepCount,
+                    activeTailStartIndex: activeTailStartIndex,
+                    hasPartialCallback: onPartialSteps != nil
+                )
                 switch action {
                 case .completeNow:
                     state.cancelSettleTimer()
                     return
-                case .armPartialStepsSettle:
-                    state.armSettleTimer(delaySeconds: partialStepsSettleSeconds) {
+                case .emitPartial(let partialSteps, let shouldRequestBackfill, let totalLen, let useBackfillWindow):
+                    if !partialSteps.isEmpty, let onPartialSteps {
+                        await onPartialSteps(partialSteps)
+                    }
+                    if shouldRequestBackfill {
+                        let backfillTask = Task {
+                            let ok = (try? await capturedSelf.requestAgentStatePageUpdate(
+                                cascadeId: cascadeId,
+                                subscriberId: subscriberId,
+                                startIndex: 0,
+                                endIndexExclusive: totalLen,
+                                isRemoteCloud: isRemoteCloud,
+                                targetUuid: targetUuid
+                            )) ?? false
+                            if !ok {
+                                state.markBackfillFailed()
+                                state.cancelSettleTimer()
+                                cancelBox.cancel()
+                            }
+                        }
+                        cancelBox.trackBackfill(backfillTask)
+                    }
+                    let delaySecs = useBackfillWindow ? backfillSettleSeconds : partialStepsSettleSeconds
+                    state.armSettleTimer(delaySeconds: delaySecs, isEmptyGrace: false) {
                         cancelBox.cancel()
                     }
+                case .requestTailOvershootExpand(let totalLen):
+                    let ok = try await capturedSelf.requestAgentStatePageUpdate(
+                        cascadeId: cascadeId,
+                        subscriberId: subscriberId,
+                        startIndex: 0,
+                        endIndexExclusive: totalLen,
+                        isRemoteCloud: isRemoteCloud,
+                        targetUuid: targetUuid
+                    )
+                    if !ok {
+                        state.markNeedsTailOvershootRetry()
+                        state.cancelSettleTimer()
+                        return
+                    }
                 case .armEmptyZeroGrace:
-                    state.armSettleTimer(delaySeconds: emptyZeroGraceSeconds) {
+                    state.armSettleTimer(delaySeconds: emptyZeroGraceSeconds, isEmptyGrace: true) {
                         cancelBox.cancel()
                     }
                 case .keepWaiting:
@@ -1179,11 +1584,14 @@ extension AntigravityRPCClient {
 
         let timeoutTask = Task {
             try? await Task.sleep(nanoseconds: UInt64(max(0.5, timeoutSeconds) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            state.markOuterTimedOut()
             readerTask.cancel()
         }
 
         defer {
             state.cancelSettleTimer()
+            cancelBox.cancelBackfillTasks()
             timeoutTask.cancel()
             readerTask.cancel()
         }
@@ -1191,7 +1599,7 @@ extension AntigravityRPCClient {
         do {
             try await readerTask.value
         } catch is CancellationError {
-            // Bounded snapshot timeout elapsed cleanly; return whatever frames were collected.
+            // Bounded snapshot timeout or settle elapsed cleanly; return whatever frames were collected.
         }
         return state.snapshot()
     }
@@ -1210,6 +1618,7 @@ extension AntigravityRPCClient {
         alreadyAttemptedWake: Bool = false,
         alreadyAttemptedProtobuf: Bool = false,
         allowNonCriticalRepair: Bool = true,
+        cloudStreamSupported: Bool = false,
         wakeFlag: WakeFlagBox? = nil
     ) async throws -> [CascadeStep] {
         var lastError = initialError
@@ -1252,6 +1661,7 @@ extension AntigravityRPCClient {
         let stepReqBody = Self.buildTrajectoryRequestBody(cascadeId: cascadeId, cloudField: activeCloudField)
 
         var firstResp: [String: JSONValue]? = nil
+        var firstStepsFailedNotFound = false
         let skipRedundantLocalStepsProbe = !isRemoteCloud
             && alreadyAttemptedWake
             && !isBinaryProtobufStepsUnsupported(for: targetUuid)
@@ -1275,6 +1685,9 @@ extension AntigravityRPCClient {
             } catch {
                 lastError = error
                 firstResp = nil
+                if ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
+                    firstStepsFailedNotFound = true
+                }
                 if isRemoteCloud, case let AntigravityRPCError.httpError(_, body) = error,
                    let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) {
                     mutateCapabilityProfile(for: targetUuid) { profile in
@@ -1323,6 +1736,7 @@ extension AntigravityRPCClient {
 
         var rawSteps = firstResp?["steps"]?.arrayValue ?? []
         let alreadyWoken = alreadyAttemptedWake || wokenInstanceCascadeKeys.contains(wakeKey)
+        var loadTrajectoryFailedNotFound = false
         if !rawSteps.isEmpty {
             wokenInstanceCascadeKeys.insert(wakeKey)
             if let activeCloudField {
@@ -1335,106 +1749,117 @@ extension AntigravityRPCClient {
             } catch let AntigravityRPCError.unauthorized(msg) {
                 throw AntigravityRPCError.unauthorized(msg)
             } catch {
-                // Best-effort wake; still retry GetCascadeTrajectorySteps and fallbacks below.
+                if ProtocolCompatibilityEngine.isTrajectoryNotFoundError(error) {
+                    loadTrajectoryFailedNotFound = true
+                }
+                // Best-effort wake; still retry GetCascadeTrajectorySteps and fallbacks below unless Cloud not_found short-circuits.
             }
-            let retryVariants: [CloudTrajectoryBackendField?] = isRemoteCloud
-                ? orderedCloudBackendFields(for: "GetCascadeTrajectorySteps", targetUuid: targetUuid).map { Optional($0) }
-                : [nil]
-            for variant in retryVariants {
-                let candidateBody = Self.buildTrajectoryRequestBody(cascadeId: cascadeId, cloudField: variant)
-                do {
-                    let retryResp = try await callUnaryJSON(
-                        method: "GetCascadeTrajectorySteps",
-                        body: candidateBody,
-                        instanceUuidOverride: targetUuid,
-                        allowCrossHostFailover: isRemoteCloud,
-                        timeoutInterval: 10.0,
-                        allowStripUnknownFields: !isRemoteCloud
-                    )
-                    if let ceiling = Self.extractJsonTruncationCeiling(
-                        from: retryResp,
-                        fallbackStepCount: retryResp["steps"]?.arrayValue?.count ?? knownStepCount
-                    ) {
-                        recordLearnedJsonStepCeiling(ceiling, for: targetUuid)
-                        if !isBinaryProtobufStepsUnsupported(for: targetUuid) {
-                            let protoSteps = try await fetchTrajectoryStepsProtobuf(
+            let skipRedundantCloudRetriesAfterNotFound = isRemoteCloud
+                && loadTrajectoryFailedNotFound
+                && (firstStepsFailedNotFound || cloudStreamSupported)
+            if !skipRedundantCloudRetriesAfterNotFound {
+                let retryVariants: [CloudTrajectoryBackendField?] = isRemoteCloud
+                    ? orderedCloudBackendFields(for: "GetCascadeTrajectorySteps", targetUuid: targetUuid).map { Optional($0) }
+                    : [nil]
+                for variant in retryVariants {
+                    let candidateBody = Self.buildTrajectoryRequestBody(cascadeId: cascadeId, cloudField: variant)
+                    do {
+                        let retryResp = try await callUnaryJSON(
+                            method: "GetCascadeTrajectorySteps",
+                            body: candidateBody,
+                            instanceUuidOverride: targetUuid,
+                            allowCrossHostFailover: isRemoteCloud,
+                            timeoutInterval: 10.0,
+                            allowStripUnknownFields: !isRemoteCloud
+                        )
+                        if let ceiling = Self.extractJsonTruncationCeiling(
+                            from: retryResp,
+                            fallbackStepCount: retryResp["steps"]?.arrayValue?.count ?? knownStepCount
+                        ) {
+                            recordLearnedJsonStepCeiling(ceiling, for: targetUuid)
+                            if !isBinaryProtobufStepsUnsupported(for: targetUuid) {
+                                let protoSteps = try await fetchTrajectoryStepsProtobuf(
+                                    cascadeId: cascadeId,
+                                    startIndex: 0,
+                                    endIndex: max(knownStepCount, ceiling),
+                                    instanceUuidOverride: targetUuid,
+                                    allowCrossHostFailover: isRemoteCloud,
+                                    allowNonCriticalRepair: allowNonCriticalRepair
+                                )
+                                if !protoSteps.isEmpty {
+                                    wokenInstanceCascadeKeys.insert(wakeKey)
+                                    return protoSteps
+                                }
+                            }
+                        }
+                        let candidateSteps = retryResp["steps"]?.arrayValue ?? []
+                        if !candidateSteps.isEmpty {
+                            rawSteps = candidateSteps
+                            lastError = nil
+                            activeCloudField = variant
+                            wokenInstanceCascadeKeys.insert(wakeKey)
+                            if let variant {
+                                recordPreferredCloudBackendField(variant, for: "GetCascadeTrajectorySteps", targetUuid: targetUuid)
+                            }
+                            break
+                        } else {
+                            if initialError == nil,
+                               knownStepCount == 0,
+                               let err = lastError,
+                               case let AntigravityRPCError.httpError(_, errBody) = err,
+                               ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: errBody) != nil {
+                                lastError = nil
+                            }
+                            if !isRemoteCloud {
+                                break
+                            }
+                        }
+                    } catch let AntigravityRPCError.unauthorized(msg) {
+                        throw AntigravityRPCError.unauthorized(msg)
+                    } catch {
+                        lastError = error
+                        if isRemoteCloud, case let AntigravityRPCError.httpError(_, body) = error,
+                           let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) {
+                            mutateCapabilityProfile(for: targetUuid) { profile in
+                                profile.recordStrippedField(unknownField, forMethod: "GetCascadeTrajectorySteps")
+                            }
+                        }
+                        if Self.isJsonPayloadLimitError(error) && !isBinaryProtobufStepsUnsupported(for: targetUuid) {
+                            if let protoSteps = try? await fetchTrajectoryStepsProtobuf(
                                 cascadeId: cascadeId,
                                 startIndex: 0,
-                                endIndex: max(knownStepCount, ceiling),
+                                endIndex: knownStepCount,
                                 instanceUuidOverride: targetUuid,
                                 allowCrossHostFailover: isRemoteCloud,
                                 allowNonCriticalRepair: allowNonCriticalRepair
-                            )
-                            if !protoSteps.isEmpty {
+                            ), !protoSteps.isEmpty {
+                                let observed = knownStepCount > 0 ? min(knownStepCount, protoSteps.count) : protoSteps.count
+                                recordLearnedJsonStepCeiling(observed, for: targetUuid)
                                 wokenInstanceCascadeKeys.insert(wakeKey)
                                 return protoSteps
                             }
                         }
+                        if !isRemoteCloud { break }
+                        let retryNext: Bool = {
+                            if case let AntigravityRPCError.httpError(code, body) = error {
+                                return code == 400
+                                    || ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) != nil
+                                    || ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(statusCode: code, body: body)
+                            }
+                            return false
+                        }()
+                        if !retryNext { break }
                     }
-                    let candidateSteps = retryResp["steps"]?.arrayValue ?? []
-                    if !candidateSteps.isEmpty {
-                        rawSteps = candidateSteps
-                        lastError = nil
-                        activeCloudField = variant
-                        wokenInstanceCascadeKeys.insert(wakeKey)
-                        if let variant {
-                            recordPreferredCloudBackendField(variant, for: "GetCascadeTrajectorySteps", targetUuid: targetUuid)
-                        }
-                        break
-                    } else {
-                        if initialError == nil,
-                           knownStepCount == 0,
-                           let err = lastError,
-                           case let AntigravityRPCError.httpError(_, errBody) = err,
-                           ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: errBody) != nil {
-                            lastError = nil
-                        }
-                        if !isRemoteCloud {
-                            break
-                        }
-                    }
-                } catch let AntigravityRPCError.unauthorized(msg) {
-                    throw AntigravityRPCError.unauthorized(msg)
-                } catch {
-                    lastError = error
-                    if isRemoteCloud, case let AntigravityRPCError.httpError(_, body) = error,
-                       let unknownField = ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) {
-                        mutateCapabilityProfile(for: targetUuid) { profile in
-                            profile.recordStrippedField(unknownField, forMethod: "GetCascadeTrajectorySteps")
-                        }
-                    }
-                    if Self.isJsonPayloadLimitError(error) && !isBinaryProtobufStepsUnsupported(for: targetUuid) {
-                        if let protoSteps = try? await fetchTrajectoryStepsProtobuf(
-                            cascadeId: cascadeId,
-                            startIndex: 0,
-                            endIndex: knownStepCount,
-                            instanceUuidOverride: targetUuid,
-                            allowCrossHostFailover: isRemoteCloud,
-                            allowNonCriticalRepair: allowNonCriticalRepair
-                        ), !protoSteps.isEmpty {
-                            let observed = knownStepCount > 0 ? min(knownStepCount, protoSteps.count) : protoSteps.count
-                            recordLearnedJsonStepCeiling(observed, for: targetUuid)
-                            wokenInstanceCascadeKeys.insert(wakeKey)
-                            return protoSteps
-                        }
-                    }
-                    if !isRemoteCloud { break }
-                    let retryNext: Bool = {
-                        if case let AntigravityRPCError.httpError(code, body) = error {
-                            return code == 400
-                                || ProtocolCompatibilityEngine.extractUnknownProtoFieldName(from: body) != nil
-                                || ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(statusCode: code, body: body)
-                        }
-                        return false
-                    }()
-                    if !retryNext { break }
                 }
             }
         }
 
         // Fallback A: Query `GetCascadeTrajectory` (`{"trajectory": {"steps": [...]}}`) when `GetCascadeTrajectorySteps`
-        // returns empty or `not_found`.
-        if rawSteps.isEmpty && (firstResp == nil || lastError != nil || knownStepCount > 0 || !alreadyWoken) {
+        // returns empty or `not_found` (skipped on Cloud when both steps & LoadTrajectory returned `not_found`).
+        let skipCloudTrajectoryFallback = isRemoteCloud
+            && loadTrajectoryFailedNotFound
+            && (firstStepsFailedNotFound || cloudStreamSupported)
+        if !skipCloudTrajectoryFallback && rawSteps.isEmpty && (firstResp == nil || lastError != nil || knownStepCount > 0 || !alreadyWoken) {
             let trajVariants: [CloudTrajectoryBackendField?] = isRemoteCloud
                 ? orderedCloudBackendFields(for: "GetCascadeTrajectory", targetUuid: targetUuid).map { Optional($0) }
                 : [nil]
@@ -1488,8 +1913,9 @@ extension AntigravityRPCClient {
             }
         }
 
-        // Fallback B: Try Binary Protobuf ONLY if Path 1 did not already try Binary Protobuf
-        if !alreadyAttemptedProtobuf
+        // Fallback B: Try Binary Protobuf ONLY for local sessions if Path 1 did not already try Binary Protobuf
+        if !isRemoteCloud
+            && !alreadyAttemptedProtobuf
             && rawSteps.isEmpty
             && (firstResp == nil || lastError != nil || knownStepCount > 0)
             && !isBinaryProtobufStepsUnsupported(for: targetUuid) {
@@ -1498,7 +1924,7 @@ extension AntigravityRPCClient {
                 startIndex: 0,
                 endIndex: knownStepCount,
                 instanceUuidOverride: targetUuid,
-                allowCrossHostFailover: isRemoteCloud,
+                allowCrossHostFailover: false,
                 allowNonCriticalRepair: allowNonCriticalRepair
             ), !protoFallback.isEmpty {
                 let observed = knownStepCount > 0 ? min(knownStepCount, protoFallback.count) : protoFallback.count

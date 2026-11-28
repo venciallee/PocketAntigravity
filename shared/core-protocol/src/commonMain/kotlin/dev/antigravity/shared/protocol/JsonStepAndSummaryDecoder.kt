@@ -519,11 +519,14 @@ public object JsonStepAndSummaryDecoder {
             }
             .orEmpty()
 
+        val pageBounds = stepsUpdate?.obj("pageBounds") ?: stepsUpdate?.obj("page_bounds")
         val baseOffset = stepsUpdate?.int("offset")
             ?: stepsUpdate?.int("startIndex")
             ?: stepsUpdate?.int("start_index")
             ?: stepsUpdate?.int("stepOffset")
             ?: stepsUpdate?.int("step_offset")
+            ?: pageBounds?.int("startIndex")
+            ?: pageBounds?.int("start_index")
             ?: 0
 
         val totalLength = stepsUpdate?.int("totalLength")

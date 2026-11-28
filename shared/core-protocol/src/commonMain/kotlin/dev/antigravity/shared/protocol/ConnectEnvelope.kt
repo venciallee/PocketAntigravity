@@ -6,7 +6,7 @@ package dev.antigravity.shared.protocol
  * (`JetboxSubscribeToSummaries`, `StreamCascadeReactiveUpdates`, `StreamAgentStateUpdates`, `ProjectUpdatesStream`).
  *
  * Wire layout:
- * - Byte 0: `flags` (`0x00` = uncompressed message, `0x01` = compressed, `0x02` = EndStream trailer)
+ * - Byte 0: `flags` (`0x00` = uncompressed message, `0x01` = compressed, `0x02` = Connect EndStream trailer, `0x80` = gRPC-Web trailer)
  * - Bytes 1..4: `uint32` big-endian payload length
  * - Bytes 5..(5+length): JSON or binary Protobuf payload
  */
@@ -14,6 +14,7 @@ public object ConnectEnvelopeFlags {
     public const val NONE: Int = 0x00
     public const val COMPRESSED: Int = 0x01
     public const val END_STREAM: Int = 0x02
+    public const val GRPC_WEB_TRAILER: Int = 0x80
 }
 
 public data class ConnectEnvelopeFrame(
@@ -24,7 +25,8 @@ public data class ConnectEnvelopeFrame(
         get() = (flags and ConnectEnvelopeFlags.COMPRESSED) != 0
 
     public val isEndStream: Boolean
-        get() = (flags and ConnectEnvelopeFlags.END_STREAM) != 0
+        get() = (flags and ConnectEnvelopeFlags.END_STREAM) != 0 ||
+            (flags and ConnectEnvelopeFlags.GRPC_WEB_TRAILER) != 0
 
     public fun encode(): ByteArray {
         val len = payload.size
