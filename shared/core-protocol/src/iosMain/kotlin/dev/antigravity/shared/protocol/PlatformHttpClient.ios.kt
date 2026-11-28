@@ -13,7 +13,6 @@ import platform.CoreFoundation.CFDataGetBytePtr
 import platform.CoreFoundation.CFDataGetLength
 import platform.CoreFoundation.CFRelease
 import platform.Foundation.NSDate
-import platform.Foundation.NSLog
 import platform.Foundation.NSURLAuthenticationMethodServerTrust
 import platform.Foundation.NSURLCredential
 import platform.Foundation.NSURLRequestReloadIgnoringLocalCacheData
@@ -34,7 +33,10 @@ public actual fun currentTimeMillis(): Long =
 public actual fun platformTransportEngineName(): String = "KMP-Darwin"
 
 internal actual fun logProtocolDiagnostic(message: String) {
-    NSLog("[CloudRelay] %@", message)
+    // Use pure Kotlin/Native stdout println (captured directly in Xcode Console) instead of
+    // C-variadic NSLog("%@", ...), which marshals Kotlin String varargs as `const char *`
+    // rather than `NSString *` and triggers EXC_BAD_ACCESS / SIGSEGV on iOS.
+    println("[CloudRelay] $message")
 }
 
 internal actual fun createPlatformHttpClient(

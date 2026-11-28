@@ -2742,4 +2742,11 @@ class AdaptiveTrajectorySyncTest {
             assertEquals(0, jsonFallbackCalls, "Must NOT discard tail steps and burn Path 2 JSON fallbacks")
         }
     }
+
+    @Test
+    fun testLogProtocolDiagnosticHandlesFormatSpecifiersSafely() {
+        // Directly exercises the platform actual implementation on both JVM and KMP iOS Simulator
+        // (`iosSimulatorArm64Test`) to ensure format specifiers (`%@`, `%s`, `%n`, `%24`) never crash.
+        logProtocolDiagnostic("StepSync diagnostic probe %@ %s %d %n https://antigravity.google.com/%24rpc")
+    }
 }
