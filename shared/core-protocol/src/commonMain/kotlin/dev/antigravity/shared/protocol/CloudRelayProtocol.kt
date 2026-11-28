@@ -649,6 +649,8 @@ public object CloudRelayJspbCodec {
             add(listOf("connect-protocol-version", "1"))
             if (!isStreaming) {
                 add(listOf("accept-encoding", "gzip"))
+            } else {
+                add(listOf("connect-accept-encoding", "gzip"))
             }
             if (contentType.equals("application/proto", ignoreCase = true)) {
                 add(listOf("accept", "application/proto"))
@@ -990,6 +992,48 @@ public class CloudRelayJspbStreamParser {
 
     public var lastErrorTrailer: String? = null
         private set
+    public var lastInnerHttpStatus: Int? = null
+        private set
+    public var lastInnerGrpcStatus: Int? = null
+        private set
+    public var lastInnerGrpcMessage: String? = null
+        private set
+
+    public fun lastInnerHeaderError(): AntigravityRpcError? {
+        val grpcCode = lastInnerGrpcStatus
+        if (grpcCode != null && grpcCode != 0) {
+            val message = lastInnerGrpcMessage?.takeIf { it.isNotBlank() } ?: "gRPC status $grpcCode"
+            return mapGrpcStatusCodeToError(grpcCode, message)
+        }
+        val httpCode = lastInnerHttpStatus
+        if (httpCode != null && httpCode !in 200..299) {
+            val detail = lastInnerGrpcMessage?.takeIf { it.isNotBlank() }
+                ?: "Inner StreamProxyCommand HTTP $httpCode"
+            return if (httpCode == 401 || httpCode == 403) {
+                AntigravityRpcError.Unauthorized(detail)
+            } else {
+                AntigravityRpcError.HttpError(httpCode, detail)
+            }
+        }
+        return null
+    }
+
+    private fun recordInnerHeaderPair(rawKey: String?, rawValue: String?) {
+        val key = rawKey?.trim()?.lowercase() ?: return
+        val value = rawValue?.trim() ?: return
+        if (value.isEmpty()) return
+        when (key) {
+            ":status", "x-http-status", "http-status" -> {
+                value.toIntOrNull()?.let { lastInnerHttpStatus = it }
+            }
+            "grpc-status" -> {
+                value.toIntOrNull()?.let { lastInnerGrpcStatus = it }
+            }
+            "grpc-message" -> {
+                lastInnerGrpcMessage = percentDecodeGrpcMessage(value)
+            }
+        }
+    }
 
     public fun feed(bytes: ByteArray): List<ByteArray> {
         var emitted: MutableList<ByteArray>? = null
@@ -1114,6 +1158,17 @@ public class CloudRelayJspbStreamParser {
                 if (stack.isNotEmpty()) {
                     stack.last().append(ElementKind.ARRAY)
                 }
+                if (closed.elementCount == 2 &&
+                    closed.firstElement == ElementKind.STRING &&
+                    closed.secondElement == ElementKind.STRING
+                ) {
+                    val keyLen = closed.firstString?.length ?: closed.firstRawBytes?.size ?: 0
+                    if (keyLen in 2..32) {
+                        val keyStr = closed.firstString ?: closed.firstRawBytes?.decodeToString()
+                        recordInnerHeaderPair(keyStr, closed.secondString)
+                    }
+                    return null
+                }
                 if (insideErrorTrailer) {
                     val code = closed.firstInt
                     val msg = closed.secondString
@@ -1123,7 +1178,7 @@ public class CloudRelayJspbStreamParser {
                     return null
                 }
                 if (closed.firstElement == ElementKind.STRING &&
-                    closed.elementCount in 1..3 &&
+                    closed.elementCount in 1..4 &&
                     (closed.elementCount == 1 || closed.secondElement == ElementKind.ARRAY || closed.secondElement == ElementKind.NULL)
                 ) {
                     val rawBytes = closed.firstRawBytes
@@ -1146,6 +1201,41 @@ public class CloudRelayJspbStreamParser {
             }
         }
     }
+}
+
+internal fun mapGrpcStatusCodeToError(grpcCode: Int, message: String): AntigravityRpcError {
+    val cleanMsg = message.trim().ifEmpty { "gRPC status $grpcCode" }
+    return when (grpcCode) {
+        16, 7 -> AntigravityRpcError.Unauthorized(cleanMsg)
+        12 -> AntigravityRpcError.HttpError(501, cleanMsg)
+        5 -> AntigravityRpcError.HttpError(404, cleanMsg)
+        3 -> AntigravityRpcError.HttpError(400, cleanMsg)
+        4 -> AntigravityRpcError.HttpError(504, cleanMsg)
+        8 -> AntigravityRpcError.HttpError(429, cleanMsg)
+        14 -> AntigravityRpcError.HttpError(503, cleanMsg)
+        else -> AntigravityRpcError.HttpError(500, cleanMsg)
+    }
+}
+
+internal fun percentDecodeGrpcMessage(raw: String): String {
+    if (!raw.contains('%')) return raw
+    val out = ArrayList<Byte>(raw.length)
+    var i = 0
+    while (i < raw.length) {
+        val ch = raw[i]
+        if (ch == '%' && i + 2 < raw.length) {
+            val hex = raw.substring(i + 1, i + 3).toIntOrNull(16)
+            if (hex != null) {
+                out.add(hex.toByte())
+                i += 3
+                continue
+            }
+        }
+        val bytes = ch.toString().encodeToByteArray()
+        for (b in bytes) out.add(b)
+        i += 1
+    }
+    return out.toByteArray().decodeToString()
 }
 
 private val B64_DECODE_TABLE: IntArray = IntArray(128) { -1 }.apply {

@@ -190,6 +190,11 @@ public enum class HostCapability(
         displayTitle = "Chunked Relay Streaming",
         minimumRecommendedVersion = AntigravitySemVer(2, 0, 0),
         rpcMethods = emptyList(),
+    ),
+    AGENT_STATE_PAGING(
+        displayTitle = "Agent State Step Paging",
+        minimumRecommendedVersion = AntigravitySemVer(2, 30, 0),
+        rpcMethods = listOf("RequestAgentStatePageUpdate"),
     );
 
     public companion object {

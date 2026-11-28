@@ -90,7 +90,7 @@ public enum ConnectEnvelope: Sendable {
 /// (`JetboxSubscribeToSummaries`, `StreamCascadeReactiveUpdates`, `StreamAgentStateUpdates`, `ProjectUpdatesStream`).
 ///
 /// Wire layout:
-/// - Byte 0: `flags` (`0x00` = uncompressed message, `0x01` = compressed, `0x02` = EndStream trailer)
+/// - Byte 0: `flags` (`0x00` = uncompressed message, `0x01` = compressed, `0x02` = Connect EndStream trailer, `0x80` = gRPC-Web trailer)
 /// - Bytes 1..4: `uint32` big-endian payload length
 /// - Bytes 5..(5+length): JSON or binary Protobuf payload
 public struct ConnectEnvelopeFrame: Sendable, Equatable {
@@ -98,8 +98,9 @@ public struct ConnectEnvelopeFrame: Sendable, Equatable {
         public let rawValue: UInt8
         public init(rawValue: UInt8) { self.rawValue = rawValue }
 
-        public static let compressed = Flags(rawValue: 0x01)
-        public static let endStream  = Flags(rawValue: 0x02)
+        public static let compressed     = Flags(rawValue: 0x01)
+        public static let endStream      = Flags(rawValue: 0x02)
+        public static let grpcWebTrailer = Flags(rawValue: 0x80)
     }
 
     public let flags: Flags
@@ -115,7 +116,7 @@ public struct ConnectEnvelopeFrame: Sendable, Equatable {
     }
 
     public var isEndStream: Bool {
-        flags.contains(.endStream)
+        flags.contains(.endStream) || flags.contains(.grpcWebTrailer)
     }
 
     public func encode() -> Data {

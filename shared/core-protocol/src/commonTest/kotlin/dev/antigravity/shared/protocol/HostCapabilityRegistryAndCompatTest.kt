@@ -40,11 +40,12 @@ class HostCapabilityRegistryAndCompatTest {
 
     @Test
     fun hostCapabilityRegistryCoversCoreAndOptionalMethods() {
-        assertEquals(16, HostCapability.entries.size)
+        assertEquals(17, HostCapability.entries.size)
         assertEquals(HostCapability.TURN_DIFF, HostCapability.capabilityForMethod("GetTurnDiff"))
         assertEquals(HostCapability.GIT_VCS, HostCapability.capabilityForMethod("GitCommit"))
         assertEquals(HostCapability.SIDE_QUESTION, HostCapability.capabilityForMethod("SendSideQuestion"))
         assertEquals(HostCapability.CUSTOMIZATIONS_CATALOG, HostCapability.capabilityForMethod("RestartMcpServer"))
+        assertEquals(HostCapability.AGENT_STATE_PAGING, HostCapability.capabilityForMethod("RequestAgentStatePageUpdate"))
 
         // Core baseline methods must NEVER be permanently negative-cached
         assertFalse(HostCapability.shouldNegativeCacheOnUnimplemented("SendUserCascadeMessage"))
@@ -53,6 +54,7 @@ class HostCapabilityRegistryAndCompatTest {
 
         // Non-core & future optional RPCs MUST be negative-cached on 404/501
         assertTrue(HostCapability.shouldNegativeCacheOnUnimplemented("GetTurnDiff"))
+        assertTrue(HostCapability.shouldNegativeCacheOnUnimplemented("RequestAgentStatePageUpdate"))
         assertTrue(HostCapability.shouldNegativeCacheOnUnimplemented("FutureV3ExperimentalRpc"))
         assertTrue(HostCapability.allRegisteredMethods.containsAll(HostCapability.coreBaselineMethods))
         assertTrue(HostCapability.allRegisteredMethods.containsAll(HostCapability.legacyAliasMethods))

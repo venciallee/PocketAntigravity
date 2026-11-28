@@ -1842,27 +1842,74 @@ public actor AntigravityRPCClient {
     }
 
     internal static func extractConnectEndStreamError(from data: Data, decoder: JSONDecoder) -> AntigravityRPCError? {
-        guard !data.isEmpty,
-              let obj = try? decoder.decode([String: JSONValue].self, from: data) else {
-            return nil
+        guard !data.isEmpty else { return nil }
+        if let obj = try? decoder.decode([String: JSONValue].self, from: data) {
+            let errObj = obj["error"]?.objectValue
+            let code = nonEmptyString(errObj?["code"]?.stringValue) ?? nonEmptyString(obj["code"]?.stringValue)
+            let msg = nonEmptyString(errObj?["message"]?.stringValue) ?? nonEmptyString(obj["message"]?.stringValue)
+            guard code != nil || msg != nil else { return nil }
+            let combined = [code, msg].compactMap { $0 }.joined(separator: ": ")
+            let lowerCode = (code ?? "").lowercased()
+            if lowerCode == "unauthenticated" || lowerCode == "permission_denied" {
+                return .unauthorized(combined)
+            }
+            if lowerCode == "unimplemented"
+                || ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: combined) {
+                return .httpError(statusCode: 501, body: combined)
+            }
+            if lowerCode == "not_found" {
+                return .httpError(statusCode: 404, body: combined)
+            }
+            if lowerCode == "deadline_exceeded" {
+                return .httpError(statusCode: 504, body: combined)
+            }
+            if lowerCode == "unavailable" {
+                return .httpError(statusCode: 503, body: combined)
+            }
+            if lowerCode == "resource_exhausted" {
+                return .httpError(statusCode: 429, body: combined)
+            }
+            if lowerCode == "internal" || lowerCode == "data_loss" {
+                return .httpError(statusCode: 500, body: combined)
+            }
+            return .httpError(statusCode: 400, body: combined)
         }
-        let errObj = obj["error"]?.objectValue
-        let code = nonEmptyString(errObj?["code"]?.stringValue) ?? nonEmptyString(obj["code"]?.stringValue)
-        let msg = nonEmptyString(errObj?["message"]?.stringValue) ?? nonEmptyString(obj["message"]?.stringValue)
-        guard code != nil || msg != nil else { return nil }
-        let combined = [code, msg].compactMap { $0 }.joined(separator: ": ")
-        let lowerCode = (code ?? "").lowercased()
-        if lowerCode == "unauthenticated" || lowerCode == "permission_denied" {
-            return .unauthorized(combined)
+
+        // gRPC-Web 0x80 trailer frame (`grpc-status: <N>\r\ngrpc-message: <msg>`)
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        var grpcStatus: Int? = nil
+        var grpcMessage: String? = nil
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let key = line[..<colon].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if key == "grpc-status", let parsed = Int(value) {
+                grpcStatus = parsed
+            } else if key == "grpc-message", !value.isEmpty {
+                grpcMessage = CloudRelayJSPBStreamParser.percentDecodeGrpcMessage(value)
+            }
         }
-        if lowerCode == "unimplemented"
-            || ProtocolCompatibilityEngine.isMethodUnimplementedResponse(statusCode: 400, body: combined) {
-            return .httpError(statusCode: 501, body: combined)
+        if let statusCode = grpcStatus, statusCode != 0 {
+            return CloudRelayJSPBStreamParser.mapGrpcStatusCodeToError(
+                statusCode,
+                message: grpcMessage ?? "gRPC status \(statusCode)"
+            )
         }
-        if lowerCode == "not_found" {
-            return .httpError(statusCode: 404, body: combined)
+        return nil
+    }
+
+    private static func isLikelyDirectConnectErrorObject(_ obj: [String: JSONValue]) -> Bool {
+        let dataKeys: [String] = [
+            "update", "agentStateUpdate", "agent_state_update", "stateUpdate", "state_update",
+            "mainTrajectoryUpdate", "main_trajectory_update", "stepsUpdate", "steps_update",
+            "steps", "summaryUpdates", "summary_updates", "updates", "diff", "project",
+            "projects", "trajectories", "trajectory"
+        ]
+        if dataKeys.contains(where: { obj[$0] != nil }) {
+            return false
         }
-        return .httpError(statusCode: 400, body: combined)
+        return obj["error"]?.objectValue != nil || obj["code"]?.stringValue != nil
     }
 
     /// Subscribes to a Connect-RPC server-streaming method (`JetboxSubscribeToSummaries`, `StreamCascadeReactiveUpdates`, etc.)
@@ -2014,6 +2061,10 @@ public actor AntigravityRPCClient {
                                 if !connectParser.hasBufferedBytes,
                                    chunkData.first == UInt8(ascii: "{"),
                                    let obj = try? decoder.decode([String: JSONValue].self, from: chunkData) {
+                                    if Self.isLikelyDirectConnectErrorObject(obj),
+                                       let directErr = Self.extractConnectEndStreamError(from: chunkData, decoder: decoder) {
+                                        throw directErr
+                                    }
                                     yieldedAny = true
                                     continuation.yield(obj)
                                 } else {
@@ -2021,7 +2072,7 @@ public actor AntigravityRPCClient {
                                         let frameBytes = frame.isCompressed
                                             ? CloudRelayJSPBCodec.decompressPayloadIfNeeded(frame.payload)
                                             : frame.payload
-                                        if frame.flags.contains(.endStream) {
+                                        if frame.isEndStream {
                                             if let streamErr = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
                                                 throw streamErr
                                             }
@@ -2095,8 +2146,13 @@ public actor AntigravityRPCClient {
                             }
                         }
 
-                        if !yieldedAny, let boqErr = jspbStreamParser.lastErrorTrailer {
-                            throw AntigravityRPCError.httpError(statusCode: 502, body: boqErr)
+                        if !yieldedAny {
+                            if let innerHeaderErr = jspbStreamParser.lastInnerHeaderError() {
+                                throw innerHeaderErr
+                            }
+                            if let boqErr = jspbStreamParser.lastErrorTrailer {
+                                throw AntigravityRPCError.httpError(statusCode: 502, body: boqErr)
+                            }
                         }
                         continuation.finish()
                     } catch {
@@ -2113,6 +2169,7 @@ public actor AntigravityRPCClient {
         request.timeoutInterval = 300
         request.setValue("application/connect+json", forHTTPHeaderField: "Content-Type")
         request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        request.setValue("gzip", forHTTPHeaderField: "Connect-Accept-Encoding")
         applyAuthHeaders(to: &request)
         request.httpBody = framedPayload
 
@@ -2147,7 +2204,7 @@ public actor AntigravityRPCClient {
                             let frameBytes = frame.isCompressed
                                 ? CloudRelayJSPBCodec.decompressPayloadIfNeeded(frame.payload)
                                 : frame.payload
-                            if frame.flags.contains(.endStream) {
+                            if frame.isEndStream {
                                 if let streamErr = Self.extractConnectEndStreamError(from: frameBytes, decoder: decoder) {
                                     throw streamErr
                                 }

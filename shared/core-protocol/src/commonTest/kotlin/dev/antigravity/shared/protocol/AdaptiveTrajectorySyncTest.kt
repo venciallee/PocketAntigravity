@@ -13,7 +13,12 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.headersOf
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -28,6 +33,7 @@ import kotlinx.serialization.json.put
 import okio.ByteString.Companion.toByteString
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -2185,5 +2191,369 @@ class AdaptiveTrajectorySyncTest {
         assertEquals(1, chunks.size)
         assertEquals(framed.size, chunks[0].size)
         assertTrue(framed.contentEquals(chunks[0]))
+    }
+
+    @Test
+    fun testCloudStreamAgentStateUpdatesUsesProdUiEmptyMetadataAndTailFirstPageUpdateBackfill() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-cloud-prod-ui-paging"
+            val cloudCid = "v1/default/jetski_remote_agents_3p_devbox/app-bug-report-100"
+            val json = Json { ignoreUnknownKeys = true }
+
+            val observedStreamRequest = CompletableDeferred<JsonObject>()
+            val observedProxyHeaders = CompletableDeferred<String>()
+            val observedPageUpdateReq = CompletableDeferred<JsonObject>()
+            val streamChannel = ByteChannel(autoFlush = true)
+
+            fun buildStepJsonRange(indices: IntRange): String = indices.joinToString(",") { idx ->
+                if (idx % 2 == 0) {
+                    """{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Cloud prompt #$idx"}}"""
+                } else {
+                    """{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Cloud answer #$idx"}}"""
+                }
+            }
+
+            // Frame 1 uses `pageBounds.startIndex = 50` (omitting `indices`) to verify decoder `pageBounds` fallback
+            val tailFrameJson = """{"update":{"conversationId":"$cloudCid","mainTrajectoryUpdate":{"stepsUpdate":{"pageBounds":{"startIndex":50},"totalLength":100,"steps":[${buildStepJsonRange(50..99)}]}}}}"""
+            val tailFramed = ConnectEnvelope.encode(tailFrameJson.encodeToByteArray())
+            val tailBoqPrefix = """[["${tailFramed.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val headFrameJson = """{"update":{"conversationId":"$cloudCid","mainTrajectoryUpdate":{"stepsUpdate":{"pageBounds":{"startIndex":0,"endIndexExclusive":50},"totalLength":100,"steps":[${buildStepJsonRange(0..49)}]}}}}"""
+            val headFramed = ConnectEnvelope.encode(headFrameJson.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val headBoqSuffix = """,["${headFramed.toByteString().base64()}"]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyText = ((request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)).decodeToString()
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        observedProxyHeaders.complete(bodyText)
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val framed = CloudRelayJspbCodec.decodeBase64Flexible((jspbArr[2] as JsonPrimitive).content) ?: ByteArray(0)
+                        val innerJson = if (framed.size > 5) framed.copyOfRange(5, framed.size).decodeToString() else "{}"
+                        observedStreamRequest.complete(json.parseToJsonElement(innerJson) as JsonObject)
+                        // Write tail Frame 1 immediately and leave stream open for RequestAgentStatePageUpdate backfill
+                        streamChannel.writeFully(tailBoqPrefix.encodeToByteArray())
+                        respond(
+                            content = streamChannel,
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val rpcPath = (jspbArr[1] as JsonPrimitive).content
+                        if (rpcPath.endsWith("/RequestAgentStatePageUpdate")) {
+                            val decoded = CloudRelayJspbCodec.decodeBase64Flexible((jspbArr[2] as JsonPrimitive).content)
+                                ?.decodeToString()
+                                .orEmpty()
+                            observedPageUpdateReq.complete(json.parseToJsonElement(decoded) as JsonObject)
+                            // Emit Frame 2 (steps 0..49) + EndStream over the open StreamAgentStateUpdates channel
+                            launch {
+                                streamChannel.writeFully(headBoqSuffix.encodeToByteArray())
+                                streamChannel.flushAndClose()
+                            }
+                            val okB64 = "{}".encodeToByteArray().toByteString().base64()
+                            respond(
+                                content = """["$okB64",[["content-type","application/json"]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            respond("""[5,"not_found: trajectory not found"]""", HttpStatusCode.NotFound)
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val partialPaints = mutableListOf<List<CascadeStep>>()
+            val allSteps = client.fetchAllTrajectorySteps(
+                cascadeId = cloudCid,
+                knownStepCount = 100,
+                isCloud = true,
+                onPartialSteps = { partialPaints.add(it) },
+            )
+
+            val streamReq = observedStreamRequest.await()
+            val rawProxyReq = observedProxyHeaders.await()
+            assertTrue(
+                rawProxyReq.contains("""["connect-accept-encoding","gzip"]"""),
+                "Streaming StreamProxyCommand should advertise connect-accept-encoding:gzip: $rawProxyReq",
+            )
+            assertFalse(
+                rawProxyReq.contains("""["accept-encoding","gzip"]"""),
+                "Streaming StreamProxyCommand must NOT send HTTP accept-encoding:gzip",
+            )
+            assertEquals("CLIENT_TRAJECTORY_VERBOSITY_PROD_UI", (streamReq["trajectoryVerbosity"] as? JsonPrimitive)?.contentOrNull)
+            assertEquals(0, ((streamReq["initialGeneratorMetadatasPageBounds"] as? JsonObject)?.get("endIndexExclusive") as? JsonPrimitive)?.intOrNull)
+            assertEquals(0, ((streamReq["initialExecutorMetadatasPageBounds"] as? JsonObject)?.get("endIndexExclusive") as? JsonPrimitive)?.intOrNull)
+            assertEquals(50, ((streamReq["initialStepsPageBounds"] as? JsonObject)?.get("startIndex") as? JsonPrimitive)?.intOrNull)
+
+            val pageUpdate = observedPageUpdateReq.await()
+            assertEquals(cloudCid, (pageUpdate["conversationId"] as? JsonPrimitive)?.contentOrNull)
+            assertEquals(
+                (streamReq["subscriberId"] as? JsonPrimitive)?.contentOrNull,
+                (pageUpdate["subscriberId"] as? JsonPrimitive)?.contentOrNull,
+            )
+            assertEquals(0, ((pageUpdate["stepPageBounds"] as? JsonObject)?.get("startIndex") as? JsonPrimitive)?.intOrNull)
+
+            assertTrue(partialPaints.isNotEmpty(), "Expected immediate Frame 1 tail fast-paint callback")
+            assertEquals(50, partialPaints.first().size, "First paint must deliver the 50 tail steps (50..99)")
+            assertEquals(50, partialPaints.first().first().stepIndex)
+            assertEquals(99, partialPaints.first().last().stepIndex)
+
+            assertEquals(100, allSteps.size, "Backfill over open stream must complete all 100 steps")
+            assertEquals(0, allSteps.first().stepIndex)
+            assertEquals("Cloud prompt #0", allSteps.first().userInput)
+            assertEquals(99, allSteps.last().stepIndex)
+            assertEquals("Cloud answer #99", allSteps.last().plannerResponse?.response)
+        }
+    }
+
+    @Test
+    fun testCloudStreamAgentStateUpdatesSelfHealsUnknownOptionalFieldsAndCachesStripped() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-cloud-older-schema"
+            val cloudCid = "v1/default/jetski_remote_agents_3p_devbox/older-desktop-stream"
+            val json = Json { ignoreUnknownKeys = true }
+            var streamAttempts = 0
+
+            val successFrame = """{"update":{"conversationId":"$cloudCid","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0],"totalLength":1,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Self-healed older host"}}]}}}}"""
+            val successFramed = ConnectEnvelope.encode(successFrame.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val successBoq = """["${successFramed.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyText = ((request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)).decodeToString()
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["Older Mac","2.26.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        streamAttempts += 1
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val framed = CloudRelayJspbCodec.decodeBase64Flexible((jspbArr[2] as JsonPrimitive).content) ?: ByteArray(0)
+                        val innerObj = json.parseToJsonElement(framed.copyOfRange(5, framed.size).decodeToString()) as JsonObject
+                        // Simulate direct non-enveloped Connect JSON error inside StreamProxyCommand for unknown fields
+                        val rejectedField = listOf(
+                            "initialGeneratorMetadatasPageBounds",
+                            "initialExecutorMetadatasPageBounds",
+                            "trajectoryVerbosity",
+                        ).firstOrNull { innerObj.containsKey(it) }
+                        if (rejectedField != null) {
+                            val directErr = """{"code":"invalid_argument","message":"unknown field \"$rejectedField\""}"""
+                            val errB64 = directErr.encodeToByteArray().toByteString().base64()
+                            respond(
+                                content = """["$errB64",[["content-type","application/json"]]]""",
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            respond(
+                                content = successBoq,
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "Older Mac",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(cascadeId = cloudCid, knownStepCount = 1, isCloud = true)
+            assertEquals(1, steps.size)
+            assertEquals("Self-healed older host", steps.first().userInput)
+            assertEquals(4, streamAttempts, "Should strip 3 unknown optional fields and succeed on 4th canonical attempt")
+
+            // Second fetch must reuse cached stripped fields and succeed in 1 RTT
+            streamAttempts = 0
+            val cachedSteps = client.fetchAllTrajectorySteps(cascadeId = cloudCid, knownStepCount = 1, isCloud = true)
+            assertEquals(1, cachedSteps.size)
+            assertEquals(1, streamAttempts, "Cached stripped fields must make subsequent calls succeed in 1 RTT")
+        }
+    }
+
+    @Test
+    fun testCloudStreamAgentStateUpdatesWaitsPast1500msHydrationStubWithoutPrematureCancel() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-cloud-hydration-2s"
+            val cloudCid = "v1/default/jetski_remote_agents_3p_devbox/app-bug-report-slow-hydrate"
+            var streamCalls = 0
+
+            val stubFrame = """{"update":{"conversationId":"$cloudCid","mainTrajectoryUpdate":{"stepsUpdate":{"totalLength":0}}}}"""
+            val stubFramed = ConnectEnvelope.encode(stubFrame.encodeToByteArray())
+            val stubBoqPrefix = """[["${stubFramed.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val hydratedFrame = """{"update":{"conversationId":"$cloudCid","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Cold Cloud hydration after 1.8s"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Loaded without premature 1.5s cancellation!"}}]}}}}"""
+            val hydratedFramed = ConnectEnvelope.encode(hydratedFrame.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val hydratedBoqSuffix = """,["${hydratedFramed.toByteString().base64()}"]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        streamCalls += 1
+                        val ch = ByteChannel(autoFlush = true)
+                        ch.writeFully(stubBoqPrefix.encodeToByteArray())
+                        launch {
+                            delay(1_800L) // > old 1,500ms premature kill window
+                            ch.writeFully(hydratedBoqSuffix.encodeToByteArray())
+                            ch.flushAndClose()
+                        }
+                        respond(
+                            content = ch,
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("""[5,"not_found: trajectory not found"]""", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+
+            val steps = client.fetchAllTrajectorySteps(cascadeId = cloudCid, knownStepCount = 2, isCloud = true)
+            assertEquals(1, streamCalls, "Must keep single open stream alive past 1.5s stub instead of cancelling and retrying")
+            assertEquals(2, steps.size)
+            assertEquals("Cold Cloud hydration after 1.8s", steps[0].userInput)
+            assertEquals("Loaded without premature 1.5s cancellation!", steps[1].plannerResponse?.response)
+        }
+    }
+
+    @Test
+    fun testStreamProxyCommandDecodesGrpcWeb80TrailersInnerHeadersAndPreservesCloudDiagnostics() = runTest {
+        withContext(Dispatchers.Default) {
+            // 1. CloudRelayJspbStreamParser captures inner HTTP & gRPC error headers even inside `[null, headers]`
+            val headerParser = CloudRelayJspbStreamParser()
+            val innerHeaderErrPayload = """[[null,[[":status","503"],["grpc-status","14"],["grpc-message","relay%20overloaded"]]]]""".encodeToByteArray()
+            assertTrue(headerParser.feed(innerHeaderErrPayload).isEmpty())
+            val headerErr = assertNotNull(headerParser.lastInnerHeaderError() as? AntigravityRpcError.HttpError)
+            assertEquals(503, headerErr.statusCode)
+            assertEquals("relay overloaded", headerErr.body)
+
+            // 2. gRPC-Web 0x80 trailer frame inside StreamProxyCommand throws true error AND preserves it over local 404 fallback
+            val instanceUuid = "inst-cloud-grpc-trailer"
+            val cloudCid = "v1/default/jetski_remote_agents_3p_devbox/grpc-error-diag"
+            val json = Json { ignoreUnknownKeys = true }
+            var listInstancesCalls = 0
+            var protoCalls = 0
+            var getCascadeTrajectoryCalls = 0
+
+            val grpcTrailerBytes = ConnectEnvelope.encode(
+                payload = "grpc-status: 13\r\ngrpc-message: remote%20agent%20proxy%20failed\r\n".encodeToByteArray(),
+                flags = ConnectEnvelopeFlags.GRPC_WEB_TRAILER,
+            )
+            val grpcTrailerBoq = """["${grpcTrailerBytes.toByteString().base64()}",[["content-type","application/grpc-web+json"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyText = ((request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)).decodeToString()
+                when {
+                    path.endsWith("/ListInstances") -> {
+                        listInstancesCalls += 1
+                        respond(
+                            content = """[[["$instanceUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/StreamProxyCommand") -> respond(
+                        content = grpcTrailerBoq,
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/ProxyCommand") -> {
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val rpcPath = (jspbArr[1] as JsonPrimitive).content
+                        if (bodyText.contains("application/proto")) protoCalls += 1
+                        if (rpcPath.endsWith("/GetCascadeTrajectory")) getCascadeTrajectoryCalls += 1
+                        respond(
+                            content = """[5,"not_found: trajectory not found"]""",
+                            status = HttpStatusCode.NotFound,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+            // Pre-populate cached instances + resolved UUID (1 initial ListInstances call)
+            client.resolveCloudRelayInstance()
+            assertEquals(1, listInstancesCalls)
+
+            val thrown = assertFailsWith<AntigravityRpcError.HttpError> {
+                client.fetchAllTrajectorySteps(cascadeId = cloudCid, knownStepCount = 10, isCloud = true)
+            }
+            assertEquals(500, thrown.statusCode, "Must preserve gRPC-Web 0x80 internal error (500) instead of local 404")
+            assertTrue(thrown.body.contains("remote agent proxy failed"), "Unexpected error body: ${thrown.body}")
+            assertEquals(0, protoCalls, "Cloud fallback must NOT waste a Binary Protobuf Fallback B RPC")
+            assertEquals(0, getCascadeTrajectoryCalls, "Cloud fallback must short-circuit GetCascadeTrajectory after LoadTrajectory 404")
+            assertEquals(1, listInstancesCalls, "Must NOT waste an extra ListInstances refresh on Cloud trajectory 404/500")
+        }
     }
 }

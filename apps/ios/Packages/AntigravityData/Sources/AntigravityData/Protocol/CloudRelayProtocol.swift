@@ -956,6 +956,8 @@ public enum CloudRelayJSPBCodec: Sendable {
         ]
         if !isStreaming {
             headerPairs.append(["accept-encoding", "gzip"])
+        } else {
+            headerPairs.append(["connect-accept-encoding", "gzip"])
         }
         if contentType.caseInsensitiveCompare("application/proto") == .orderedSame {
             headerPairs.append(["accept", "application/proto"])
@@ -1265,8 +1267,77 @@ public struct CloudRelayJSPBStreamParser: Sendable {
 
     /// Captures the last Boq error trailer (`[null, [code, message]]`) observed on the stream, if any.
     public private(set) var lastErrorTrailer: String? = nil
+    public private(set) var lastInnerHttpStatus: Int? = nil
+    public private(set) var lastInnerGrpcStatus: Int? = nil
+    public private(set) var lastInnerGrpcMessage: String? = nil
 
     public init() {}
+
+    public func lastInnerHeaderError() -> AntigravityRPCError? {
+        if let grpcCode = lastInnerGrpcStatus, grpcCode != 0 {
+            let msg = lastInnerGrpcMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return Self.mapGrpcStatusCodeToError(grpcCode, message: (msg?.isEmpty == false) ? msg! : "gRPC status \(grpcCode)")
+        }
+        if let httpCode = lastInnerHttpStatus, !(200..<300).contains(httpCode) {
+            let msg = lastInnerGrpcMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = (msg?.isEmpty == false) ? msg! : "Inner StreamProxyCommand HTTP \(httpCode)"
+            if httpCode == 401 || httpCode == 403 {
+                return .unauthorized(detail)
+            }
+            return .httpError(statusCode: httpCode, body: detail)
+        }
+        return nil
+    }
+
+    internal static func mapGrpcStatusCodeToError(_ grpcCode: Int, message: String) -> AntigravityRPCError {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanMsg = trimmed.isEmpty ? "gRPC status \(grpcCode)" : trimmed
+        switch grpcCode {
+        case 16, 7:
+            return .unauthorized(cleanMsg)
+        case 12:
+            return .httpError(statusCode: 501, body: cleanMsg)
+        case 5:
+            return .httpError(statusCode: 404, body: cleanMsg)
+        case 3:
+            return .httpError(statusCode: 400, body: cleanMsg)
+        case 4:
+            return .httpError(statusCode: 504, body: cleanMsg)
+        case 8:
+            return .httpError(statusCode: 429, body: cleanMsg)
+        case 14:
+            return .httpError(statusCode: 503, body: cleanMsg)
+        default:
+            return .httpError(statusCode: 500, body: cleanMsg)
+        }
+    }
+
+    internal static func percentDecodeGrpcMessage(_ raw: String) -> String {
+        guard raw.contains("%") else { return raw }
+        return raw.removingPercentEncoding ?? raw
+    }
+
+    private mutating func recordInnerHeaderPair(rawKey: String?, rawValue: String?) {
+        guard let key = rawKey?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return
+        }
+        switch key {
+        case ":status", "x-http-status", "http-status":
+            if let code = Int(value) {
+                lastInnerHttpStatus = code
+            }
+        case "grpc-status":
+            if let code = Int(value) {
+                lastInnerGrpcStatus = code
+            }
+        case "grpc-message":
+            lastInnerGrpcMessage = Self.percentDecodeGrpcMessage(value)
+        default:
+            break
+        }
+    }
 
     public mutating func feed(_ bytes: Data) -> [Data] {
         var emitted: [Data] = []
@@ -1390,6 +1461,14 @@ public struct CloudRelayJSPBStreamParser: Sendable {
             if !stack.isEmpty {
                 stack[stack.count - 1].append(.array)
             }
+            if closed.elementCount == 2,
+               closed.firstElement == .string,
+               closed.secondElement == .string {
+                if let keyStr = closed.firstString, keyStr.count >= 2 && keyStr.count <= 32 {
+                    recordInnerHeaderPair(rawKey: keyStr, rawValue: closed.secondString)
+                }
+                return nil
+            }
             if insideErrorTrailer {
                 if let code = closed.firstInt, code != 0,
                    let msg = closed.secondString, !msg.isEmpty {
@@ -1398,7 +1477,7 @@ public struct CloudRelayJSPBStreamParser: Sendable {
                 return nil
             }
             if closed.firstElement == .string,
-               closed.elementCount >= 1 && closed.elementCount <= 3,
+               closed.elementCount >= 1 && closed.elementCount <= 4,
                (closed.elementCount == 1 || closed.secondElement == .array || closed.secondElement == .null),
                let b64 = closed.firstString,
                CloudRelayJSPBCodec.isPlausibleBase64Payload(b64),

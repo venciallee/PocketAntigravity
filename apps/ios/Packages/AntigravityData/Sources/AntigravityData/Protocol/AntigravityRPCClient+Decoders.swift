@@ -1514,11 +1514,14 @@ extension AntigravityRPCClient {
             return nil
         }
 
+        let pageBounds = stepsUpdate?["pageBounds"]?.objectValue ?? stepsUpdate?["page_bounds"]?.objectValue
         let baseOffset = parseIntValue(stepsUpdate?["offset"])
             ?? parseIntValue(stepsUpdate?["startIndex"])
             ?? parseIntValue(stepsUpdate?["start_index"])
             ?? parseIntValue(stepsUpdate?["stepOffset"])
             ?? parseIntValue(stepsUpdate?["step_offset"])
+            ?? parseIntValue(pageBounds?["startIndex"])
+            ?? parseIntValue(pageBounds?["start_index"])
             ?? 0
 
         let totalLength = parseIntValue(stepsUpdate?["totalLength"])

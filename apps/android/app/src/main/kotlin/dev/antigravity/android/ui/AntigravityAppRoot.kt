@@ -329,13 +329,22 @@ fun AntigravityAppRoot(
         }
     }
 
-    DisposableEffect(activeChatRouteId, connectionState.isConnected) {
+    val hasLoadedStepsForActiveChat = activeChatRouteId != null &&
+        !chatState.stepsByCascadeId[activeChatRouteId].isNullOrEmpty()
+    val isInitialUncachedChatLoad = activeChatRouteId != null &&
+        !hasLoadedStepsForActiveChat &&
+        (chatState.isLoadingSteps ||
+            chatState.activeCascadeId != activeChatRouteId ||
+            chatState.stepLoadErrorText != null)
+    val shouldRunLiveChatStream = !coordinator.isVerificationMode &&
+        !activeChatRouteId.isNullOrBlank() &&
+        !activeChatRouteId.startsWith("cascade-new-") &&
+        connectionState.isConnected &&
+        !isInitialUncachedChatLoad
+
+    DisposableEffect(activeChatRouteId, shouldRunLiveChatStream) {
         val cid = activeChatRouteId
-        if (!coordinator.isVerificationMode &&
-            !cid.isNullOrBlank() &&
-            !cid.startsWith("cascade-new-") &&
-            connectionState.isConnected
-        ) {
+        if (shouldRunLiveChatStream && !cid.isNullOrBlank()) {
             val summary = activeChatSummary
             coordinator.startLiveChatStream(
                 cascadeId = cid,

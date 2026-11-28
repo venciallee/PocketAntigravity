@@ -920,6 +920,9 @@ public class AntigravityCoreCoordinator(
         }
     }
 
+    public val activeLiveChatStreamCascadeId: String?
+        get() = if (liveChatStreamJob?.isActive == true) liveChatStreamCascadeId else null
+
     public fun stopLiveChatStream() {
         liveChatStreamJob?.cancel()
         liveChatStreamJob = null
