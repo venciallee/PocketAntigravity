@@ -2451,6 +2451,224 @@ final class AntigravityCompatibilityTests: XCTestCase {
         XCTAssertEqual(probe.protoCount(), 0, "Cloud fallback must NOT invoke Binary Protobuf Fallback B")
         XCTAssertEqual(counter.count(forSuffix: "/ListInstances"), 1, "Must NOT trigger extra ListInstances refresh on Cloud trajectory 404/500")
     }
+
+    func testSwiftStreamProxyCommandDisablesHttp3AndDecompressesRealGzipConnectFrame() async throws {
+        let instanceUuid = "inst-swift-http3-gzip"
+        let cloudCid = "v1/default/jetski_remote_agents_3p_devbox/swift-gzip"
+        let gzippedJsonB64 = "H4sIAAAAAAACA13OwWrDMAwG4FcJOmdkZbfcRptDYLShcWBjFOPFSuausY2lZO1C3n0Ogw2mixD6kP4ZRq8VI+QztM5OGEixcbbUkMO0yTR2arxwdkamDyMDDo5Rqh4tk3zwUuP05q4ZfZqO7/ov4yGFQRkrgjpjyy7cmt/7xOjpbzRWmxYJ8tf7UwrsWF2e0Pb8Dvkm/cFxNwPffPSwPRxF8SxrUVRSvFSFbOriKMt91QhYueKR/rFaPIqmlrvDvohkJAyl9SOvzxmvscMOWzf4gESokzV+snXWxuBJF9SAsCynJdY3EAPSNiYBAAA="
+        let gzippedBytes = try XCTUnwrap(Data(base64Encoded: gzippedJsonB64))
+        var compressedStream = Data()
+        compressedStream.append(ConnectEnvelope.encode(payload: gzippedBytes, flags: .compressed))
+        compressedStream.append(ConnectEnvelope.encode(payload: Data("{}".utf8), flags: .endStream))
+        let boqBody = "[\"\(compressedStream.base64EncodedString())\",[[\"content-type\",\"application/connect+json\"]]]"
+
+        final class StreamReqCapture: @unchecked Sendable {
+            private let lock = NSLock()
+            var assumesHttp3: Bool? = nil
+            var cachePolicy: URLRequest.CachePolicy? = nil
+            func record(_ req: URLRequest) {
+                lock.lock()
+                #if os(iOS) || os(macOS)
+                assumesHttp3 = req.assumesHTTP3Capable
+                #endif
+                cachePolicy = req.cachePolicy
+                lock.unlock()
+            }
+            func snapshot() -> (Bool?, URLRequest.CachePolicy?) {
+                lock.lock()
+                defer { lock.unlock() }
+                return (assumesHttp3, cachePolicy)
+            }
+        }
+        let capture = StreamReqCapture()
+
+        let session = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.33.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                capture.record(req)
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(boqBody.utf8))
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let client = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: instanceUuid,
+                hostname: "MacBook Pro",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: session
+        )
+
+        let steps = try await client.fetchAllTrajectorySteps(cascadeId: cloudCid, knownStepCount: 1, isCloud: true)
+        XCTAssertEqual(steps.count, 1)
+        XCTAssertEqual(steps[0].userInput, "Decompressed gzip Connect frame")
+        let (http3Capable, cachePolicy) = capture.snapshot()
+        XCTAssertEqual(cachePolicy, .reloadIgnoringLocalCacheData)
+        #if os(iOS) || os(macOS)
+        XCTAssertEqual(http3Capable, false, "StreamProxyCommand must disable HTTP/3 QUIC on Apple platforms to avoid proxy stalls")
+        #endif
+    }
+
+    func testSwiftCloudPath2ShortCircuitsTimeoutAndLocalRelayPreservesTailStepsOnTimeout() async throws {
+        // 1. Cloud Path 2 short-circuits URLError(.timedOut) without cascading into LoadTrajectory / GetCascadeTrajectory
+        let instanceUuid = "inst-swift-timeout-short"
+        let cloudCid = "v1/default/jetski_remote_agents_3p_devbox/swift-timeout-short"
+        let cloudCounter = CompatRequestCounter()
+
+        let cloudSession = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            cloudCounter.record(path: path)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.33.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data("[null,[[\"grpc-status\",\"12\"],[\"grpc-message\",\"unimplemented\"]]]".utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let bodyText = String(data: bodyData, encoding: .utf8) ?? ""
+                if bodyText.contains("GetCascadeTrajectorySteps") {
+                    cloudCounter.record(path: "/inner/GetCascadeTrajectorySteps")
+                    throw URLError(.timedOut)
+                }
+                if bodyText.contains("LoadTrajectory") {
+                    cloudCounter.record(path: "/inner/LoadTrajectory")
+                }
+                if bodyText.contains("GetCascadeTrajectory\"") {
+                    cloudCounter.record(path: "/inner/GetCascadeTrajectory")
+                }
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+                return (resp, Data())
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let cloudClient = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: instanceUuid,
+                hostname: "MacBook Pro",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: cloudSession
+        )
+        _ = try await cloudClient.resolveCloudRelayInstance()
+
+        do {
+            _ = try await cloudClient.fetchAllTrajectorySteps(cascadeId: cloudCid, knownStepCount: 15, isCloud: true)
+            XCTFail("Expected URLError.timedOut to be thrown")
+        } catch let err as URLError {
+            XCTAssertEqual(err.code, .timedOut)
+        }
+        XCTAssertEqual(cloudCounter.count(forSuffix: "/inner/GetCascadeTrajectorySteps"), 1)
+        XCTAssertEqual(cloudCounter.count(forSuffix: "/inner/LoadTrajectory"), 0)
+        XCTAssertEqual(cloudCounter.count(forSuffix: "/inner/GetCascadeTrajectory"), 0)
+
+        // 2. Local Cloud Relay preserves painted 32 tail steps when full 0..60 ProxyCommand times out
+        let localCid = "local-swift-big-relay"
+        let localCounter = CompatRequestCounter()
+        var tailBinary = Data()
+        for i in 0..<32 {
+            var stepPayload = Data()
+            stepPayload.append(encodeVarintField(1, value: 15)) // PLANNER_RESPONSE
+            stepPayload.append(encodeVarintField(4, value: 3))  // DONE
+            stepPayload.append(encodeLengthField(20, payload: encodeStringField(1, string: "Tail reply #\(i)")))
+            tailBinary.append(encodeLengthField(1, payload: stepPayload))
+        }
+        let tailB64 = tailBinary.base64EncodedString()
+
+        let localSession = makeMockSession { req in
+            let path = req.url?.path ?? ""
+            let bodyData = CompatMockURLProtocol.readBody(from: req)
+            localCounter.record(path: path)
+            if path.hasSuffix("/ListInstances") {
+                let listJson = "[[[\"\(instanceUuid)\",[\"MacBook Pro\",\"2.33.0\",true],1,[1740000000,0]]],5]"
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data(listJson.utf8))
+            }
+            if path.hasSuffix("/StreamProxyCommand") {
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                return (resp, Data("[null,[[\"grpc-status\",\"12\"],[\"grpc-message\",\"unimplemented\"]]]".utf8))
+            }
+            if path.hasSuffix("/ProxyCommand") {
+                let bodyText = (String(data: bodyData, encoding: .utf8) ?? "").replacingOccurrences(of: "\\/", with: "/")
+                if bodyText.contains("application/proto") {
+                    let arr = (try? JSONDecoder().decode([JSONValue].self, from: bodyData)) ?? []
+                    let innerB64 = arr.count > 2 ? (arr[2].stringValue ?? "") : ""
+                    let innerBytes = CloudRelayJSPBCodec.decodeBase64Flexible(innerB64) ?? Data()
+                    var startIdx = 0
+                    var cursor = 0
+                    while cursor < innerBytes.count {
+                        guard let tag = ProtobufStepCodec.readVarint(from: innerBytes, offset: &cursor) else { break }
+                        let fn = Int(tag >> 3)
+                        let wt = Int(tag & 0x07)
+                        if wt == 0 {
+                            guard let v = ProtobufStepCodec.readVarint(from: innerBytes, offset: &cursor) else { break }
+                            if fn == 2 { startIdx = Int(v) }
+                        } else if wt == 2 {
+                            guard let len = ProtobufStepCodec.readVarint(from: innerBytes, offset: &cursor) else { break }
+                            cursor += Int(len)
+                        } else {
+                            break
+                        }
+                    }
+                    if startIdx >= 20 {
+                        let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json+protobuf"])!
+                        return (resp, Data("[\"\(tailB64)\",[[\"content-type\",\"application/proto\"]]]".utf8))
+                    }
+                    throw URLError(.timedOut)
+                }
+                localCounter.record(path: "/inner/jsonFallback")
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+                return (resp, Data())
+            }
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (resp, Data())
+        }
+
+        let localClient = AntigravityRPCClient(
+            host: RemoteHostInstance(
+                instanceId: instanceUuid,
+                hostname: "MacBook Pro",
+                channel: .cloudRelay,
+                endpointURL: URL(string: "https://antigravity.google.com/r/\(instanceUuid)")!,
+                isOnline: true
+            ),
+            sessionCookie: "SAPISID=test_sapisid; SID=test_sid",
+            relayApiKey: "AI" + "zaSyVALIDKEY0000000000000000000000000",
+            urlSession: localSession
+        )
+        _ = try await localClient.resolveCloudRelayInstance()
+
+        let steps = try await localClient.fetchAllTrajectorySteps(
+            cascadeId: localCid,
+            knownStepCount: 60,
+            isCloud: false,
+            onPartialSteps: { _ in }
+        )
+        XCTAssertEqual(steps.count, 32, "Must preserve 32 tail steps when full 0..60 ProxyCommand times out")
+        XCTAssertEqual(localCounter.count(forSuffix: "/StreamProxyCommand"), 1, "Must try compact StreamAgentStateUpdates before returning preserved tail")
+        XCTAssertEqual(localCounter.count(forSuffix: "/inner/jsonFallback"), 0, "Must NOT discard tail steps and burn Path 2 JSON")
+    }
 }
 
 // MARK: - Swift 6 Strict-Concurrency Mock URLProtocol Helpers

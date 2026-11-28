@@ -51,6 +51,8 @@ public expect fun currentTimeMillis(): Long
 
 public expect fun platformTransportEngineName(): String
 
+internal expect fun logProtocolDiagnostic(message: String)
+
 internal expect fun createPlatformHttpClient(
     endpointHost: String,
     config: TlsEngineConfig,

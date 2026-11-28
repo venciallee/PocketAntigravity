@@ -3610,6 +3610,23 @@ public class AntigravityKmpRpcClient(
         return emptyList()
     }
 
+    private fun isTransportTimeoutError(error: Throwable?): Boolean {
+        if (error == null) return false
+        if (error is AntigravityRpcError.HttpError && error.statusCode == 504) return true
+        val clsName = error::class.simpleName.orEmpty().lowercase()
+        val msg = error.message.orEmpty().lowercase()
+        return clsName.contains("timeout") ||
+            msg.contains("timed out") ||
+            msg.contains("timeout") ||
+            msg.contains("-1001")
+    }
+
+    private fun logStepSyncDiag(message: String) {
+        if (ownsHttpClients) {
+            logProtocolDiagnostic(message)
+        }
+    }
+
     private suspend fun fetchStepsFromSingleInstance(
         cascadeId: String,
         knownStepCount: Int,
@@ -3621,6 +3638,14 @@ public class AntigravityKmpRpcClient(
         isPeerProbe: Boolean = false,
         onPartialSteps: (suspend (List<CascadeStep>) -> Unit)? = null,
     ): SingleInstanceFetchOutcome {
+        val fetchStartMs = currentTimeMillis()
+        val cidTag = cascadeId.take(28)
+        val targetTag = targetUuid?.take(8) ?: "direct"
+        if (!isBackgroundPreload) {
+            logStepSyncDiag(
+                "StepSync start engine=${platformTransportEngineName()} cid=$cidTag isCloud=$isRemoteCloud known=$knownStepCount existing=$existingStepsCount target=$targetTag peer=$isPeerProbe"
+            )
+        }
         val wakeKey = "${targetUuid ?: "direct"}|$cascadeId"
         var lastError: Throwable? = null
         var cloudStreamError: Throwable? = null
@@ -3630,6 +3655,7 @@ public class AntigravityKmpRpcClient(
         var didAttemptWake = false
         var didAttemptProtobuf = false
         var didAttemptAgentStream = false
+        var cachedTailSteps: List<CascadeStep> = emptyList()
 
         // Path 0 (Antigravity 2.x Cloud Primary): Remote Cloud (`v1/...`) conversations live on
         // Google's remote backend rather than local `.pb` files, so `GetCascadeTrajectorySteps` /
@@ -3643,6 +3669,7 @@ public class AntigravityKmpRpcClient(
                 isPeerProbe -> 6_000L
                 else -> 12_000L
             }
+            val p0StartMs = currentTimeMillis()
             try {
                 when (
                     val streamOutcome = fetchStepsViaAgentStateStream(
@@ -3656,6 +3683,11 @@ public class AntigravityKmpRpcClient(
                     )
                 ) {
                     is AgentStateStreamOutcome.Snapshot -> {
+                        if (!isBackgroundPreload) {
+                            logStepSyncDiag(
+                                "StepSync Path0(stream) OK cid=$cidTag target=$targetTag steps=${streamOutcome.steps.size} authEmpty=${streamOutcome.authoritativeEmpty} t=${currentTimeMillis() - p0StartMs}ms"
+                            )
+                        }
                         if (streamOutcome.steps.isNotEmpty() || streamOutcome.authoritativeEmpty) {
                             stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
                             return SingleInstanceFetchOutcome(
@@ -3666,6 +3698,9 @@ public class AntigravityKmpRpcClient(
                     }
                     is AgentStateStreamOutcome.Unsupported -> {
                         cloudStreamWasUnsupported = true
+                        if (!isBackgroundPreload) {
+                            logStepSyncDiag("StepSync Path0(stream) unsupported cid=$cidTag target=$targetTag t=${currentTimeMillis() - p0StartMs}ms")
+                        }
                     }
                     is AgentStateStreamOutcome.NoData -> {
                         cloudStreamTimedOut = streamOutcome.timedOut
@@ -3675,6 +3710,11 @@ public class AntigravityKmpRpcClient(
                                 lastError = err
                                 cloudStreamError = err
                             }
+                        }
+                        if (!isBackgroundPreload) {
+                            logStepSyncDiag(
+                                "StepSync Path0(stream) noData cid=$cidTag target=$targetTag timedOut=${streamOutcome.timedOut} sawResp=${streamOutcome.sawStreamResponse} err=${streamOutcome.lastError?.message?.take(120) ?: "none"} t=${currentTimeMillis() - p0StartMs}ms"
+                            )
                         }
                     }
                 }
@@ -3688,6 +3728,11 @@ public class AntigravityKmpRpcClient(
                 } else {
                     lastError = e
                     cloudStreamError = e
+                }
+                if (!isBackgroundPreload) {
+                    logStepSyncDiag(
+                        "StepSync Path0(stream) throw cid=$cidTag target=$targetTag err=${e.message?.take(120)} t=${currentTimeMillis() - p0StartMs}ms"
+                    )
                 }
             }
 
@@ -3712,11 +3757,14 @@ public class AntigravityKmpRpcClient(
             val offsetIgnored = stateMutex.withLock { hostKey in stepOffsetIgnoredHosts }
             var tailFastPainted = false
 
-            // Two-phase tail-first fast paint for long uncached conversations (>= 80 steps):
-            // Fetch only the latest 48 steps first (~5-15% of payload) so the chat opens instantly,
-            // then backfill the complete 0..N trajectory in phase 2.
-            if (onPartialSteps != null && existingStepsCount == 0 && knownStepCount >= 80 && !offsetIgnored) {
-                val tailOffset = max(0, knownStepCount - 48)
+            // Two-phase tail-first fast paint for long uncached conversations:
+            // Cloud Relay starts tail-first earlier (>= 50 steps, 32-step tail) to avoid unary ProxyCommand timeouts;
+            // Direct LAN keeps >= 80 steps with 48-step tail.
+            val tailMinSteps = if (channel == RemoteConnectionChannel.CLOUD_RELAY) 50 else 80
+            val tailWindow = if (channel == RemoteConnectionChannel.CLOUD_RELAY) 32 else 48
+            if (onPartialSteps != null && existingStepsCount == 0 && knownStepCount >= tailMinSteps && !offsetIgnored) {
+                val tailOffset = max(0, knownStepCount - tailWindow)
+                val tailStartMs = currentTimeMillis()
                 try {
                     val tailSteps = fetchTrajectoryStepsProtobuf(
                         cascadeId = cascadeId,
@@ -3748,7 +3796,13 @@ public class AntigravityKmpRpcClient(
                             return SingleInstanceFetchOutcome(repaired)
                         }
                         tailFastPainted = true
+                        cachedTailSteps = tailSteps
                         stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                        if (!isBackgroundPreload) {
+                            logStepSyncDiag(
+                                "StepSync Path1(tailProto) OK cid=$cidTag target=$targetTag steps=${tailSteps.size} offset=$tailOffset t=${currentTimeMillis() - tailStartMs}ms"
+                            )
+                        }
                         onPartialSteps(tailSteps)
                     }
                 } catch (e: AntigravityRpcError.Unauthorized) {
@@ -3765,6 +3819,7 @@ public class AntigravityKmpRpcClient(
 
             if (!isBinaryProtobufStepsUnsupported(targetUuid)) {
                 var shouldWakeAndRetryProto = false
+                val p1StartMs = currentTimeMillis()
                 try {
                     val protoSteps = fetchTrajectoryStepsProtobuf(
                         cascadeId = cascadeId,
@@ -3777,6 +3832,11 @@ public class AntigravityKmpRpcClient(
                     )
                     if (protoSteps.isNotEmpty()) {
                         stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                        if (!isBackgroundPreload) {
+                            logStepSyncDiag(
+                                "StepSync Path1(proto) OK cid=$cidTag target=$targetTag steps=${protoSteps.size} t=${currentTimeMillis() - p1StartMs}ms"
+                            )
+                        }
                         return SingleInstanceFetchOutcome(protoSteps)
                     }
                     if (!tailFastPainted) {
@@ -3795,6 +3855,11 @@ public class AntigravityKmpRpcClient(
                         if (ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
                             shouldWakeAndRetryProto = true
                         }
+                    }
+                    if (!isBackgroundPreload) {
+                        logStepSyncDiag(
+                            "StepSync Path1(proto) fail cid=$cidTag target=$targetTag err=${e.message?.take(120)} t=${currentTimeMillis() - p1StartMs}ms"
+                        )
                     }
                 }
 
@@ -3837,15 +3902,27 @@ public class AntigravityKmpRpcClient(
                 }
             }
 
-            // Fast-path for Antigravity 2.x local SQLite/live sessions: if Binary Protobuf IS supported
-            // and `GetCascadeTrajectorySteps` STILL returned `trajectory not found` AFTER `LoadTrajectory`,
-            // try `StreamAgentStateUpdates` immediately before burning legacy JSON fallbacks.
-            if (didAttemptWake &&
-                !isBinaryProtobufStepsUnsupported(targetUuid) &&
-                lastError != null &&
-                ProtocolCompatibilityEngine.isTrajectoryNotFoundError(lastError!!)
-            ) {
+            // Fast-path for Antigravity 2.x local sessions:
+            // 1. If Binary Protobuf returned `not_found` AFTER `LoadTrajectory`, OR
+            // 2. If full Binary Protobuf timed out / failed over Cloud Relay (e.g. giant trajectory),
+            // try compact `StreamAgentStateUpdates` (`PROD_UI` + empty metadata bounds) immediately
+            // before burning slow unary JSON fallbacks.
+            val shouldFastTryLocalStream = (
+                didAttemptWake &&
+                    !isBinaryProtobufStepsUnsupported(targetUuid) &&
+                    lastError != null &&
+                    ProtocolCompatibilityEngine.isTrajectoryNotFoundError(lastError!!)
+                ) || (
+                !isBackgroundPreload &&
+                    (isTransportTimeoutError(lastError) || cachedTailSteps.isNotEmpty())
+                )
+            if (shouldFastTryLocalStream) {
                 didAttemptAgentStream = true
+                val localStreamTimeoutMs = if (isTransportTimeoutError(lastError) || cachedTailSteps.isNotEmpty()) {
+                    6_000L
+                } else {
+                    3_500L
+                }
                 try {
                     when (
                         val streamOutcome = fetchStepsViaAgentStateStream(
@@ -3853,7 +3930,7 @@ public class AntigravityKmpRpcClient(
                             isRemoteCloud = false,
                             targetUuid = targetUuid,
                             knownStepCount = knownStepCount,
-                            timeoutMs = 3_500L,
+                            timeoutMs = localStreamTimeoutMs,
                             isBackgroundPreload = isBackgroundPreload,
                             onPartialSteps = onPartialSteps,
                         )
@@ -3861,6 +3938,11 @@ public class AntigravityKmpRpcClient(
                         is AgentStateStreamOutcome.Snapshot -> {
                             if (streamOutcome.steps.isNotEmpty() || streamOutcome.authoritativeEmpty) {
                                 stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                                if (!isBackgroundPreload) {
+                                    logStepSyncDiag(
+                                        "StepSync Path1(localStream) OK cid=$cidTag target=$targetTag steps=${streamOutcome.steps.size} t=${currentTimeMillis() - fetchStartMs}ms"
+                                    )
+                                }
                                 return SingleInstanceFetchOutcome(
                                     steps = streamOutcome.steps,
                                     authoritativeEmpty = streamOutcome.authoritativeEmpty,
@@ -3874,8 +3956,18 @@ public class AntigravityKmpRpcClient(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Throwable) {
-                    // Fall through to legacy JSON fallback below.
+                    // Fall through to cached tail or legacy JSON fallback below.
                 }
+            }
+
+            // Never discard already-painted tail steps if full unary fetch & stream fallback both failed.
+            if (cachedTailSteps.isNotEmpty()) {
+                if (!isBackgroundPreload) {
+                    logStepSyncDiag(
+                        "StepSync Path1(preserveTail) OK cid=$cidTag target=$targetTag steps=${cachedTailSteps.size} t=${currentTimeMillis() - fetchStartMs}ms"
+                    )
+                }
+                return SingleInstanceFetchOutcome(cachedTailSteps)
             }
         }
 
@@ -3884,6 +3976,7 @@ public class AntigravityKmpRpcClient(
         // that Path 1 already executed.
         var adaptiveError: Throwable? = null
         var didWakeViaLoadTrajectory = false
+        val p2StartMs = currentTimeMillis()
         val adaptiveSteps = try {
             fetchStepsViaAdaptiveJson(
                 cascadeId = cascadeId,
@@ -3908,7 +4001,16 @@ public class AntigravityKmpRpcClient(
         }
 
         if (adaptiveSteps.isNotEmpty()) {
+            if (!isBackgroundPreload) {
+                logStepSyncDiag(
+                    "StepSync Path2(json) OK cid=$cidTag target=$targetTag steps=${adaptiveSteps.size} t=${currentTimeMillis() - p2StartMs}ms total=${currentTimeMillis() - fetchStartMs}ms"
+                )
+            }
             return SingleInstanceFetchOutcome(adaptiveSteps)
+        } else if (!isBackgroundPreload) {
+            logStepSyncDiag(
+                "StepSync Path2(json) empty cid=$cidTag target=$targetTag err=${adaptiveError?.message?.take(120) ?: "none"} t=${currentTimeMillis() - p2StartMs}ms"
+            )
         }
 
         // Path 3 (Antigravity 2.x Stream Fallback & Post-Wake Cloud Retry):
@@ -3953,11 +4055,15 @@ public class AntigravityKmpRpcClient(
         }
 
         // Preserve real `StreamAgentStateUpdates` error or timeout diagnostics on Cloud sessions instead of
-        // letting local-only fallback's `not_found: trajectory not found` mask the true root cause.
+        // letting local-only fallback's `not_found: trajectory not found` or fallback timeout mask the true root cause.
         if (isRemoteCloud &&
             didAttemptAgentStream &&
             !cloudStreamWasUnsupported &&
-            (adaptiveError == null || ProtocolCompatibilityEngine.isTrajectoryNotFoundError(adaptiveError))
+            (
+                adaptiveError == null ||
+                    ProtocolCompatibilityEngine.isTrajectoryNotFoundError(adaptiveError) ||
+                    isTransportTimeoutError(adaptiveError)
+                )
         ) {
             if (cloudStreamError != null && !ProtocolCompatibilityEngine.isTrajectoryNotFoundError(cloudStreamError)) {
                 throw cloudStreamError
@@ -4670,6 +4776,7 @@ public class AntigravityKmpRpcClient(
 
         var firstResp: JsonObject? = null
         var firstStepsFailedNotFound = false
+        var firstStepsTimedOut = false
         // Skip duplicate `GetCascadeTrajectorySteps` JSON probe when Path 1 already proved `not_found`
         // after `LoadTrajectory` on a host that supports Binary Protobuf — go straight to `GetCascadeTrajectory`.
         val skipRedundantLocalStepsProbe = !isRemoteCloud &&
@@ -4699,6 +4806,9 @@ public class AntigravityKmpRpcClient(
                 firstResp = null
                 if (ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
                     firstStepsFailedNotFound = true
+                }
+                if (isTransportTimeoutError(e)) {
+                    firstStepsTimedOut = true
                 }
                 if (isRemoteCloud && e is AntigravityRpcError.HttpError) {
                     ProtocolCompatibilityEngine.extractUnknownProtoFieldName(e.body)?.let { unknownField ->
@@ -4732,6 +4842,10 @@ public class AntigravityKmpRpcClient(
                     }
                 }
             }
+        }
+
+        if (isRemoteCloud && firstStepsTimedOut) {
+            lastError?.let { throw it }
         }
 
         if (firstResp != null) {
@@ -6762,6 +6876,8 @@ public class AntigravityKmpRpcClient(
             )
 
             suspend fun executeCloudStreamOnce(apiKey: String?, allowKeyRefreshRetry: Boolean): Boolean {
+                val traceStream = method == "StreamAgentStateUpdates"
+                val streamStartMs = currentTimeMillis()
                 val headers = SapisidHashGenerator.buildApiServiceHeaders(
                     cookieHeader = sessionCookie.orEmpty(),
                     origin = relayOrigin,
@@ -6779,6 +6895,17 @@ public class AntigravityKmpRpcClient(
                 }.execute { response ->
                     val code = response.status.value
                     val respHeaders = response.flattenHeaders()
+                    val headerBase64 = respHeaders.any { (k, v) ->
+                        (k.equals("x-goog-safety-encoding", ignoreCase = true) ||
+                            k.equals("content-transfer-encoding", ignoreCase = true)) &&
+                            v.contains("base64", ignoreCase = true)
+                    }
+                    if (traceStream) {
+                        val ct = respHeaders.entries.firstOrNull { it.key.equals("content-type", ignoreCase = true) }?.value ?: "?"
+                        logStepSyncDiag(
+                            "StepSync StreamProxy open method=$method target=${targetUuid.take(8)} http=$code ct=$ct b64Hdr=$headerBase64 t=${currentTimeMillis() - streamStartMs}ms"
+                        )
+                    }
                     if (allowKeyRefreshRetry && (code == 400 || code == 403)) {
                         val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
                         val errText = unwrapErrorBodyText(errBytes, respHeaders)
@@ -6828,11 +6955,6 @@ public class AntigravityKmpRpcClient(
                             errText.ifBlank { "StreamProxyCommand HTTP $code" },
                         )
                     }
-                    val headerBase64 = respHeaders.any { (k, v) ->
-                        (k.equals("x-goog-safety-encoding", ignoreCase = true) ||
-                            k.equals("content-transfer-encoding", ignoreCase = true)) &&
-                            v.contains("base64", ignoreCase = true)
-                    }
                     val jspbParser = CloudRelayJspbStreamParser()
                     val connectParser = ConnectStreamParser()
                     val b64Decoder = StreamingBase64Decoder()
@@ -6841,11 +6963,17 @@ public class AntigravityKmpRpcClient(
                     val sniffBuffer = ArrayList<Byte>(4)
                     var yieldedAny = false
                     var done = false
+                    var totalBytesRead = 0L
+                    var totalJspbChunks = 0
+                    var totalEmittedFrames = 0
+                    var firstFrameKeys: String? = null
+                    var terminalDiag: String? = null
 
                     suspend fun processDecodedBytes(decodedSlice: ByteArray) {
                         if (decodedSlice.isEmpty() || done) return
                         val innerChunks = jspbParser.feed(decodedSlice)
                         for (rawChunk in innerChunks) {
+                            totalJspbChunks += 1
                             val chunkData = CloudRelayJspbCodec.decompressPayloadIfNeeded(rawChunk)
                             if (!connectParser.hasBufferedBytes &&
                                 chunkData.isNotEmpty() &&
@@ -6856,9 +6984,16 @@ public class AntigravityKmpRpcClient(
                                 }.getOrNull()
                                 if (directObj != null) {
                                     if (isLikelyDirectConnectErrorObject(directObj)) {
-                                        extractConnectEndStreamError(chunkData)?.let { throw it }
+                                        extractConnectEndStreamError(chunkData)?.let {
+                                            terminalDiag = it.message?.take(120)
+                                            throw it
+                                        }
+                                    }
+                                    if (firstFrameKeys == null) {
+                                        firstFrameKeys = directObj.keys.take(6).joinToString(",")
                                     }
                                     yieldedAny = true
+                                    totalEmittedFrames += 1
                                     markRelayInstanceVerified(targetUuid)
                                     emit(directObj)
                                     continue
@@ -6872,7 +7007,10 @@ public class AntigravityKmpRpcClient(
                                     frame.payload
                                 }
                                 if (frame.isEndStream) {
-                                    extractConnectEndStreamError(frameBytes)?.let { throw it }
+                                    extractConnectEndStreamError(frameBytes)?.let {
+                                        terminalDiag = it.message?.take(120)
+                                        throw it
+                                    }
                                     done = true
                                     break
                                 }
@@ -6880,7 +7018,11 @@ public class AntigravityKmpRpcClient(
                                     json.parseToJsonElement(frameBytes.decodeToString()) as? JsonObject
                                 }.getOrNull()
                                 if (obj != null) {
+                                    if (firstFrameKeys == null) {
+                                        firstFrameKeys = obj.keys.take(6).joinToString(",")
+                                    }
                                     yieldedAny = true
+                                    totalEmittedFrames += 1
                                     markRelayInstanceVerified(targetUuid)
                                     emit(obj)
                                 }
@@ -6889,78 +7031,93 @@ public class AntigravityKmpRpcClient(
                         }
                     }
 
-                    val channelReader = response.bodyAsChannel()
-                    val buf = ByteArray(32768)
-                    while (!done) {
-                        val read = channelReader.readAvailable(buf, 0, buf.size)
-                        if (read < 0) break
-                        if (read == 0) continue
-                        when (outerMode) {
-                            1 -> processDecodedBytes(buf.copyOf(read))
-                            2 -> processDecodedBytes(b64Decoder.feed(buf.copyOf(read)))
-                            else -> {
-                                var idx = 0
-                                while (idx < read && outerMode == 0 && !done) {
-                                    val b = buf[idx]
-                                    val c = b.toInt() and 0xFF
-                                    if (sniffBuffer.isEmpty() &&
-                                        (c == ' '.code || c == '\t'.code || c == '\r'.code || c == '\n'.code)
-                                    ) {
-                                        idx += 1
-                                        continue
-                                    }
-                                    if (sniffBuffer.isEmpty() &&
-                                        (c == '['.code || c == '{'.code || c == ')'.code || c == '('.code || c in '0'.code..'9'.code)
-                                    ) {
-                                        outerMode = 1
-                                        processDecodedBytes(buf.copyOfRange(idx, read))
-                                        idx = read
-                                        break
-                                    }
-                                    sniffBuffer.add(b)
-                                    idx += 1
-                                    if (sniffBuffer.size == 4) {
-                                        val candidateStr = sniffBuffer.toByteArray().decodeToString()
-                                        val decodedPrefix = CloudRelayJspbCodec.decodeBase64Flexible(candidateStr)
-                                        val firstDecoded = decodedPrefix?.firstOrNull()?.toInt()?.and(0xFF)
-                                        if (decodedPrefix != null &&
-                                            (firstDecoded == ')'.code || firstDecoded == '['.code ||
-                                                firstDecoded == '{'.code || firstDecoded == ' '.code ||
-                                                firstDecoded == '\n'.code)
+                    try {
+                        val channelReader = response.bodyAsChannel()
+                        val buf = ByteArray(32768)
+                        while (!done) {
+                            val read = channelReader.readAvailable(buf, 0, buf.size)
+                            if (read < 0) break
+                            if (read == 0) continue
+                            totalBytesRead += read
+                            when (outerMode) {
+                                1 -> processDecodedBytes(buf.copyOf(read))
+                                2 -> processDecodedBytes(b64Decoder.feed(buf.copyOf(read)))
+                                else -> {
+                                    var idx = 0
+                                    while (idx < read && outerMode == 0 && !done) {
+                                        val b = buf[idx]
+                                        val c = b.toInt() and 0xFF
+                                        if (sniffBuffer.isEmpty() &&
+                                            (c == ' '.code || c == '\t'.code || c == '\r'.code || c == '\n'.code)
                                         ) {
-                                            outerMode = 2
-                                            processDecodedBytes(decodedPrefix)
-                                            if (idx < read && !done) {
-                                                processDecodedBytes(b64Decoder.feed(buf.copyOfRange(idx, read)))
-                                            }
-                                        } else {
-                                            outerMode = 1
-                                            processDecodedBytes(sniffBuffer.toByteArray())
-                                            if (idx < read && !done) {
-                                                processDecodedBytes(buf.copyOfRange(idx, read))
-                                            }
+                                            idx += 1
+                                            continue
                                         }
-                                        sniffBuffer.clear()
-                                        idx = read
+                                        if (sniffBuffer.isEmpty() &&
+                                            (c == '['.code || c == '{'.code || c == ')'.code || c == '('.code || c in '0'.code..'9'.code)
+                                        ) {
+                                            outerMode = 1
+                                            processDecodedBytes(buf.copyOfRange(idx, read))
+                                            idx = read
+                                            break
+                                        }
+                                        sniffBuffer.add(b)
+                                        idx += 1
+                                        if (sniffBuffer.size == 4) {
+                                            val candidateStr = sniffBuffer.toByteArray().decodeToString()
+                                            val decodedPrefix = CloudRelayJspbCodec.decodeBase64Flexible(candidateStr)
+                                            val firstDecoded = decodedPrefix?.firstOrNull()?.toInt()?.and(0xFF)
+                                            if (decodedPrefix != null &&
+                                                (firstDecoded == ')'.code || firstDecoded == '['.code ||
+                                                    firstDecoded == '{'.code || firstDecoded == ' '.code ||
+                                                    firstDecoded == '\n'.code)
+                                            ) {
+                                                outerMode = 2
+                                                processDecodedBytes(decodedPrefix)
+                                                if (idx < read && !done) {
+                                                    processDecodedBytes(b64Decoder.feed(buf.copyOfRange(idx, read)))
+                                                }
+                                            } else {
+                                                outerMode = 1
+                                                processDecodedBytes(sniffBuffer.toByteArray())
+                                                if (idx < read && !done) {
+                                                    processDecodedBytes(buf.copyOfRange(idx, read))
+                                                }
+                                            }
+                                            sniffBuffer.clear()
+                                            idx = read
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    if (!done) {
-                        if (outerMode == 2) {
-                            processDecodedBytes(b64Decoder.flush())
-                        } else if (sniffBuffer.isNotEmpty()) {
-                            processDecodedBytes(sniffBuffer.toByteArray())
-                            sniffBuffer.clear()
+                        if (!done) {
+                            if (outerMode == 2) {
+                                processDecodedBytes(b64Decoder.flush())
+                            } else if (sniffBuffer.isNotEmpty()) {
+                                processDecodedBytes(sniffBuffer.toByteArray())
+                                sniffBuffer.clear()
+                            }
                         }
-                    }
 
-                    if (!yieldedAny && !done) {
-                        jspbParser.lastInnerHeaderError()?.let { throw it }
-                        jspbParser.lastErrorTrailer?.let { boqErr ->
-                            throw AntigravityRpcError.HttpError(502, boqErr)
+                        if (!yieldedAny && !done) {
+                            jspbParser.lastInnerHeaderError()?.let {
+                                terminalDiag = it.message?.take(120)
+                                throw it
+                            }
+                            jspbParser.lastErrorTrailer?.let { boqErr ->
+                                terminalDiag = boqErr.take(120)
+                                throw AntigravityRpcError.HttpError(502, boqErr)
+                            }
+                        }
+                    } finally {
+                        if (traceStream) {
+                            val innerErr = jspbParser.lastInnerHeaderError()?.message?.take(80)
+                            val boqErr = jspbParser.lastErrorTrailer?.take(80)
+                            logStepSyncDiag(
+                                "StepSync StreamProxy end method=$method target=${targetUuid.take(8)} mode=$outerMode bytes=$totalBytesRead chunks=$totalJspbChunks frames=$totalEmittedFrames keys=${firstFrameKeys ?: "-"} err=${terminalDiag ?: innerErr ?: boqErr ?: "none"} t=${currentTimeMillis() - streamStartMs}ms"
+                            )
                         }
                     }
                 }

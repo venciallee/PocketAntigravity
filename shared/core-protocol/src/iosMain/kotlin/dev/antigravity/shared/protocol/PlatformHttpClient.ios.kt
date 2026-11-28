@@ -15,6 +15,7 @@ import platform.CoreFoundation.CFRelease
 import platform.Foundation.NSDate
 import platform.Foundation.NSURLAuthenticationMethodServerTrust
 import platform.Foundation.NSURLCredential
+import platform.Foundation.NSURLRequestReloadIgnoringLocalCacheData
 import platform.Foundation.NSURLSessionAuthChallengeCancelAuthenticationChallenge
 import platform.Foundation.NSURLSessionAuthChallengePerformDefaultHandling
 import platform.Foundation.NSURLSessionAuthChallengeUseCredential
@@ -30,6 +31,13 @@ public actual fun currentTimeMillis(): Long =
     (NSDate().timeIntervalSince1970 * 1000.0).toLong()
 
 public actual fun platformTransportEngineName(): String = "KMP-Darwin"
+
+internal actual fun logProtocolDiagnostic(message: String) {
+    // Use pure Kotlin/Native stdout println (captured directly in Xcode Console) instead of
+    // C-variadic NSLog("%@", ...), which marshals Kotlin String varargs as `const char *`
+    // rather than `NSString *` and triggers EXC_BAD_ACCESS / SIGSEGV on iOS.
+    println("[CloudRelay] $message")
+}
 
 internal actual fun createPlatformHttpClient(
     endpointHost: String,
@@ -53,6 +61,8 @@ internal actual fun createPlatformHttpClient(
             }
             configureRequest {
                 setHTTPShouldHandleCookies(false)
+                setCachePolicy(NSURLRequestReloadIgnoringLocalCacheData)
+                setAssumesHTTP3Capable(false)
             }
             handleChallenge { _, _, challenge, completionHandler ->
                 val space = challenge.protectionSpace

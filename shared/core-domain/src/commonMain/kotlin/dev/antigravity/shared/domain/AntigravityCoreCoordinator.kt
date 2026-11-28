@@ -989,9 +989,13 @@ public class AntigravityCoreCoordinator(
         }
         val summary = conversationSyncStore.state.value.summaries.firstOrNull { it.cascadeId == cascadeId }
         val effectiveKnownCount = maxOf(knownStepCount, summary?.stepCount ?: 0)
+        val shouldPreemptTargetPreload = isCloud || effectiveKnownCount >= 50
         activeForegroundSyncCount.update { it + 1 }
         return try {
-            preemptNonTargetPreloads(keepCascadeId = cascadeId)
+            val preemptedTarget = preemptNonTargetPreloads(
+                keepCascadeId = if (shouldPreemptTargetPreload) null else cascadeId,
+                targetCascadeId = cascadeId,
+            )
             val steps = chatStore.syncSteps(
                 client = client,
                 cascadeId = cascadeId,
@@ -1000,7 +1004,7 @@ public class AntigravityCoreCoordinator(
                 instanceUuidOverride = instanceUuidOverride,
                 summaryStatus = summary?.status,
                 summaryUpdatedAtEpochMs = summary?.updatedAtEpochMs ?: 0L,
-                forceRefresh = forceRefresh,
+                forceRefresh = forceRefresh || preemptedTarget,
                 onPartialSteps = { partial ->
                     if (partial.isNotEmpty()) {
                         conversationSyncStore.reconcileLiveRunStatus(
@@ -1249,7 +1253,10 @@ public class AntigravityCoreCoordinator(
      * Immediately cancels in-flight background preload HTTP transfers for conversations other than
      * [keepCascadeId] so foreground chat opening gets 100% of relay/LAN bandwidth and Desktop CPU.
      */
-    private suspend fun preemptNonTargetPreloads(keepCascadeId: String) {
+    private suspend fun preemptNonTargetPreloads(
+        keepCascadeId: String?,
+        targetCascadeId: String? = null,
+    ): Boolean {
         val jobsToCancel = preloadMutex.withLock {
             val active = activePreloadJobsByCascadeId.entries
                 .filter { (cid, job) -> cid != keepCascadeId && job.isActive }
@@ -1257,14 +1264,19 @@ public class AntigravityCoreCoordinator(
             for ((cid, _) in active) {
                 activePreloadJobsByCascadeId.remove(cid)
                 preloadAttemptedAtMs.remove(cid)
-                preloadQueue.remove(cid)
-                preloadQueue.addFirst(cid)
+                if (cid != targetCascadeId) {
+                    preloadQueue.remove(cid)
+                    preloadQueue.addFirst(cid)
+                }
             }
             active
         }
-        for ((_, job) in jobsToCancel) {
+        var cancelledTarget = false
+        for ((cid, job) in jobsToCancel) {
+            if (cid == targetCascadeId) cancelledTarget = true
             job.cancel()
         }
+        return cancelledTarget
     }
 
     private suspend fun runPreloadWorkers() {

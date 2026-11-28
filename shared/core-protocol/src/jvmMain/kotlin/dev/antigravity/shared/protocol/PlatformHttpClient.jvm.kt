@@ -19,6 +19,10 @@ public actual fun currentTimeMillis(): Long = System.currentTimeMillis()
 
 public actual fun platformTransportEngineName(): String = "KMP-OkHttp"
 
+internal actual fun logProtocolDiagnostic(message: String) {
+    println("[CloudRelay] $message")
+}
+
 internal actual fun createPlatformHttpClient(
     endpointHost: String,
     config: TlsEngineConfig,

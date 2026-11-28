@@ -2556,4 +2556,197 @@ class AdaptiveTrajectorySyncTest {
             assertEquals(1, listInstancesCalls, "Must NOT waste an extra ListInstances refresh on Cloud trajectory 404/500")
         }
     }
+
+    @Test
+    fun testCloudPath2ShortCircuitsTransportTimeoutWithoutCascadingLoadOrTrajectoryRetries() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-cloud-timeout-short"
+            val cloudCid = "v1/default/jetski_remote_agents_3p_devbox/timeout-cascade"
+            val json = Json { ignoreUnknownKeys = true }
+            var stepsCalls = 0
+            var loadCalls = 0
+            var getTrajCalls = 0
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyText = ((request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)).decodeToString()
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> respond(
+                        content = """[null,[501,"unimplemented"]]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/ProxyCommand") -> {
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val rpcPath = (jspbArr[1] as JsonPrimitive).content
+                        when {
+                            rpcPath.endsWith("/GetCascadeTrajectorySteps") -> {
+                                stepsCalls += 1
+                                respond(
+                                    content = "Gateway Timeout",
+                                    status = HttpStatusCode.GatewayTimeout,
+                                    headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                                )
+                            }
+                            rpcPath.endsWith("/LoadTrajectory") -> {
+                                loadCalls += 1
+                                respond(
+                                    content = """[5,"not_found"]""",
+                                    status = HttpStatusCode.NotFound,
+                                    headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                )
+                            }
+                            rpcPath.endsWith("/GetCascadeTrajectory") -> {
+                                getTrajCalls += 1
+                                respond(
+                                    content = """[5,"not_found"]""",
+                                    status = HttpStatusCode.NotFound,
+                                    headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                )
+                            }
+                            else -> respond("", HttpStatusCode.NotFound)
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+            client.resolveCloudRelayInstance()
+
+            val err = assertFailsWith<AntigravityRpcError.HttpError> {
+                client.fetchAllTrajectorySteps(cascadeId = cloudCid, knownStepCount = 20, isCloud = true)
+            }
+            assertEquals(504, err.statusCode)
+            assertEquals(1, stepsCalls, "Cloud Path 2 timeout must NOT retry GetCascadeTrajectorySteps multiple times")
+            assertEquals(0, loadCalls, "Cloud Path 2 timeout must NOT cascade into LoadTrajectory")
+            assertEquals(0, getTrajCalls, "Cloud Path 2 timeout must NOT cascade into GetCascadeTrajectory")
+        }
+    }
+
+    @Test
+    fun testLocalCloudRelayPreservesTailStepsWhenFullFetchTimesOutAndFallsBackToStream() = runTest {
+        withContext(Dispatchers.Default) {
+            val instanceUuid = "inst-local-relay-tail"
+            val localCid = "local-big-relay-chat"
+            val json = Json { ignoreUnknownKeys = true }
+            var streamFallbackCalls = 0
+            var jsonFallbackCalls = 0
+            val tailBinaryPayload = buildBinaryPlannerSteps(32)
+            val tailB64 = tailBinaryPayload.toByteString().base64()
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyText = ((request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)).decodeToString()
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        content = """[[["$instanceUuid",["MacBook Pro","2.33.0",true],1,[1740000000,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        streamFallbackCalls += 1
+                        respond(
+                            content = """[null,[["grpc-status","12"],["grpc-message","unimplemented"]]]""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                        )
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val innerB64 = (jspbArr[2] as JsonPrimitive).content
+                        val innerBytes = CloudRelayJspbCodec.decodeBase64Flexible(innerB64) ?: ByteArray(0)
+                        if (bodyText.contains("application/proto")) {
+                            // Decode startIndex (field 2 varint) from GetCascadeTrajectoryStepsRequest
+                            var startIdx = 0
+                            val off = IntArray(1)
+                            while (off[0] < innerBytes.size) {
+                                val tag = ProtobufStepCodec.readVarint(innerBytes, off) ?: break
+                                val fn = (tag shr 3).toInt()
+                                val wt = (tag and 0x07UL).toInt()
+                                when (wt) {
+                                    0 -> {
+                                        val v = ProtobufStepCodec.readVarint(innerBytes, off) ?: break
+                                        if (fn == 2) startIdx = v.toInt()
+                                    }
+                                    2 -> {
+                                        val len = ProtobufStepCodec.readVarint(innerBytes, off)?.toInt() ?: break
+                                        off[0] += len
+                                    }
+                                    else -> break
+                                }
+                            }
+                            if (startIdx >= 20) {
+                                respond(
+                                    content = """["$tailB64",[["content-type","application/proto"]]]""",
+                                    status = HttpStatusCode.OK,
+                                    headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                                )
+                            } else {
+                                // Simulate full 0..60 unary ProxyCommand timing out (504)
+                                respond(
+                                    content = "Gateway Timeout",
+                                    status = HttpStatusCode.GatewayTimeout,
+                                    headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                                )
+                            }
+                        } else {
+                            jsonFallbackCalls += 1
+                            respond("", HttpStatusCode.NotFound)
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = instanceUuid,
+                    hostname = "MacBook Pro",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$instanceUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+            client.resolveCloudRelayInstance()
+
+            val partialSnapshots = mutableListOf<List<CascadeStep>>()
+            val result = client.fetchAllTrajectorySteps(
+                cascadeId = localCid,
+                knownStepCount = 60,
+                isCloud = false,
+                onPartialSteps = { partialSnapshots.add(it) },
+            )
+
+            assertEquals(1, partialSnapshots.size, "Cloud Relay local chat >=50 steps must paint 32 tail steps first")
+            assertEquals(32, result.size, "Must preserve painted tail steps when full 0..60 unary ProxyCommand times out")
+            assertEquals(1, streamFallbackCalls, "Must fast-try StreamAgentStateUpdates before falling back to preserved tail")
+            assertEquals(0, jsonFallbackCalls, "Must NOT discard tail steps and burn Path 2 JSON fallbacks")
+        }
+    }
+
+    @Test
+    fun testLogProtocolDiagnosticHandlesFormatSpecifiersSafely() {
+        // Directly exercises the platform actual implementation on both JVM and KMP iOS Simulator
+        // (`iosSimulatorArm64Test`) to ensure format specifiers (`%@`, `%s`, `%n`, `%24`) never crash.
+        logProtocolDiagnostic("StepSync diagnostic probe %@ %s %d %n https://antigravity.google.com/%24rpc")
+    }
 }
