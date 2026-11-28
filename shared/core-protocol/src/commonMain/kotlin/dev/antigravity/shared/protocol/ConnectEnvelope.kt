@@ -66,6 +66,9 @@ public class ConnectStreamParser {
     public val hasBufferedBytes: Boolean
         get() = writeOffset > readOffset
 
+    public val bufferedByteCount: Int
+        get() = maxOf(0, writeOffset - readOffset)
+
     public fun feedByte(byte: Byte): ConnectEnvelopeFrame? =
         feed(byteArrayOf(byte)).firstOrNull()
 

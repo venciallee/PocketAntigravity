@@ -584,6 +584,10 @@ public enum ProtocolCompatibilityEngine: Sendable {
                 || text.contains("instance disconnected")
                 || text.contains("target instance not connected")
                 || text.contains("no active tunnel")
+                || text.contains("tunnel not found")
+                || text.contains("tunnel_unavailable")
+                || text.contains("tunnel unavailable")
+                || text.contains("no tunnel found")
         }
         return matches(detail) || matches(rawLower)
     }

@@ -45,9 +45,13 @@ public actor AntigravityRPCClient {
     internal static let livenessProbeTimeoutSeconds: TimeInterval = 8.0
     internal static let transientProbeOfflineThreshold: Int = 2
     internal static let explicitVerifyRetryDelayNanoseconds: UInt64 = 350_000_000
+    internal static let deadInstanceCooldownSeconds: TimeInterval = 90.0
+    internal static let timedOutInstanceCooldownSeconds: TimeInterval = 45.0
     internal var cachedRelayInstances: [RelayInstanceInfo] = []
     internal var lastEndToEndVerifiedAtByUuid: [String: Date] = [:]
     internal var consecutiveTransientProbeFailuresByUuid: [String: Int] = [:]
+    internal var deadInstanceUntilByUuid: [String: Date] = [:]
+    internal var timedOutInstanceUntilByUuid: [String: Date] = [:]
     internal var cachedCloudProjectsById: [String: ProjectWorkspace] = [:]
     internal var cachedLocalProjectNameById: [String: String] = [:]
     internal var cachedLocalProjectIdByName: [String: String] = [:]
@@ -63,6 +67,65 @@ public actor AntigravityRPCClient {
     internal var learnedWireStepTypeByHost: [String: CortexStepType] = [:]
     internal var learnedHousekeepingWireKeys: Set<String> = []
     internal var stepOffsetIgnoredHosts: Set<String> = []
+
+    internal func markRelayInstanceDead(_ uuid: String, reasonIsUnregistered: Bool) {
+        let clean = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let now = Date()
+        lastEndToEndVerifiedAtByUuid.removeValue(forKey: clean)
+        if reasonIsUnregistered {
+            consecutiveTransientProbeFailuresByUuid.removeValue(forKey: clean)
+            deadInstanceUntilByUuid[clean] = now.addingTimeInterval(Self.deadInstanceCooldownSeconds)
+            timedOutInstanceUntilByUuid.removeValue(forKey: clean)
+            cachedRelayInstances = cachedRelayInstances.map { inst in
+                inst.uuid == clean ? inst.withStatus(.disconnected) : inst
+            }
+        } else {
+            let failures = (consecutiveTransientProbeFailuresByUuid[clean] ?? 0) + 1
+            consecutiveTransientProbeFailuresByUuid[clean] = failures
+            let isNonPrimaryPeer = (resolvedInstanceUuid != nil && resolvedInstanceUuid != clean)
+            if isNonPrimaryPeer || failures >= Self.transientProbeOfflineThreshold {
+                timedOutInstanceUntilByUuid[clean] = now.addingTimeInterval(Self.timedOutInstanceCooldownSeconds)
+            }
+        }
+    }
+
+    internal func clearRelayInstanceHealthCooldown(_ uuid: String) {
+        let clean = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        deadInstanceUntilByUuid.removeValue(forKey: clean)
+        timedOutInstanceUntilByUuid.removeValue(forKey: clean)
+        consecutiveTransientProbeFailuresByUuid.removeValue(forKey: clean)
+        lastEndToEndVerifiedAtByUuid[clean] = Date()
+    }
+
+    internal func isRelayInstanceInDeadCooldown(_ uuid: String, now: Date = Date()) -> Bool {
+        guard let until = deadInstanceUntilByUuid[uuid] else { return false }
+        if now < until { return true }
+        deadInstanceUntilByUuid.removeValue(forKey: uuid)
+        return false
+    }
+
+    internal func isRelayInstanceInTimeoutCooldown(_ uuid: String, now: Date = Date()) -> Bool {
+        guard let until = timedOutInstanceUntilByUuid[uuid] else { return false }
+        if now < until { return true }
+        timedOutInstanceUntilByUuid.removeValue(forKey: uuid)
+        return false
+    }
+
+    internal func applyHealthCooldowns(
+        to instances: [RelayInstanceInfo],
+        respectDeadCooldown: Bool = true
+    ) -> [RelayInstanceInfo] {
+        guard respectDeadCooldown else { return instances }
+        let now = Date()
+        return instances.map { inst in
+            if isRelayInstanceInDeadCooldown(inst.uuid, now: now) {
+                return inst.withStatus(.disconnected)
+            }
+            return inst
+        }
+    }
 
     internal enum RelayLivenessOutcome: Sendable, Equatable {
         case alive
@@ -99,6 +162,9 @@ public actor AntigravityRPCClient {
               !pinned.isEmpty else {
             return nil
         }
+        if isRelayInstanceInDeadCooldown(pinned) {
+            return nil
+        }
         if cachedRelayInstances.isEmpty || cachedRelayInstances.contains(where: { $0.uuid == pinned && $0.status.isReachable }) {
             return pinned
         }
@@ -124,6 +190,7 @@ public actor AntigravityRPCClient {
     }
     internal let urlSession: URLSession
     internal let streamingURLSession: URLSession
+    internal let interactiveStreamURLSession: URLSession
     internal let handshakeDiagBox: HandshakeDiagnosticBox
 
     internal final class HandshakeDiagnosticBox: @unchecked Sendable {
@@ -244,20 +311,31 @@ public actor AntigravityRPCClient {
         if let urlSession {
             self.urlSession = urlSession
             self.streamingURLSession = urlSession
+            self.interactiveStreamURLSession = urlSession
         } else {
             self.urlSession = Self.makeDefaultURLSession(
                 for: host.endpointURL,
                 pinnedFingerprintSHA256: pinnedFingerprintSHA256,
                 allowLocalSelfSignedTOFU: host.channel == .directHost,
-                requestTimeout: 20,
-                resourceTimeout: 300
+                requestTimeout: 15,
+                resourceTimeout: 120,
+                maxConnectionsPerHost: 12
             )
             self.streamingURLSession = Self.makeDefaultURLSession(
                 for: host.endpointURL,
                 pinnedFingerprintSHA256: pinnedFingerprintSHA256,
                 allowLocalSelfSignedTOFU: host.channel == .directHost,
                 requestTimeout: 300,
-                resourceTimeout: 3600
+                resourceTimeout: 3600,
+                maxConnectionsPerHost: 12
+            )
+            self.interactiveStreamURLSession = Self.makeDefaultURLSession(
+                for: host.endpointURL,
+                pinnedFingerprintSHA256: pinnedFingerprintSHA256,
+                allowLocalSelfSignedTOFU: host.channel == .directHost,
+                requestTimeout: 30,
+                resourceTimeout: 300,
+                maxConnectionsPerHost: 8
             )
         }
     }
@@ -298,20 +376,31 @@ public actor AntigravityRPCClient {
         if let urlSession {
             self.urlSession = urlSession
             self.streamingURLSession = urlSession
+            self.interactiveStreamURLSession = urlSession
         } else {
             self.urlSession = Self.makeDefaultURLSession(
                 for: baseURL,
                 pinnedFingerprintSHA256: pinnedFingerprintSHA256,
                 allowLocalSelfSignedTOFU: true,
-                requestTimeout: 20,
-                resourceTimeout: 300
+                requestTimeout: 15,
+                resourceTimeout: 120,
+                maxConnectionsPerHost: 12
             )
             self.streamingURLSession = Self.makeDefaultURLSession(
                 for: baseURL,
                 pinnedFingerprintSHA256: pinnedFingerprintSHA256,
                 allowLocalSelfSignedTOFU: true,
                 requestTimeout: 300,
-                resourceTimeout: 3600
+                resourceTimeout: 3600,
+                maxConnectionsPerHost: 12
+            )
+            self.interactiveStreamURLSession = Self.makeDefaultURLSession(
+                for: baseURL,
+                pinnedFingerprintSHA256: pinnedFingerprintSHA256,
+                allowLocalSelfSignedTOFU: true,
+                requestTimeout: 30,
+                resourceTimeout: 300,
+                maxConnectionsPerHost: 8
             )
         }
     }
@@ -320,12 +409,14 @@ public actor AntigravityRPCClient {
         for endpointURL: URL,
         pinnedFingerprintSHA256: String?,
         allowLocalSelfSignedTOFU: Bool,
-        requestTimeout: TimeInterval = 20,
-        resourceTimeout: TimeInterval = 300
+        requestTimeout: TimeInterval = 15,
+        resourceTimeout: TimeInterval = 120,
+        maxConnectionsPerHost: Int = 12
     ) -> URLSession {
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = requestTimeout
         config.timeoutIntervalForResource = resourceTimeout
+        config.httpMaximumConnectionsPerHost = maxConnectionsPerHost
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
         config.urlCache = nil
@@ -1189,8 +1280,7 @@ public actor AntigravityRPCClient {
                 data,
                 responseHeaders: http.allHeaderFields
             )
-            self.lastEndToEndVerifiedAtByUuid[targetUuid] = Date()
-            self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: targetUuid)
+            self.clearRelayInstanceHealthCooldown(targetUuid)
             return (decoded.payload, decoded.headers, targetUuid)
         }
 
@@ -1214,12 +1304,19 @@ public actor AntigravityRPCClient {
                 throw error
             }
             let isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error)
-            if isInstanceUnregistered {
-                self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
-                self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: initialTargetUuid)
-                self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
-                    inst.uuid == initialTargetUuid ? inst.withStatus(.disconnected) : inst
+            let isTransportTimeout: Bool = {
+                if let urlErr = error as? URLError, urlErr.code == .timedOut {
+                    return true
                 }
+                if case let AntigravityRPCError.httpError(code, _) = error, code == 504 {
+                    return true
+                }
+                return false
+            }()
+            if isInstanceUnregistered {
+                self.markRelayInstanceDead(initialTargetUuid, reasonIsUnregistered: true)
+            } else if isTransportTimeout && !ignoreCachedOfflineStatus {
+                self.markRelayInstanceDead(initialTargetUuid, reasonIsUnregistered: false)
             } else if error is URLError {
                 self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
             } else if case let AntigravityRPCError.httpError(code, _) = error,
@@ -1227,6 +1324,10 @@ public actor AntigravityRPCClient {
                 self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: initialTargetUuid)
             }
             if ignoreCachedOfflineStatus {
+                throw error
+            }
+            let isShortBoundedProbe = (timeoutInterval ?? 0) > 0 && (timeoutInterval ?? 0) <= 10.0
+            if isShortBoundedProbe && !isInstanceUnregistered && !allowCrossHostFailover {
                 throw error
             }
             let isHttp404: Bool = {
@@ -1249,9 +1350,7 @@ public actor AntigravityRPCClient {
                 let prevNameForTarget = self.cachedRelayInstances.first(where: { $0.uuid == initialTargetUuid })?.name
                 if let refreshedRaw = try? await listRelayInstances(timeoutInterval: min(timeoutInterval ?? 6.0, 6.0)),
                    !refreshedRaw.isEmpty {
-                    let refreshed = isInstanceUnregistered
-                        ? refreshedRaw.map { $0.uuid == initialTargetUuid ? $0.withStatus(.disconnected) : $0 }
-                        : refreshedRaw
+                    let refreshed = self.applyHealthCooldowns(to: refreshedRaw, respectDeadCooldown: true)
                     self.cachedRelayInstances = refreshed
                     // An HTTP 404 from a still-online instance means the RPC method itself is unimplemented
                     // (e.g. GetWorkspaceInfos) — NEVER fail over to another host on an application-level 404!
@@ -1273,11 +1372,18 @@ public actor AntigravityRPCClient {
                         ?? (instanceUuidOverride == nil && !Self.isWildcardRelayIdentifier(targetInstanceIdentifier) ? targetInstanceIdentifier : fallbackHostSeed)
                     let sameFamilyAlt: RelayInstanceInfo? = !familySeed.isEmpty
                         ? refreshed.first(where: {
-                            $0.uuid != initialTargetUuid && $0.status.isReachable && $0.sameHostFamily(as: familySeed)
+                            $0.uuid != initialTargetUuid
+                                && $0.status.isReachable
+                                && !self.isRelayInstanceInTimeoutCooldown($0.uuid)
+                                && $0.sameHostFamily(as: familySeed)
                         })
                         : nil
                     let crossHostAlt: RelayInstanceInfo? = allowCrossHostFailover
-                        ? refreshed.first(where: { $0.uuid != initialTargetUuid && $0.status.isReachable })
+                        ? refreshed.first(where: {
+                            $0.uuid != initialTargetUuid
+                                && $0.status.isReachable
+                                && !self.isRelayInstanceInTimeoutCooldown($0.uuid)
+                        })
                         : nil
                     if let altInst = sameFamilyAlt ?? crossHostAlt {
                         if instanceUuidOverride == nil || self.resolvedInstanceUuid == initialTargetUuid {
@@ -1957,14 +2063,18 @@ public actor AntigravityRPCClient {
             let capturedCookie = sessionCookie ?? ""
             let capturedAuthUser = authUser
             let cachedApiKey = relayApiKey
-            let session = self.streamingURLSession
+            let session = (method == "StreamAgentStateUpdates")
+                ? self.interactiveStreamURLSession
+                : self.streamingURLSession
             let capturedTargetIdentifier = targetInstanceIdentifier
             let rpcPath = "\(Self.servicePrefix)/\(method)"
+            let cidTag = String((requestPayload["conversationId"]?.stringValue ?? "-").prefix(16))
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     let traceStream = (method == "StreamAgentStateUpdates")
                     let streamStartDate = Date()
                     var targetPrefix = String((initialUuid ?? "unresolved").prefix(8))
+                    var resolvedStreamTargetUuid: String? = nil
                     do {
                         let targetUuid: String
                         if let initialUuid, !initialUuid.isEmpty {
@@ -1988,6 +2098,7 @@ public actor AntigravityRPCClient {
                                 body: "Selected Antigravity Desktop host is offline"
                             )
                         }
+                        resolvedStreamTargetUuid = targetUuid
                         targetPrefix = String(targetUuid.prefix(8))
 
                         let encodedStreamBody = try CloudRelayJSPBCodec.encodeProxyCommandRequest(
@@ -2002,7 +2113,7 @@ public actor AntigravityRPCClient {
                             var req = URLRequest(url: relayURL)
                             req.httpMethod = "POST"
                             req.cachePolicy = .reloadIgnoringLocalCacheData
-                            req.timeoutInterval = 300
+                            req.timeoutInterval = (method == "StreamAgentStateUpdates") ? 30 : 300
                             #if os(iOS) || os(macOS)
                             req.assumesHTTP3Capable = false
                             #endif
@@ -2034,7 +2145,7 @@ public actor AntigravityRPCClient {
                             let ct = http.value(forHTTPHeaderField: "Content-Type") ?? "?"
                             let b64Hdr = Self.hasBase64TransferHeader(http.allHeaderFields)
                             Self.logStepSyncDiagnostic(
-                                "StepSync StreamProxy open method=\(method) target=\(targetPrefix) http=\(http.statusCode) ct=\(ct) b64Hdr=\(b64Hdr) t=\(openMs)ms"
+                                "StepSync StreamProxy open cid=\(cidTag) method=\(method) target=\(targetPrefix) http=\(http.statusCode) ct=\(ct) b64Hdr=\(b64Hdr) t=\(openMs)ms"
                             )
                         }
                         if http.statusCode == 400 || http.statusCode == 403 {
@@ -2086,6 +2197,9 @@ public actor AntigravityRPCClient {
                         var totalBytesRead: Int = 0
                         var totalJspbChunks: Int = 0
                         var totalEmittedFrames: Int = 0
+                        var droppedFrames: Int = 0
+                        var firstChunkLen: Int = 0
+                        var firstChunkHex: String = "-"
                         var firstFrameKeys: String? = nil
                         var terminalDiag: String? = nil
 
@@ -2099,7 +2213,7 @@ public actor AntigravityRPCClient {
                                     ?? boqErr.map(String.init)
                                     ?? (Task.isCancelled ? "cancelled" : "none")
                                 Self.logStepSyncDiagnostic(
-                                    "StepSync StreamProxy end method=\(method) target=\(targetPrefix) mode=\(outerMode) bytes=\(totalBytesRead) chunks=\(totalJspbChunks) frames=\(totalEmittedFrames) keys=\(firstFrameKeys ?? "-") err=\(errStr) t=\(elapsedMs)ms"
+                                    "StepSync StreamProxy end cid=\(cidTag) method=\(method) target=\(targetPrefix) mode=\(outerMode) bytes=\(totalBytesRead) chunks=\(totalJspbChunks) c1Len=\(firstChunkLen) c1Hex=\(firstChunkHex) buf=\(connectParser.bufferedByteCount) frames=\(totalEmittedFrames) drop=\(droppedFrames) keys=\(firstFrameKeys ?? "-") err=\(errStr) t=\(elapsedMs)ms"
                                 )
                             }
                         }
@@ -2111,6 +2225,10 @@ public actor AntigravityRPCClient {
                             for rawChunk in chunks {
                                 totalJspbChunks += 1
                                 let chunkData = CloudRelayJSPBCodec.decompressPayloadIfNeeded(rawChunk)
+                                if totalJspbChunks == 1 {
+                                    firstChunkLen = chunkData.count
+                                    firstChunkHex = chunkData.prefix(8).map { String(format: "%02x", $0) }.joined()
+                                }
                                 if !connectParser.hasBufferedBytes,
                                    chunkData.first == UInt8(ascii: "{"),
                                    let obj = try? decoder.decode([String: JSONValue].self, from: chunkData) {
@@ -2145,6 +2263,8 @@ public actor AntigravityRPCClient {
                                             yieldedAny = true
                                             totalEmittedFrames += 1
                                             continuation.yield(obj)
+                                        } else {
+                                            droppedFrames += 1
                                         }
                                     }
                                 }
@@ -2152,6 +2272,7 @@ public actor AntigravityRPCClient {
                             return true
                         }
 
+                        var didMarkHealthy = false
                         for try await byte in bytes {
                             totalBytesRead += 1
                             if outerMode == 1 {
@@ -2197,6 +2318,10 @@ public actor AntigravityRPCClient {
                                     }
                                 }
                             }
+                            if yieldedAny && !didMarkHealthy {
+                                didMarkHealthy = true
+                                await self.clearRelayInstanceHealthCooldown(targetUuid)
+                            }
                         }
 
                         if outerMode == 2 {
@@ -2222,10 +2347,14 @@ public actor AntigravityRPCClient {
                         }
                         continuation.finish()
                     } catch {
+                        if let deadTarget = resolvedStreamTargetUuid,
+                           ProtocolCompatibilityEngine.isInstanceNotRegisteredError(error) {
+                            await self.markRelayInstanceDead(deadTarget, reasonIsUnregistered: true)
+                        }
                         if traceStream {
                             let elapsedMs = Int(Date().timeIntervalSince(streamStartDate) * 1000)
                             Self.logStepSyncDiagnostic(
-                                "StepSync StreamProxy throw method=\(method) target=\(targetPrefix) err=\(String(error.localizedDescription.prefix(120))) t=\(elapsedMs)ms"
+                                "StepSync StreamProxy throw cid=\(cidTag) method=\(method) target=\(targetPrefix) err=\(String(error.localizedDescription.prefix(120))) t=\(elapsedMs)ms"
                             )
                         }
                         continuation.finish(throwing: error)

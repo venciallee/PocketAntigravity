@@ -168,6 +168,8 @@ public class AntigravityKmpRpcClient(
         internal const val LIVENESS_PROBE_TIMEOUT_MS: Long = 8_000L
         internal const val TRANSIENT_PROBE_OFFLINE_THRESHOLD: Int = 2
         internal const val EXPLICIT_VERIFY_RETRY_DELAY_MS: Long = 350L
+        internal const val DEAD_INSTANCE_COOLDOWN_MS: Long = 90_000L
+        internal const val TIMED_OUT_INSTANCE_COOLDOWN_MS: Long = 45_000L
         internal const val CLOUD_STREAM_TIMEOUT_DIAGNOSTIC_PREFIX: String = "Cloud conversation stream timed out"
 
         private val localDesktopOnlyMethods = setOf("OpenWorkspaceInFinder", "ReadArtifactFile")
@@ -352,6 +354,8 @@ public class AntigravityKmpRpcClient(
     private var cachedRelayInstances: List<RelayInstanceInfo> = emptyList()
     private val lastEndToEndVerifiedAtMsByUuid = linkedMapOf<String, Long>()
     private val consecutiveTransientProbeFailuresByUuid = linkedMapOf<String, Int>()
+    private val deadInstanceUntilMsByUuid = linkedMapOf<String, Long>()
+    private val timedOutInstanceUntilMsByUuid = linkedMapOf<String, Long>()
     private var preferredCloudInstanceUuid: String? = null
     private val cachedCloudProjectsById = linkedMapOf<String, ProjectWorkspace>()
     private var cachedValidUpstreamModels: Set<String>? = null
@@ -397,6 +401,7 @@ public class AntigravityKmpRpcClient(
         if (cid.isEmpty()) return null
         return stateMutex.withLock {
             val pinned = pinnedInstanceByCascadeId[cid]?.takeIf { it.isNotBlank() } ?: return@withLock null
+            if (isRelayInstanceInDeadCooldownLocked(pinned)) return@withLock null
             if (cachedRelayInstances.isEmpty() || cachedRelayInstances.any { it.uuid == pinned && it.status.isReachable }) {
                 pinned
             } else {
@@ -461,6 +466,10 @@ public class AntigravityKmpRpcClient(
     private val streamingHttpClient: HttpClient = httpClientOverride ?: createPlatformHttpClient(
         endpointHost = endpointHost,
         config = tlsConfig.copy(requestTimeoutMs = max(tlsConfig.requestTimeoutMs, 120_000L)),
+    )
+    private val interactiveStreamHttpClient: HttpClient = httpClientOverride ?: createPlatformHttpClient(
+        endpointHost = endpointHost,
+        config = tlsConfig.copy(requestTimeoutMs = max(tlsConfig.requestTimeoutMs, 30_000L)),
     )
 
     public val channel: RemoteConnectionChannel
@@ -891,6 +900,8 @@ public class AntigravityKmpRpcClient(
             if (trimmedUuid.isNotEmpty() && !isWildcardRelayIdentifier(trimmedUuid)) {
                 resolvedInstanceUuidState = trimmedUuid
                 targetInstanceIdentifier = trimmedUuid
+                deadInstanceUntilMsByUuid.remove(trimmedUuid)
+                timedOutInstanceUntilMsByUuid.remove(trimmedUuid)
             } else if (trimmedName.isNotEmpty()) {
                 targetInstanceIdentifier = trimmedName
             }
@@ -1229,12 +1240,68 @@ public class AntigravityKmpRpcClient(
         }
     }
 
+    private fun isRelayInstanceInDeadCooldownLocked(uuid: String, nowMs: Long = currentTimeMillis()): Boolean {
+        val until = deadInstanceUntilMsByUuid[uuid] ?: return false
+        if (nowMs < until) return true
+        deadInstanceUntilMsByUuid.remove(uuid)
+        return false
+    }
+
+    private fun isRelayInstanceInTimeoutCooldownLocked(uuid: String, nowMs: Long = currentTimeMillis()): Boolean {
+        val until = timedOutInstanceUntilMsByUuid[uuid] ?: return false
+        if (nowMs < until) return true
+        timedOutInstanceUntilMsByUuid.remove(uuid)
+        return false
+    }
+
+    private fun applyHealthCooldownsLocked(
+        instances: List<RelayInstanceInfo>,
+        respectDeadCooldown: Boolean = true,
+        nowMs: Long = currentTimeMillis(),
+    ): List<RelayInstanceInfo> {
+        if (!respectDeadCooldown) return instances
+        return instances.map { inst ->
+            if (isRelayInstanceInDeadCooldownLocked(inst.uuid, nowMs)) {
+                inst.copy(status = RelayInstanceStatus.DISCONNECTED)
+            } else {
+                inst
+            }
+        }
+    }
+
+    private suspend fun markRelayInstanceDead(uuid: String, reasonIsUnregistered: Boolean) {
+        val clean = uuid.trim()
+        if (clean.isEmpty()) return
+        val nowMs = currentTimeMillis()
+        stateMutex.withLock {
+            lastEndToEndVerifiedAtMsByUuid.remove(clean)
+            if (reasonIsUnregistered) {
+                consecutiveTransientProbeFailuresByUuid.remove(clean)
+                deadInstanceUntilMsByUuid[clean] = nowMs + DEAD_INSTANCE_COOLDOWN_MS
+                timedOutInstanceUntilMsByUuid.remove(clean)
+                cachedRelayInstances = cachedRelayInstances.map { inst ->
+                    if (inst.uuid == clean) inst.copy(status = RelayInstanceStatus.DISCONNECTED) else inst
+                }
+            } else {
+                val failures = (consecutiveTransientProbeFailuresByUuid[clean] ?: 0) + 1
+                consecutiveTransientProbeFailuresByUuid[clean] = failures
+                val isNonPrimaryPeer = resolvedInstanceUuidState != null && resolvedInstanceUuidState != clean
+                if (isNonPrimaryPeer || failures >= TRANSIENT_PROBE_OFFLINE_THRESHOLD) {
+                    timedOutInstanceUntilMsByUuid[clean] = nowMs + TIMED_OUT_INSTANCE_COOLDOWN_MS
+                }
+            }
+        }
+    }
+
     private suspend fun markRelayInstancesDisconnected(uuids: Set<String>): List<RelayInstanceInfo> {
         if (uuids.isEmpty()) return currentCachedRelayInstances()
+        val nowMs = currentTimeMillis()
         return stateMutex.withLock {
             for (uuid in uuids) {
                 lastEndToEndVerifiedAtMsByUuid.remove(uuid)
                 consecutiveTransientProbeFailuresByUuid.remove(uuid)
+                deadInstanceUntilMsByUuid[uuid] = nowMs + DEAD_INSTANCE_COOLDOWN_MS
+                timedOutInstanceUntilMsByUuid.remove(uuid)
             }
             val updated = cachedRelayInstances.map { inst ->
                 if (inst.uuid in uuids) inst.copy(status = RelayInstanceStatus.DISCONNECTED) else inst
@@ -1249,6 +1316,8 @@ public class AntigravityKmpRpcClient(
         stateMutex.withLock {
             lastEndToEndVerifiedAtMsByUuid[uuid] = nowMs
             consecutiveTransientProbeFailuresByUuid.remove(uuid)
+            deadInstanceUntilMsByUuid.remove(uuid)
+            timedOutInstanceUntilMsByUuid.remove(uuid)
         }
     }
 
@@ -2016,8 +2085,11 @@ public class AntigravityKmpRpcClient(
         } catch (e: Throwable) {
             if (e is CancellationException) throw e
             val isInstanceUnregistered = ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)
+            val isTransportTimeout = isTransportTimeoutError(e)
             if (isInstanceUnregistered) {
-                markRelayInstancesDisconnected(setOf(initialTargetUuid))
+                markRelayInstanceDead(initialTargetUuid, reasonIsUnregistered = true)
+            } else if (isTransportTimeout && !ignoreCachedOfflineStatus) {
+                markRelayInstanceDead(initialTargetUuid, reasonIsUnregistered = false)
             } else if (e !is AntigravityRpcError ||
                 (e is AntigravityRpcError.HttpError && e.statusCode in setOf(502, 503, 504))
             ) {
@@ -2038,16 +2110,11 @@ public class AntigravityKmpRpcClient(
                 val refreshTimeoutMs = if (perCallTimeoutMs != null) minOf(perCallTimeoutMs, 3_500L) else 7_000L
                 val refreshedRaw = runCatching { listRelayInstances(timeoutMs = refreshTimeoutMs) }.getOrNull().orEmpty()
                 if (refreshedRaw.isNotEmpty()) {
-                    val refreshed = if (isInstanceUnregistered) {
-                        refreshedRaw.map { inst ->
-                            if (inst.uuid == initialTargetUuid) inst.copy(status = RelayInstanceStatus.DISCONNECTED) else inst
-                        }
-                    } else {
-                        refreshedRaw
-                    }
-                    stateMutex.withLock {
-                        cachedRelayInstances = refreshed
-                        recordRelayInstanceVersionsLocked(refreshed)
+                    val refreshed = stateMutex.withLock {
+                        val filtered = applyHealthCooldownsLocked(refreshedRaw, respectDeadCooldown = true)
+                        cachedRelayInstances = filtered
+                        recordRelayInstanceVersionsLocked(filtered)
+                        filtered
                     }
                     if (isHttp404 && !isInstanceUnregistered && refreshed.any { it.uuid == initialTargetUuid && it.status.isReachable }) {
                         throw e
@@ -2064,13 +2131,25 @@ public class AntigravityKmpRpcClient(
                                     !isWildcardRelayIdentifier(it)
                             }.orEmpty()
                         }
-                    val sameFamAlt = if (familySeed.isNotEmpty()) {
-                        refreshed.firstOrNull { it.uuid != initialTargetUuid && it.status.isReachable && it.sameHostFamily(familySeed) }
-                    } else null
-                    val crossAlt = if (allowCrossHostFailover) {
-                        refreshed.firstOrNull { it.uuid != initialTargetUuid && it.status.isReachable }
-                    } else null
-                    val alt = sameFamAlt ?: crossAlt
+                    val alt = stateMutex.withLock {
+                        val nowMs = currentTimeMillis()
+                        val sameFamAlt = if (familySeed.isNotEmpty()) {
+                            refreshed.firstOrNull {
+                                it.uuid != initialTargetUuid &&
+                                    it.status.isReachable &&
+                                    !isRelayInstanceInTimeoutCooldownLocked(it.uuid, nowMs) &&
+                                    it.sameHostFamily(familySeed)
+                            }
+                        } else null
+                        val crossAlt = if (allowCrossHostFailover) {
+                            refreshed.firstOrNull {
+                                it.uuid != initialTargetUuid &&
+                                    it.status.isReachable &&
+                                    !isRelayInstanceInTimeoutCooldownLocked(it.uuid, nowMs)
+                            }
+                        } else null
+                        sameFamAlt ?: crossAlt
+                    }
                     if (alt != null) {
                         stateMutex.withLock {
                             if (instanceUuidOverride == null || resolvedInstanceUuidState == initialTargetUuid) {
@@ -2305,14 +2384,20 @@ public class AntigravityKmpRpcClient(
 
         val relayInstances = if (!skipRelayListRefresh) {
             try {
-                val refreshed = listRelayInstances()
-                if (refreshed.isNotEmpty()) {
+                val refreshedRaw = listRelayInstances()
+                if (refreshedRaw.isNotEmpty()) {
                     stateMutex.withLock {
-                        cachedRelayInstances = refreshed
-                        recordRelayInstanceVersionsLocked(refreshed)
+                        val filtered = applyHealthCooldownsLocked(
+                            refreshedRaw,
+                            respectDeadCooldown = targetInstanceUuid == null,
+                        )
+                        cachedRelayInstances = filtered
+                        recordRelayInstanceVersionsLocked(filtered)
+                        filtered
                     }
+                } else {
+                    currentCachedRelayInstances()
                 }
-                refreshed.ifEmpty { currentCachedRelayInstances() }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AntigravityRpcError.Unauthorized) {
@@ -2324,7 +2409,21 @@ public class AntigravityKmpRpcClient(
             currentCachedRelayInstances()
         }
 
-        val reachableInstances = relayInstances.filter { it.status.isReachable }
+        val preferredUuid = targetInstanceUuid?.takeIf { it.isNotBlank() } ?: currentResolvedInstanceUuid()
+        val reachableInstances = stateMutex.withLock {
+            val nowMs = currentTimeMillis()
+            relayInstances.filter { inst ->
+                if (!inst.status.isReachable) return@filter false
+                if (targetInstanceUuid != null && inst.uuid == targetInstanceUuid) return@filter true
+                if (preferredUuid != null && inst.uuid == preferredUuid) {
+                    return@filter !isRelayInstanceInDeadCooldownLocked(inst.uuid, nowMs)
+                }
+                !isRelayInstanceInDeadCooldownLocked(inst.uuid, nowMs) &&
+                    !isRelayInstanceInTimeoutCooldownLocked(inst.uuid, nowMs)
+            }.sortedWith(
+                compareByDescending<RelayInstanceInfo> { it.uuid == preferredUuid }.thenBy { it.uuid }
+            )
+        }
         val targets = when {
             !includeLocal -> emptyList()
             targetInstanceUuid != null -> {
@@ -2370,7 +2469,9 @@ public class AntigravityKmpRpcClient(
             val wsError: Throwable?,
         )
 
-        val cloudBudgetMs = minOf(5_000L, perCallTimeoutMs ?: 5_000L)
+        val boundedRelayCallTimeoutMs = minOf(perCallTimeoutMs ?: 8_000L, 8_000L)
+        val cloudBudgetMs = minOf(5_000L, boundedRelayCallTimeoutMs)
+        val primaryLocalUuid = preferredUuid ?: targets.firstOrNull()?.uuid
         val (perInstanceResults, cloudProjects, cloudSummaries) = coroutineScope {
             val cloudProjectsDeferred = async {
                 if (includeCloud && reachableInstances.isNotEmpty()) {
@@ -2394,6 +2495,8 @@ public class AntigravityKmpRpcClient(
                 }
             }
             val localDeferreds = targets.map { inst ->
+                val shouldFetchLocalJetbox = includeJetboxSnapshot &&
+                    (targets.size <= 1 || inst.uuid == primaryLocalUuid)
                 async {
                     val wsDeferred = async {
                         try {
@@ -2402,7 +2505,7 @@ public class AntigravityKmpRpcClient(
                                 getWorkspaceInfos(
                                     instanceUuidOverride = inst.uuid,
                                     originHostName = inst.name,
-                                    perCallTimeoutMs = perCallTimeoutMs,
+                                    perCallTimeoutMs = boundedRelayCallTimeoutMs,
                                 ),
                                 null as Throwable?,
                             )
@@ -2428,7 +2531,7 @@ public class AntigravityKmpRpcClient(
                                 getAllCascadeTrajectories(
                                     instanceUuidOverride = inst.uuid,
                                     originHostName = inst.name,
-                                    perCallTimeoutMs = perCallTimeoutMs,
+                                    perCallTimeoutMs = boundedRelayCallTimeoutMs,
                                 )
                             )
                         } catch (e: CancellationException) {
@@ -2438,7 +2541,7 @@ public class AntigravityKmpRpcClient(
                         }
                     }
                     val jbDeferred = async {
-                        if (includeJetboxSnapshot) {
+                        if (shouldFetchLocalJetbox) {
                             fetchJetboxSummariesSnapshot(
                                 cloud = false,
                                 instanceUuidOverride = inst.uuid,
@@ -3458,9 +3561,15 @@ public class AntigravityKmpRpcClient(
                     ?: targetInstanceIdentifier.takeIf { instanceUuidOverride == null && !isWildcardRelayIdentifier(it) }
                 val familySeed = instances.firstOrNull { it.uuid == seedUuid }?.name
                     ?: targetInstanceIdentifier.takeIf { instanceUuidOverride == null && !isWildcardRelayIdentifier(it) }.orEmpty()
-                val peers = instances.filter { inst ->
-                    inst.status.isReachable && inst.uuid !in probedUuids &&
-                        (isRemoteCloud || inst.uuid == seedUuid || (familySeed.isNotEmpty() && inst.sameHostFamily(familySeed)))
+                val peers = stateMutex.withLock {
+                    val nowMs = currentTimeMillis()
+                    instances.filter { inst ->
+                        inst.status.isReachable &&
+                            inst.uuid !in probedUuids &&
+                            !isRelayInstanceInDeadCooldownLocked(inst.uuid, nowMs) &&
+                            !isRelayInstanceInTimeoutCooldownLocked(inst.uuid, nowMs) &&
+                            (isRemoteCloud || inst.uuid == seedUuid || (familySeed.isNotEmpty() && inst.sameHostFamily(familySeed)))
+                    }
                 }
                 if (peers.isEmpty()) return null
                 for (peer in peers) probedUuids.add(peer.uuid)
@@ -3594,13 +3703,15 @@ public class AntigravityKmpRpcClient(
                         ))
                 )
             if (shouldRefreshInstances) {
-                val refreshed = runCatching {
+                val refreshedRaw = runCatching {
                     withSafeTimeoutOrNull(4_000L) { listRelayInstances(timeoutMs = 3_500L) }
                 }.getOrNull().orEmpty()
-                if (refreshed.isNotEmpty()) {
-                    stateMutex.withLock {
-                        cachedRelayInstances = refreshed
-                        recordRelayInstanceVersionsLocked(refreshed)
+                if (refreshedRaw.isNotEmpty()) {
+                    val refreshed = stateMutex.withLock {
+                        val filtered = applyHealthCooldownsLocked(refreshedRaw, respectDeadCooldown = true)
+                        cachedRelayInstances = filtered
+                        recordRelayInstanceVersionsLocked(filtered)
+                        filtered
                     }
                     probePeers(refreshed)?.let { return it }
                 }
@@ -3734,6 +3845,11 @@ public class AntigravityKmpRpcClient(
                         "StepSync Path0(stream) throw cid=$cidTag target=$targetTag err=${e.message?.take(120)} t=${currentTimeMillis() - p0StartMs}ms"
                     )
                 }
+            }
+
+            val deadErr = cloudStreamError ?: lastError
+            if (deadErr != null && ProtocolCompatibilityEngine.isInstanceNotRegisteredError(deadErr)) {
+                throw deadErr
             }
 
             // If `StreamAgentStateUpdates` is confirmed supported/responding on this host and timed out
@@ -3969,6 +4085,10 @@ public class AntigravityKmpRpcClient(
                 }
                 return SingleInstanceFetchOutcome(cachedTailSteps)
             }
+            val path1DeadErr = lastError
+            if (path1DeadErr != null && ProtocolCompatibilityEngine.isInstanceNotRegisteredError(path1DeadErr)) {
+                throw path1DeadErr
+            }
         }
 
         // Path 2: Adaptive JSON (`GetCascadeTrajectorySteps` + `LoadTrajectory` + `GetCascadeTrajectory`)
@@ -3996,6 +4116,9 @@ public class AntigravityKmpRpcClient(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
+            if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                throw e
+            }
             adaptiveError = e
             emptyList()
         }
@@ -4011,6 +4134,34 @@ public class AntigravityKmpRpcClient(
             logStepSyncDiag(
                 "StepSync Path2(json) empty cid=$cidTag target=$targetTag err=${adaptiveError?.message?.take(120) ?: "none"} t=${currentTimeMillis() - p2StartMs}ms"
             )
+        }
+
+        // Recovery for raw-UUID local sessions misclassified as Cloud: if `cascadeId` is not a `v1/...`
+        // remote path and both Cloud Path 0 & Cloud Path 2 returned 404 (not dead tunnel / not timeout),
+        // try a single fast bare Binary Protobuf fetch on this host before failing over.
+        if (isRemoteCloud &&
+            !cascadeId.lowercase().startsWith("v1/") &&
+            !didAttemptProtobuf &&
+            !isBinaryProtobufStepsUnsupported(targetUuid) &&
+            !cloudStreamTimedOut &&
+            !isTransportTimeoutError(adaptiveError) &&
+            adaptiveError?.let { ProtocolCompatibilityEngine.isTrajectoryNotFoundError(it) } == true
+        ) {
+            val localProtoSteps = runCatching {
+                fetchTrajectoryStepsProtobuf(
+                    cascadeId = cascadeId,
+                    startIndex = 0,
+                    endIndex = knownStepCount,
+                    instanceUuidOverride = targetUuid,
+                    allowCrossHostFailover = false,
+                    allowNonCriticalRepair = allowNonCriticalRepair,
+                    onDecodedBeforeRepair = onPartialSteps,
+                )
+            }.getOrNull().orEmpty()
+            if (localProtoSteps.isNotEmpty()) {
+                stateMutex.withLock { wokenInstanceCascadeKeys.add(wakeKey) }
+                return SingleInstanceFetchOutcome(localProtoSteps)
+            }
         }
 
         // Path 3 (Antigravity 2.x Stream Fallback & Post-Wake Cloud Retry):
@@ -4626,6 +4777,12 @@ public class AntigravityKmpRpcClient(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
+                    if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                        targetUuid?.let { markRelayInstanceDead(it, reasonIsUnregistered = true) }
+                        lastError = e
+                        shouldBreakAllVariants = true
+                        break
+                    }
                     if (ProtocolCompatibilityEngine.isMethodUnimplementedError(e)) {
                         mutateCapabilityProfile(targetUuid) { it.recordMethodUnsupported("StreamAgentStateUpdates") }
                         return AgentStateStreamOutcome.Unsupported
@@ -4659,8 +4816,7 @@ public class AntigravityKmpRpcClient(
                         legacyBackendQueue.add("backendType")
                     }
                     val shouldTryNext = e is AntigravityRpcError.HttpError && (
-                        e.statusCode == 400 ||
-                            unknownField != null ||
+                        unknownField != null ||
                             ProtocolCompatibilityEngine.isTrajectoryNotFoundResponse(e.statusCode, e.body)
                         )
                     if (!shouldTryNext) {
@@ -4802,6 +4958,9 @@ public class AntigravityKmpRpcClient(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                    throw e
+                }
                 lastError = e
                 firstResp = null
                 if (ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
@@ -4871,6 +5030,9 @@ public class AntigravityKmpRpcClient(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                if (ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                    throw e
+                }
                 if (ProtocolCompatibilityEngine.isTrajectoryNotFoundError(e)) {
                     loadTrajectoryFailedNotFound = true
                 }
@@ -6875,6 +7037,9 @@ public class AntigravityKmpRpcClient(
                 isStreaming = true,
             )
 
+            val streamClient = if (method == "StreamAgentStateUpdates") interactiveStreamHttpClient else streamingHttpClient
+            val cidTag = ((body["conversationId"] as? JsonPrimitive)?.contentOrNull ?: "-").take(16)
+
             suspend fun executeCloudStreamOnce(apiKey: String?, allowKeyRefreshRetry: Boolean): Boolean {
                 val traceStream = method == "StreamAgentStateUpdates"
                 val streamStartMs = currentTimeMillis()
@@ -6887,37 +7052,56 @@ public class AntigravityKmpRpcClient(
                     timestampSeconds = currentTimeMillis() / 1000L,
                 )
                 var retryWithRefreshedKey = false
-                streamingHttpClient.preparePost(url) {
-                    for ((k, v) in headers) {
-                        if (!k.equals("Content-Type", ignoreCase = true)) header(k, v)
-                    }
-                    setBody(ByteArrayContent(reqBytes, ContentType.parse("application/json+protobuf")))
-                }.execute { response ->
-                    val code = response.status.value
-                    val respHeaders = response.flattenHeaders()
-                    val headerBase64 = respHeaders.any { (k, v) ->
-                        (k.equals("x-goog-safety-encoding", ignoreCase = true) ||
-                            k.equals("content-transfer-encoding", ignoreCase = true)) &&
-                            v.contains("base64", ignoreCase = true)
-                    }
-                    if (traceStream) {
-                        val ct = respHeaders.entries.firstOrNull { it.key.equals("content-type", ignoreCase = true) }?.value ?: "?"
-                        logStepSyncDiag(
-                            "StepSync StreamProxy open method=$method target=${targetUuid.take(8)} http=$code ct=$ct b64Hdr=$headerBase64 t=${currentTimeMillis() - streamStartMs}ms"
-                        )
-                    }
-                    if (allowKeyRefreshRetry && (code == 400 || code == 403)) {
-                        val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
-                        val errText = unwrapErrorBodyText(errBytes, respHeaders)
-                        if (SapisidHashGenerator.isInvalidApiKeyError(code, errText)) {
-                            val refreshedKey = ensureRelayWebApiKey(forceRefresh = true)
-                            if (!refreshedKey.isNullOrEmpty() && refreshedKey != apiKey) {
-                                activeApiKey = refreshedKey
-                                retryWithRefreshedKey = true
-                                return@execute
-                            }
+                try {
+                    streamClient.preparePost(url) {
+                        for ((k, v) in headers) {
+                            if (!k.equals("Content-Type", ignoreCase = true)) header(k, v)
                         }
-                        if (code == 403) {
+                        setBody(ByteArrayContent(reqBytes, ContentType.parse("application/json+protobuf")))
+                    }.execute { response ->
+                        val code = response.status.value
+                        val respHeaders = response.flattenHeaders()
+                        val headerBase64 = respHeaders.any { (k, v) ->
+                            (k.equals("x-goog-safety-encoding", ignoreCase = true) ||
+                                k.equals("content-transfer-encoding", ignoreCase = true)) &&
+                                v.contains("base64", ignoreCase = true)
+                        }
+                        if (traceStream) {
+                            val ct = respHeaders.entries.firstOrNull { it.key.equals("content-type", ignoreCase = true) }?.value ?: "?"
+                            logStepSyncDiag(
+                                "StepSync StreamProxy open cid=$cidTag method=$method target=${targetUuid.take(8)} http=$code ct=$ct b64Hdr=$headerBase64 t=${currentTimeMillis() - streamStartMs}ms"
+                            )
+                        }
+                        if (allowKeyRefreshRetry && (code == 400 || code == 403)) {
+                            val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
+                            val errText = unwrapErrorBodyText(errBytes, respHeaders)
+                            if (SapisidHashGenerator.isInvalidApiKeyError(code, errText)) {
+                                val refreshedKey = ensureRelayWebApiKey(forceRefresh = true)
+                                if (!refreshedKey.isNullOrEmpty() && refreshedKey != apiKey) {
+                                    activeApiKey = refreshedKey
+                                    retryWithRefreshedKey = true
+                                    return@execute
+                                }
+                            }
+                            if (code == 403) {
+                                throw AntigravityRpcError.Unauthorized(
+                                    buildUnauthorizedDiagnostic(
+                                        operation = "StreamProxyCommand/$method",
+                                        statusCode = code,
+                                        responseHeaders = respHeaders,
+                                        rawBytes = errBytes,
+                                        apiKey = apiKey,
+                                        authUser = activeAuth,
+                                    )
+                                )
+                            }
+                            throw AntigravityRpcError.HttpError(
+                                code,
+                                errText.ifBlank { "StreamProxyCommand HTTP $code" },
+                            )
+                        }
+                        if (code == 401 || code == 403) {
+                            val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
                             throw AntigravityRpcError.Unauthorized(
                                 buildUnauthorizedDiagnostic(
                                     operation = "StreamProxyCommand/$method",
@@ -6929,197 +7113,204 @@ public class AntigravityKmpRpcClient(
                                 )
                             )
                         }
-                        throw AntigravityRpcError.HttpError(
-                            code,
-                            errText.ifBlank { "StreamProxyCommand HTTP $code" },
-                        )
-                    }
-                    if (code == 401 || code == 403) {
-                        val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
-                        throw AntigravityRpcError.Unauthorized(
-                            buildUnauthorizedDiagnostic(
-                                operation = "StreamProxyCommand/$method",
-                                statusCode = code,
-                                responseHeaders = respHeaders,
-                                rawBytes = errBytes,
-                                apiKey = apiKey,
-                                authUser = activeAuth,
+                        if (code !in 200..299) {
+                            val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
+                            val errText = unwrapErrorBodyText(errBytes, respHeaders)
+                            throw AntigravityRpcError.HttpError(
+                                code,
+                                errText.ifBlank { "StreamProxyCommand HTTP $code" },
                             )
-                        )
-                    }
-                    if (code !in 200..299) {
-                        val errBytes = runCatching { response.bodyAsBytes() }.getOrDefault(ByteArray(0))
-                        val errText = unwrapErrorBodyText(errBytes, respHeaders)
-                        throw AntigravityRpcError.HttpError(
-                            code,
-                            errText.ifBlank { "StreamProxyCommand HTTP $code" },
-                        )
-                    }
-                    val jspbParser = CloudRelayJspbStreamParser()
-                    val connectParser = ConnectStreamParser()
-                    val b64Decoder = StreamingBase64Decoder()
-                    // 0 = auto-detect outer base64 vs raw UTF-8 JSPB, 1 = raw, 2 = base64
-                    var outerMode = if (headerBase64) 2 else 0
-                    val sniffBuffer = ArrayList<Byte>(4)
-                    var yieldedAny = false
-                    var done = false
-                    var totalBytesRead = 0L
-                    var totalJspbChunks = 0
-                    var totalEmittedFrames = 0
-                    var firstFrameKeys: String? = null
-                    var terminalDiag: String? = null
+                        }
+                        val jspbParser = CloudRelayJspbStreamParser()
+                        val connectParser = ConnectStreamParser()
+                        val b64Decoder = StreamingBase64Decoder()
+                        // 0 = auto-detect outer base64 vs raw UTF-8 JSPB, 1 = raw, 2 = base64
+                        var outerMode = if (headerBase64) 2 else 0
+                        val sniffBuffer = ArrayList<Byte>(4)
+                        var yieldedAny = false
+                        var done = false
+                        var totalBytesRead = 0L
+                        var totalJspbChunks = 0
+                        var totalEmittedFrames = 0
+                        var droppedFrames = 0
+                        var firstChunkLen = 0
+                        var firstChunkHex = "-"
+                        var firstFrameKeys: String? = null
+                        var terminalDiag: String? = null
 
-                    suspend fun processDecodedBytes(decodedSlice: ByteArray) {
-                        if (decodedSlice.isEmpty() || done) return
-                        val innerChunks = jspbParser.feed(decodedSlice)
-                        for (rawChunk in innerChunks) {
-                            totalJspbChunks += 1
-                            val chunkData = CloudRelayJspbCodec.decompressPayloadIfNeeded(rawChunk)
-                            if (!connectParser.hasBufferedBytes &&
-                                chunkData.isNotEmpty() &&
-                                (chunkData[0].toInt() and 0xFF) == '{'.code
-                            ) {
-                                val directObj = runCatching {
-                                    json.parseToJsonElement(chunkData.decodeToString()) as? JsonObject
-                                }.getOrNull()
-                                if (directObj != null) {
-                                    if (isLikelyDirectConnectErrorObject(directObj)) {
-                                        extractConnectEndStreamError(chunkData)?.let {
+                        suspend fun processDecodedBytes(decodedSlice: ByteArray) {
+                            if (decodedSlice.isEmpty() || done) return
+                            val innerChunks = jspbParser.feed(decodedSlice)
+                            for (rawChunk in innerChunks) {
+                                totalJspbChunks += 1
+                                val chunkData = CloudRelayJspbCodec.decompressPayloadIfNeeded(rawChunk)
+                                if (totalJspbChunks == 1) {
+                                    firstChunkLen = chunkData.size
+                                    firstChunkHex = chunkData.take(8).joinToString("") { b ->
+                                        val v = b.toInt() and 0xFF
+                                        val hi = "0123456789abcdef"[v ushr 4]
+                                        val lo = "0123456789abcdef"[v and 0x0F]
+                                        "$hi$lo"
+                                    }
+                                }
+                                if (!connectParser.hasBufferedBytes &&
+                                    chunkData.isNotEmpty() &&
+                                    (chunkData[0].toInt() and 0xFF) == '{'.code
+                                ) {
+                                    val directObj = runCatching {
+                                        json.parseToJsonElement(chunkData.decodeToString()) as? JsonObject
+                                    }.getOrNull()
+                                    if (directObj != null) {
+                                        if (isLikelyDirectConnectErrorObject(directObj)) {
+                                            extractConnectEndStreamError(chunkData)?.let {
+                                                terminalDiag = it.message?.take(120)
+                                                throw it
+                                            }
+                                        }
+                                        if (firstFrameKeys == null) {
+                                            firstFrameKeys = directObj.keys.take(6).joinToString(",")
+                                        }
+                                        yieldedAny = true
+                                        totalEmittedFrames += 1
+                                        markRelayInstanceVerified(targetUuid)
+                                        emit(directObj)
+                                        continue
+                                    }
+                                }
+                                val frames = connectParser.feed(chunkData)
+                                for (frame in frames) {
+                                    val frameBytes = if (frame.isCompressed) {
+                                        CloudRelayJspbCodec.decompressPayloadIfNeeded(frame.payload)
+                                    } else {
+                                        frame.payload
+                                    }
+                                    if (frame.isEndStream) {
+                                        extractConnectEndStreamError(frameBytes)?.let {
                                             terminalDiag = it.message?.take(120)
                                             throw it
                                         }
+                                        done = true
+                                        break
                                     }
-                                    if (firstFrameKeys == null) {
-                                        firstFrameKeys = directObj.keys.take(6).joinToString(",")
+                                    val obj = runCatching {
+                                        json.parseToJsonElement(frameBytes.decodeToString()) as? JsonObject
+                                    }.getOrNull()
+                                    if (obj != null) {
+                                        if (firstFrameKeys == null) {
+                                            firstFrameKeys = obj.keys.take(6).joinToString(",")
+                                        }
+                                        yieldedAny = true
+                                        totalEmittedFrames += 1
+                                        markRelayInstanceVerified(targetUuid)
+                                        emit(obj)
+                                    } else {
+                                        droppedFrames += 1
                                     }
-                                    yieldedAny = true
-                                    totalEmittedFrames += 1
-                                    markRelayInstanceVerified(targetUuid)
-                                    emit(directObj)
-                                    continue
                                 }
+                                if (done) break
                             }
-                            val frames = connectParser.feed(chunkData)
-                            for (frame in frames) {
-                                val frameBytes = if (frame.isCompressed) {
-                                    CloudRelayJspbCodec.decompressPayloadIfNeeded(frame.payload)
-                                } else {
-                                    frame.payload
-                                }
-                                if (frame.isEndStream) {
-                                    extractConnectEndStreamError(frameBytes)?.let {
-                                        terminalDiag = it.message?.take(120)
-                                        throw it
-                                    }
-                                    done = true
-                                    break
-                                }
-                                val obj = runCatching {
-                                    json.parseToJsonElement(frameBytes.decodeToString()) as? JsonObject
-                                }.getOrNull()
-                                if (obj != null) {
-                                    if (firstFrameKeys == null) {
-                                        firstFrameKeys = obj.keys.take(6).joinToString(",")
-                                    }
-                                    yieldedAny = true
-                                    totalEmittedFrames += 1
-                                    markRelayInstanceVerified(targetUuid)
-                                    emit(obj)
-                                }
-                            }
-                            if (done) break
                         }
-                    }
 
-                    try {
-                        val channelReader = response.bodyAsChannel()
-                        val buf = ByteArray(32768)
-                        while (!done) {
-                            val read = channelReader.readAvailable(buf, 0, buf.size)
-                            if (read < 0) break
-                            if (read == 0) continue
-                            totalBytesRead += read
-                            when (outerMode) {
-                                1 -> processDecodedBytes(buf.copyOf(read))
-                                2 -> processDecodedBytes(b64Decoder.feed(buf.copyOf(read)))
-                                else -> {
-                                    var idx = 0
-                                    while (idx < read && outerMode == 0 && !done) {
-                                        val b = buf[idx]
-                                        val c = b.toInt() and 0xFF
-                                        if (sniffBuffer.isEmpty() &&
-                                            (c == ' '.code || c == '\t'.code || c == '\r'.code || c == '\n'.code)
-                                        ) {
-                                            idx += 1
-                                            continue
-                                        }
-                                        if (sniffBuffer.isEmpty() &&
-                                            (c == '['.code || c == '{'.code || c == ')'.code || c == '('.code || c in '0'.code..'9'.code)
-                                        ) {
-                                            outerMode = 1
-                                            processDecodedBytes(buf.copyOfRange(idx, read))
-                                            idx = read
-                                            break
-                                        }
-                                        sniffBuffer.add(b)
-                                        idx += 1
-                                        if (sniffBuffer.size == 4) {
-                                            val candidateStr = sniffBuffer.toByteArray().decodeToString()
-                                            val decodedPrefix = CloudRelayJspbCodec.decodeBase64Flexible(candidateStr)
-                                            val firstDecoded = decodedPrefix?.firstOrNull()?.toInt()?.and(0xFF)
-                                            if (decodedPrefix != null &&
-                                                (firstDecoded == ')'.code || firstDecoded == '['.code ||
-                                                    firstDecoded == '{'.code || firstDecoded == ' '.code ||
-                                                    firstDecoded == '\n'.code)
+                        try {
+                            val channelReader = response.bodyAsChannel()
+                            val buf = ByteArray(32768)
+                            while (!done) {
+                                val read = channelReader.readAvailable(buf, 0, buf.size)
+                                if (read < 0) break
+                                if (read == 0) continue
+                                totalBytesRead += read
+                                when (outerMode) {
+                                    1 -> processDecodedBytes(buf.copyOf(read))
+                                    2 -> processDecodedBytes(b64Decoder.feed(buf.copyOf(read)))
+                                    else -> {
+                                        var idx = 0
+                                        while (idx < read && outerMode == 0 && !done) {
+                                            val b = buf[idx]
+                                            val c = b.toInt() and 0xFF
+                                            if (sniffBuffer.isEmpty() &&
+                                                (c == ' '.code || c == '\t'.code || c == '\r'.code || c == '\n'.code)
                                             ) {
-                                                outerMode = 2
-                                                processDecodedBytes(decodedPrefix)
-                                                if (idx < read && !done) {
-                                                    processDecodedBytes(b64Decoder.feed(buf.copyOfRange(idx, read)))
-                                                }
-                                            } else {
-                                                outerMode = 1
-                                                processDecodedBytes(sniffBuffer.toByteArray())
-                                                if (idx < read && !done) {
-                                                    processDecodedBytes(buf.copyOfRange(idx, read))
-                                                }
+                                                idx += 1
+                                                continue
                                             }
-                                            sniffBuffer.clear()
-                                            idx = read
+                                            if (sniffBuffer.isEmpty() &&
+                                                (c == '['.code || c == '{'.code || c == ')'.code || c == '('.code || c in '0'.code..'9'.code)
+                                            ) {
+                                                outerMode = 1
+                                                processDecodedBytes(buf.copyOfRange(idx, read))
+                                                idx = read
+                                                break
+                                            }
+                                            sniffBuffer.add(b)
+                                            idx += 1
+                                            if (sniffBuffer.size == 4) {
+                                                val candidateStr = sniffBuffer.toByteArray().decodeToString()
+                                                val decodedPrefix = CloudRelayJspbCodec.decodeBase64Flexible(candidateStr)
+                                                val firstDecoded = decodedPrefix?.firstOrNull()?.toInt()?.and(0xFF)
+                                                if (decodedPrefix != null &&
+                                                    (firstDecoded == ')'.code || firstDecoded == '['.code ||
+                                                        firstDecoded == '{'.code || firstDecoded == ' '.code ||
+                                                        firstDecoded == '\n'.code)
+                                                ) {
+                                                    outerMode = 2
+                                                    processDecodedBytes(decodedPrefix)
+                                                    if (idx < read && !done) {
+                                                        processDecodedBytes(b64Decoder.feed(buf.copyOfRange(idx, read)))
+                                                    }
+                                                } else {
+                                                    outerMode = 1
+                                                    processDecodedBytes(sniffBuffer.toByteArray())
+                                                    if (idx < read && !done) {
+                                                        processDecodedBytes(buf.copyOfRange(idx, read))
+                                                    }
+                                                }
+                                                sniffBuffer.clear()
+                                                idx = read
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        if (!done) {
-                            if (outerMode == 2) {
-                                processDecodedBytes(b64Decoder.flush())
-                            } else if (sniffBuffer.isNotEmpty()) {
-                                processDecodedBytes(sniffBuffer.toByteArray())
-                                sniffBuffer.clear()
+                            if (!done) {
+                                if (outerMode == 2) {
+                                    processDecodedBytes(b64Decoder.flush())
+                                } else if (sniffBuffer.isNotEmpty()) {
+                                    processDecodedBytes(sniffBuffer.toByteArray())
+                                    sniffBuffer.clear()
+                                }
                             }
-                        }
 
-                        if (!yieldedAny && !done) {
-                            jspbParser.lastInnerHeaderError()?.let {
-                                terminalDiag = it.message?.take(120)
-                                throw it
+                            if (!yieldedAny && !done) {
+                                jspbParser.lastInnerHeaderError()?.let {
+                                    terminalDiag = it.message?.take(120)
+                                    throw it
+                                }
+                                jspbParser.lastErrorTrailer?.let { boqErr ->
+                                    terminalDiag = boqErr.take(120)
+                                    throw AntigravityRpcError.HttpError(502, boqErr)
+                                }
                             }
-                            jspbParser.lastErrorTrailer?.let { boqErr ->
-                                terminalDiag = boqErr.take(120)
-                                throw AntigravityRpcError.HttpError(502, boqErr)
+                        } finally {
+                            if (traceStream) {
+                                val innerErr = jspbParser.lastInnerHeaderError()?.message?.take(80)
+                                val boqErr = jspbParser.lastErrorTrailer?.take(80)
+                                logStepSyncDiag(
+                                    "StepSync StreamProxy end cid=$cidTag method=$method target=${targetUuid.take(8)} mode=$outerMode bytes=$totalBytesRead chunks=$totalJspbChunks c1Len=$firstChunkLen c1Hex=$firstChunkHex buf=${connectParser.bufferedByteCount} frames=$totalEmittedFrames drop=$droppedFrames keys=${firstFrameKeys ?: "-"} err=${terminalDiag ?: innerErr ?: boqErr ?: "none"} t=${currentTimeMillis() - streamStartMs}ms"
+                                )
                             }
-                        }
-                    } finally {
-                        if (traceStream) {
-                            val innerErr = jspbParser.lastInnerHeaderError()?.message?.take(80)
-                            val boqErr = jspbParser.lastErrorTrailer?.take(80)
-                            logStepSyncDiag(
-                                "StepSync StreamProxy end method=$method target=${targetUuid.take(8)} mode=$outerMode bytes=$totalBytesRead chunks=$totalJspbChunks frames=$totalEmittedFrames keys=${firstFrameKeys ?: "-"} err=${terminalDiag ?: innerErr ?: boqErr ?: "none"} t=${currentTimeMillis() - streamStartMs}ms"
-                            )
                         }
                     }
+                } catch (e: Throwable) {
+                    if (e !is CancellationException && ProtocolCompatibilityEngine.isInstanceNotRegisteredError(e)) {
+                        markRelayInstanceDead(targetUuid, reasonIsUnregistered = true)
+                    }
+                    if (traceStream) {
+                        logStepSyncDiag(
+                            "StepSync StreamProxy throw cid=$cidTag method=$method target=${targetUuid.take(8)} err=${(e.message ?: e::class.simpleName ?: "error").take(120)} t=${currentTimeMillis() - streamStartMs}ms"
+                        )
+                    }
+                    throw e
                 }
                 return retryWithRefreshedKey
             }
@@ -7129,7 +7320,8 @@ public class AntigravityKmpRpcClient(
             }
         } else {
             val url = "$endpointBaseUrl$SERVICE_PREFIX/$method"
-            streamingHttpClient.preparePost(url) {
+            val directStreamClient = if (method == "StreamAgentStateUpdates") interactiveStreamHttpClient else streamingHttpClient
+            directStreamClient.preparePost(url) {
                 header("Connect-Protocol-Version", "1")
                 header("Connect-Accept-Encoding", "gzip")
                 csrfToken?.takeIf { it.isNotEmpty() }?.let { header("x-codeium-csrf-token", it) }
@@ -7177,6 +7369,7 @@ public class AntigravityKmpRpcClient(
         if (ownsHttpClients) {
             httpClient.close()
             streamingHttpClient.close()
+            interactiveStreamHttpClient.close()
         }
     }
 

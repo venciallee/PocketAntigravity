@@ -141,6 +141,10 @@ public struct ConnectStreamParser: Sendable {
         buffer.count > readOffset
     }
 
+    public var bufferedByteCount: Int {
+        max(0, buffer.count - readOffset)
+    }
+
     public mutating func feedByte(_ byte: UInt8) -> ConnectEnvelopeFrame? {
         buffer.append(byte)
         return extractNextFrame()

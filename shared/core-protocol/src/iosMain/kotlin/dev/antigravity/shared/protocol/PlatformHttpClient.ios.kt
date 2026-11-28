@@ -52,6 +52,7 @@ internal actual fun createPlatformHttpClient(
             configureSession {
                 timeoutIntervalForRequest = config.requestTimeoutMs / 1000.0
                 timeoutIntervalForResource = maxOf(25.0, (config.requestTimeoutMs * 2) / 1000.0)
+                HTTPMaximumConnectionsPerHost = 12L
                 HTTPShouldSetCookies = false
                 HTTPCookieStorage = null
                 URLCache = null

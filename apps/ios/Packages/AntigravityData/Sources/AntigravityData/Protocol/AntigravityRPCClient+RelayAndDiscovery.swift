@@ -151,6 +151,8 @@ extension AntigravityRPCClient {
         if !trimmedUuid.isEmpty && !Self.isWildcardRelayIdentifier(trimmedUuid) {
             self.resolvedInstanceUuid = trimmedUuid
             self.targetInstanceIdentifier = trimmedUuid
+            self.deadInstanceUntilByUuid.removeValue(forKey: trimmedUuid)
+            self.timedOutInstanceUntilByUuid.removeValue(forKey: trimmedUuid)
         } else if !trimmedName.isEmpty {
             self.targetInstanceIdentifier = trimmedName
         }
@@ -1088,7 +1090,8 @@ extension AntigravityRPCClient {
         cloudSucceeded: Bool
     ) {
         if channel == .cloudRelay && !skipRelayListRefresh {
-            if let refreshed = try? await listRelayInstances(timeoutInterval: timeoutInterval), !refreshed.isEmpty {
+            if let refreshedRaw = try? await listRelayInstances(timeoutInterval: timeoutInterval), !refreshedRaw.isEmpty {
+                let refreshed = self.applyHealthCooldowns(to: refreshedRaw, respectDeadCooldown: targetInstanceUuid == nil)
                 self.cachedRelayInstances = refreshed
                 if let currentUuid = resolvedInstanceUuid,
                    !refreshed.contains(where: { $0.uuid == currentUuid && $0.status.isReachable }) {
@@ -1109,13 +1112,21 @@ extension AntigravityRPCClient {
         let reachableInstances: [RelayInstanceInfo] = {
             guard channel == .cloudRelay else { return [] }
             let raw = currentReachableRelayInstances()
-            return raw.sorted { lhs, rhs in
-                if let preferredUuid {
-                    if lhs.uuid == preferredUuid && rhs.uuid != preferredUuid { return true }
-                    if rhs.uuid == preferredUuid && lhs.uuid != preferredUuid { return false }
+            let now = Date()
+            return raw
+                .filter { inst in
+                    if let targetUuid = targetInstanceUuid, inst.uuid == targetUuid { return true }
+                    if let preferredUuid, inst.uuid == preferredUuid { return !isRelayInstanceInDeadCooldown(inst.uuid, now: now) }
+                    return !isRelayInstanceInDeadCooldown(inst.uuid, now: now)
+                        && !isRelayInstanceInTimeoutCooldown(inst.uuid, now: now)
                 }
-                return lhs.uuid < rhs.uuid
-            }
+                .sorted { lhs, rhs in
+                    if let preferredUuid {
+                        if lhs.uuid == preferredUuid && rhs.uuid != preferredUuid { return true }
+                        if rhs.uuid == preferredUuid && lhs.uuid != preferredUuid { return false }
+                    }
+                    return lhs.uuid < rhs.uuid
+                }
         }()
 
         let localInstancesToQuery: [RelayInstanceInfo] = {
@@ -1134,6 +1145,10 @@ extension AntigravityRPCClient {
             return reachableInstances
         }()
 
+        let boundedRelayCallTimeout: TimeInterval? = (channel == .cloudRelay)
+            ? min(timeoutInterval ?? 8.0, 8.0)
+            : timeoutInterval
+
         // 1. Kick off Antigravity Cloud (`BACKEND_TYPE_REMOTE_AICODE`) projects fetch concurrently
         //    so Cloud project listing never blocks local Mac workspace/trajectory queries.
         let cachedCloudValues = Array(cachedCloudProjectsById.values)
@@ -1141,7 +1156,7 @@ extension AntigravityRPCClient {
         async let cloudProjectsTask: (projects: [ProjectWorkspace], warmingUp: Bool) = shouldQueryCloudProjects
             ? self.fetchCloudProjects(
                 candidateInstances: reachableInstances,
-                timeoutInterval: timeoutInterval
+                timeoutInterval: boundedRelayCallTimeout
             )
             : (cachedCloudValues, false)
 
@@ -1169,7 +1184,7 @@ extension AntigravityRPCClient {
             async let cloudOutcomeTask: (summaries: [CascadeSummary], succeeded: Bool) = shouldFetchCloud
                 ? self.fetchCloudSummariesAcrossInstances(
                     candidates: orderedCloudCandidates,
-                    timeoutInterval: timeoutInterval,
+                    timeoutInterval: boundedRelayCallTimeout,
                     includeJetboxSnapshot: includeJetboxSnapshot
                 )
                 : ([], false)
@@ -1183,22 +1198,25 @@ extension AntigravityRPCClient {
                 let unauthorizedError: AntigravityRPCError?
             }
 
+            let primaryLocalUuid = preferredUuid ?? localInstancesToQuery.first?.uuid
             var resultsByUuid: [String: LocalFetchEntry] = [:]
             if !localInstancesToQuery.isEmpty {
                 await withTaskGroup(of: (String, LocalFetchEntry).self) { group in
                     for inst in localInstancesToQuery {
+                        let shouldFetchLocalJetbox = includeJetboxSnapshot
+                            && (localInstancesToQuery.count <= 1 || inst.uuid == primaryLocalUuid)
                         group.addTask {
                             async let wsOutcomeTask = self.fetchWorkspaceInfosOutcome(
                                 instanceUuidOverride: inst.uuid,
                                 originHostName: inst.name,
-                                timeoutInterval: timeoutInterval
+                                timeoutInterval: boundedRelayCallTimeout
                             )
                             async let memTask = self.fetchTrajectoriesResult(
                                 instanceUuidOverride: inst.uuid,
                                 originHostName: inst.name,
-                                timeoutInterval: timeoutInterval
+                                timeoutInterval: boundedRelayCallTimeout
                             )
-                            async let jbLocalTask: [CascadeSummary] = includeJetboxSnapshot
+                            async let jbLocalTask: [CascadeSummary] = shouldFetchLocalJetbox
                                 ? self.fetchJetboxSummariesSnapshot(
                                     cloud: false,
                                     instanceUuidOverride: inst.uuid,
@@ -1309,17 +1327,11 @@ extension AntigravityRPCClient {
                 }
                 if !definitelyOfflineUuids.isEmpty {
                     for uuid in definitelyOfflineUuids {
-                        self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: uuid)
-                        self.consecutiveTransientProbeFailuresByUuid.removeValue(forKey: uuid)
-                    }
-                    if !self.cachedRelayInstances.isEmpty {
-                        self.cachedRelayInstances = self.cachedRelayInstances.map { inst in
-                            definitelyOfflineUuids.contains(inst.uuid) ? inst.withStatus(.disconnected) : inst
-                        }
+                        self.markRelayInstanceDead(uuid, reasonIsUnregistered: true)
                     }
                 }
                 for uuid in transientFailedUuids {
-                    self.lastEndToEndVerifiedAtByUuid.removeValue(forKey: uuid)
+                    self.markRelayInstanceDead(uuid, reasonIsUnregistered: false)
                 }
             }
 

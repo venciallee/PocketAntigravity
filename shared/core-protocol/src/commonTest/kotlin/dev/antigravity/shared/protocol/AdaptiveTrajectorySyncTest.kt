@@ -2749,4 +2749,110 @@ class AdaptiveTrajectorySyncTest {
         // (`iosSimulatorArm64Test`) to ensure format specifiers (`%@`, `%s`, `%n`, `%24`) never crash.
         logProtocolDiagnostic("StepSync diagnostic probe %@ %s %d %n https://antigravity.google.com/%24rpc")
     }
+
+    @Test
+    fun testTunnelUnavailableMarksInstanceDeadAndAbortsWithoutRetryingVariant2OrPath2() = runTest {
+        withContext(Dispatchers.Default) {
+            val boqTunnelNotFound = """[,[9,"tunnel not found",[["type.googleapis.com/google.rpc.ErrorInfo",["TUNNEL_UNAVAILABLE","cloudcode-pa.googleapis.com"]]]]]"""
+            assertTrue(
+                ProtocolCompatibilityEngine.isInstanceNotRegisteredResponse(400, boqTunnelNotFound),
+                "TUNNEL_UNAVAILABLE / tunnel not found must be classified as dead/unregistered instance",
+            )
+
+            val deadUuid = "fee0ee43-dead-4000-8000-000000000001"
+            val healthyUuid = "d25a1fd8-good-4000-8000-000000000002"
+            val cloudCid = "e996e1b8-59ba-4636-a766-87ad00000001"
+            val json = Json { ignoreUnknownKeys = true }
+
+            var deadStreamCalls = 0
+            var deadProxyCalls = 0
+            var healthyStreamCalls = 0
+
+            val okFrameJson = """{"update":{"conversationId":"$cloudCid","mainTrajectoryUpdate":{"stepsUpdate":{"indices":[0,1],"totalLength":2,"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","userInput":{"text":"Load quickly"}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"response":"Loaded from healthy peer"}}]}}}}"""
+            val okStreamBytes = ConnectEnvelope.encode(okFrameJson.encodeToByteArray()) +
+                ConnectEnvelope.encode("{}".encodeToByteArray(), flags = ConnectEnvelopeFlags.END_STREAM)
+            val okBoq = """["${okStreamBytes.toByteString().base64()}",[["content-type","application/connect+json"]]]"""
+
+            val engine = MockEngine { request ->
+                val path = request.url.encodedPath
+                val bodyText = ((request.body as? ByteArrayContent)?.bytes() ?: ByteArray(0)).decodeToString()
+                when {
+                    path.endsWith("/ListInstances") -> respond(
+                        // Stale ListInstances still reports both deadUuid and healthyUuid as CONNECTED (1)
+                        content = """[[["$deadUuid",["Dead Mac","2.34.0",true],1,[1740000000,0]],["$healthyUuid",["Healthy Mac","2.34.0",true],1,[1740000001,0]]],5]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                    )
+                    path.endsWith("/StreamProxyCommand") -> {
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val target = (jspbArr[0] as JsonPrimitive).content
+                        if (target == deadUuid) {
+                            deadStreamCalls += 1
+                            respond(
+                                content = boqTunnelNotFound,
+                                status = HttpStatusCode.BadRequest,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            healthyStreamCalls += 1
+                            respond(
+                                content = okBoq,
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    path.endsWith("/ProxyCommand") -> {
+                        val jspbArr = json.parseToJsonElement(bodyText) as JsonArray
+                        val target = (jspbArr[0] as JsonPrimitive).content
+                        if (target == deadUuid) {
+                            deadProxyCalls += 1
+                            respond(
+                                content = boqTunnelNotFound,
+                                status = HttpStatusCode.BadRequest,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        } else {
+                            respond(
+                                content = encodeJspbProxyResponse("""{"workspaceInfos":[]}"""),
+                                status = HttpStatusCode.OK,
+                                headers = headersOf(HttpHeaders.ContentType, "application/json+protobuf"),
+                            )
+                        }
+                    }
+                    else -> respond("", HttpStatusCode.NotFound)
+                }
+            }
+
+            val client = AntigravityKmpRpcClient(
+                host = RemoteHostInstance(
+                    instanceId = deadUuid,
+                    hostname = "Dead Mac",
+                    channel = RemoteConnectionChannel.CLOUD_RELAY,
+                    endpointUrl = "https://antigravity.google.com/r/$deadUuid",
+                    isOnline = true,
+                ),
+                sessionCookie = "SAPISID=test_sapisid; SID=test_sid",
+                relayApiKey = "AI" + "zaSyVALIDKEY0000000000000000000000000",
+                httpClientOverride = HttpClient(engine),
+            )
+            client.resolveCloudRelayInstance()
+
+            val steps = client.fetchAllTrajectorySteps(
+                cascadeId = cloudCid,
+                knownStepCount = 2,
+                isCloud = true,
+            )
+            assertEquals(2, steps.size, "Must fail over cleanly to healthy peer and return Cloud steps")
+            assertEquals("Loaded from healthy peer", steps[1].plannerResponse?.response)
+            assertEquals(1, deadStreamCalls, "Dead tunnel HTTP 400 TUNNEL_UNAVAILABLE must NOT retry Variant #2")
+            assertEquals(0, deadProxyCalls, "Dead tunnel must abort immediately and NEVER fall through to Path 2 ProxyCommand")
+            assertEquals(1, healthyStreamCalls)
+
+            // Subsequent federated refresh with stale ListInstances must NOT resurrect deadUuid during cooldown
+            deadProxyCalls = 0
+            client.fetchFederatedWorkspacesAndSummaries(includeCloud = false, includeJetboxSnapshot = false)
+            assertEquals(0, deadProxyCalls, "Stale ListInstances must NOT resurrect dead tunnel inside cooldown window")
+        }
+    }
 }
